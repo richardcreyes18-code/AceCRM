@@ -11792,7 +11792,15 @@ function showSettingsPage(){
   const loanType   = _store.get('dflt_loan_type')  || 'Fixed';
   const loanRate   = _store.get('dflt_loan_rate')  || '6.5';
   const loanAmort  = _store.get('dflt_loan_amort') || '25';
-  const connected  = !!sbKey && sbKey.length > 20;
+  // Use the RESOLVED config key (baked-in fallback + localStorage override),
+  // not just the raw localStorage value. The CRM works via c.key, so that's
+  // what determines whether we're actually connected.
+  const activeKey  = c.key || '';
+  const connected  = !!activeKey && activeKey.length > 20;
+  // Mask the key for display: first 12 + "..." + last 6 chars
+  const maskedKey  = activeKey.length > 20
+    ? activeKey.slice(0, 12) + '…' + activeKey.slice(-6)
+    : '(none)';
 
   const mainArea = document.getElementById('mainArea');
   if(!mainArea) return;
@@ -11813,11 +11821,25 @@ function showSettingsPage(){
 
         <!-- CONNECTION -->
         <section style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
-          <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:4px;">🔌 Database Connection</div>
-          <div style="font-size:12px;color:#64748b;margin-bottom:14px;">${connected?`<span style="color:#16a34a;font-weight:600;">● Connected</span> · Project: <code>kxtuegjptvzqycgyzehj</code>`:'<span style="color:#c00;font-weight:600;">● Not connected</span>'}</div>
-          <label style="display:block;font-size:11px;font-weight:700;color:#475569;margin-bottom:4px;">Supabase Anon Key</label>
-          <input id="cfgSbKey" type="password" value="${sbKey.replace(/"/g,'&quot;')}" style="width:100%;padding:9px 12px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;font-family:monospace;box-sizing:border-box;"/>
-          <div style="font-size:10px;color:#94a3b8;margin-top:4px;">Stored locally in your browser only. Get from Supabase Dashboard → Settings → API.</div>
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:4px;">
+            <div style="font-size:15px;font-weight:700;color:#0f172a;">🔌 Database Connection</div>
+            <button onclick="_testDbConnection()" id="dbTestBtn" style="background:#f1f5f9;border:1px solid #cbd5e1;color:#334155;padding:6px 14px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Test Connection</button>
+          </div>
+          <div id="dbStatusIndicator" style="font-size:12px;color:#64748b;margin-bottom:14px;">
+            ${connected
+              ? `<span style="color:#16a34a;font-weight:600;">● Connected</span> · Project: <code style="background:#f1f5f9;padding:1px 6px;border-radius:4px;">kxtuegjptvzqycgyzehj</code>`
+              : `<span style="color:#dc2626;font-weight:600;">● Not connected</span> · Key missing or invalid`}
+          </div>
+          <label style="display:block;font-size:11px;font-weight:700;color:#475569;margin-bottom:4px;">Supabase Anon Key <span style="font-weight:500;color:#94a3b8;">(read-only)</span></label>
+          <div style="display:flex;gap:6px;align-items:center;">
+            <input id="cfgSbKeyDisplay" type="text" readonly value="${maskedKey}" style="flex:1;padding:9px 12px;border:1px solid #e2e8f0;border-radius:6px;font-size:12px;font-family:monospace;box-sizing:border-box;background:#f8fafc;color:#64748b;cursor:not-allowed;"/>
+            <button onclick="_copyFullKey()" style="background:#f1f5f9;border:1px solid #cbd5e1;color:#334155;padding:9px 14px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;">Copy Full Key</button>
+          </div>
+          <div style="font-size:10px;color:#94a3b8;margin-top:6px;line-height:1.5;">
+            🔒 Baked into the app code. To rotate this key, contact admin — it requires a code update and redeploy.
+          </div>
+          <!-- Hidden input kept so saveSettingsPage() can still read it without crashing -->
+          <input id="cfgSbKey" type="hidden" value="${activeKey.replace(/"/g,'&quot;')}"/>
         </section>
 
         <!-- API KEYS -->
@@ -11893,6 +11915,62 @@ function showSettingsPage(){
 
   // Populate the Team Management users table (async, doesn't block render)
   setTimeout(() => { if(typeof _tmLoadUsers === 'function') _tmLoadUsers(); }, 50);
+}
+
+// ═══════════════════════════════════════════════════════════════
+//  DATABASE CONNECTION TEST (Settings page)
+// ═══════════════════════════════════════════════════════════════
+
+// Runs a live read against Supabase to verify the connection is actually working,
+// then updates the status indicator in the Settings page. Uses an existing
+// lightweight endpoint (ace_users count) via the crm-proxy Edge Function so it
+// exercises the same path the rest of the app uses.
+async function _testDbConnection(){
+  const btn = document.getElementById('dbTestBtn');
+  const ind = document.getElementById('dbStatusIndicator');
+  if(!ind) return;
+  const origBtnText = btn ? btn.textContent : '';
+  if(btn){ btn.disabled = true; btn.textContent = '⏳ Testing…'; }
+  ind.innerHTML = '<span style="color:#64748b;font-weight:600;">● Testing connection…</span>';
+  try{
+    // Minimal read: just fetch 1 row from ace_users. If this succeeds, the
+    // baked Supabase URL + anon key + crm-proxy are all working.
+    const start = Date.now();
+    const rows = await _sbGet('ace_users', 'select=id&limit=1');
+    const elapsed = Date.now() - start;
+    if(!Array.isArray(rows)) throw new Error('Unexpected response shape');
+    ind.innerHTML = `<span style="color:#16a34a;font-weight:600;">● Connected</span> · Project: <code style="background:#f1f5f9;padding:1px 6px;border-radius:4px;">kxtuegjptvzqycgyzehj</code> · <span style="color:#94a3b8;">verified ${elapsed}ms ago</span>`;
+  }catch(e){
+    ind.innerHTML = `<span style="color:#dc2626;font-weight:600;">● Not connected</span> · <span style="color:#dc2626;">${(e.message||'connection failed').replace(/</g,'&lt;')}</span>`;
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = origBtnText || 'Test Connection'; }
+  }
+}
+
+// Copy the full (unmasked) Supabase anon key to clipboard.
+function _copyFullKey(){
+  try{
+    const cfg = getConfig();
+    const key = cfg.key || '';
+    if(!key){ alert('No key available to copy.'); return; }
+    if(navigator.clipboard && navigator.clipboard.writeText){
+      navigator.clipboard.writeText(key).then(
+        () => { showSaveConfirm && showSaveConfirm('✓ Supabase anon key copied to clipboard'); },
+        () => { alert('Failed to copy. Your browser may block clipboard access.'); }
+      );
+    } else {
+      // Fallback for older browsers: use a temporary textarea
+      const ta = document.createElement('textarea');
+      ta.value = key;
+      ta.style.position = 'fixed';
+      ta.style.left = '-9999px';
+      document.body.appendChild(ta);
+      ta.select();
+      try{ document.execCommand('copy'); showSaveConfirm && showSaveConfirm('✓ Copied'); }
+      catch(e){ alert('Failed to copy.'); }
+      document.body.removeChild(ta);
+    }
+  }catch(e){ alert('Copy failed: '+e.message); }
 }
 
 // ═══════════════════════════════════════════════════════════════

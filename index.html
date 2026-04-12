@@ -996,6 +996,7 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   <button class="nav-btn" onclick="setNav(this,'home')">Deals</button>
   <button class="nav-btn" onclick="setNav(this,'pipeline')">Pipeline</button>
   <button class="nav-btn" onclick="setNav(this,'dealboard')" style="font-weight:bold;">Deal Board</button>
+  <button class="nav-btn" onclick="setNav(this,'map')" style="color:#059669;">🗺 Map</button>
   <button class="nav-btn" onclick="setNav(this,'contacts')">Contacts</button>
   <button class="nav-btn" onclick="setNav(this,'buyercriteria')">Buyer Criteria</button>
   <button class="nav-btn" onclick="setNav(this,'company')">🏢 Company</button>
@@ -2742,6 +2743,7 @@ function _setNavDirect(btn, page){
   if(btn) btn.classList.add('active');
   if(page==='pipeline') showPipelineView();
   else if(page==='dealboard') showDealBoard();
+  else if(page==='map') showMapPage();
   else if(page==='fieldmap') showFieldMap();
   else if(page==='contacts') showContactsPage();
   else if(page==='buyercriteria') showBuyerCriteriaPage();
@@ -9000,6 +9002,21 @@ function dbClearAllFilters(){
   dbRefreshMapPins();
 }
 
+// Standalone Map page — renders the Deal Board and immediately switches it
+// to map view mode. Reuses all of Deal Board's filter bar, pins, county
+// layer, color modes, and map controls, so behavior is identical to clicking
+// Deal Board → 🗺 Map toggle. This is a dedicated entry point so admins can
+// jump straight to the map without first seeing the list view.
+function showMapPage(){
+  showDealBoard();
+  // After the Deal Board renders, flip to map view. setTimeout 0 to let the
+  // DOM settle (showDealBoard does innerHTML = ... which creates the map div
+  // that dbSetView needs to reference).
+  setTimeout(() => {
+    try { dbSetView('map'); } catch(e) { console.warn('Map switch failed:', e); }
+  }, 0);
+}
+
 function showDealBoard(){
   const STAGE_ORDER = ['New Lead','Need INFO','Needs Offer','Pitch Out','Limbo','Negotiating','Needs a 1031','Won','Closed','Overpriced','Nurture'];
   const STAGE_COLORS = {
@@ -9206,6 +9223,146 @@ const DB_TYPE_COLORS = {
 const NJ_NORTH_COUNTIES    = ['Bergen','Passaic','Essex','Hudson','Union','Morris','Sussex','Warren','Hunterdon'];
 const NJ_CENTRAL_COUNTIES  = ['Middlesex','Somerset','Mercer','Monmouth','Ocean'];
 const NJ_SOUTH_COUNTIES    = ['Burlington','Camden','Gloucester','Salem','Cumberland','Atlantic','Cape May'];
+
+// ═══════════════════════════════════════════════════════════════
+//  PIPELINE STATE / REGION LOOKUP (Phase A — frontend-only)
+// ═══════════════════════════════════════════════════════════════
+// Maps county names (as they appear in ace_properties.simple_county) to state
+// abbreviations. Used by the Pipeline filter UI so admins can filter by state
+// and by NJ region without requiring a dedicated state column in the database.
+//
+// Ambiguous counties (same name in multiple states) are resolved per Ricky's
+// explicit instruction to the most common state in Ace's dataset:
+//   Essex County      → NJ  (not NY, MA, VT)
+//   Middlesex County  → NJ  (not MA, CT)
+//   Montgomery County → PA  (not NY, MD, AL, TX)
+// Phase B will replace this frontend lookup with a real state column
+// backfilled from parsed addresses, which will catch cases where an
+// "Essex County" deal actually turns out to be in NY.
+//
+// Counties not in this map are treated as "Other" state in the filter.
+// Each county appears EXACTLY ONCE to avoid JS object duplicate-key bugs.
+const PIPELINE_COUNTY_TO_STATE = {
+  // NJ — 21 counties. Essex/Middlesex locked to NJ per Ricky.
+  'Atlantic County':'NJ','Bergen County':'NJ','Burlington County':'NJ',
+  'Camden County':'NJ','Cape May County':'NJ','Cumberland County':'NJ',
+  'Essex County':'NJ','Gloucester County':'NJ','Hudson County':'NJ',
+  'Hunterdon County':'NJ','Mercer County':'NJ','Middlesex County':'NJ',
+  'Monmouth County':'NJ','Morris County':'NJ','Ocean County':'NJ',
+  'Passaic County':'NJ','Salem County':'NJ','Somerset County':'NJ',
+  'Sussex County':'NJ','Union County':'NJ','Warren County':'NJ',
+
+  // NY — counties in Ace's dataset
+  'New York County':'NY','Kings County':'NY','Queens County':'NY',
+  'Bronx County':'NY','Richmond County':'NY','Nassau County':'NY',
+  'Suffolk County':'NY','Westchester County':'NY','Rockland County':'NY',
+  'Dutchess County':'NY','Ulster County':'NY','Albany County':'NY',
+  'Rensselaer County':'NY','Broome County':'NY','Chemung County':'NY',
+  'Chenango County':'NY','Oneida County':'NY','Oswego County':'NY',
+  'Cayuga County':'NY','Tompkins County':'NY','Niagara County':'NY',
+  'Otsego County':'NY','Allegany County':'NY','Madison County':'NY',
+  // Orange County is ambiguous (NY vs CA vs FL). Keeping as NY — Ricky's
+  // dataset has 9 "Orange County" rows and his work is NE-focused.
+  'Orange County':'NY',
+
+  // PA — Montgomery locked to PA per Ricky.
+  'Philadelphia County':'PA','Allegheny County':'PA','Montgomery County':'PA',
+  'Bucks County':'PA','Chester County':'PA','Delaware County':'PA',
+  'Lancaster County':'PA','Lehigh County':'PA','Northampton County':'PA',
+  'Berks County':'PA','York County':'PA','Dauphin County':'PA',
+  'Luzerne County':'PA','Lackawanna County':'PA','Pike County':'PA',
+  'Schuylkill County':'PA','Beaver County':'PA','Armstrong County':'PA',
+  'Cambria County':'PA','Lawrence County':'PA','Montour County':'PA',
+
+  // CT — traditional counties plus post-2022 planning regions
+  'Fairfield County':'CT','Hartford County':'CT','New Haven County':'CT',
+  'New London County':'CT','Litchfield County':'CT','Tolland County':'CT',
+  'Windham County':'CT',
+  'Capitol Planning Region':'CT',
+  'Lower Connecticut River Valley Planning Region':'CT',
+  'South Central Connecticut Planning Region':'CT',
+  'Western Connecticut Planning Region':'CT',
+
+  // FL
+  'Miami-Dade County':'FL','Broward County':'FL','Palm Beach County':'FL',
+  'Hillsborough County':'FL','Pinellas County':'FL','Duval County':'FL',
+  'Lee County':'FL','Collier County':'FL','Sarasota County':'FL',
+  'Brevard County':'FL','Volusia County':'FL','Polk County':'FL',
+  'Alachua County':'FL','Seminole County':'FL','Osceola County':'FL',
+  'Pasco County':'FL','Manatee County':'FL','Marion County':'FL',
+  'Indian River County':'FL','Okaloosa County':'FL',
+
+  // TX
+  'Harris County':'TX','Dallas County':'TX','Tarrant County':'TX',
+  'Bexar County':'TX','Travis County':'TX','Collin County':'TX',
+  'Denton County':'TX','Fort Bend County':'TX','Williamson County':'TX',
+  'Galveston County':'TX','McLennan County':'TX',
+
+  // CA
+  'Los Angeles County':'CA','San Diego County':'CA','Riverside County':'CA',
+  'San Bernardino County':'CA','Santa Clara County':'CA','Alameda County':'CA',
+  'Sacramento County':'CA','Contra Costa County':'CA','Fresno County':'CA',
+  'Kern County':'CA','San Francisco County':'CA','Ventura County':'CA',
+  'San Mateo County':'CA','San Joaquin County':'CA','Stanislaus County':'CA',
+  'Sonoma County':'CA','Tulare County':'CA','Solano County':'CA',
+  'Madera County':'CA',
+};
+
+// Known-bad county values that get a yellow ⚠ badge in Pipeline view.
+// Phase B will persist this as a `needs_county_review` column in the DB.
+// Deals with these county values need manual review or cleanup.
+const PIPELINE_BAD_COUNTY_NAMES = new Set([
+  '',                          // empty / missing
+  'Mounmouth County',          // typo — should be Monmouth
+  'Monmouth',                  // missing "County" suffix
+  'N County', 'E County', 'Of County',  // junk parser output
+  // International / non-US admin divisions that slipped into the field
+  'City of Onkaparinga','Greater London','Giessen','Glasgow City',
+  'Kawartha Lakes','Parry Sound District','Hastings County',
+]);
+
+// Preferred regions in display order for the Pipeline filter chip bar.
+// `kind` tells applyPipelineFilters() how to match:
+//   'state'  → any county whose state === value
+//   'region' → any county whose NJ region array includes value
+//   'states' → any county whose state is in the value array
+const PIPELINE_REGION_CHIPS = [
+  { id: 'all_nj',     label: 'All NJ',     kind: 'state',  value: 'NJ'        },
+  { id: 'north_nj',   label: 'North NJ',   kind: 'region', value: 'North NJ'  },
+  { id: 'central_nj', label: 'Central NJ', kind: 'region', value: 'Central NJ'},
+  { id: 'south_nj',   label: 'South NJ',   kind: 'region', value: 'South NJ'  },
+  { id: 'tri_state',  label: 'Tri-State',  kind: 'states', value: ['NJ','NY','PA'] },
+];
+
+// Resolve a county name to its state. Returns '' (empty) for unknown counties.
+function _countyState(county){
+  if(!county) return '';
+  return PIPELINE_COUNTY_TO_STATE[county] || '';
+}
+
+// Resolve a county name to its NJ region(s). Returns an ARRAY because some
+// counties appear in multiple regions:
+//   Ocean → [Central NJ, South NJ]    (per Ricky)
+//   Hunterdon → [North NJ, Central NJ] (per Ricky)
+// All other NJ counties return a single-element array; non-NJ returns [].
+function _countyRegions(county){
+  if(!county) return [];
+  const bare = county.replace(/\s+County$/i, '');
+  const regions = [];
+  if(NJ_NORTH_COUNTIES.includes(bare))   regions.push('North NJ');
+  if(NJ_CENTRAL_COUNTIES.includes(bare)) regions.push('Central NJ');
+  if(NJ_SOUTH_COUNTIES.includes(bare))   regions.push('South NJ');
+  // Ocean County is already in Central via NJ_CENTRAL_COUNTIES. Add South.
+  if(bare === 'Ocean' && !regions.includes('South NJ')) regions.push('South NJ');
+  // Hunterdon is already in North via NJ_NORTH_COUNTIES. Add Central.
+  if(bare === 'Hunterdon' && !regions.includes('Central NJ')) regions.push('Central NJ');
+  return regions;
+}
+
+// True if this county name looks wrong/junk and should be flagged for review.
+function _isBadCountyName(county){
+  return PIPELINE_BAD_COUNTY_NAMES.has(county || '');
+}
 
 function _stateFromAddress(addr){
   if(!addr) return '';
@@ -19612,10 +19769,13 @@ function _defaultPipelineFilters(){
     search: '',
     stages: [],      // multi-select: pipeline_stage values
     assetTypes: [],  // multi-select: CRM Asset Classification values (normalized)
-    regions: [],     // multi-select: Region for County values
+    regions: [],     // multi-select: Region for County values (legacy, still supported)
     counties: [],    // multi-select
     cities: [],      // multi-select
     agents: [],      // multi-select
+    // Phase A additions: state + region chips + regionChipIds for toggle highlight
+    states: [],        // multi-select: state abbreviations resolved from county
+    regionChipIds: [], // multi-select: which Pipeline region chips are active
     priceMin: null, priceMax: null,
     sfMin: null, sfMax: null,
     unitsMin: null, unitsMax: null,
@@ -19725,10 +19885,30 @@ function applyPipelineFilters(deals){
     if(f.stages.length && !f.stages.includes(getStage(d))) return false;
     // Asset type
     if(f.assetTypes.length && !f.assetTypes.includes(_dealAssetType(d))) return false;
-    // Region
+    // Region (legacy — matches old "Region for County" field from Airtable sync)
     if(f.regions.length && !f.regions.includes(d['Region for County'])) return false;
     // County
     if(f.counties.length && !f.counties.includes(d['Simple County'])) return false;
+    // Phase A: State filter — uses the county→state lookup
+    if(f.states && f.states.length){
+      const dealState = _countyState(d['Simple County']);
+      if(!f.states.includes(dealState || 'Other')) return false;
+    }
+    // Phase A: Region chips — OR semantics (deal passes if ANY chip matches)
+    if(f.regionChipIds && f.regionChipIds.length){
+      const county = d['Simple County'] || '';
+      const dealState = _countyState(county);
+      const dealRegions = _countyRegions(county); // [] for non-NJ counties
+      let anyMatch = false;
+      for(const chipId of f.regionChipIds){
+        const chip = PIPELINE_REGION_CHIPS.find(c => c.id === chipId);
+        if(!chip) continue;
+        if(chip.kind === 'state'  && dealState === chip.value){ anyMatch = true; break; }
+        if(chip.kind === 'region' && dealRegions.includes(chip.value)){ anyMatch = true; break; }
+        if(chip.kind === 'states' && chip.value.includes(dealState)){ anyMatch = true; break; }
+      }
+      if(!anyMatch) return false;
+    }
     // City
     if(f.cities.length){
       const parts = (d['Address']||'').split(',').map(s=>s.trim());
@@ -19773,6 +19953,8 @@ function _countActiveFilters(){
   if(f.counties.length) n++;
   if(f.cities.length) n++;
   if(f.agents.length) n++;
+  if(f.states && f.states.length) n++;
+  if(f.regionChipIds && f.regionChipIds.length) n++;
   if(f.priceMin != null || f.priceMax != null) n++;
   if(f.sfMin != null || f.sfMax != null) n++;
   if(f.unitsMin != null || f.unitsMax != null) n++;
@@ -19909,7 +20091,7 @@ function _refreshPipelineBody(){
                 return `<div class="pipeline-card" draggable="true"
                   ondragstart="pipelineDragStart(event, '${d.id}')"
                   ondragend="pipelineDragEnd(event)"
-                  onclick="openDealSnapshot('${d.id}')">${rows}</div>`;
+                  onclick="openDealSnapshot('${d.id}')">${_isBadCountyName(d['Simple County']) ? '<div style="background:#fef3c7;color:#92400e;font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;margin-bottom:4px;display:inline-block;" title="County name needs review">⚠ BAD COUNTY</div>' : ''}${rows}</div>`;
               }).join('')}
               ${col.length===0?'<div style="font-size:11px;color:#94a3b8;text-align:center;padding:20px;font-style:italic;">Empty</div>':''}
             </div>
@@ -20197,13 +20379,71 @@ function _buildPipelineFilterPanelHTML(){
       </div>
     </div>`;
 
+  // Phase A: Region chips row — NJ subsections + Tri-State
+  const regionChipsHTML = `
+    <div style="margin-bottom:14px;">
+      <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Region <span style="font-weight:500;color:#94a3b8;">(click to toggle)</span></div>
+      <div>
+        ${PIPELINE_REGION_CHIPS.map(chip => {
+          const sel = f.regionChipIds && f.regionChipIds.includes(chip.id);
+          return `<span onclick="togglePipelineRegionChip('${chip.id}')" style="${btnStyle(sel)}">${chip.label}</span>`;
+        }).join('')}
+      </div>
+    </div>`;
+
+  // Phase A: State dropdown — all states present in data, default "All"
+  // Builds the state list from actual deals so unmapped counties show as "Other"
+  const stateSet = new Set();
+  opts.counties.forEach(c => {
+    const st = _countyState(c);
+    stateSet.add(st || 'Other');
+  });
+  const allStates = [...stateSet].sort((a,b) => {
+    // NJ first (Ricky's primary market), then alphabetical, Other last
+    if(a === 'NJ') return -1;
+    if(b === 'NJ') return 1;
+    if(a === 'Other') return 1;
+    if(b === 'Other') return -1;
+    return a.localeCompare(b);
+  });
+  const currentStateFilter = (f.states && f.states[0]) || ''; // single-select UX for dropdown
+  const stateDropdownHTML = `
+    <div style="margin-bottom:10px;">
+      <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">State</div>
+      <select onchange="setPipelineStateFilter(this.value)" style="width:100%;max-width:200px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:5px;font-size:12px;background:#fff;">
+        <option value="">All states</option>
+        ${allStates.map(s => `<option value="${s}" ${currentStateFilter===s?'selected':''}>${s === 'Other' ? 'Other (unmapped)' : s}</option>`).join('')}
+      </select>
+    </div>`;
+
+  // Phase A: Searchable county multi-select, filtered by current state selection.
+  // If a state is selected, only show counties in that state. Otherwise show all.
+  const countiesForState = currentStateFilter
+    ? opts.counties.filter(c => {
+        const st = _countyState(c);
+        return currentStateFilter === 'Other' ? !st : st === currentStateFilter;
+      })
+    : opts.counties;
+  const selectedCounties = f.counties || [];
+  const countySearchHTML = `
+    <div style="margin-bottom:14px;">
+      <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">
+        County <span style="font-weight:500;color:#94a3b8;">(${countiesForState.length} ${currentStateFilter?`in ${currentStateFilter}`:'total'}${selectedCounties.length?` · ${selectedCounties.length} selected`:''})</span>
+      </div>
+      <input type="text" id="pipelineCountySearchBox" placeholder="Type to search counties..." oninput="_pipelineCountySearch(this.value)" style="width:100%;padding:7px 10px;border:1px solid #cbd5e1;border-radius:5px;font-size:11px;box-sizing:border-box;margin-bottom:6px;"/>
+      <div id="pipelineCountyResults" style="max-height:160px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:5px;padding:6px;background:#fff;">
+        ${_pipelineCountyRenderList('', countiesForState, selectedCounties, btnStyle)}
+      </div>
+    </div>`;
+
   return `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px 24px;padding:16px 20px;background:#f8fafc;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;">
       <div>
         ${multiSelect('Pipeline Stage', 'stages', NEW_PIPELINE_STAGES)}
         ${multiSelect('Asset Type', 'assetTypes', opts.assetTypes)}
-        ${multiSelect('Region', 'regions', opts.regions)}
-        ${multiSelect('County', 'counties', opts.counties)}
+        ${regionChipsHTML}
+        ${stateDropdownHTML}
+        ${countySearchHTML}
       </div>
       <div>
         ${opts.cities.length <= 60 ? multiSelect('City', 'cities', opts.cities) : `
@@ -20222,6 +20462,72 @@ function _buildPipelineFilterPanelHTML(){
         ${rangeInput('Commission Amount', 'commMin', 'commMax', '$', '')}
       </div>
     </div>`;
+}
+
+// Render the filtered county list (used both on initial panel build and as
+// the user types into the search box to narrow results).
+function _pipelineCountyRenderList(query, allCounties, selected, btnStyleFn){
+  const q = (query||'').toLowerCase().trim();
+  // Always show selected counties first (as "✕ to remove" chips), then matches
+  const matches = q ? allCounties.filter(c => c.toLowerCase().includes(q) && !selected.includes(c)) : allCounties.filter(c => !selected.includes(c));
+  // Cap displayed matches to keep the DOM light — user can narrow via search
+  const capped = matches.slice(0, 100);
+  return [
+    ...selected.map(v => `<span onclick="togglePipelineFilterValue('counties','${v.replace(/'/g,"\\'")}')" style="${btnStyleFn(true)}">${v} ✕</span>`),
+    ...capped.map(v => `<span onclick="togglePipelineFilterValue('counties','${v.replace(/'/g,"\\'")}')" style="${btnStyleFn(false)}">${v}</span>`),
+    matches.length > 100 ? `<div style="font-size:10px;color:#94a3b8;padding:6px;">+${matches.length-100} more — keep typing to narrow</div>` : ''
+  ].join('');
+}
+
+// Called from the county search box oninput — re-renders the results div.
+function _pipelineCountySearch(query){
+  const resultsEl = document.getElementById('pipelineCountyResults');
+  if(!resultsEl) return;
+  const opts = _collectFilterOptions();
+  const f = getPipelineFilters();
+  const currentStateFilter = (f.states && f.states[0]) || '';
+  const countiesForState = currentStateFilter
+    ? opts.counties.filter(c => {
+        const st = _countyState(c);
+        return currentStateFilter === 'Other' ? !st : st === currentStateFilter;
+      })
+    : opts.counties;
+  const btnStyleFn = (sel) =>
+    `display:inline-block;padding:5px 11px;margin:2px;border-radius:99px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${sel?'#1e3a8a':'#cbd5e1'};background:${sel?'#1e3a8a':'#f1f5f9'};color:${sel?'#fff':'#334155'};`;
+  resultsEl.innerHTML = _pipelineCountyRenderList(query, countiesForState, f.counties || [], btnStyleFn);
+}
+
+// Toggle a region chip (e.g. "North NJ") in/out of the active filter.
+// Re-renders the whole pipeline view so all chip highlights and filter counts update.
+function togglePipelineRegionChip(chipId){
+  const f = getPipelineFilters();
+  if(!f.regionChipIds) f.regionChipIds = [];
+  const idx = f.regionChipIds.indexOf(chipId);
+  if(idx >= 0) f.regionChipIds.splice(idx, 1);
+  else         f.regionChipIds.push(chipId);
+  savePipelineFilters();
+  showPipelineView();
+}
+
+// Set the state dropdown filter. Empty string = "All states" (clears the filter).
+// Also clears any county selections that are no longer in the chosen state to
+// avoid confusing "hidden but still active" filters.
+function setPipelineStateFilter(state){
+  const f = getPipelineFilters();
+  if(!state){
+    f.states = [];
+  } else {
+    f.states = [state];
+    // Drop any selected counties that aren't in the new state
+    if(f.counties && f.counties.length){
+      f.counties = f.counties.filter(c => {
+        const st = _countyState(c);
+        return state === 'Other' ? !st : st === state;
+      });
+    }
+  }
+  savePipelineFilters();
+  showPipelineView();
 }
 
 function _cityFilterSearch(q){

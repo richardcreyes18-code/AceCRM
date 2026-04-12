@@ -1000,8 +1000,6 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   <button class="nav-btn" onclick="setNav(this,'buyercriteria')">Buyer Criteria</button>
   <button class="nav-btn" onclick="setNav(this,'company')">🏢 Company</button>
   <button class="nav-btn" onclick="setNav(this,'tasks-nav')" style="font-weight:600;color:#a78bfa;">☑ Tasks</button>
-  <button class="nav-btn" onclick="setNav(this,'calendar-nav')">Calendar</button>
-  <button class="nav-btn" onclick="setNav(this,'tools')">Tools</button>
   <button class="nav-btn" id="navSettingsBtn" onclick="setNav(this,'settings')" style="display:none;">⚙ Settings</button>
   <button class="nav-btn" onclick="setNav(this,'fieldmap')" style="color:#2060b0;">⇄ Field Map</button>
   <div class="nav-spacer"></div>
@@ -1026,8 +1024,6 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
         <button id="btnAllDeals" onclick="setViewMode('all')"
           style="font-size:10px;padding:2px 8px;border-radius:99px;border:1px solid #ccc;background:transparent;color:#888;cursor:pointer;">All Deals</button>
       </div>
-      <a onclick="openConfig()" style="font-size:10px;">Settings</a> &nbsp;·&nbsp;
-      <a onclick="syncData()" style="font-size:10px;">Sync Data</a> &nbsp;·&nbsp;
       <a onclick="doLogout()" style="font-size:10px;color:#c0392b;">Sign Out</a>
     </div>
     <button class="add-new-btn" onclick="setNav(null,'leadintake')">
@@ -22559,13 +22555,44 @@ function showLoginErr(msg){
 }
 
 function doLogout(){
-  if(!confirm('Sign out?')) return;
-  _clearSession();
-  _currentUser = null;
-  _authToken = null;
-  allDeals = [];
-  buildSidebar();
-  showLogin();
+  // Show a styled confirmation modal matching the rest of the app.
+  // Avoids the ugly browser-native confirm() dialog.
+  const existing = document.getElementById('logoutConfirmModal');
+  if(existing) existing.remove();
+
+  const modal = document.createElement('div');
+  modal.id = 'logoutConfirmModal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.6);z-index:999999;display:flex;align-items:center;justify-content:center;padding:20px;';
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;padding:28px;width:380px;max-width:92vw;box-shadow:0 20px 60px rgba(0,0,0,0.3);text-align:center;">
+      <div style="font-size:40px;margin-bottom:8px;">👋</div>
+      <div style="font-size:18px;font-weight:800;color:#0f172a;margin-bottom:6px;">Sign out?</div>
+      <div style="font-size:13px;color:#64748b;margin-bottom:20px;line-height:1.5;">You'll need to sign in again to access your deals.</div>
+      <div style="display:flex;gap:10px;">
+        <button id="logoutCancelBtn" style="flex:1;background:#f1f5f9;color:#475569;border:none;padding:11px;font-size:13px;font-weight:600;border-radius:7px;cursor:pointer;">Cancel</button>
+        <button id="logoutConfirmBtn" style="flex:1;background:#dc2626;color:#fff;border:none;padding:11px;font-size:13px;font-weight:700;border-radius:7px;cursor:pointer;">Sign Out</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+
+  const close = () => { const m = document.getElementById('logoutConfirmModal'); if(m) m.remove(); };
+  document.getElementById('logoutCancelBtn').onclick = close;
+  // Click outside the modal card to cancel
+  modal.addEventListener('click', (e) => { if(e.target === modal) close(); });
+  // Escape key to cancel
+  const escHandler = (e) => { if(e.key === 'Escape'){ close(); document.removeEventListener('keydown', escHandler); } };
+  document.addEventListener('keydown', escHandler);
+
+  document.getElementById('logoutConfirmBtn').onclick = () => {
+    close();
+    document.removeEventListener('keydown', escHandler);
+    _clearSession();
+    _currentUser = null;
+    _authToken = null;
+    allDeals = [];
+    buildSidebar();
+    showLogin();
+  };
 }
 
 function _applyUserToUI(user){

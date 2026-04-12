@@ -1525,32 +1525,93 @@ function _sanitizeFilename(name) {
 let _currentUser = null; // { id, name, email, initials, fub_name, role }
 let _viewMode = 'my';    // 'my' = own deals, 'all' = company pipeline
 let _authToken = null;
+let _refreshToken = null;
 
-function _saveSession(token, user) {
+function _saveSession(token, user, refreshToken) {
   _authToken = token;
   _currentUser = user;
+  if(refreshToken !== undefined) _refreshToken = refreshToken;
   localStorage.setItem('ace_auth_token', token);
   localStorage.setItem('ace_auth_user', JSON.stringify(user));
+  if(refreshToken) localStorage.setItem('ace_refresh_token', refreshToken);
 }
 
 function _clearSession() {
   _authToken = null;
+  _refreshToken = null;
   _currentUser = null;
   _myRelationships = new Map();
   _myRelationshipsLoadMs = 0;
   localStorage.removeItem('ace_auth_token');
   localStorage.removeItem('ace_auth_user');
+  localStorage.removeItem('ace_refresh_token');
 }
 
 function _loadSession() {
   const token = localStorage.getItem('ace_auth_token');
   const user  = localStorage.getItem('ace_auth_user');
+  const refresh = localStorage.getItem('ace_refresh_token');
   if(token && user) {
     _authToken = token;
+    _refreshToken = refresh || null;
     _currentUser = JSON.parse(user);
     return true;
   }
   return false;
+}
+
+// Parse a JWT without verification and return its payload, or null if invalid.
+function _parseJwtPayload(token){
+  try{
+    const parts = (token||'').split('.');
+    if(parts.length !== 3) return null;
+    return JSON.parse(atob(parts[1].replace(/-/g,'+').replace(/_/g,'/')));
+  }catch(e){ return null; }
+}
+
+// Returns true if the current access token expires within `bufferSeconds`
+// (default 5 minutes). If we can't parse it, assume expiring so we refresh.
+function _isTokenExpiring(bufferSeconds = 300){
+  if(!_authToken) return true;
+  const payload = _parseJwtPayload(_authToken);
+  if(!payload || !payload.exp) return true;
+  const now = Math.floor(Date.now()/1000);
+  return (payload.exp - now) < bufferSeconds;
+}
+
+// Exchange the stored refresh token for a new access token. Returns the new
+// access token on success, or null on failure (caller should clear session).
+// Uses a module-level promise to deduplicate concurrent refresh attempts.
+let _refreshInFlight = null;
+async function _refreshAccessToken(){
+  if(_refreshInFlight) return _refreshInFlight;
+  _refreshInFlight = (async () => {
+    try{
+      if(!_refreshToken) return null;
+      const resp = await fetch(`${SB_AUTH_URL}/token?grant_type=refresh_token`, {
+        method: 'POST',
+        headers: { 'Content-Type':'application/json', 'apikey': SB_ANON_KEY },
+        body: JSON.stringify({ refresh_token: _refreshToken })
+      });
+      const data = await resp.json();
+      if(!resp.ok || !data.access_token){
+        console.warn('Token refresh failed:', data.error_description || data.msg || resp.status);
+        return null;
+      }
+      // Save the new tokens — Supabase rotates refresh tokens too
+      _authToken = data.access_token;
+      if(data.refresh_token) _refreshToken = data.refresh_token;
+      localStorage.setItem('ace_auth_token', _authToken);
+      if(data.refresh_token) localStorage.setItem('ace_refresh_token', data.refresh_token);
+      return _authToken;
+    }catch(e){
+      console.warn('Token refresh error:', e.message);
+      return null;
+    }finally{
+      _refreshInFlight = null;
+    }
+  })();
+  return _refreshInFlight;
 }
 
 async function _signIn(email, password) {
@@ -1567,7 +1628,7 @@ async function _signIn(email, password) {
   const user = Array.isArray(profile) ? profile[0] : profile;
   if(!user) throw new Error('User profile not found. Contact admin.');
   
-  _saveSession(data.access_token, user);
+  _saveSession(data.access_token, user, data.refresh_token);
   _loadMyRelationships(true); // fire-and-forget
   return user;
 }
@@ -11991,18 +12052,49 @@ function _tmGetAccessToken(){
   try{ return localStorage.getItem('ace_auth_token') || null; }catch(e){ return null; }
 }
 
-// Generic Edge Function caller with auth header
+// Generic Edge Function caller with auth header.
+// Handles expired JWTs by (a) proactively refreshing before the call if the
+// access token is within 5 minutes of expiry, and (b) catching 401 responses
+// and retrying once after a refresh. If the refresh itself fails, the user's
+// session is cleared and they're bounced to the login screen.
 async function _tmCall(action, payload){
-  const token = _tmGetAccessToken();
-  if(!token) throw new Error('Not signed in — please log in again');
-  const res = await fetch(_TM_FN_URL, {
-    method: 'POST',
-    headers: {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer ' + token,
-    },
-    body: JSON.stringify({ action, ...payload }),
-  });
+  // Proactive refresh: if the current token is about to expire, swap it now.
+  if(_isTokenExpiring()){
+    const newTok = await _refreshAccessToken();
+    if(!newTok){
+      _clearSession();
+      if(typeof showLogin === 'function') showLogin();
+      throw new Error('Session expired — please sign in again');
+    }
+  }
+
+  const doFetch = async () => {
+    const token = _tmGetAccessToken();
+    if(!token) throw new Error('Not signed in — please log in again');
+    return fetch(_TM_FN_URL, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Authorization': 'Bearer ' + token,
+      },
+      body: JSON.stringify({ action, ...payload }),
+    });
+  };
+
+  let res = await doFetch();
+
+  // Reactive retry: server rejected the token — try one refresh + retry
+  if(res.status === 401){
+    const newTok = await _refreshAccessToken();
+    if(newTok){
+      res = await doFetch();
+    } else {
+      _clearSession();
+      if(typeof showLogin === 'function') showLogin();
+      throw new Error('Session expired — please sign in again');
+    }
+  }
+
   const data = await res.json().catch(()=>({ error: 'Invalid response' }));
   if(!res.ok || data.error) throw new Error(data.error || `HTTP ${res.status}`);
   return data;

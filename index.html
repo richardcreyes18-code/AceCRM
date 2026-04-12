@@ -855,48 +855,7 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
 </div>
 
 
-<!-- EMERGENCY TOKEN OVERLAY — always works, independent of all app state -->
-<div id="tokenOverlay" style="display:none;position:fixed;inset:0;background:rgba(0,0,0,0.7);z-index:999999;align-items:center;justify-content:center;">
-  <div style="background:#fff;border-radius:10px;padding:32px;width:420px;max-width:92vw;box-shadow:0 20px 60px rgba(0,0,0,0.4);">
-    <div style="font-size:18px;font-weight:700;color:#1a3a6e;margin-bottom:4px;">⚙ Update Airtable Token</div>
-    <div style="font-size:12px;color:#666;margin-bottom:16px;">Paste your new Personal Access Token below and click Save. The token is stored locally in your browser only.</div>
-    <input id="tok_input" type="text" placeholder="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9..."
-      style="width:100%;border:2px solid #2060b0;border-radius:6px;padding:10px 12px;font-size:13px;font-family:monospace;box-sizing:border-box;margin-bottom:12px;"
-      onkeydown="if(event.key==='Enter')tok_save()"/>
-    <div style="display:flex;gap:10px;">
-      <button onclick="tok_save()" style="flex:1;background:#1a3a6e;color:#fff;border:none;padding:11px;font-size:14px;font-weight:700;border-radius:6px;cursor:pointer;">💾 Save &amp; Connect</button>
-      <button onclick="tok_close()" style="background:#f0f0f0;color:#555;border:none;padding:11px 18px;font-size:13px;border-radius:6px;cursor:pointer;">Cancel</button>
-    </div>
-    <div id="tok_msg" style="margin-top:10px;font-size:12px;color:#c00;display:none;"></div>
-  </div>
-</div>
-<script>
-function tok_open(){
-  const el=document.getElementById('tokenOverlay');
-  if(el){
-    el.style.display='flex';
-    setTimeout(()=>{
-      const inp=document.getElementById('tok_input');
-      if(inp){
-        try{ inp.value=localStorage.getItem('at_key')||''; }catch(e){}
-        inp.focus(); inp.select();
-      }
-    },80);
-  }
-}
-function tok_close(){
-  const el=document.getElementById('tokenOverlay'); if(el) el.style.display='none';
-}
-function tok_save(){
-  const val=(document.getElementById('tok_input')?.value||'').trim();
-  const msg=document.getElementById('tok_msg');
-  if(!val||val.length<10){if(msg){msg.textContent='Please enter a valid token.';msg.style.display='block';}return;}
-  try{localStorage.setItem('at_key',val);}catch(e){}
-  if(msg) msg.style.display='none';
-  tok_close();
-  if(typeof syncData==='function') syncData();
-}
-</script>
+<!-- Legacy Airtable token popup removed in v91 — CRM is Supabase-only now -->
 
 <!-- CONFIG OVERLAY -->
 <div class="config-overlay" id="configOverlay" style="display:none!important;visibility:hidden!important;pointer-events:none!important;">
@@ -935,17 +894,7 @@ function tok_save(){
         <div id="cfgGoogleStatus" style="font-size:11px;margin-top:4px;color:#888;"></div>
       </div>
 
-      <!-- CLOUDINARY PHOTO UPLOAD -->
-      <div style="margin-top:18px;border-top:1px solid #ddd;padding-top:14px;">
-        <div style="font-weight:bold;color:#c07000;font-size:12px;margin-bottom:6px;">📷 Property Photo Uploads (Cloudinary — Free)</div>
-        <p style="font-size:11px;color:#666;margin-bottom:8px;">Enables one-click photo uploads. 25GB free storage, no credit card ever.<br>
-        <strong>Setup (60 sec):</strong> <a href="https://cloudinary.com/users/register_free" target="_blank" style="color:#c07000;">Sign up at cloudinary.com</a> → Dashboard → copy the <strong>API Environment variable</strong> (the line starting with <code style="background:#f0f0f0;padding:1px 4px;">cloudinary://</code>) → paste it below.</p>
-        <div class="config-field">
-          <label>Cloudinary API Environment Variable</label>
-          <input type="password" id="cfgCloudinaryUrl" placeholder="cloudinary://API_KEY:API_SECRET@cloud_name"/>
-        </div>
-        <div id="cfgCloudinaryStatus" style="font-size:11px;margin-top:4px;color:#888;"></div>
-      </div>
+      <!-- Cloudinary removed v91: photo uploads now go directly to Supabase Storage -->
 
       <!-- ANTHROPIC AI KEY -->
       <div style="margin-top:18px;border-top:1px solid #ddd;padding-top:14px;">
@@ -1658,9 +1607,31 @@ let calMonth = new Date();
 // Safe localStorage wrapper - won't crash on file:// or private mode
 const _store = {
   _mem: {},
-  get(k){ try{ return localStorage.getItem(k); }catch(e){ return this._mem[k]||null; } },
+  // Baked-in fallbacks: any key with no localStorage value falls back to these constants.
+  // Lets a fresh team member land on the CRM with everything working, no per-user setup.
+  // Google Places is a browser-exposed key — it's locked down by HTTP referrer restrictions
+  // in Google Cloud Console (only *.vercel.app domains can use it).
+  _baked: {
+    'google_places_key': 'AIzaSyAxUaUJdh4JCRx7n-YYjYrnlCbUx1f0mCE'
+  },
+  get(k){
+    try{
+      const v = localStorage.getItem(k);
+      if(v !== null && v !== '') return v;
+    }catch(e){
+      if(this._mem[k] !== undefined && this._mem[k] !== '') return this._mem[k];
+    }
+    // Fall back to baked-in value if nothing stored locally
+    return this._baked[k] || null;
+  },
   set(k,v){ try{ localStorage.setItem(k,v); }catch(e){ this._mem[k]=v; } }
 };
+
+// v91 cleanup: drop stale localStorage keys from prior Airtable/Cloudinary versions
+// so team members upgrading from an older cached build get a clean slate.
+try{
+  ['at_key','cloudinary_url','cloudinary_name','cloudinary_key','cloudinary_secret'].forEach(k => localStorage.removeItem(k));
+}catch(e){}
 
 function getConfig(){
   // Credentials baked in — no setup needed
@@ -1690,14 +1661,8 @@ function saveConfig(){
   const gk = document.getElementById('cfgGoogleKey')?.value?.trim();
   if(gk){ _store.set('google_places_key', gk); _loadGooglePlacesAPI(gk); }
 
-  // Save Cloudinary URL (cloudinary://key:secret@cloudname) — parse and store parts
-  const cUrl = document.getElementById('cfgCloudinaryUrl')?.value?.trim();
-  if(cUrl !== undefined){
-    _store.set('cloudinary_url', cUrl);
-    const cp = _parseCloudinaryUrl(cUrl);
-    if(cp){ _store.set('cloudinary_name', cp.cloudName); _store.set('cloudinary_key', cp.apiKey); _store.set('cloudinary_secret', cp.apiSecret); }
-    else if(!cUrl){ _store.set('cloudinary_name',''); _store.set('cloudinary_key',''); _store.set('cloudinary_secret',''); }
-  }
+  // Cloudinary removed v91 — photo uploads go directly to Supabase Storage
+
   const lType  = document.getElementById('dflt_loan_type')?.value;
   const lRate  = document.getElementById('dflt_loan_rate')?.value?.trim();
   const lAmort = document.getElementById('dflt_loan_amort')?.value;
@@ -1734,15 +1699,7 @@ function openConfig(){
       if(gStatus) gStatus.textContent = window._googlePlacesLoaded ? '✓ Google Places API active' : (gkEl.value ? '⏳ Key saved — will activate on save' : '');
     }
 
-    // Load Cloudinary URL
-    const cuEl = document.getElementById('cfgCloudinaryUrl');
-    if(cuEl) cuEl.value = _store.get('cloudinary_url')||'';
-    const cStatus = document.getElementById('cfgCloudinaryStatus');
-    if(cStatus){
-      const ready = _store.get('cloudinary_name') && _store.get('cloudinary_secret');
-      cStatus.textContent = ready ? '✓ Photo uploads enabled — cloud: ' + _store.get('cloudinary_name') : '';
-      cStatus.style.color = ready ? '#1a6a1a' : '#888';
-    }
+    // Cloudinary removed v91 — photo uploads go directly to Supabase Storage
 
     // Load saved loan defaults — wrapped separately so a crash here doesn't block the overlay
     try{
@@ -8130,7 +8087,6 @@ function renderDocumentsTab(d){
   const mainPhotoId = d['Main Photo']||'';
   const mainPhoto = photos.find(p=>p.id===mainPhotoId) || (photos.length?photos[0]:null);
   const airtableRecordUrl = `https://airtable.com/appKuHPzTwx9X3mKo/tbln5sLEUlNPydYJW/${d.id}`;
-  const hasImgbb = !!(_store.get('cloudinary_name') && _store.get('cloudinary_secret'));
 
   return `
     <!-- ══ PHOTO GALLERY ══════════════════════════════════════════ -->
@@ -11439,9 +11395,9 @@ async function loadBrochurePhotos(recordId){
   const statusEl = document.getElementById('brochurePhotoStatus');
 
   try{
-    // Photos are Cloudinary-hosted in Supabase version — no PHOTO field
+    // Photos are stored in Supabase Storage — no separate PHOTO field fetch needed
     if(isSupabase()){
-      if(statusEl) statusEl.textContent = 'Use Cloudinary photo upload for brochure photos.';
+      if(statusEl) statusEl.textContent = 'Upload brochure photos via the Property Photos section.';
       return;
     }
     const res = await fetch(`https://api.airtable.com/v0/${cfg.base}/${cfg.table}/${recordId}`,
@@ -11827,7 +11783,6 @@ function showSettingsPage(){
   const sbKey      = _store.get('sb_key') || '';
   const anthropic  = _store.get('anthropic_key') || '';
   const googleKey  = _store.get('google_places_key') || '';
-  const cloudinary = _store.get('cloudinary_url') || '';
   const loanType   = _store.get('dflt_loan_type')  || 'Fixed';
   const loanRate   = _store.get('dflt_loan_rate')  || '6.5';
   const loanAmort  = _store.get('dflt_loan_amort') || '25';
@@ -11867,12 +11822,6 @@ function showSettingsPage(){
             <label style="display:block;font-size:11px;font-weight:700;color:#475569;margin-bottom:4px;">📍 Google Places (address autocomplete)</label>
             <input id="cfgGoogleKey" type="password" value="${googleKey.replace(/"/g,'&quot;')}" placeholder="AIza..." style="width:100%;padding:9px 12px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;font-family:monospace;box-sizing:border-box;"/>
             <div style="font-size:10px;color:#94a3b8;margin-top:4px;">Free up to ~65,000 lookups/month. <a href="https://console.cloud.google.com" target="_blank" style="color:#2563eb;">Get a key</a> → enable Places API + Maps JavaScript API.</div>
-          </div>
-
-          <div style="margin-bottom:16px;">
-            <label style="display:block;font-size:11px;font-weight:700;color:#475569;margin-bottom:4px;">📸 Cloudinary (property photos)</label>
-            <input id="cfgCloudinaryUrl" type="password" value="${cloudinary.replace(/"/g,'&quot;')}" placeholder="cloudinary://key:secret@cloudname" style="width:100%;padding:9px 12px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;font-family:monospace;box-sizing:border-box;"/>
-            <div style="font-size:10px;color:#94a3b8;margin-top:4px;">25GB free, no credit card. <a href="https://cloudinary.com" target="_blank" style="color:#2563eb;">Sign up</a> → copy API Environment Variable.</div>
           </div>
 
           <div>
@@ -11944,13 +11893,8 @@ function saveSettingsPage(){
   if(gk){ _store.set('google_places_key', gk); if(typeof _loadGooglePlacesAPI==='function') _loadGooglePlacesAPI(gk); }
   else if(gk === '') _store.set('google_places_key', '');
 
-  const cUrl = document.getElementById('cfgCloudinaryUrl')?.value?.trim();
-  if(cUrl !== undefined){
-    _store.set('cloudinary_url', cUrl);
-    const cp = (typeof _parseCloudinaryUrl==='function') ? _parseCloudinaryUrl(cUrl) : null;
-    if(cp){ _store.set('cloudinary_name', cp.cloudName); _store.set('cloudinary_key', cp.apiKey); _store.set('cloudinary_secret', cp.apiSecret); }
-    else if(!cUrl){ _store.set('cloudinary_name',''); _store.set('cloudinary_key',''); _store.set('cloudinary_secret',''); }
-  }
+  // Cloudinary removed v91 — photo uploads go directly to Supabase Storage
+
   const lType  = document.getElementById('dflt_loan_type')?.value;
   const lRate  = document.getElementById('dflt_loan_rate')?.value?.trim();
   const lAmort = document.getElementById('dflt_loan_amort')?.value;
@@ -18283,18 +18227,7 @@ async function uploadDocToAirtable(propertyId, propertyAddress){
 //  PROPERTY PHOTO GALLERY
 // ════════════════════════════════════════════════════════════════
 
-// Parse cloudinary://API_KEY:API_SECRET@cloud_name
-function _parseCloudinaryUrl(url){
-  try{
-    const s = url.replace(/^cloudinary:\/\//,'');
-    const atIdx = s.lastIndexOf('@');
-    if(atIdx<0) return null;
-    const cloudName = s.slice(atIdx+1);
-    const creds = s.slice(0, atIdx).split(':');
-    if(creds.length<2) return null;
-    return { apiKey: creds[0], apiSecret: creds.slice(1).join(':'), cloudName };
-  }catch(e){ return null; }
-}
+// _parseCloudinaryUrl removed v91 — photo uploads go directly to Supabase Storage
 
 // SHA-256 via built-in SubtleCrypto — no library needed
 async function _sha256hex(str){
@@ -21912,23 +21845,10 @@ window.addEventListener('DOMContentLoaded',()=>{
     const tag = e.target?.tagName;
     if(tag === 'INPUT' || tag === 'SELECT' || tag === 'TEXTAREA') markDirty();
   });
-  // If token is stored, connect immediately (like v12 behavior)
-  const storedKey = _store.get('at_key')||'';
-  if(storedKey && storedKey.length > 10){
-    syncData();
-    return;
-  }
-  // No token — dismiss splash and show token overlay
-  if(typeof _splashDone==='function') _splashDone();
-  setTimeout(()=>tok_open(), 200);
-
-  // Load demo deals so sidebar isn't empty
-  allDeals = [
-    { id:'demo1', 'Address':'123 Main St, Newark, NJ 07102', 'Pipeline Stage':'Pitch Out', 'Asking Price':1500000, 'Offer Price':1350000, 'NOI':95000, 'Simple Text Property Type':'Multifamily', 'Simple County':'Essex County', 'Region for County':'North Jersey', 'Top Priority':true, 'Deal Notes':'6-unit building. Owner motivated.', '# of Buyers Pitched':4 },
-    { id:'demo2', 'Address':'456 Bergen Blvd, Ridgefield, NJ 07657', 'Pipeline Stage':'Prospect / Lead', 'Asking Price':2800000, 'NOI':160000, 'Simple Text Property Type':'Industrial', 'Simple County':'Bergen County', 'Region for County':'North Jersey', '# of Buyers Pitched':0 },
-  ];
-  buildSidebar();
-  openDeal(allDeals[0]);
+  // Supabase anon key is baked into getConfig() — just sync on launch.
+  // No token prompt, no demo fallback: any user landing here is a team member
+  // and should see real data immediately.
+  syncData();
 });
 
 function connectAirtable(){

@@ -1141,6 +1141,7 @@ const SB_PROP_MAP = {
   property_type_text:'Simple Text Property Type',
   legacy_property_type:'Legacy Property Type (Backup)',
   simple_county:'Simple County', region:'Region for County',
+  state:'State', needs_county_review:'Needs County Review',
   next_steps:'Next Steps', deal_notes:'Deal Notes',
   general_property_notes:'General Property Notes',
   financial_property_notes:'Financial Property Notes',
@@ -9335,7 +9336,11 @@ const PIPELINE_REGION_CHIPS = [
 ];
 
 // Resolve a county name to its state. Returns '' (empty) for unknown counties.
-function _countyState(county){
+// PHASE B: if a deal object is passed as a second arg and has a 'State' field
+// from the database, that takes priority over the hardcoded county map.
+function _countyState(county, deal){
+  // Phase B preference: use the DB-populated state column if available
+  if(deal && deal['State']) return deal['State'];
   if(!county) return '';
   return PIPELINE_COUNTY_TO_STATE[county] || '';
 }
@@ -9360,7 +9365,10 @@ function _countyRegions(county){
 }
 
 // True if this county name looks wrong/junk and should be flagged for review.
-function _isBadCountyName(county){
+// PHASE B: if a deal object is passed and has the DB-backed needs_county_review
+// flag set, that takes priority over the hardcoded set.
+function _isBadCountyName(county, deal){
+  if(deal && deal['Needs County Review'] === true) return true;
   return PIPELINE_BAD_COUNTY_NAMES.has(county || '');
 }
 
@@ -19776,6 +19784,8 @@ function _defaultPipelineFilters(){
     // Phase A additions: state + region chips + regionChipIds for toggle highlight
     states: [],        // multi-select: state abbreviations resolved from county
     regionChipIds: [], // multi-select: which Pipeline region chips are active
+    // Phase B: show only deals flagged for county review
+    needsReviewOnly: false,
     priceMin: null, priceMax: null,
     sfMin: null, sfMax: null,
     unitsMin: null, unitsMax: null,
@@ -19890,14 +19900,17 @@ function applyPipelineFilters(deals){
     // County
     if(f.counties.length && !f.counties.includes(d['Simple County'])) return false;
     // Phase A: State filter — uses the county→state lookup
+    // (Phase B: passes deal so the DB-backed state column takes priority.)
     if(f.states && f.states.length){
-      const dealState = _countyState(d['Simple County']);
+      const dealState = _countyState(d['Simple County'], d);
       if(!f.states.includes(dealState || 'Other')) return false;
     }
+    // Phase B: Needs Review filter — only show deals flagged for county review
+    if(f.needsReviewOnly && !_isBadCountyName(d['Simple County'], d)) return false;
     // Phase A: Region chips — OR semantics (deal passes if ANY chip matches)
     if(f.regionChipIds && f.regionChipIds.length){
       const county = d['Simple County'] || '';
-      const dealState = _countyState(county);
+      const dealState = _countyState(county, d);
       const dealRegions = _countyRegions(county); // [] for non-NJ counties
       let anyMatch = false;
       for(const chipId of f.regionChipIds){
@@ -19955,6 +19968,7 @@ function _countActiveFilters(){
   if(f.agents.length) n++;
   if(f.states && f.states.length) n++;
   if(f.regionChipIds && f.regionChipIds.length) n++;
+  if(f.needsReviewOnly) n++;
   if(f.priceMin != null || f.priceMax != null) n++;
   if(f.sfMin != null || f.sfMax != null) n++;
   if(f.unitsMin != null || f.unitsMax != null) n++;
@@ -20091,7 +20105,7 @@ function _refreshPipelineBody(){
                 return `<div class="pipeline-card" draggable="true"
                   ondragstart="pipelineDragStart(event, '${d.id}')"
                   ondragend="pipelineDragEnd(event)"
-                  onclick="openDealSnapshot('${d.id}')">${_isBadCountyName(d['Simple County']) ? '<div style="background:#fef3c7;color:#92400e;font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;margin-bottom:4px;display:inline-block;" title="County name needs review">⚠ BAD COUNTY</div>' : ''}${rows}</div>`;
+                  onclick="openDealSnapshot('${d.id}')">${_isBadCountyName(d['Simple County'], d) ? '<div style="background:#fef3c7;color:#92400e;font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;margin-bottom:4px;display:inline-block;" title="County name needs review">⚠ BAD COUNTY</div>' : ''}${rows}</div>`;
               }).join('')}
               ${col.length===0?'<div style="font-size:11px;color:#94a3b8;text-align:center;padding:20px;font-style:italic;">Empty</div>':''}
             </div>
@@ -20391,6 +20405,20 @@ function _buildPipelineFilterPanelHTML(){
       </div>
     </div>`;
 
+  // Phase B: Needs Review toggle — count deals flagged for county review and
+  // render a single button that filters pipeline to just the review queue.
+  // Uses the same DB-backed flag that Phase B populated, with Phase A fallback.
+  const reviewCount = allDeals.filter(d => _isBadCountyName(d['Simple County'], d)).length;
+  const reviewActive = !!f.needsReviewOnly;
+  const reviewToggleHTML = `
+    <div style="margin-bottom:14px;">
+      <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Data Quality</div>
+      <span onclick="togglePipelineNeedsReview()" style="display:inline-block;padding:6px 13px;border-radius:99px;font-size:11px;font-weight:700;cursor:pointer;border:1px solid ${reviewActive?'#b45309':'#fbbf24'};background:${reviewActive?'#b45309':'#fef3c7'};color:${reviewActive?'#fff':'#92400e'};">
+        ⚠ Needs Review Only <span style="background:${reviewActive?'rgba(255,255,255,0.25)':'#fbbf24'};color:${reviewActive?'#fff':'#78350f'};padding:1px 7px;border-radius:99px;margin-left:5px;font-size:10px;">${reviewCount}</span>
+      </span>
+      ${reviewCount > 0 ? `<div style="font-size:10px;color:#94a3b8;margin-top:4px;">${reviewCount} deals have bad, missing, or mismatched county data.</div>` : ''}
+    </div>`;
+
   // Phase A: State dropdown — all states present in data, default "All"
   // Builds the state list from actual deals so unmapped counties show as "Other"
   const stateSet = new Set();
@@ -20444,6 +20472,7 @@ function _buildPipelineFilterPanelHTML(){
         ${regionChipsHTML}
         ${stateDropdownHTML}
         ${countySearchHTML}
+        ${reviewToggleHTML}
       </div>
       <div>
         ${opts.cities.length <= 60 ? multiSelect('City', 'cities', opts.cities) : `
@@ -20505,6 +20534,15 @@ function togglePipelineRegionChip(chipId){
   const idx = f.regionChipIds.indexOf(chipId);
   if(idx >= 0) f.regionChipIds.splice(idx, 1);
   else         f.regionChipIds.push(chipId);
+  savePipelineFilters();
+  showPipelineView();
+}
+
+// Phase B: Toggle the "Needs Review Only" filter. Shows only deals flagged
+// for county review (bad/missing/mismatched county names).
+function togglePipelineNeedsReview(){
+  const f = getPipelineFilters();
+  f.needsReviewOnly = !f.needsReviewOnly;
   savePipelineFilters();
   showPipelineView();
 }

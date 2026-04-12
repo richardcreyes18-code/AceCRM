@@ -11905,25 +11905,12 @@ function showSettingsPage(){
 
 const _TM_FN_URL = 'https://kxtuegjptvzqycgyzehj.supabase.co/functions/v1/admin-users';
 
-// Get the current user's JWT access token. Stored by supabase-js under a key
-// that looks like sb-kxtuegjptvzqycgyzehj-auth-token in localStorage.
+// Get the current user's JWT. Uses the CRM's existing session state from
+// _saveSession() — _authToken global (in-memory) with localStorage fallback.
+// No SDK-key guessing; this is the same token the rest of the app already uses.
 function _tmGetAccessToken(){
-  try{
-    // Look for any supabase auth token key
-    for(let i=0; i<localStorage.length; i++){
-      const k = localStorage.key(i);
-      if(k && (k.includes('supabase.auth.token') || (k.startsWith('sb-') && k.endsWith('-auth-token')))){
-        const v = localStorage.getItem(k);
-        if(!v) continue;
-        try{
-          const parsed = JSON.parse(v);
-          // v2 shape: { access_token, ... } OR { currentSession: { access_token, ... } }
-          return parsed?.access_token || parsed?.currentSession?.access_token || null;
-        }catch(e){}
-      }
-    }
-  }catch(e){}
-  return null;
+  if(typeof _authToken !== 'undefined' && _authToken) return _authToken;
+  try{ return localStorage.getItem('ace_auth_token') || null; }catch(e){ return null; }
 }
 
 // Generic Edge Function caller with auth header

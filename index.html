@@ -1339,7 +1339,9 @@ const SB_BC_MAP = {
   automotive_min_bays:'Automotive Min Bays',
   shopping_min_sf:'Shopping Min SF',
   shopping_max_sf:'Shopping Max SF',
-  shopping_min_tenants:'Shopping Min Tenants'
+  shopping_min_tenants:'Shopping Min Tenants',
+  // v102.17: agent attribution for dashboard scoping
+  fub_assigned_to:'Assigned Agent'
 };
 
 // Tasks map (ace_tasks)
@@ -2175,6 +2177,18 @@ function showDashboard(){
       </div>`;
   };
 
+  // v102.17: Buyer Leads count card — count-only, no goal coloring.
+  // Renders with "—" placeholder; the async _dashLoadBuyerLeadCounts() call
+  // below populates the actual numbers shortly after the dashboard appears.
+  const buyerCountCard = (label, elId) => `
+    <div style="
+      flex:1;min-width:180px;background:#f0f9ff;border:2px solid #bae6fd;
+      border-radius:12px;padding:18px 20px;">
+      <div style="font-size:11px;font-weight:700;color:#0369a1;text-transform:uppercase;letter-spacing:.06em;">${label}</div>
+      <div id="${elId}" style="font-size:34px;font-weight:800;color:#0369a1;line-height:1.1;margin:6px 0 4px;">—</div>
+      <div style="font-size:11px;color:#0369a1;font-weight:600;">Buyer leads entered</div>
+    </div>`;
+
   // Build a simple value/count tile for pipeline stats
   const statTile = (label, value, sublabel, color) => `
     <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px 18px;box-shadow:0 1px 2px rgba(0,0,0,0.03);">
@@ -2210,11 +2224,21 @@ function showDashboard(){
 
       <!-- LEAD STATS -->
       <div style="margin-bottom:28px;">
-        <div style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;">New Leads</div>
+        <div style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;">New Seller Leads</div>
         <div style="display:flex;gap:14px;flex-wrap:wrap;">
           ${leadCard('Today', todayLeads, 'today')}
           ${leadCard('This Week', weekLeads, 'week')}
           ${leadCard('This Month', monthLeads, 'month')}
+        </div>
+      </div>
+
+      <!-- v102.17: BUYER LEADS — count-only, no goals -->
+      <div style="margin-bottom:28px;">
+        <div style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;">New Buyer Leads</div>
+        <div style="display:flex;gap:14px;flex-wrap:wrap;">
+          ${buyerCountCard('Today',     'dashBuyerToday')}
+          ${buyerCountCard('This Week', 'dashBuyerWeek')}
+          ${buyerCountCard('This Month','dashBuyerMonth')}
         </div>
       </div>
 
@@ -2320,6 +2344,64 @@ function showDashboard(){
 
   // Lazy-load tasks async so the main dashboard renders immediately
   _dashLoadTasks();
+  // v102.17: lazy-load buyer lead counts scoped to current agent
+  _dashLoadBuyerLeadCounts();
+}
+
+// v102.17: Fetch buyer lead counts for the current agent in three date windows.
+// Uses lightweight Postgrest count queries (HEAD + Prefer: count=exact) instead
+// of pulling the full rows. Called after the dashboard renders. If the user
+// isn't signed in or has no fub_name, all three counts are left as "—".
+async function _dashLoadBuyerLeadCounts(){
+  const todayEl = document.getElementById('dashBuyerToday');
+  const weekEl  = document.getElementById('dashBuyerWeek');
+  const monthEl = document.getElementById('dashBuyerMonth');
+  if(!todayEl || !weekEl || !monthEl) return; // dashboard left the screen
+  const agentName = (typeof _currentUser !== 'undefined' && _currentUser && _currentUser.fub_name) || null;
+  if(!agentName){
+    todayEl.textContent = '0';
+    weekEl.textContent  = '0';
+    monthEl.textContent = '0';
+    return;
+  }
+  try {
+    const { today, weekStart, monthStart } = _dashWindowStarts();
+    const iso = d => new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString();
+    const cfg = getConfig();
+    if(!isSupabase() || !cfg.url || !cfg.key) return;
+    const agentEnc = encodeURIComponent(agentName);
+    const fetchCount = async (sinceIso) => {
+      const url = `${cfg.url}/rest/v1/${SB_TABLES.buyerCriteria}?fub_assigned_to=eq.${agentEnc}&created_at=gte.${encodeURIComponent(sinceIso)}&select=id`;
+      const res = await fetch(url, {
+        method: 'HEAD',
+        headers: {
+          apikey: cfg.key,
+          Authorization: `Bearer ${cfg.key}`,
+          'Prefer': 'count=exact',
+          'Range-Unit': 'items',
+          'Range': '0-0'
+        }
+      });
+      if(!res.ok) return 0;
+      const range = res.headers.get('content-range') || '';
+      // content-range is "0-0/N" or "*/N"
+      const m = range.match(/\/(\d+)$/);
+      return m ? Number(m[1]) : 0;
+    };
+    const [tCnt, wCnt, mCnt] = await Promise.all([
+      fetchCount(iso(today)),
+      fetchCount(iso(weekStart)),
+      fetchCount(iso(monthStart))
+    ]);
+    if(todayEl) todayEl.textContent = String(tCnt);
+    if(weekEl)  weekEl.textContent  = String(wCnt);
+    if(monthEl) monthEl.textContent = String(mCnt);
+  } catch(e){
+    console.warn('[dashboard] buyer lead count fetch failed:', e.message);
+    if(todayEl) todayEl.textContent = '?';
+    if(weekEl)  weekEl.textContent  = '?';
+    if(monthEl) monthEl.textContent = '?';
+  }
 }
 
 async function _dashLoadTasks(){
@@ -16989,6 +17071,13 @@ async function _liSubmitSeller(){
     const contactNotes = gv('li_s_cnotes');
 
     if(isSupabase()){
+      // v102.17: capture the current agent's fub_name so new leads count on
+      // the submitting agent's dashboard (Today / This Week / This Month).
+      // Falls back to null if no user is logged in or no fub_name is set —
+      // those edge cases just won't be agent-attributed, which matches the
+      // existing dashboard fallback behavior of "showing all deals".
+      const agentFub = (typeof _currentUser !== 'undefined' && _currentUser && _currentUser.fub_name) || null;
+
       // 1. Create (or reuse existing) contact in ace_contacts
       let contactId = null;
       try{
@@ -17006,7 +17095,8 @@ async function _liSubmitSeller(){
             company: contactCo || null,
             contact_notes: contactNotes || null,
             type: ['Seller'],
-            date_added: new Date().toISOString().slice(0,10)
+            date_added: new Date().toISOString().slice(0,10),
+            fub_assigned_to: agentFub  // v102.17: agent attribution
           };
           const createdContact = await _sbPost(SB_TABLES.contacts, contactRow);
           contactId = createdContact?.id || null;
@@ -17024,6 +17114,9 @@ async function _liSubmitSeller(){
       // 3. Create deal in ace_properties, linking the contact as owner
       const propData = _atToSb(dealFields, SB_PROP_MAP);
       if(contactId) propData.owner_contact_id = contactId;
+      // v102.17: agent attribution — must be set BEFORE _sbPost so the new
+      // property shows up on the submitting agent's dashboard immediately.
+      if(agentFub) propData.fub_assigned_to = agentFub;
       const createdDeal = await _sbPost(SB_TABLES.properties, propData);
       // v102.6: No more localStorage seeding. Any GRI / expense data from
       // the intake form is already in dealFields → propData → Supabase.
@@ -17403,6 +17496,10 @@ async function _liSubmitBuyer(){
       // preference fields (automotive, retail, land zoning, etc.) that were
       // previously collected in the UI but dropped on submit.
 
+      // v102.17: capture the current agent's fub_name so this buyer lead
+      // shows up on the submitting agent's dashboard Buyer Leads counter.
+      const agentFub = (typeof _currentUser !== 'undefined' && _currentUser && _currentUser.fub_name) || null;
+
       // 1. Create contact row
       const contactName  = gv('li_b_name');
       const contactPhone = gv('li_b_phone');
@@ -17416,7 +17513,8 @@ async function _liSubmitBuyer(){
           company: gv('li_b_company') || null,
           contact_notes: gv('li_b_cnotes') || null,
           type: ['Buyer'],
-          date_added: new Date().toISOString().slice(0,10)
+          date_added: new Date().toISOString().slice(0,10),
+          fub_assigned_to: agentFub  // v102.17: agent attribution
         };
         const createdContact = await _sbPost(SB_TABLES.contacts, contactRow);
         contactId = createdContact?.id || null;
@@ -17430,6 +17528,8 @@ async function _liSubmitBuyer(){
       const bcRow = {
         contact_id: contactId,
         date_added: new Date().toISOString().slice(0,10),
+        // v102.17: agent attribution for dashboard scoping
+        fub_assigned_to: agentFub,
         desired_property_types: assetLabels || null,
         preferred_states: (_li.counties && _li.counties.length) ? 'NJ' : null,
         preferred_counties: _li.counties && _li.counties.length ? _li.counties.join(', ') : null,

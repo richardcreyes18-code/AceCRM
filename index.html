@@ -1271,7 +1271,12 @@ const SB_PROP_MAP = {
   property_name:'Property Name', complex_name:'Complex Name', municipality:'Municipality',
   x_price_per_foot:'What is the price at X Price per foot',
   x_cap_rate_pct:'What is price at X Cap Rate?',
-  created_at:'Date Added',
+  // v102.18: removed `created_at:'Date Added'` duplicate mapping. It was
+  // a latent bug — _atToSb's reverse map only keeps one entry per Airtable
+  // label, so writes to 'Date Added' were targeting the auto-managed
+  // created_at column instead of the nullable date_added column. The
+  // loader at line ~1917 now explicitly falls back: deal['Date Added']
+  // = row.date_added || row.created_at.
   fub_assigned_to:'Assigned Agent',
   ai_clarifying_notes:'AI Clarifying Notes',
   ai_parsed_at:'AI Parsed At',
@@ -1917,6 +1922,16 @@ async function syncData(){
           const deal = _sbToAt(row, SB_PROP_MAP);
           deal.id = row.id;
           if(row.owner_contact_id) deal['Owner'] = [row.owner_contact_id];
+          // v102.18: Date Added fallback chain. SB_PROP_MAP no longer has the
+          // duplicate created_at:'Date Added' entry that used to provide this
+          // implicitly (and which broke the write side because the reverse
+          // map collapsed the two snake_case columns into one). Now we do it
+          // explicitly: use date_added if set, else fall back to created_at.
+          // This keeps all 5,700+ legacy deals (which have null date_added)
+          // displaying their creation date correctly.
+          if(!deal['Date Added'] && row.created_at){
+            deal['Date Added'] = row.created_at;
+          }
           records.push(deal);
         });
       };
@@ -16978,6 +16993,11 @@ async function _liSubmitSeller(){
     const userGeneralNotes = gv('li_s_notes');
     const dealFields = {
       'Address': gv('li_s_address'), 'Pipeline Stage': 'New Lead',
+      // v102.18: explicitly set Date Added so the dashboard "New Leads"
+      // counter increments immediately on submission. Without this, the
+      // column was null and only created_at provided the fallback —
+      // which worked for legacy queries but is cleaner this way.
+      'Date Added': new Date().toISOString().slice(0,10),
       'General Property Notes': userGeneralNotes || '',
       'Simple County': gv('li_s_county')||'',
       'CRM Asset Classification': assetTypeText||'',
@@ -17125,7 +17145,10 @@ async function _liSubmitSeller(){
     }
     // v102.12: Airtable fallback else branch removed. Ace CRM is
     // Supabase-only; there is no Airtable code path for new deals anymore.
-    syncData();
+    // v102.18: await syncData so allDeals contains the new lead before
+    // _liShowSuccess fires. Without await, the user can navigate to the
+    // dashboard before the refresh completes and see stale counts.
+    await syncData();
     _liShowSuccess('seller', gv('li_s_name'), gv('li_s_address'));
   }catch(e){
     if(btn){btn.disabled=false;btn.textContent='✓ Submit Seller Lead';}
@@ -17608,6 +17631,11 @@ async function _liSubmitBuyer(){
       await _sbPost(SB_TABLES.buyerCriteria, bcRow);
     }
     // v102.12: Airtable fallback else branch removed. Ace CRM is Supabase-only.
+    // v102.18: invalidate the buyer criteria cache so the Buyer Criteria tab
+    // shows the new lead next time it's opened. Also calls syncData so any
+    // dashboard counts that depend on allDeals stay fresh.
+    if(typeof _bcLastLoadMs !== 'undefined') _bcLastLoadMs = 0;
+    try { await syncData(); } catch(e) { console.warn('syncData after buyer submit failed:', e.message); }
     _liShowSuccess('buyer', gv('li_b_name'), null);
   }catch(e){
     if(btn){btn.disabled=false;btn.textContent='✓ Submit Buyer Lead';}
@@ -17620,12 +17648,13 @@ function _liShowSuccess(type, name, address){
     <div style="max-width:560px;margin:60px auto;text-align:center;padding:20px;">
       <div style="font-size:64px;margin-bottom:16px;">✅</div>
       <div style="font-size:24px;font-weight:800;color:#0f172a;margin-bottom:8px;">Lead Submitted!</div>
-      <div style="font-size:14px;color:#64748b;margin-bottom:6px;"><strong>${name}</strong> has been added to Airtable as a ${type==='seller'?'Seller':'Buyer'} lead.</div>
+      <div style="font-size:14px;color:#64748b;margin-bottom:6px;"><strong>${name}</strong> has been added as a ${type==='seller'?'Seller':'Buyer'} lead.</div>
       ${address?`<div style="font-size:13px;color:#94a3b8;margin-bottom:24px;">${address}</div>`:'<div style="margin-bottom:24px;"></div>'}
       <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
         <button onclick="showLeadIntakePage()" style="background:#1a3a6e;color:#fff;border:none;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">+ Add Another Lead</button>
+        <button onclick="setNav(document.querySelectorAll('.nav-btn')[0],'home');showDashboard();" style="background:#0369a1;color:#fff;border:none;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">📊 Back to Dashboard</button>
         ${type==='buyer'?`<button onclick="setNav(document.querySelector('.nav-btn[onclick*=buyercriteria]'),'buyercriteria')" style="background:#f1f5f9;color:#1a3a6e;border:none;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">View Buyer Criteria →</button>`
-        :`<button onclick="setNav(document.querySelectorAll('.nav-btn')[0],'home')" style="background:#f1f5f9;color:#1a3a6e;border:none;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">Back to Deals →</button>`}
+        :`<button onclick="setNav(document.querySelectorAll('.nav-btn')[1],'pipeline')" style="background:#f1f5f9;color:#1a3a6e;border:none;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">View Deals →</button>`}
       </div>
     </div>`;
 }

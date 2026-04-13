@@ -1005,6 +1005,17 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   <button class="nav-btn" onclick="setNav(this,'fieldmap')" style="color:#2060b0;">⇄ Field Map</button>
   <div class="nav-spacer"></div>
   <span class="nav-user" id="navUser">Welcome, Ricky</span>
+  <!-- v102.7: online/offline indicator. Green when Supabase is reachable,
+       red with tooltip when offline. Listens to window.online / window.offline
+       events. Users need internet for the CRM to save — this tells them why
+       saves fail if connectivity drops. -->
+  <span id="netStatusIndicator" title="Online — connected to Supabase"
+    style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;margin-right:8px;
+           background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);
+           border-radius:12px;font-size:11px;font-weight:600;color:#16a34a;">
+    <span id="netStatusDot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;"></span>
+    <span id="netStatusText">Online</span>
+  </span>
   <button class="nav-btn" onclick="syncData()" id="syncNavBtn">↻ Sync</button>
 </div>
 
@@ -1127,8 +1138,10 @@ const SB_TABLES = {
   buyerCriteria: 'ace_buyer_criteria',
   tasks:         'ace_tasks',
   buyerInterests:'ace_buyer_interests',
-  submissionBuyer:  'ace_submissions_buyer',
-  submissionSeller: 'ace_submissions_seller',
+  // v102.12: submissionBuyer / submissionSeller removed. The tables they
+  // referenced (ace_submissions_buyer, ace_submissions_seller) were dropped
+  // in the v102.12 migration after v102.9 rewired lead intake to write
+  // directly to the real tables.
   documents:     'ace_documents',
   tenantMix:     'ace_properties'  // tenant mix lives in the property record
 };
@@ -1141,6 +1154,7 @@ const SB_PROP_MAP = {
   property_type_text:'Simple Text Property Type',
   legacy_property_type:'Legacy Property Type (Backup)',
   simple_county:'Simple County', region:'Region for County',
+  state:'State', needs_county_review:'Needs County Review',
   next_steps:'Next Steps', deal_notes:'Deal Notes',
   general_property_notes:'General Property Notes',
   financial_property_notes:'Financial Property Notes',
@@ -1182,6 +1196,35 @@ const SB_PROP_MAP = {
   property_mgmt_fee_monthly:'Property Management Fee (Monthly)',
   capital_reserve_monthly:'Capital Reserve (Monthly)',
   admin_expenses_monthly:'Admin Expenses (Monthly)',
+  // v102.4: new expense sub-category columns so every Financial Analysis input persists
+  accounting_monthly:'Accounting (Monthly)',
+  legal_monthly:'Legal (Monthly)',
+  other_admin_monthly:'Other Admin (Monthly)',
+  other_utilities_monthly:'Other Utilities (Monthly)',
+  other_misc_monthly:'Other Misc (Monthly)',
+  other_tax_monthly:'Other Tax (Monthly)',
+  liability_insurance_monthly:'Liability Insurance (Monthly)',
+  other_mgmt_monthly:'Other Mgmt (Monthly)',
+  // v102.4: JSONB column for pro forma expense per-line values
+  pro_forma_expense_breakdown:'Pro Forma Expense Breakdown',
+  // v102.6: Final localStorage → Supabase migration. These 6 fields used to
+  // only live in the fin_${dealId} localStorage blob, which meant teammates
+  // couldn't see each other's updates. Now persisted to dedicated columns.
+  non_revenue_units_pct:'Non-Revenue Units (%)',
+  proforma_non_revenue_units_pct:'Proforma Non-Revenue Units (%)',
+  gri_source:'GRI Source',
+  down_payment_type:'Down Payment Type',
+  proforma_down_payment_pct:'Proforma Down Payment (%)',
+  proforma_down_payment_type:'Proforma Down Payment Type',
+  // v102.8: Lot Size Unit radio toggle persistence (sf / acres)
+  lot_size_unit:'Lot Size Unit',
+  // v102.8: Total Lot Size — latent bug, input had no DB column or collect path
+  total_lot_size:'Total Lot Size',
+  // v102.9: lead intake asset-type-specific fields
+  automotive_gas_type:'Automotive Gas Type',
+  automotive_wash_type:'Automotive Wash Type',
+  retail_lease_type:'Retail Lease Type',
+  shopping_lease_type:'Shopping Lease Type',
   mortgage1_loan_type:'Mortgage 1 Loan Type', mortgage1_principal:'Mortgage 1 Principal Balance',
   mortgage1_amortization_yrs:'Mortgage 1 Amortization (Years)',
   mortgage1_interest_rate_pct:'Mortgage 1 Interest Rate (%)',
@@ -1264,7 +1307,16 @@ const SB_BC_MAP = {
   office_min_sf:'Office Min SF', office_class_preference:'Office Class Preference',
   land_min_acreage:'Land Min Acreage', land_intended_use:'Land Intended Use',
   other_requirements:'Other Requirements ', deals_sent_notes:'Deals Sent Notes',
-  is_vip_buyer:'Is VIP Buyer'
+  is_vip_buyer:'Is VIP Buyer',
+  // v102.9: columns added for buyer lead intake fields that were previously
+  // collected in the UI but dropped on submit due to missing SB_BC_MAP entries
+  preferred_counties:'Preferred Counties',
+  automotive_gas_preference:'Automotive Gas Preference',
+  automotive_type_preference:'Automotive Type Preference',
+  land_zoning_preference:'Land Zoning Preference',
+  retail_anchor_preference:'Retail Anchor Preference',
+  retail_lease_preference:'Retail Lease Preference',
+  warehouse_profile_preference:'Warehouse Profile Preference'
 };
 
 // Tasks map (ace_tasks)
@@ -1904,6 +1956,14 @@ async function syncData(){
     // Land on Dashboard by default, not the first deal
     showDashboard();
     setTimeout(()=>_bgGeocodeAll(), 3000);
+    // v102.6: run the one-shot legacy localStorage migration in the background.
+    // Pushes any stale fin_${dealId} blobs on this laptop to Supabase so no data
+    // is lost when we stop reading localStorage. Silent unless something's wrong.
+    setTimeout(() => {
+      _migrateLegacyFinLocalStorage().catch(e => {
+        console.warn('[v102.6 migration] Unhandled error:', e);
+      });
+    }, 2000);
   }catch(e){
     if(typeof _splashDone==='function') _splashDone();
     const msg = e.name==='AbortError'
@@ -3190,8 +3250,8 @@ async function saveEditAddressModal(){
   try {
     if(isSupabase()){
       const sbData = _atToSb(fields, SB_PROP_MAP);
-      // Filter out fields that don't have a column mapping (Property Name, Complex Name, Municipality)
-      // — the SB_PROP_MAP only has the columns that exist in ace_properties
+      // v102.11: All 4 address fields (Property Name, Complex Name, Municipality,
+      // Simple County) are mapped in SB_PROP_MAP and have columns in ace_properties.
       await _sbPatch(SB_TABLES.properties, currentDeal.id, sbData);
     } else {
       const cfg = getConfig();
@@ -3444,7 +3504,7 @@ function renderDealPage(){
         <button class="tab-btn" onclick="switchTab('comps',this)">Comparables / Comps</button>
         <button class="tab-btn" style="color:#6a0dad;" onclick="switchTab('aicomm',this)">✦ AI Communication</button>
         <button class="tab-btn" style="color:#1a7a3a;font-weight:bold;" onclick="switchTab('buyermatch',this)">🎯 Buyer Match</button>
-        <button class="tab-btn" style="color:#c05000;font-weight:bold;" onclick="switchTab('brochure',this)">📄 Brochure Creator</button>
+        <button class="tab-btn" style="color:#b8912a;font-weight:bold;" onclick="switchTab('brochure',this)">📄 OM & Flyer Creator</button>
         <button class="tab-btn" style="color:#2a7a2a;font-weight:bold;" onclick="switchTab('tenantmix',this)">🏪 Tenant Mix</button>
         <button class="tab-btn" style="color:#1a3a6e;font-weight:bold;" onclick="switchTab('pitchout',this)">📊 Buyer Pitch</button>
         <button id="fmToggleBtn" onclick="toggleFieldMapDrawer()" title="Show where each field is stored in Airtable"
@@ -3548,7 +3608,7 @@ function clearPendingEdits(){
 }
 
 let _autoSaveTimer = null;
-const AUTO_SAVE_DELAY = 1800; // ms after last change before auto-saving
+const AUTO_SAVE_DELAY = 900; // ms after last change before auto-saving (v102.5: was 1800)
 
 function markDirty(){
   if(!currentDeal) return;
@@ -3556,22 +3616,21 @@ function markDirty(){
   // Don't trigger auto-save when user is filling out a lead intake form
   if(document.getElementById('li_s_name') || document.getElementById('li_b_name')) return;
   _dealDirty = true;
-  const banner = document.getElementById('unsavedBanner');
+  // v102.5: silent auto-save — no orange banner, no "Auto-saving..." toast.
+  // The global Save button still turns amber as a subtle visual hint that
+  // there are unsaved changes, but no distracting popup/banner appears.
   const btn    = document.getElementById('globalSaveBtn');
-  if(banner) banner.style.display = 'block';
   if(btn)    btn.style.background = 'linear-gradient(180deg,#c05000,#a03800)';
 
   // Debounced auto-save: reset timer on every change
   clearTimeout(_autoSaveTimer);
   _autoSaveTimer = setTimeout(async () => {
     if(!_dealDirty || !currentDeal?.id) return;
-    const banner2 = document.getElementById('unsavedBanner');
-    if(banner2) banner2.textContent = '⏳ Auto-saving...';
     try{
       await masterSave();
-      // masterSave calls clearDirty which hides the banner
+      // masterSave clears _dealDirty and resets the Save button color on success
     } catch(e){
-      if(banner2){ banner2.textContent = '⚠ Unsaved Changes'; }
+      console.warn('[autosave] masterSave failed silently:', e);
     }
   }, AUTO_SAVE_DELAY);
 }
@@ -3632,7 +3691,9 @@ async function masterSave(){
     // Update the CAPTURED deal object (not currentDeal which may have changed)
     Object.assign(dealToSave, fields);
     clearDirty();
-    showSaveConfirm('✓ Saved');
+    // v102.5: no success toast — the Save button color reset is visual feedback
+    // enough. Manual save (clicking the global Save button) still works the same
+    // way, but without the noisy green toast popping up every 900ms.
     // Refresh sidebar to reflect any address/stage changes
     buildSidebar(document.getElementById('sideSearch')?.value||'');
   } catch(e){
@@ -3728,6 +3789,12 @@ function collectAllDealFields(){
   s(fields,'No. of Stories',        getNum('noStories'));
   s(fields,'No. of Parking Spaces', getNum('prop_parkingSpaces') || getNum('parkingSpaces'));
   const parkRatio = getVal('prop_parkingRatio'); if(parkRatio) fields['Parking Ratio'] = parkRatio;
+  // v102.8: Total Lot Size was previously wired with oninput="markDirty()"
+  // but never collected here — values typed silently vanished. Now collected.
+  s(fields,'Total Lot Size',        getNum('prop_lotSize'));
+  // v102.8: Lot size unit (sf vs acres) — the radio toggle persists now too
+  const lotUnit = getRadio('lotUnit');
+  if(lotUnit) fields['Lot Size Unit'] = lotUnit;
   s(fields,'Roof Type',   getVal('roofType')||null);
   s(fields,'Foundation',  getVal('foundationType')||null);
   s(fields,'Exterior',    getVal('exteriorType')||null);
@@ -3740,6 +3807,9 @@ function collectAllDealFields(){
   // Property info text
   const propDesc = getVal('prop_propDesc');  if(propDesc) fields['General Property Notes'] = propDesc;
   const locDesc  = getVal('prop_locDesc');   if(locDesc)  fields['Location Description']   = locDesc;
+  // v102.11: AI clarifying notes had markDirty() on oninput but was never collected.
+  // Every value users typed here silently vanished on save.
+  const aiClarify = getVal('prop_aiClarifying'); if(aiClarify) fields['AI Clarifying Notes'] = aiClarify;
 
   // Unit mix
   s(fields,'No. of Units',           getNum('um_totalUnits')||getNum('fin_aUnits'));
@@ -3839,7 +3909,7 @@ function renderFieldMapDrawer(){
     documents:'Documents',       dealstatus:'Deal Status',
     contacts:'Contacts / Buyers',notes:'Notes',
     calendar:'Calendar',         comps:'Comparables / Comps',
-    aicomm:'AI Communication',   brochure:'Brochure Creator',  tenantmix:'Tenant Mix'
+    aicomm:'AI Communication',   brochure:'OM & Flyer Creator',  tenantmix:'Tenant Mix'
   };
   const currentTabLabel = TAB_MAP[currentTab] || currentTab;
   if(tabLabel) tabLabel.textContent = showAll ? '(showing all tabs)' : `— ${currentTabLabel}`;
@@ -4070,7 +4140,15 @@ function switchTab(name, btn){
   if(name==='pitchout'   && currentDeal?.id) loadPitchOutTab(currentDeal.id);
   if(name==='offers'     && currentDeal?.id) loadOffersTab(currentDeal.id);
   if(name==='contacts' && currentDeal?.id) loadBuyerPitches(currentDeal.id);
-  if(name==='brochure' && currentDeal?.id) loadBrochurePhotos(currentDeal.id);
+  if(name==='brochure' && currentDeal?.id) {
+    loadBrochurePhotos(currentDeal.id);
+    // v100: check required fields so OM buttons are correctly enabled/disabled
+    // v100.1: also render the read-only photo grid pulled from Property Photos
+    setTimeout(() => {
+      _omRenderPhotoGrid();
+      _omRefreshRequiredFieldsCheck();
+    }, 30);
+  }
   if(name==='tasks'    && currentDeal?.id) _loadAndRenderDealTasks(currentDeal.id, currentDeal['Address']||'');
   if(name==='financial'){
     setTimeout(()=>{
@@ -4084,6 +4162,8 @@ function switchTab(name, btn){
       } finally {
         _rendering = false; // always release, even if something throws
       }
+      // v102.2: wire auto-save listener for the financial inputs
+      if(typeof _finWireAutoSave === 'function') _finWireAutoSave();
     }, 0);
   }
 }
@@ -4692,8 +4772,8 @@ function renderPropertyTab(d){
                 <label class="pd-lbl">Total Lot Size</label>
                 <div class="pd-row">
                   <input id="prop_lotSize" class="form-input" value="${d['Total Lot Size']||''}" placeholder="e.g. 15.5" oninput="markDirty()"/>
-                  <label style="font-size:11px;color:#334155;display:inline-flex;align-items:center;gap:3px;white-space:nowrap;"><input type="radio" name="lotUnit" id="prop_lotSF" value="sf" ${d['Lot Size Unit']==='sf'?'checked':''}/>SF</label>
-                  <label style="font-size:11px;color:#334155;display:inline-flex;align-items:center;gap:3px;white-space:nowrap;"><input type="radio" name="lotUnit" id="prop_lotAcres" value="acres" ${d['Lot Size Unit']!=='sf'?'checked':''}/>Ac</label>
+                  <label style="font-size:11px;color:#334155;display:inline-flex;align-items:center;gap:3px;white-space:nowrap;"><input type="radio" name="lotUnit" id="prop_lotSF" value="sf" ${d['Lot Size Unit']==='sf'?'checked':''} onchange="markDirty()"/>SF</label>
+                  <label style="font-size:11px;color:#334155;display:inline-flex;align-items:center;gap:3px;white-space:nowrap;"><input type="radio" name="lotUnit" id="prop_lotAcres" value="acres" ${d['Lot Size Unit']!=='sf'?'checked':''} onchange="markDirty()"/>Ac</label>
                 </div>
               </div>
               <div class="pd-field">
@@ -6833,33 +6913,304 @@ async function _submitAddOffer(dealId){
   }
 }
 
-function renderFinancialTab(d){
-  // ── Pull saved fin inputs from localStorage first ──────────
-  const fKey = 'fin_'+d.id;
-  let fi = {};
-  try{ fi=JSON.parse(_store.get(fKey)||'{}'); }catch(e){}
+// ═══════════════════════════════════════════════════════════════════
+//  ONE-SHOT LEGACY LOCALSTORAGE MIGRATION (v102.6)
+//
+//  Before v102.6, the Financial Analysis tab stored per-deal state in
+//  localStorage keys named fin_${dealId}. This could lose data when
+//  teammates opened the same deal on different laptops. v102.6 makes
+//  Supabase the sole source of truth and adds this migration to ensure
+//  no existing data is lost:
+//
+//    1. On app load (after syncData succeeds), find all fin_* keys
+//    2. For each, PATCH the matching Supabase row with the localStorage
+//       values (using the same field mapping saveFinInputs uses)
+//    3. Preserve the expand/collapse UI state by moving it to a smaller
+//       fin_ui_${dealId} key (per the "views aren't critical" rule)
+//    4. On successful Supabase write, delete the fin_${dealId} blob
+//    5. On failure, keep the blob so we retry next app load
+//
+//  Runs at most once per app session. Silent unless something interesting
+//  happens (console.info on migrations, console.warn on failures).
+// ═══════════════════════════════════════════════════════════════════
+let _finLegacyMigrationDone = false;
 
-  // ── DB fallback seed for detailed expense line items ───────
-  // When localStorage is empty (new deal, or teammate opening on a different
-  // machine for the first time), populate the per-category expense inputs
-  // from their corresponding ace_properties columns so nothing looks blank.
-  // Reverse of the expMap used in _extractFinFields.
+async function _migrateLegacyFinLocalStorage(){
+  if(_finLegacyMigrationDone) return;
+  _finLegacyMigrationDone = true; // only run once per session even if called multiple times
+
+  // Collect all fin_<uuid> keys from localStorage
+  const finKeys = [];
+  try {
+    for(let i = 0; i < localStorage.length; i++){
+      const k = localStorage.key(i);
+      if(k && k.startsWith('fin_') && !k.startsWith('fin_ui_')){
+        // fin_ UUIDs are 36 chars; "fin_" + 36 = 40
+        if(k.length >= 10) finKeys.push(k);
+      }
+    }
+  } catch(e) {
+    console.warn('[v102.6 migration] Could not enumerate localStorage:', e.message);
+    return;
+  }
+
+  if(finKeys.length === 0) return; // nothing to migrate
+
+  console.info(`[v102.6 migration] Found ${finKeys.length} legacy fin_ blob(s). Migrating to Supabase…`);
+
+  // Mapping from localStorage fi.X key → Supabase column name (via airtableUpdate).
+  // Mirrors saveFinInputs but operates on the blob instead of DOM inputs.
+  const fiKeyMap = {
+    // Income
+    aGrossRent:   { field: 'Gross Rental Income (Monthly)',   transform: v => Math.round(Number(v)/12) },  // blob stores yearly, column is monthly
+    aVacancy:     { field: 'Vacancy Rate (%)' },
+    aOtherInc:    { field: 'Other Income (Monthly)',          transform: v => Math.round(Number(v)/12) },
+    aRUBS_mo:     { field: 'RUBS/CAM Income (Monthly)' },
+    aOI_mo:       { field: 'Other Income (Monthly)' },
+    aNRU:         { field: 'Non-Revenue Units (%)' },
+    aGRISource:   { field: 'GRI Source' },
+    pGrossRent:   { field: 'Proforma Gross Rent (Monthly)',   transform: v => Math.round(Number(v)/12) },
+    pVacancy:     { field: 'Vacancy Rate Proforma (%)' },
+    pOI_mo:       { field: 'Proforma Other Income (Monthly)' },
+    pRUBS_mo:     { field: 'Proforma RUBS/CAM (Monthly)' },
+    pNRU:         { field: 'Proforma Non-Revenue Units (%)' },
+    // Size & Building
+    aNetRentSF:   { field: 'Net Rentable SF' },
+    aTotalSF:     { field: 'Total Building SF' },
+    aUnits:       { field: 'No. of Units' },
+    aOccupancy:   { field: 'Occupancy (%)' },
+    // Purchase / Cash
+    askPrice:     { field: 'Asking Price' },
+    offerPrice:   { field: 'Offer Price' },
+    aDownPct:     { field: 'Down Payment (%)' },
+    pDownPct:     { field: 'Proforma Down Payment (%)' },
+    aDpType:      { field: 'Down Payment Type' },
+    pDpType:      { field: 'Proforma Down Payment Type' },
+    aRenovation:  { field: 'Renovation Expense' },
+    renovation:   { field: 'Renovation Expense' },  // legacy alias
+    // Capital reserve
+    aCapRes_mo:   { field: 'Capital Reserve (Monthly)' },
+  };
+
+  // Per-item expense map: fi key 'a_<id>_mo' → Supabase column
+  // Same id-to-column mapping saveFinInputs uses
+  const expItemToField = {
+    admin_mgmt:  'Admin Expenses (Monthly)',
+    admin_acct:  'Accounting (Monthly)',
+    admin_legal: 'Legal (Monthly)',
+    admin_other: 'Other Admin (Monthly)',
+    rm_jan:      'Janitorial (Monthly)',
+    rm_land:     'Landscaping (Monthly)',
+    rm_maint:    'Maintenance & Repair Costs (Monthly)',
+    rm_sal:      'Maintenance & Repair Salary (Monthly)',
+    rm_pool:     'Pool (Monthly)',
+    rm_sup:      'Supplies (Monthly)',
+    util_elec:   'Electric (Monthly)',
+    util_gas:    'Gas (Monthly)',
+    util_water:  'Water & Sewer (Monthly)',
+    util_trash:  'Trash (Monthly)',
+    util_other:  'Other Utilities (Monthly)',
+    misc_adv:    'Miscellaneous Expenses (Monthly)',
+    misc_other:  'Other Misc (Monthly)',
+    tax_prop:    'Property Tax (Monthly)',
+    tax_other:   'Other Tax (Monthly)',
+    ins_prop:    'Insurance (Monthly)',
+    ins_liab:    'Liability Insurance (Monthly)',
+    pm_fee:      'Property Management Fee (Monthly)',
+    pm_other:    'Other Mgmt (Monthly)',
+  };
+
+  // Mortgage fields
+  const mortFieldMap = {
+    bal:       n => `Mortgage ${n} Principal Balance`,
+    amort:     n => `Mortgage ${n} Amortization (Years)`,
+    rate:      n => `Mortgage ${n} Interest Rate (%)`,
+    type:      n => `Mortgage ${n} Loan Type`,
+    assumable: n => `Mortgage ${n} Assumable`,
+    yrsrem:    n => `Mortgage ${n} Years Remaining`,
+  };
+
+  let migratedCount = 0;
+  let failedCount = 0;
+
+  for(const key of finKeys){
+    const dealId = key.slice(4); // strip "fin_"
+    if(!dealId || dealId.length < 10) continue; // guard against bad keys
+
+    let blob = null;
+    try { blob = JSON.parse(localStorage.getItem(key) || '{}'); } catch(e) { blob = null; }
+    if(!blob || typeof blob !== 'object') {
+      // Unparseable blob — delete it, nothing to save
+      try { localStorage.removeItem(key); } catch(e) {}
+      continue;
+    }
+
+    // Build the Supabase PATCH payload from the blob
+    const fields = {};
+
+    // Helper: is this blob value a real value, or a UI placeholder like '--'?
+    const isRealValue = (v) => v !== undefined && v !== null && v !== '' && v !== '--';
+
+    // 1. Simple named fields
+    for(const [fiKey, mapping] of Object.entries(fiKeyMap)){
+      if(isRealValue(blob[fiKey])){
+        const val = mapping.transform ? mapping.transform(blob[fiKey]) : blob[fiKey];
+        if(val !== null && val !== undefined && val !== '' && val !== '--' && !Number.isNaN(val)){
+          fields[mapping.field] = val;
+        }
+      }
+    }
+
+    // 2. Per-item expenses (actual side — individual columns)
+    for(const [itemId, field] of Object.entries(expItemToField)){
+      const blobKey = 'a_' + itemId + '_mo';
+      if(isRealValue(blob[blobKey])){
+        const n = Number(blob[blobKey]);
+        if(!Number.isNaN(n) && n > 0) fields[field] = n;
+      }
+    }
+
+    // 3. Pro forma expenses → JSONB blob
+    const proFormaBreakdown = {};
+    let hasProForma = false;
+    for(const itemId of Object.keys(expItemToField)){
+      const blobKey = 'p_' + itemId + '_mo';
+      if(isRealValue(blob[blobKey])){
+        const n = Number(blob[blobKey]);
+        if(!Number.isNaN(n) && n > 0){
+          proFormaBreakdown[itemId] = n;
+          hasProForma = true;
+        }
+      }
+    }
+    if(hasProForma) fields['Pro Forma Expense Breakdown'] = proFormaBreakdown;
+
+    // 4. Mortgages
+    // v102.13 hotfix: `recalcFinancials` historically set string '--' as the
+    // default value for empty select dropdowns (amort, type, yrsrem). Those
+    // '--' strings ended up in the fin_${dealId} localStorage blobs and
+    // then the v102.6 migration tried to write them straight through — which
+    // Postgres rejected with "invalid input syntax for type integer: --"
+    // because amort/yrsrem/bal/rate are numeric columns. Now we validate:
+    //   - numeric mortgage fields: must Number() cleanly and be > 0
+    //   - type: any non-'--' string is allowed
+    //   - assumable: boolean only
+    const numericMortFields = new Set(['bal','amort','rate','yrsrem']);
+    for(let n = 1; n <= 3; n++){
+      for(const [suffix, colFn] of Object.entries(mortFieldMap)){
+        const blobKey = 'mort' + n + '_' + suffix;
+        const raw = blob[blobKey];
+        if(!isRealValue(raw)) continue;
+
+        if(numericMortFields.has(suffix)){
+          // Coerce to number, skip if invalid or zero (Postgres won't accept '--' on integer/numeric columns)
+          const num = Number(String(raw).replace(/,/g,''));
+          if(!Number.isNaN(num) && num > 0) fields[colFn(n)] = num;
+        } else if(suffix === 'assumable'){
+          // Boolean column
+          fields[colFn(n)] = raw === true || raw === 'true';
+        } else {
+          // type (text column)
+          fields[colFn(n)] = String(raw);
+        }
+      }
+    }
+
+    // 5. Preserve expand/collapse UI state in a separate small key
+    const uiState = {};
+    ['exp_admin','exp_rm','exp_util','exp_misc','exp_tax','exp_ins','exp_pm','exp_mortgage'].forEach(k => {
+      if(blob[k] !== undefined) uiState[k] = blob[k];
+    });
+    if(Object.keys(uiState).length > 0){
+      try { localStorage.setItem('fin_ui_' + dealId, JSON.stringify(uiState)); } catch(e) {}
+    }
+
+    // If there's nothing to push to Supabase, just delete the key and move on
+    if(Object.keys(fields).length === 0){
+      try { localStorage.removeItem(key); } catch(e) {}
+      continue;
+    }
+
+    // v102.13 hotfix: Push to Supabase directly via _sbPatch. We deliberately
+    // bypass airtableUpdate() here because that function fires a user-facing
+    // alert('Save failed: ...') on any error, which is the wrong UX for
+    // a silent background migration. If the migration fails for one deal,
+    // we want to silently log and keep the blob for next-session retry.
+    try {
+      // Translate Airtable-style keys → snake_case columns
+      const sbData = _atToSb(fields, SB_PROP_MAP);
+      if(Object.keys(sbData).length === 0){
+        // Nothing left after mapping — treat as success, delete blob
+        try { localStorage.removeItem(key); } catch(e) {}
+        continue;
+      }
+      await _sbPatch(SB_TABLES.properties, dealId, sbData);
+      // Update currentDeal if this deal happens to be loaded
+      if(currentDeal && currentDeal.id === dealId) Object.assign(currentDeal, fields);
+      // Mirror into allDeals too so Pipeline / Dashboard see fresh values
+      const entry = allDeals.find(x => x.id === dealId);
+      if(entry) Object.assign(entry, fields);
+      // Delete the migrated blob only on success
+      try { localStorage.removeItem(key); } catch(e) {}
+      migratedCount++;
+    } catch(e) {
+      failedCount++;
+      console.warn(`[v102.6 migration] Error migrating ${dealId}, blob preserved for retry:`, e.message);
+      // Don't delete the blob — retry next session
+    }
+  }
+
+  if(migratedCount > 0 || failedCount > 0){
+    console.info(`[v102.6 migration] Complete. Migrated: ${migratedCount}, Failed: ${failedCount}`);
+  }
+}
+
+function renderFinancialTab(d){
+  // v102.6: Supabase is now the source of truth for all Financial Analysis
+  // fields. Previously this tab read from a fin_${dealId} localStorage blob
+  // as primary source, which caused teammates to see different data on
+  // different laptops. Now fi starts empty and is populated entirely from
+  // the deal object (which came from Supabase on load). See _omMigrateLegacyFinLocalStorage
+  // for the one-shot sweep that pushes any stale localStorage data to
+  // Supabase on app load and then deletes the blob.
+  let fi = {};
+
+  // ── DB seed for detailed expense line items ───────────────
+  // Populate the per-category expense inputs from their corresponding
+  // ace_properties columns. This is now the ONLY source — no more
+  // localStorage fallback.
   const _dbExpSeed = {
+    // Administrative
     'a_admin_mgmt_mo':  d['Admin Expenses (Monthly)'],
+    'a_admin_acct_mo':  d['Accounting (Monthly)'],
+    'a_admin_legal_mo': d['Legal (Monthly)'],
+    'a_admin_other_mo': d['Other Admin (Monthly)'],
+    // Repair & Maintenance
     'a_rm_jan_mo':      d['Janitorial (Monthly)'],
     'a_rm_land_mo':     d['Landscaping (Monthly)'],
     'a_rm_maint_mo':    d['Maintenance & Repair Costs (Monthly)'],
     'a_rm_sal_mo':      d['Maintenance & Repair Salary (Monthly)'],
     'a_rm_pool_mo':     d['Pool (Monthly)'],
     'a_rm_sup_mo':      d['Supplies (Monthly)'],
+    // Utilities
     'a_util_elec_mo':   d['Electric (Monthly)'],
     'a_util_gas_mo':    d['Gas (Monthly)'],
     'a_util_water_mo':  d['Water & Sewer (Monthly)'],
     'a_util_trash_mo':  d['Trash (Monthly)'],
+    'a_util_other_mo':  d['Other Utilities (Monthly)'],
+    // Miscellaneous
     'a_misc_adv_mo':    d['Miscellaneous Expenses (Monthly)'],
+    'a_misc_other_mo':  d['Other Misc (Monthly)'],
+    // Taxes
     'a_tax_prop_mo':    d['Property Tax (Monthly)'],
+    'a_tax_other_mo':   d['Other Tax (Monthly)'],
+    // Insurance
     'a_ins_prop_mo':    d['Insurance (Monthly)'],
+    'a_ins_liab_mo':    d['Liability Insurance (Monthly)'],
+    // Property Management
     'a_pm_fee_mo':      d['Property Management Fee (Monthly)'],
+    'a_pm_other_mo':    d['Other Mgmt (Monthly)'],
+    // Reserves
     'aCapRes_mo':       d['Capital Reserve (Monthly)'],
   };
   Object.entries(_dbExpSeed).forEach(([key, dbVal])=>{
@@ -6868,37 +7219,99 @@ function renderFinancialTab(d){
     }
   });
 
-  // ── Pull from Airtable as fallback only ────────────────────
-  // Ask/Offer price: prefer localStorage (what user typed) over Airtable
-  const ask    = Number(fi.askPrice)   || Number(d['Asking Price'])||0;
-  const offer  = Number(fi.offerPrice) || Number(d['Offer Price'])||0;
+  // v102.4: Seed pro forma expense values from the JSONB column when
+  // localStorage is empty. Same pattern as actual-side, but unpacks a
+  // single JSON object instead of reading individual columns.
+  const _dbProFormaExp = d['Pro Forma Expense Breakdown'];
+  if(_dbProFormaExp && typeof _dbProFormaExp === 'object'){
+    Object.entries(_dbProFormaExp).forEach(([itemId, val]) => {
+      const fiKey = 'p_' + itemId + '_mo';
+      if((fi[fiKey] === undefined || fi[fiKey] === null || fi[fiKey] === '') && val != null && val !== ''){
+        fi[fiKey] = Number(val);
+      }
+    });
+  }
+
+  // ── Pull all values from Supabase (the deal object). ──────
+  // v102.6: No more localStorage — d[...] is the only source of truth.
+  // Each field uses DB column first, sensible default second.
+  const ask    = Number(d['Asking Price'])||0;
+  const offer  = Number(d['Offer Price'])||0;
   const noiAt  = Number(d['NOI'])||0;
   const debt   = Number(d['Annual Debt Service'])||0;
 
-  // Actual inputs (fall back to Airtable where possible)
-  // If localStorage is empty (e.g. on a brand-new deal submitted from lead intake,
-  // or when another teammate opens the deal for the first time on their machine),
-  // fall back to the DB columns so the Gross Rental Income and Expenses fields
-  // aren't blank on the first render. Source of truth is still localStorage once
-  // the user edits anything here, but the DB fallback ensures no data is lost.
-  const aGrossRent   = Number(fi.aGrossRent)  || Number(d['Gross Revenue Yearly']) || (Number(d['Gross Revenue Monthly'])||0)*12 || 0;
-  const aVacancy     = (fi.aVacancy !== null && fi.aVacancy !== undefined) ? Number(fi.aVacancy) : '';
-  const aOtherInc    = Number(fi.aOtherInc)   || 0;
-  const aExpenses    = Number(fi.aExpenses)   || Number(d['Expenses Yearly']) || (Number(d['Expenses Monthly'])||0)*12 || 0;
-  const aDownPct     = Number(fi.aDownPct)    || 25;
-  const pDownPct     = Number(fi.pDownPct)    || aDownPct;
-  const aIntRate     = Number(fi.aIntRate)    || 7;
-  const aAmort       = Number(fi.aAmort)      || 30;
-  const aNetRentSF   = Number(fi.aNetRentSF)  || 0;
-  const aTotalSF     = Number(fi.aTotalSF)    || 0;
-  const aUnits       = Number(fi.aUnits)      || 0;
-  const aOccupancy   = Number(fi.aOccupancy)  || 100;
+  // Actual inputs
+  const aGrossRent   = Number(d['Gross Revenue Yearly']) || (Number(d['Gross Rental Income (Monthly)'])||0)*12 || (Number(d['Gross Revenue Monthly'])||0)*12 || 0;
+  const aVacancy     = (d['Vacancy Rate (%)'] !== null && d['Vacancy Rate (%)'] !== undefined && d['Vacancy Rate (%)'] !== '') ? Number(d['Vacancy Rate (%)']) : '';
+  const aOtherInc    = (Number(d['Other Income (Monthly)'])||0)*12;
+  const aExpenses    = Number(d['Expenses Yearly']) || (Number(d['Expenses Monthly'])||0)*12 || 0;
+  const aDownPct     = Number(d['Down Payment (%)']) || 25;
+  const pDownPct     = Number(d['Proforma Down Payment (%)']) || aDownPct;
+  const aIntRate     = 7;   // global default, no per-deal storage
+  const aAmort       = 30;  // global default, no per-deal storage
+  const aNetRentSF   = Number(d['Net Rentable SF'])  || 0;
+  const aTotalSF     = Number(d['Total Building SF']) || 0;
+  const aUnits       = Number(d['No. of Units']) || Number(d['Number of Units']) || 0;
+  const aOccupancy   = Number(d['Occupancy (%)']) || 100;
 
   // Proforma inputs
-  const pGrossRent   = Number(fi.pGrossRent)  || 0;
-  const pVacancy     = (fi.pVacancy !== null && fi.pVacancy !== undefined) ? Number(fi.pVacancy) : '';
-  const pOtherInc    = Number(fi.pOtherInc)   || 0;
-  const pExpenses    = Number(fi.pExpenses)   || 0;
+  const pGrossRent   = (Number(d['Proforma Gross Rent (Monthly)'])||0)*12;
+  const pVacancy     = (d['Vacancy Rate Proforma (%)'] !== null && d['Vacancy Rate Proforma (%)'] !== undefined && d['Vacancy Rate Proforma (%)'] !== '') ? Number(d['Vacancy Rate Proforma (%)']) : '';
+  const pOtherInc    = (Number(d['Proforma Other Income (Monthly)'])||0)*12;
+  const pExpenses    = Number(d['Pro Forma Expenses Yearly']) || (Number(d['Pro Forma Expenses Monthly'])||0)*12 || 0;
+
+  // Seed fi for the rest of the tab render code that still reads fi.X
+  // (e.g. expense item subrows, down payment type radio buttons, renovation).
+  // Every field below comes from DB columns.
+  fi.askPrice    = ask;
+  fi.offerPrice  = offer;
+  fi.aGrossRent  = aGrossRent;
+  fi.pGrossRent  = pGrossRent;
+  fi.aVacancy    = aVacancy;
+  fi.pVacancy    = pVacancy;
+  fi.aOtherInc   = aOtherInc;
+  fi.pOtherInc   = pOtherInc;
+  fi.aExpenses   = aExpenses;
+  fi.pExpenses   = pExpenses;
+  fi.aDownPct    = aDownPct;
+  fi.pDownPct    = pDownPct;
+  fi.aNetRentSF  = aNetRentSF;
+  fi.aTotalSF    = aTotalSF;
+  fi.aUnits      = aUnits;
+  fi.aOccupancy  = aOccupancy;
+  fi.aDpType     = d['Down Payment Type']          || 'percent';
+  fi.pDpType     = d['Proforma Down Payment Type'] || 'percent';
+  fi.aGRISource  = d['GRI Source']                 || 'custom';
+  fi.aRenovation = Number(d['Renovation Expense']) || 0;
+  fi.renovation  = fi.aRenovation; // legacy alias
+  // NRU % fields
+  if(d['Non-Revenue Units (%)'] != null)          fi.aNRU = Number(d['Non-Revenue Units (%)']);
+  if(d['Proforma Non-Revenue Units (%)'] != null) fi.pNRU = Number(d['Proforma Non-Revenue Units (%)']);
+
+  // Mortgages — all 18 fields flow from SB_PROP_MAP into d[...]
+  for(let n = 1; n <= 3; n++){
+    fi['mort'+n+'_bal']       = Number(d[`Mortgage ${n} Principal Balance`])  || 0;
+    fi['mort'+n+'_amort']     = Number(d[`Mortgage ${n} Amortization (Years)`]) || 0;
+    fi['mort'+n+'_rate']      = Number(d[`Mortgage ${n} Interest Rate (%)`])  || 0;
+    fi['mort'+n+'_type']      = d[`Mortgage ${n} Loan Type`]         || '';
+    fi['mort'+n+'_assumable'] = !!d[`Mortgage ${n} Assumable`];
+    fi['mort'+n+'_yrsrem']    = Number(d[`Mortgage ${n} Years Remaining`])    || 0;
+  }
+
+  // Expand/collapse UI state — keep in localStorage per your guidance.
+  // Not sensitive data, just display preference. Loaded here from a
+  // separate small key so the big fin_ blob can stay deleted.
+  try {
+    const uiState = JSON.parse(_store.get('fin_ui_'+d.id) || '{}');
+    if(uiState.exp_admin !== undefined)    fi.exp_admin    = uiState.exp_admin;
+    if(uiState.exp_rm !== undefined)       fi.exp_rm       = uiState.exp_rm;
+    if(uiState.exp_util !== undefined)     fi.exp_util     = uiState.exp_util;
+    if(uiState.exp_misc !== undefined)     fi.exp_misc     = uiState.exp_misc;
+    if(uiState.exp_tax !== undefined)      fi.exp_tax      = uiState.exp_tax;
+    if(uiState.exp_ins !== undefined)      fi.exp_ins      = uiState.exp_ins;
+    if(uiState.exp_pm !== undefined)       fi.exp_pm       = uiState.exp_pm;
+    if(uiState.exp_mortgage !== undefined) fi.exp_mortgage = uiState.exp_mortgage;
+  } catch(e) {}
 
   // ── Actual calculations ────────────────────────────────────
   const aEGI   = aGrossRent * (1 - aVacancy/100) + aOtherInc;
@@ -7595,8 +8008,20 @@ function renderFinancialTab(d){
         ▶ Calculate / Refresh
       </button>
       <button class="save-btn" style="padding:6px 16px;" onclick="saveFinInputs('${d.id}')">Save Inputs</button>
-      <span style="font-size:10px;color:#666;">Fill in inputs above, then click Calculate to refresh all metrics.</span>
+      <!-- v102.2: auto-save indicator dot — pulses only when an actual save fires -->
+      <span id="finSaveDot" title="Auto-save indicator — pulses green when changes are saved" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#86efac;opacity:0.4;transition:opacity 0.2s;"></span>
+      <span style="font-size:10px;color:#64748b;">Auto-saves as you type. Or click Save Inputs to save now.</span>
     </div>
+    <style>
+      /* v102.2: green pulse animation for the auto-save dot. Class is added
+         transiently in _finPulseSaveDot() and the animation cleans itself up. */
+      @keyframes finDotPulse {
+        0%   { transform: scale(1);   background: #86efac; opacity: 0.4; box-shadow: 0 0 0 0 rgba(34,197,94,0); }
+        20%  { transform: scale(1.5); background: #22c55e; opacity: 1;   box-shadow: 0 0 0 4px rgba(34,197,94,0.3); }
+        100% { transform: scale(1);   background: #86efac; opacity: 0.4; box-shadow: 0 0 0 0 rgba(34,197,94,0); }
+      }
+      #finSaveDot.pulse { animation: finDotPulse 900ms ease-out; }
+    </style>
 
     <!-- LESS: OPERATING EXPENSES ────────────────────────────── -->
     ${(()=>{
@@ -9335,7 +9760,11 @@ const PIPELINE_REGION_CHIPS = [
 ];
 
 // Resolve a county name to its state. Returns '' (empty) for unknown counties.
-function _countyState(county){
+// PHASE B: if a deal object is passed as a second arg and has a 'State' field
+// from the database, that takes priority over the hardcoded county map.
+function _countyState(county, deal){
+  // Phase B preference: use the DB-populated state column if available
+  if(deal && deal['State']) return deal['State'];
   if(!county) return '';
   return PIPELINE_COUNTY_TO_STATE[county] || '';
 }
@@ -9360,7 +9789,10 @@ function _countyRegions(county){
 }
 
 // True if this county name looks wrong/junk and should be flagged for review.
-function _isBadCountyName(county){
+// PHASE B: if a deal object is passed and has the DB-backed needs_county_review
+// flag set, that takes priority over the hardcoded set.
+function _isBadCountyName(county, deal){
+  if(deal && deal['Needs County Review'] === true) return true;
   return PIPELINE_BAD_COUNTY_NAMES.has(county || '');
 }
 
@@ -11449,15 +11881,49 @@ function renderBrochureTab(d){
   const genNotes  = d['General Property Notes']||'';
 
   return `
-    <div class="section-hdr"><span class="icon">📄</span> Brochure Creator</div>
+    <div class="section-hdr"><span class="icon">📄</span> OM & Flyer Creator</div>
 
-    <!-- STICKY CREATE BUTTON -->
-    <div style="position:sticky;top:0;z-index:50;background:linear-gradient(180deg,#7a3000,#4a1800);border-bottom:2px solid #f08030;padding:8px 16px;display:flex;align-items:center;gap:12px;">
-      <span style="color:#fff;font-size:11px;font-weight:bold;">Brochure Creator</span>
-      <button onclick="createBrochure()" style="background:linear-gradient(180deg,#f08030,#c05000);color:#fff;border:1px solid #804000;padding:6px 24px;font-size:13px;font-weight:bold;border-radius:3px;cursor:pointer;">
-        📄 Create Brochure
-      </button>
-      <span style="color:#ffc090;font-size:11px;">Opens a print-ready brochure in a new window → use Ctrl/Cmd+P to save as PDF</span>
+    <!-- ══════════════════════════════════════════════════════════════
+         THREE MODES: Quick Flyer, Standard OM, Premium OM
+         Matches CRM's white/navy palette (not the gold PDF brand)
+         ══════════════════════════════════════════════════════════════ -->
+    <div style="position:sticky;top:0;z-index:50;background:#fff;border-bottom:2px solid #1a3a6e;padding:12px 16px;box-shadow:0 2px 4px rgba(0,0,0,0.04);">
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+        <div style="color:#1a3a6e;font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;">Document Generator</div>
+        <div style="flex:1;"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <!-- Quick Flyer — always available, no required-fields check -->
+          <button id="omBtnQuickFlyer" onclick="createBrochure()" title="Print-friendly HTML flyer → use Ctrl/Cmd+P to save as PDF. Good for fast internal handouts."
+            style="background:#f1f5f9;color:#334155;border:1px solid #cbd5e1;padding:8px 16px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:6px;"
+            onmouseenter="this.style.background='#e2e8f0'" onmouseleave="this.style.background='#f1f5f9'">
+            <span style="font-size:14px;">📄</span> Quick Flyer
+          </button>
+          <!-- Standard OM — pdfmake template, no LLM, free -->
+          <button id="omBtnStandard" onclick="_omGenerateStandard()" title="Professional multi-page OM using the Ace Acquisitions brand template. Generates instantly from your deal data. Free."
+            style="background:linear-gradient(180deg,#2563eb,#1a3a6e);color:#fff;border:1px solid #14305a;padding:8px 18px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:6px;box-shadow:0 2px 6px rgba(26,58,110,0.25);"
+            onmouseenter="this.style.transform='translateY(-1px)'" onmouseleave="this.style.transform='translateY(0)'">
+            <span style="font-size:14px;">📑</span> Standard OM <span style="font-size:9px;font-weight:600;background:rgba(255,255,255,0.22);padding:1px 6px;border-radius:99px;margin-left:2px;">FREE</span>
+          </button>
+          <!-- Premium OM — pdfmake + Claude Sonnet API call for prose, ~$0.10 -->
+          <button id="omBtnPremium" onclick="_omGeneratePremium()" title="Institutional-grade OM with AI-generated prose (executive summary, investment highlights, market analysis). Requires confirmation. Costs roughly $0.10 per OM."
+            style="background:linear-gradient(180deg,#7c3aed,#5b21b6);color:#fff;border:1px solid #4c1d95;padding:8px 18px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:6px;box-shadow:0 2px 6px rgba(91,33,182,0.25);"
+            onmouseenter="this.style.transform='translateY(-1px)'" onmouseleave="this.style.transform='translateY(0)'">
+            <span style="font-size:14px;">✨</span> Premium OM <span style="font-size:9px;font-weight:600;background:rgba(255,255,255,0.22);padding:1px 6px;border-radius:99px;margin-left:2px;">AI · ~$0.10</span>
+          </button>
+        </div>
+      </div>
+      <div style="color:#64748b;font-size:10px;margin-top:8px;line-height:1.5;">
+        <strong style="color:#1a3a6e;">Quick Flyer:</strong> HTML → Ctrl/Cmd+P to save as PDF. ·
+        <strong style="color:#1a3a6e;">Standard OM:</strong> Professional multi-page PDF, generated instantly from your deal data. ·
+        <strong style="color:#1a3a6e;">Premium OM:</strong> Standard + AI-written prose sections. Admin confirmation required before each generation.
+      </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════════
+         REQUIRED FIELDS CHECK — runs on tab render and before Generate
+         ══════════════════════════════════════════════════════════════ -->
+    <div id="omRequiredFieldsCheck" style="padding:0 0 0 0;">
+      <!-- Populated by _omRefreshRequiredFieldsCheck() after the form renders -->
     </div>
 
     <!-- BROKER INFO -->
@@ -11520,70 +11986,32 @@ All information is deemed reliable but not guaranteed.</textarea>
       </div>
     </div>
 
-    <!-- IMAGES -->
+    <!-- PROPERTY PHOTOS (READ-ONLY, PULLED FROM DEAL) -->
     <div class="info-box">
-      <div class="info-box-title">Images</div>
-
-      <!-- Imgur Instructions -->
-      <div style="background:#f0f7ff;border:1px solid #b8d4f0;border-radius:4px;padding:10px 14px;margin-bottom:12px;font-size:11px;line-height:1.8;">
-        <div style="font-weight:bold;color:#1a3a6e;margin-bottom:4px;">📷 How to get Imgur image URLs:</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 20px;">
-          <div><span style="color:#c05000;font-weight:bold;">Album link (won't work):</span><br/>
-            <code style="background:#fff;padding:1px 4px;border:1px solid #ddd;font-size:10px;">imgur.com/a/fD3oR9n</code>
-          </div>
-          <div><span style="color:#080;font-weight:bold;">Direct image link (paste this):</span><br/>
-            <code style="background:#fff;padding:1px 4px;border:1px solid #ddd;font-size:10px;">i.imgur.com/XXXXXXX.jpg</code>
-          </div>
-        </div>
-        <div style="margin-top:6px;color:#555;">
-          <strong>To get the direct link from an album:</strong> Open the album → click on one image → right-click the image → <em>"Copy image address"</em> → paste here. It should start with <code style="background:#fff;padding:1px 3px;border:1px solid #ddd;">https://i.imgur.com/</code>
-        </div>
+      <div class="info-box-title" style="display:flex;align-items:center;justify-content:space-between;">
+        <span>Property Photos</span>
+        <span style="font-size:10px;font-weight:normal;color:#64748b;">
+          Uploaded via the Documents tab → <a onclick="switchTab('documents', document.querySelector('[onclick*=\\'switchTab(\\\\\\'documents\\\\\\')\\']'))" style="color:#2563eb;cursor:pointer;text-decoration:underline;">Manage photos →</a>
+        </span>
       </div>
-
-      <div id="brochurePhotoStatus" style="font-size:11px;color:#2060b0;margin-bottom:8px;"></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:11px;">
-        <div>
-          <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Cover Image (Main)</label>
-          <input class="form-input" id="br_img0" placeholder="https://..." style="width:100%;margin-bottom:4px;" oninput="updateImgPreview(0)"/>
-          <div id="br_img0_preview" style="height:80px;background:#eee;border:1px solid #ccc;border-radius:3px;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:10px;">No image</div>
-        </div>
-        <div>
-          <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Sub-Image 1</label>
-          <input class="form-input" id="br_img1" placeholder="https://..." style="width:100%;margin-bottom:4px;" oninput="updateImgPreview(1)"/>
-          <div id="br_img1_preview" style="height:80px;background:#eee;border:1px solid #ccc;border-radius:3px;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:10px;">No image</div>
-        </div>
-        <div>
-          <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Sub-Image 2</label>
-          <input class="form-input" id="br_img2" placeholder="https://..." style="width:100%;margin-bottom:4px;" oninput="updateImgPreview(2)"/>
-          <div id="br_img2_preview" style="height:80px;background:#eee;border:1px solid #ccc;border-radius:3px;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:10px;">No image</div>
-        </div>
-        <div>
-          <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Sub-Image 3</label>
-          <input class="form-input" id="br_img3" placeholder="https://..." style="width:100%;margin-bottom:4px;" oninput="updateImgPreview(3)"/>
-          <div id="br_img3_preview" style="height:80px;background:#eee;border:1px solid #ccc;border-radius:3px;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:10px;">No image</div>
-        </div>
-        <div>
-          <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Sub-Image 4</label>
-          <input class="form-input" id="br_img4" placeholder="https://..." style="width:100%;margin-bottom:4px;" oninput="updateImgPreview(4)"/>
-          <div id="br_img4_preview" style="height:80px;background:#eee;border:1px solid #ccc;border-radius:3px;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:10px;">No image</div>
-        </div>
-        <div>
-          <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Sub-Image 5</label>
-          <input class="form-input" id="br_img5" placeholder="https://..." style="width:100%;margin-bottom:4px;" oninput="updateImgPreview(5)"/>
-          <div id="br_img5_preview" style="height:80px;background:#eee;border:1px solid #ccc;border-radius:3px;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:10px;">No image</div>
-        </div>
+      <div style="font-size:11px;color:#555;margin-bottom:12px;line-height:1.5;">
+        Photos uploaded to this deal's <strong>Documents → Property Photos</strong> section are automatically available to all three OM/flyer generators.
+        The <strong>main photo</strong> is used as the cover image; remaining photos appear as interior shots in upload order.
+      </div>
+      <div id="omPhotoGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;">
+        <!-- Populated by _omRenderPhotoGrid() when the tab renders -->
+      </div>
+      <div id="omPhotoEmpty" style="display:none;padding:20px;background:#fef3c7;border:1px dashed #fbbf24;border-radius:6px;font-size:12px;color:#78350f;text-align:center;">
+        ⚠ No photos uploaded yet. Upload photos in the <strong>Documents tab → Property Photos</strong> section to enable OM generation.
       </div>
     </div>`;
 }
 
 function updateImgPreview(i){
-  let url = document.getElementById('br_img'+i)?.value?.trim();
-  if(url) url = convertDriveUrl(url);
-  const inp = document.getElementById('br_img'+i);
-  const prev = document.getElementById('br_img'+i+'_preview');
-  if(!prev) return;
-  if(url){ prev.innerHTML = '<img src="'+url+'" style="max-height:78px;max-width:100%;object-fit:cover;border-radius:2px;" onerror="this.parentElement.innerHTML=\'<span style=\\\"color:#c00;font-size:10px;\\\">Image failed to load — check URL or Drive sharing settings</span>\'"/>'; }
-  else { prev.innerHTML = '<span style="color:#aaa;font-size:10px;">No image</span>'; }
+  // v100.1: no-op. The br_img* inputs this function used to manage were
+  // removed when photos moved to the Documents tab / photo_attachments source.
+  // Kept as a stub in case any legacy onclick handler still references it.
+  return;
 }
 
 function convertDriveUrl(url){
@@ -11609,35 +12037,1259 @@ function convertDriveUrl(url){
   return url;
 }
 
-async function loadBrochurePhotos(recordId){
-  const cfg = getConfig();
-  if(!cfg.key && !isSupabase()) return;
-  const statusEl = document.getElementById('brochurePhotoStatus');
+// ═══════════════════════════════════════════════════════════════════
+//  OM & FLYER CREATOR — v100 (UI shell)
+//
+//  Three modes:
+//    1. Quick Flyer        → createBrochure()          existing, unchanged
+//    2. Standard OM        → _omGenerateStandard()     pdfmake template (v101+)
+//    3. Premium OM         → _omGeneratePremium()      pdfmake + AI (v103+)
+//
+//  v100 establishes the UI shell: button layout, required-fields gate,
+//  and placeholder handlers. Standard/Premium show "coming soon" alerts
+//  until v101/v103 wire in the actual pdfmake generation.
+// ═══════════════════════════════════════════════════════════════════
 
-  try{
-    // Photos are stored in Supabase Storage — no separate PHOTO field fetch needed
-    if(isSupabase()){
-      if(statusEl) statusEl.textContent = 'Upload brochure photos via the Property Photos section.';
+// Fields that are required before Standard OM or Premium OM can be generated.
+// Each entry: [label, getter-function, tabName-to-jump-to-on-fix]
+// Quick Flyer is intentionally lenient and ignores this list.
+const OM_REQUIRED_FIELDS = [
+  { label: 'Address',       get: d => d['Address'],                                 tab: 'core'   },
+  { label: 'City/State',    get: d => d['City'] || _omExtractCity(d),               tab: 'core'   },
+  { label: 'Asking Price',  get: d => d['Asking Price'],                            tab: 'financial' },
+  { label: 'Asset Type',    get: d => d['CRM Asset Classification'] || d['Simple Text Property Type'], tab: 'core' },
+  { label: 'County',        get: d => d['Simple County'],                           tab: 'core'   },
+  { label: 'At least 1 photo', get: d => {
+      // v100.1: photos come from deal.photo_attachments (Documents tab), not
+      // the old Imgur URL inputs. See _omGetOrderedPhotos() for details.
+      const photos = _omGetOrderedPhotos(d);
+      return photos.length > 0 ? true : null;
+    }, tab: 'documents' },
+];
+
+// Try to parse city from the address string if no explicit City field exists.
+function _omExtractCity(d){
+  const addr = d['Address'] || '';
+  const parts = addr.split(',').map(s => s.trim()).filter(Boolean);
+  // Typical format: "123 Main St, Newark, NJ 07102, USA" → parts[1] = "Newark"
+  return parts.length >= 2 ? parts[1] : '';
+}
+
+// Check all required fields against the current deal. Returns an array of
+// missing field labels (empty array = all good).
+function _omCheckRequiredFields(){
+  const d = currentDeal;
+  if(!d) return ['No deal selected'];
+  const missing = [];
+  for(const f of OM_REQUIRED_FIELDS){
+    let v;
+    try { v = f.get(d); } catch(e) { v = null; }
+    if(v === null || v === undefined || v === '' || v === false) missing.push(f.label);
+  }
+  return missing;
+}
+
+// Render the required-fields status banner at the top of the Brochure tab.
+// Called after the tab renders and also after any field change that might
+// affect the check. Updates button disabled state + banner text.
+function _omRefreshRequiredFieldsCheck(){
+  const holder = document.getElementById('omRequiredFieldsCheck');
+  if(!holder) return;
+  const missing = _omCheckRequiredFields();
+  const btnStandard = document.getElementById('omBtnStandard');
+  const btnPremium  = document.getElementById('omBtnPremium');
+  if(missing.length === 0){
+    holder.innerHTML = `
+      <div style="margin:14px 16px 4px;padding:10px 14px;background:#f0fdf4;border:1px solid #86efac;border-radius:6px;font-size:11px;color:#166534;display:flex;align-items:center;gap:8px;">
+        <span style="font-size:14px;">✓</span>
+        <span><strong>Ready to generate.</strong> All required fields for Standard OM and Premium OM are complete.</span>
+      </div>`;
+    if(btnStandard){ btnStandard.style.opacity = '1'; btnStandard.style.cursor = 'pointer'; btnStandard.disabled = false; }
+    if(btnPremium){  btnPremium.style.opacity  = '1'; btnPremium.style.cursor  = 'pointer'; btnPremium.disabled  = false; }
+  } else {
+    holder.innerHTML = `
+      <div style="margin:14px 16px 4px;padding:12px 14px;background:#fef3c7;border:1px solid #fbbf24;border-radius:6px;font-size:11px;color:#78350f;">
+        <div style="display:flex;align-items:flex-start;gap:8px;">
+          <span style="font-size:14px;flex-shrink:0;">⚠</span>
+          <div style="flex:1;">
+            <strong>Missing ${missing.length} required field${missing.length>1?'s':''} for Standard/Premium OM:</strong>
+            <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;">
+              ${missing.map(m => `<span style="background:#fde68a;color:#78350f;padding:3px 8px;border-radius:99px;font-size:10px;font-weight:700;">${m}</span>`).join('')}
+            </div>
+            <div style="margin-top:8px;color:#92400e;font-size:10px;">
+              Quick Flyer is still available and ignores these requirements. Standard/Premium buttons are disabled until all fields are filled.
+            </div>
+          </div>
+        </div>
+      </div>`;
+    if(btnStandard){ btnStandard.style.opacity = '0.5'; btnStandard.style.cursor = 'not-allowed'; btnStandard.disabled = true; }
+    if(btnPremium){  btnPremium.style.opacity  = '0.5'; btnPremium.style.cursor  = 'not-allowed'; btnPremium.disabled  = true; }
+  }
+}
+
+// Return the deal's photos in OM order: main photo first, then the rest in
+// upload order. Each item is { id, url, filename, isMain }. Returns [] if
+// the deal has no photos.
+//
+// Handles all possible field-name shapes:
+//   - d['PHOTO'] (SB_PROP_MAP → 'PHOTO', actual in-memory field name)
+//   - d['photo_attachments'] (raw Supabase column name)
+//   - d['Photo Attachments'] (legacy title-case form)
+// and for the main-photo id:
+//   - d['Main Photo'] (SB_PROP_MAP → 'Main Photo')
+//   - d['main_photo_attachment_id'] (raw column name)
+function _omGetOrderedPhotos(d){
+  d = d || currentDeal;
+  if(!d) return [];
+  const atts = Array.isArray(d['PHOTO']) ? d['PHOTO']
+             : Array.isArray(d['photo_attachments']) ? d['photo_attachments']
+             : Array.isArray(d['Photo Attachments']) ? d['Photo Attachments']
+             : [];
+  if(!atts.length) return [];
+  const mainId = d['Main Photo'] || d['main_photo_attachment_id'] || d['Main Photo Attachment ID'] || null;
+  // Main photo first (or first upload if no main designated), then the rest
+  const mainIdx = mainId ? atts.findIndex(p => p && p.id === mainId) : -1;
+  let ordered;
+  if(mainIdx >= 0){
+    ordered = [atts[mainIdx], ...atts.filter((_, i) => i !== mainIdx)];
+  } else {
+    ordered = [...atts];
+  }
+  return ordered.filter(p => p && p.url).map((p, i) => ({
+    id: p.id,
+    url: p.url,
+    filename: p.filename || 'photo',
+    isMain: i === 0,
+  }));
+}
+
+// Render the read-only photo grid at the top of the OM Creator tab.
+// Called after the tab renders. Pulls from currentDeal.photo_attachments.
+function _omRenderPhotoGrid(){
+  const grid  = document.getElementById('omPhotoGrid');
+  const empty = document.getElementById('omPhotoEmpty');
+  if(!grid) return;
+  const photos = _omGetOrderedPhotos(currentDeal);
+  if(photos.length === 0){
+    grid.style.display = 'none';
+    if(empty) empty.style.display = 'block';
+    return;
+  }
+  grid.style.display = 'grid';
+  if(empty) empty.style.display = 'none';
+  grid.innerHTML = photos.map((p, i) => `
+    <div style="position:relative;border:2px solid ${p.isMain?'#2563eb':'#e2e8f0'};border-radius:6px;overflow:hidden;aspect-ratio:4/3;background:#f1f5f9;">
+      <img src="${p.url}" alt="${(p.filename||'').replace(/"/g,'&quot;')}" style="width:100%;height:100%;object-fit:cover;display:block;" onerror="this.style.display='none';this.parentElement.style.background='#fef2f2';this.parentElement.innerHTML='<div style=\\'padding:12px;font-size:10px;color:#c00;text-align:center;\\'>Image failed to load</div>';"/>
+      ${p.isMain ? '<div style="position:absolute;top:4px;left:4px;background:#2563eb;color:#fff;font-size:9px;font-weight:700;padding:2px 8px;border-radius:99px;box-shadow:0 1px 3px rgba(0,0,0,0.2);">★ COVER</div>' : `<div style="position:absolute;top:4px;left:4px;background:rgba(15,23,42,0.75);color:#fff;font-size:9px;font-weight:700;padding:2px 7px;border-radius:99px;">#${i+1}</div>`}
+    </div>
+  `).join('');
+}
+
+// Standard OM handler — v100 placeholder, v101 will lazy-load pdfmake and
+// render the real cover page + a few body sections.
+// ═══════════════════════════════════════════════════════════════════
+//  PDFMAKE LAZY-LOADER (v101)
+//
+//  pdfmake is a 350KB JS library that we only need when the user actually
+//  clicks "Generate Standard OM" or "Generate Premium OM". Loading it on
+//  demand keeps the initial page load fast. Once loaded, it's cached in
+//  window.pdfMake and subsequent calls are instant.
+//
+//  Uses CDN: cdnjs. Two scripts required:
+//    1. pdfmake.min.js — the core library
+//    2. vfs_fonts.js — embedded Roboto font family (required by pdfmake)
+// ═══════════════════════════════════════════════════════════════════
+let _pdfmakeLoadPromise = null;
+function _omLoadPdfMake(){
+  if(window.pdfMake && window.pdfMake.createPdf) return Promise.resolve(window.pdfMake);
+  if(_pdfmakeLoadPromise) return _pdfmakeLoadPromise;
+  _pdfmakeLoadPromise = (async () => {
+    const loadScript = (src) => new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = src;
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error('Failed to load ' + src));
+      document.head.appendChild(s);
+    });
+    try {
+      await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.10/pdfmake.min.js');
+      await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.10/vfs_fonts.js');
+      if(!window.pdfMake || !window.pdfMake.createPdf){
+        throw new Error('pdfmake loaded but window.pdfMake.createPdf missing');
+      }
+      return window.pdfMake;
+    } catch (e) {
+      _pdfmakeLoadPromise = null; // allow retry on next click
+      throw e;
+    }
+  })();
+  return _pdfmakeLoadPromise;
+}
+
+// Fetch a photo URL and convert it to a base64 data URI for pdfmake embedding.
+// Uses Supabase Storage public URLs which have CORS enabled (verified).
+// Returns null on failure (caller decides whether to skip or abort).
+async function _omFetchPhotoAsDataUri(url){
+  try {
+    const resp = await fetch(url, { mode: 'cors', cache: 'force-cache' });
+    if(!resp.ok) throw new Error('HTTP ' + resp.status);
+    const blob = await resp.blob();
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload  = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error || new Error('FileReader failed'));
+      reader.readAsDataURL(blob);
+    });
+  } catch (e) {
+    console.warn('[OM] Photo fetch failed for', url, e);
+    return null;
+  }
+}
+
+// Show/hide a blocking spinner overlay while the OM is being generated.
+// Photos-download and PDF-build can take 3-15 seconds depending on how many
+// photos are in the deal, so we need to show progress or the user will think
+// the CRM froze.
+function _omShowSpinner(message){
+  const existing = document.getElementById('omSpinnerOverlay');
+  if(existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'omSpinnerOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:999999;display:flex;align-items:center;justify-content:center;';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:12px;padding:32px 40px;box-shadow:0 20px 60px rgba(0,0,0,0.3);min-width:320px;text-align:center;">
+      <div style="font-size:36px;margin-bottom:14px;">📑</div>
+      <div id="omSpinnerMsg" style="font-size:14px;font-weight:700;color:#0f172a;margin-bottom:8px;">${message || 'Generating OM…'}</div>
+      <div style="font-size:11px;color:#64748b;margin-bottom:18px;">This may take a few seconds.</div>
+      <div style="width:100%;height:4px;background:#e2e8f0;border-radius:99px;overflow:hidden;">
+        <div style="width:40%;height:100%;background:linear-gradient(90deg,#2563eb,#1a3a6e);border-radius:99px;animation:omSpinPulse 1.2s ease-in-out infinite;"></div>
+      </div>
+    </div>
+    <style>
+      @keyframes omSpinPulse {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(250%); }
+      }
+    </style>`;
+  document.body.appendChild(overlay);
+}
+
+function _omUpdateSpinner(message){
+  const m = document.getElementById('omSpinnerMsg');
+  if(m) m.textContent = message;
+}
+
+function _omHideSpinner(){
+  const el = document.getElementById('omSpinnerOverlay');
+  if(el) el.remove();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  STANDARD OM GENERATION (v101)
+//
+//  Produces a multi-page PDF using the Ace Acquisitions brand template.
+//  Matches the visual design of the reference Edgewater OM:
+//    - Navy background + gold accent cover page with hero image
+//    - Navy/gold header bar + footer on every interior page
+//    - Section numbers in gold, section titles in navy with gold underline
+//    - Professional tables with navy header row, alternating body rows
+//
+//  v101 includes: Cover, TOC, Executive Summary, Investment Highlights
+//  v102 will add: Development Program, Site Description, Renderings, Legal
+//
+//  No LLM — all prose comes from deterministic templates or deal fields.
+//  Photos come from deal.photo_attachments (Property Photos in Documents tab).
+// ═══════════════════════════════════════════════════════════════════
+
+// Brand constants — match the Ace Acquisitions OM brand standard from the
+// Opus package. These are PDF-only colors and do NOT appear in the CRM UI.
+const OM_BRAND = {
+  navy:       '#0b1f3a',
+  navyDark:   '#081529',
+  gold:       '#b8912a',
+  goldLight:  '#d4a84b',
+  cream:      '#f7f4ee',
+  lightGray:  '#f2f2f2',
+  midGray:    '#d0d0d0',
+  darkGray:   '#444444',
+  text:       '#1c1c1c',
+  white:      '#ffffff',
+};
+
+// Main Standard OM generator. Checks required fields, loads pdfmake, fetches
+// photos, builds the docDefinition, and triggers a download.
+async function _omGenerateStandard(){
+  const missing = _omCheckRequiredFields();
+  if(missing.length > 0){
+    alert('Cannot generate Standard OM — missing required fields:\n\n• ' + missing.join('\n• '));
+    return;
+  }
+  const d = currentDeal;
+  if(!d){ alert('No deal selected.'); return; }
+
+  // v102.2: flush any pending Financial Analysis auto-save before we read
+  // deal data. This ensures typed-but-not-yet-saved expense values land in
+  // currentDeal BEFORE the financial section reads from it. No-op if the
+  // Financial tab isn't currently rendered (nothing to flush).
+  try {
+    if(typeof _finFlushPendingSave === 'function') await _finFlushPendingSave();
+  } catch(e) { console.warn('[OM] Pre-generate flush failed (continuing):', e); }
+
+  try {
+    _omShowSpinner('Loading PDF library…');
+    const pdfMake = await _omLoadPdfMake();
+
+    _omUpdateSpinner('Downloading photos…');
+    const photos = _omGetOrderedPhotos(d);
+    const photoDataUris = [];
+    for(let i = 0; i < photos.length && i < 6; i++){
+      _omUpdateSpinner(`Downloading photo ${i+1} of ${Math.min(photos.length,6)}…`);
+      const uri = await _omFetchPhotoAsDataUri(photos[i].url);
+      if(uri) photoDataUris.push(uri);
+    }
+    if(photoDataUris.length === 0){
+      _omHideSpinner();
+      alert('Could not download any photos from the deal. Check your connection and try again, or ensure the deal has at least one valid photo.');
       return;
     }
-    const res = await fetch(`https://api.airtable.com/v0/${cfg.base}/${cfg.table}/${recordId}`,
-      {headers:{Authorization:`Bearer ${cfg.key}`}});
-    const rec = await res.json();
-    const photos = (rec.fields['PHOTO']||[]).filter(a=>a.type&&a.type.startsWith('image/'));
-    if(photos.length){
-      if(statusEl) statusEl.textContent = `✓ ${photos.length} photo${photos.length>1?'s':''} loaded`;
-      photos.slice(0,6).forEach((photo,i)=>{
-        const inp = document.getElementById('br_img'+i);
-        if(inp && !inp.value){
-          inp.value = photo.url;
-          const prev = document.getElementById('br_img'+i+'_preview');
-          if(prev) prev.innerHTML = `<img src="${photo.url}" style="max-height:78px;max-width:100%;object-fit:cover;border-radius:2px;"/>`;
-        }
-      });
-    } else {
-      if(statusEl) statusEl.textContent = 'No photos found — paste image URLs above.';
-    }
-  }catch(e){}
+
+    _omUpdateSpinner('Building PDF…');
+    await new Promise(r => setTimeout(r, 20));
+
+    const docDefinition = _omBuildStandardDocDefinition(d, photoDataUris);
+
+    _omUpdateSpinner('Finalizing…');
+    await new Promise(r => setTimeout(r, 20));
+
+    const addrSlug = (d['Address'] || 'Property')
+      .replace(/[^\w\s-]/g, '')
+      .replace(/\s+/g, '_')
+      .slice(0, 80);
+    const filename = `${addrSlug}_Offering_Memorandum.pdf`;
+
+    pdfMake.createPdf(docDefinition).download(filename, () => {
+      _omHideSpinner();
+    });
+  } catch (e) {
+    _omHideSpinner();
+    console.error('[OM] Standard OM generation failed:', e);
+    alert('Failed to generate OM: ' + (e.message || e));
+  }
+}
+
+// Build the pdfmake docDefinition for a Standard OM.
+function _omBuildStandardDocDefinition(d, photoDataUris){
+  const coverPhoto = photoDataUris[0];
+  const addr       = d['Address'] || 'Property';
+  const cityState  = _omExtractCityStateZip(d);
+  const ask        = d['Asking Price'] ? '$' + Number(d['Asking Price']).toLocaleString() : 'Call for Price';
+  const units      = Number(d['Number of Units'] || d['No. of Units']) || 0;
+  const sqft       = Number(d['Square Footage'] || d['Total Building SF'] || d['Net Rentable SF']) || 0;
+  const county     = d['Simple County'] || '';
+  const assetType  = _omSanitizeText(_dealAssetType(d) || d['Simple Text Property Type'] || 'Commercial Property');
+  const stories    = d['No. of Stories'] || '';
+  const yearBuilt  = d['Year Built'] || '';
+  const genNotes   = d['General Property Notes'] || '';
+
+  const statBoxes = [];
+  if(d['Asking Price']) statBoxes.push({ value: ask, label: 'ASKING PRICE' });
+  if(units)             statBoxes.push({ value: units.toLocaleString(),          label: assetType.toLowerCase().includes('multifamily') ? 'UNITS' : 'SPACES' });
+  if(sqft)              statBoxes.push({ value: sqft.toLocaleString() + ' SF',   label: 'BUILDING AREA' });
+  if(stories)           statBoxes.push({ value: stories + (stories==1?' Story':' Stories'), label: 'HEIGHT' });
+  if(yearBuilt)         statBoxes.push({ value: yearBuilt, label: 'YEAR BUILT' });
+
+  const tags = [];
+  if(d['Top Priority'])        tags.push('Priority Listing');
+  if(d['Pipeline Stage'] === 'Hot Active Listing') tags.push('Hot Listing');
+  if(assetType)                tags.push(_omSanitizeText(assetType));
+  if(county)                   tags.push(_omSanitizeText(county));
+  if(d['Property Class'])      tags.push(_omSanitizeText('Class ' + d['Property Class']));
+  if(d['Location Trending'])   tags.push(_omSanitizeText(d['Location Trending']));
+
+  const highlights = _omSanitizeText(genNotes)
+    .split('\n')
+    .map(s => s.trim())
+    .filter(s => s.length > 0)
+    .slice(0, 10);
+
+  const coverPage = {
+    stack: [
+      {
+        image: coverPhoto,
+        width: 540,
+        height: 320,
+        fit: [540, 320],
+        alignment: 'center',
+        margin: [0, 28, 0, 0],
+      },
+      { canvas: [{ type: 'line', x1: 0, y1: 10, x2: 540, y2: 10, lineWidth: 2.5, lineColor: OM_BRAND.gold }], margin: [0, 14, 0, 14] },
+      { text: 'CONFIDENTIAL OFFERING MEMORANDUM', color: OM_BRAND.goldLight, fontSize: 10, characterSpacing: 1.2, margin: [0, 0, 0, 6] },
+      { text: addr, color: OM_BRAND.white, fontSize: 32, bold: true, margin: [0, 0, 0, 4] },
+      { text: cityState, color: '#b0c4de', fontSize: 16, margin: [0, 0, 0, 18] },
+      { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 540, y2: 0, lineWidth: 1.5, lineColor: OM_BRAND.gold }], margin: [0, 0, 0, 16] },
+      _omBuildCoverStatBoxes(statBoxes),
+      { margin: [0, 18, 0, 0], ..._omBuildCoverTagPills(tags.slice(0, 5)) },
+    ],
+    pageBreak: 'after',
+  };
+
+  const tocPage = {
+    stack: [
+      { text: 'CONTENTS', color: OM_BRAND.gold, fontSize: 10, characterSpacing: 1.4, bold: true, margin: [0, 0, 0, 8] },
+      { text: 'Table of Contents', color: OM_BRAND.navy, fontSize: 26, bold: true, margin: [0, 0, 0, 4] },
+      { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 180, y2: 0, lineWidth: 1.5, lineColor: OM_BRAND.gold }], margin: [0, 0, 0, 24] },
+      _omBuildTocTable(_omBuildTocRows(d)),
+    ],
+    pageBreak: 'after',
+  };
+
+  const execSummaryPage = {
+    stack: [
+      { text: 'SECTION 01', color: OM_BRAND.gold, fontSize: 9, characterSpacing: 1.2, bold: true, margin: [0, 0, 0, 6] },
+      { text: 'Executive Summary', color: OM_BRAND.navy, fontSize: 22, bold: true, margin: [0, 0, 0, 2] },
+      { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 160, y2: 0, lineWidth: 1.5, lineColor: OM_BRAND.gold }], margin: [0, 0, 0, 18] },
+      {
+        text: _omBuildExecSummaryProse(d),
+        fontSize: 10,
+        lineHeight: 1.45,
+        color: OM_BRAND.text,
+        alignment: 'justify',
+        margin: [0, 0, 0, 20],
+      },
+      { text: 'Property', color: OM_BRAND.navy, fontSize: 11, bold: true, margin: [0, 0, 0, 8] },
+      _omBuildPropertySummaryTable(d),
+    ],
+    pageBreak: 'after',
+  };
+
+  const investmentHighlightsPage = {
+    stack: [
+      { text: 'SECTION 02', color: OM_BRAND.gold, fontSize: 9, characterSpacing: 1.2, bold: true, margin: [0, 0, 0, 6] },
+      { text: 'Investment Highlights', color: OM_BRAND.navy, fontSize: 22, bold: true, margin: [0, 0, 0, 2] },
+      { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 200, y2: 0, lineWidth: 1.5, lineColor: OM_BRAND.gold }], margin: [0, 0, 0, 18] },
+      ...(highlights.length > 0
+        ? highlights.map(h => _omBuildHighlightBullet(h))
+        : [{ text: 'Add Investment Highlights by entering them as line-separated bullets in the deal\'s General Property Notes field.', italics: true, color: OM_BRAND.darkGray, fontSize: 10 }]
+      ),
+    ],
+    pageBreak: 'after',
+  };
+
+  // v102: new sections — Financial Summary, Property Details, Location,
+  // Additional Photos gallery, Confidentiality & Disclaimer.
+  // Each section-builder returns null if the deal has no data for that section,
+  // which we filter out below so empty sections never appear in the PDF.
+  const financialPage         = _omBuildFinancialSummaryPage(d);
+  const propertyDetailsPage   = _omBuildPropertyDetailsPage(d);
+  const locationPage          = _omBuildLocationPage(d);
+  const galleryPage           = _omBuildGalleryPage(d, photoDataUris);
+  const disclaimerPage        = _omBuildDisclaimerPage(d);
+
+  return {
+    pageSize: 'LETTER',
+    pageMargins: [36, 76, 36, 58],
+    info: {
+      title: `${addr} — Offering Memorandum`,
+      author: 'Ace Acquisitions',
+      subject: 'Confidential Offering Memorandum',
+      creator: 'Ace Acquisitions CRM',
+    },
+    background: function(currentPage) {
+      if(currentPage === 1){
+        return [
+          { canvas: [{ type: 'rect', x: 0, y: 0, w: 612, h: 792, color: OM_BRAND.navy }] },
+          { canvas: [{ type: 'rect', x: 0, y: 0, w: 7, h: 792, color: OM_BRAND.gold }] },
+        ];
+      }
+      return null;
+    },
+    header: function(currentPage){
+      if(currentPage === 1) return null;
+      return {
+        stack: [
+          {
+            canvas: [
+              { type: 'rect', x: 0, y: 0, w: 612, h: 36, color: OM_BRAND.navy },
+              { type: 'rect', x: 0, y: 36, w: 612, h: 2.5, color: OM_BRAND.gold },
+            ],
+            absolutePosition: { x: 0, y: 0 },
+          },
+          {
+            columns: [
+              { text: `${addr.toUpperCase()}  |  ${cityState.toUpperCase()}`, color: OM_BRAND.white, fontSize: 9, bold: true, margin: [36, -24, 0, 0] },
+              { text: 'CONFIDENTIAL OFFERING MEMORANDUM', color: OM_BRAND.white, fontSize: 9, bold: true, alignment: 'right', margin: [0, -24, 36, 0] },
+            ],
+          },
+        ],
+      };
+    },
+    footer: function(currentPage, pageCount){
+      if(currentPage === 1) return null;
+      return {
+        stack: [
+          {
+            canvas: [
+              { type: 'rect', x: 0, y: 0, w: 612, h: 2, color: OM_BRAND.gold },
+              { type: 'rect', x: 0, y: 2, w: 612, h: 28, color: OM_BRAND.navy },
+            ],
+            absolutePosition: { x: 0, y: 762 },
+          },
+          {
+            columns: [
+              { text: 'ACE ACQUISITIONS', color: OM_BRAND.goldLight, fontSize: 8, bold: true, characterSpacing: 0.8, margin: [36, 10, 0, 0] },
+              { text: `Page ${currentPage - 1}`, color: OM_BRAND.white, fontSize: 8, alignment: 'center', margin: [0, 10, 0, 0] },
+              { text: 'CONFIDENTIAL — NOT FOR DISTRIBUTION', color: OM_BRAND.goldLight, fontSize: 8, bold: true, alignment: 'right', margin: [0, 10, 36, 0] },
+            ],
+          },
+        ],
+      };
+    },
+    content: [
+      coverPage,
+      tocPage,
+      execSummaryPage,
+      investmentHighlightsPage,
+      // v102: conditional sections — only included if they have data
+      financialPage,
+      propertyDetailsPage,
+      locationPage,
+      galleryPage,
+      disclaimerPage,
+    ].filter(Boolean),
+    defaultStyle: {
+      font: 'Roboto',
+      fontSize: 10,
+      color: OM_BRAND.text,
+    },
+  };
+}
+
+// ── Cover page builders ──────────────────────────────────────────────────
+
+function _omBuildCoverStatBoxes(stats){
+  if(!stats.length) return { text: '' };
+  return {
+    columns: stats.map(s => ({
+      stack: [
+        { canvas: [{ type: 'line', x1: 10, y1: 0, x2: 90, y2: 0, lineWidth: 1, lineColor: OM_BRAND.gold }], margin: [0, 0, 0, 6] },
+        { text: s.value, color: OM_BRAND.white, fontSize: 13, bold: true, alignment: 'center', margin: [0, 0, 0, 3] },
+        { text: s.label, color: OM_BRAND.goldLight, fontSize: 7, characterSpacing: 0.8, alignment: 'center' },
+      ],
+      width: '*',
+    })),
+    columnGap: 6,
+  };
+}
+
+function _omBuildCoverTagPills(tags){
+  if(!tags.length) return { text: '' };
+  return {
+    table: {
+      widths: tags.map(() => '*'),
+      body: [
+        tags.map(t => ({
+          text: t,
+          color: OM_BRAND.goldLight,
+          fontSize: 8,
+          bold: true,
+          alignment: 'center',
+          margin: [2, 5, 2, 5],
+        })),
+      ],
+    },
+    layout: {
+      hLineWidth: () => 0.8,
+      vLineWidth: () => 0.8,
+      hLineColor: () => OM_BRAND.gold,
+      vLineColor: () => OM_BRAND.gold,
+      paddingTop: () => 2,
+      paddingBottom: () => 2,
+    },
+  };
+}
+
+// ── Table of Contents builder ────────────────────────────────────────────
+
+function _omBuildTocTable(rows){
+  return {
+    table: {
+      widths: [30, '*', 60],
+      body: rows.map(r => [
+        { text: r[0], color: OM_BRAND.gold, bold: true, fontSize: 11, margin: [0, 8, 0, 8] },
+        { text: r[1], color: OM_BRAND.navy, bold: true, fontSize: 11, margin: [0, 8, 0, 8] },
+        { text: r[2], color: OM_BRAND.darkGray, fontSize: 10, alignment: 'right', margin: [0, 8, 0, 8] },
+      ]),
+    },
+    layout: {
+      hLineWidth: (i) => (i === 0 ? 0 : 0.5),
+      vLineWidth: () => 0,
+      hLineColor: () => '#e0e0e0',
+      paddingLeft: () => 0,
+      paddingRight: () => 0,
+    },
+  };
+}
+
+// ── Executive Summary builders ───────────────────────────────────────────
+
+function _omBuildExecSummaryProse(d){
+  const addr      = d['Address'] || 'this property';
+  const cityState = _omExtractCityStateZip(d);
+  const county    = d['Simple County'] || '';
+  const assetType = _omSanitizeText((_dealAssetType(d) || d['Simple Text Property Type'] || 'commercial real estate')).toLowerCase();
+  const units     = Number(d['Number of Units'] || d['No. of Units']) || 0;
+  const sqft      = Number(d['Square Footage'] || d['Total Building SF'] || d['Net Rentable SF']) || 0;
+  const ask       = d['Asking Price'] ? '$' + Number(d['Asking Price']).toLocaleString() : null;
+  const yearBuilt = d['Year Built'] || '';
+  const occupancy = d['Occupancy (%)'] || '';
+
+  const sentences = [];
+  let intro = `Ace Acquisitions is pleased to present the opportunity to acquire ${addr}`;
+  if(cityState) intro += `, a ${assetType} property located in ${cityState}`;
+  if(county && !cityState.includes(county)) intro += ` (${county})`;
+  intro += '.';
+  sentences.push(intro);
+
+  const programParts = [];
+  if(units)     programParts.push(`${units.toLocaleString()} ${units === 1 ? 'unit' : 'units'}`);
+  if(sqft)      programParts.push(`${sqft.toLocaleString()} square feet of building area`);
+  if(yearBuilt) programParts.push(`originally built in ${yearBuilt}`);
+  if(programParts.length) {
+    sentences.push(`The property comprises ${programParts.join(', ')}.`);
+  }
+
+  if(occupancy) sentences.push(`Current occupancy stands at ${occupancy}${String(occupancy).includes('%') ? '' : '%'}.`);
+
+  if(ask) {
+    sentences.push(`The property is offered at ${ask}.`);
+  } else {
+    sentences.push('The property is offered at a price available upon request.');
+  }
+
+  sentences.push('Additional details on financial performance, property specifications, and investment highlights are provided in the sections that follow.');
+
+  return sentences.join(' ');
+}
+
+function _omBuildPropertySummaryTable(d){
+  const rows = [];
+  const addOrSkip = (label, value) => {
+    if(value !== null && value !== undefined && value !== '') rows.push([label, String(value)]);
+  };
+  addOrSkip('Address',          d['Address']);
+  addOrSkip('County',           d['Simple County']);
+  addOrSkip('Municipality',     _omExtractCityStateZip(d));
+  addOrSkip('Asset Type',       _dealAssetType(d) || d['Simple Text Property Type']);
+  if(d['Number of Units']) addOrSkip('Total Units', Number(d['Number of Units']).toLocaleString());
+  if(d['Square Footage'])  addOrSkip('Building Area', Number(d['Square Footage']).toLocaleString() + ' SF');
+  if(d['No. of Stories'])  addOrSkip('Stories', d['No. of Stories']);
+  if(d['Year Built'])      addOrSkip('Year Built', d['Year Built']);
+  if(d['Year Renovated'])  addOrSkip('Year Renovated', d['Year Renovated']);
+  if(d['No. of Parking Spaces']) addOrSkip('Parking Spaces', d['No. of Parking Spaces']);
+  if(d['Occupancy (%)'])   addOrSkip('Occupancy', String(d['Occupancy (%)']).includes('%') ? d['Occupancy (%)'] : d['Occupancy (%)']+'%');
+  if(d['Asking Price'])    addOrSkip('Asking Price', '$' + Number(d['Asking Price']).toLocaleString());
+  return {
+    table: {
+      widths: [140, '*'],
+      body: rows.map((r, i) => [
+        { text: r[0], color: OM_BRAND.darkGray, fontSize: 9, bold: true,  margin: [6, 6, 6, 6], fillColor: i % 2 === 0 ? OM_BRAND.lightGray : null },
+        { text: r[1], color: OM_BRAND.text,     fontSize: 9,              margin: [6, 6, 6, 6], fillColor: i % 2 === 0 ? OM_BRAND.lightGray : null },
+      ]),
+    },
+    layout: {
+      hLineWidth: () => 0.4,
+      vLineWidth: () => 0,
+      hLineColor: () => '#e0e0e0',
+    },
+  };
+}
+
+// ── Investment Highlights builder ────────────────────────────────────────
+
+function _omBuildHighlightBullet(line){
+  const splitMatch = line.match(/^(.+?)\s+[—-]\s+(.+)$/);
+  const title = splitMatch ? splitMatch[1] : null;
+  const body  = splitMatch ? splitMatch[2] : line;
+  return {
+    columns: [
+      { text: '■', color: OM_BRAND.gold, fontSize: 11, width: 14, margin: [0, 2, 0, 0] },
+      {
+        stack: [
+          title ? { text: title, color: OM_BRAND.navy, fontSize: 11, bold: true, margin: [0, 0, 0, 3] } : null,
+          { text: body, color: OM_BRAND.text, fontSize: 9.5, lineHeight: 1.4, alignment: 'justify' },
+        ].filter(Boolean),
+        width: '*',
+      },
+    ],
+    margin: [0, 0, 0, 12],
+  };
+}
+
+// Extract "City, STATE ZIP" from the deal's address field.
+// Strip emojis, private-use area glyphs, and other non-printable characters
+// that Roboto (pdfmake's default font) can't render. Without this, characters
+// like 🟣 show as empty square boxes ("tofu") in the output PDF.
+// Keeps normal punctuation, extended Latin, em dashes, and common CRE symbols.
+function _omSanitizeText(s){
+  if(s === null || s === undefined) return '';
+  return String(s)
+    // Emoji: Misc Symbols & Pictographs, Emoticons, Transport, Supplemental, etc.
+    .replace(/[\u{1F300}-\u{1FAFF}]/gu, '')
+    .replace(/[\u{2600}-\u{27BF}]/gu, '')
+    .replace(/[\u{1F000}-\u{1F2FF}]/gu, '')
+    // Private Use Area (where weird custom icons sometimes live)
+    .replace(/[\u{E000}-\u{F8FF}]/gu, '')
+    // Variation selectors
+    .replace(/[\u{FE00}-\u{FE0F}]/gu, '')
+    // Zero-width characters
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u206F]/g, '')
+    // Collapse any resulting whitespace runs
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+function _omExtractCityStateZip(d){
+  const addr = d['Address'] || '';
+  const m = addr.match(/,\s*([^,]+,\s*[A-Z]{2}\s+\d{5})/);
+  if(m) return m[1].trim();
+  if(d['City']) return d['City'] + (d['State'] ? ', ' + d['State'] : '');
+  return d['Simple County'] || '';
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  v102 — ADDITIONAL SECTIONS
+//
+//  New sections focused on Ace's real deal flow: Multifamily, Retail,
+//  Industrial. Each section builder returns null if there's no data for
+//  that section, so empty pages never appear in the generated OM.
+// ═══════════════════════════════════════════════════════════════════
+
+// Normalize a money value from any field shape (number, string with $, etc.)
+function _omMoney(v){
+  if(v === null || v === undefined || v === '') return null;
+  const n = Number(String(v).replace(/[$,]/g, ''));
+  return isFinite(n) && n !== 0 ? n : null;
+}
+
+// Format a number as $X,XXX
+function _omFmtMoney(n){
+  if(n === null || n === undefined || !isFinite(n)) return '—';
+  return '$' + Number(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
+}
+
+// Format a decimal as a percentage. Accepts 0.075 → "7.50%" or 7.5 → "7.50%".
+function _omFmtPct(n){
+  if(n === null || n === undefined || !isFinite(n)) return '—';
+  const v = Number(n);
+  const scaled = Math.abs(v) <= 1 ? v * 100 : v;
+  return scaled.toFixed(2) + '%';
+}
+
+// Simplified asset-type detector. Returns one of: 'multifamily', 'retail',
+// 'industrial', 'office', 'mixed', 'other'.
+function _omAssetFamily(d){
+  const raw = ((_dealAssetType ? _dealAssetType(d) : null) || d['CRM Asset Classification'] || d['Simple Text Property Type'] || '').toLowerCase();
+  if(raw.includes('multifamily') || raw.includes('apartment')) return 'multifamily';
+  if(raw.includes('retail') || raw.includes('shopping') || raw.includes('strip')) return 'retail';
+  if(raw.includes('industrial') || raw.includes('warehouse') || raw.includes('distribution')) return 'industrial';
+  if(raw.includes('office')) return 'office';
+  if(raw.includes('mixed')) return 'mixed';
+  return 'other';
+}
+
+// Build the TOC rows dynamically based on which sections actually have data.
+// Keeps section numbers consistent with the final PDF (no gaps).
+function _omBuildTocRows(d){
+  const rows = [];
+  let n = 1;
+  const pad = (i) => String(i).padStart(2, '0');
+  rows.push([pad(n++), 'Executive Summary',     'included']);
+  rows.push([pad(n++), 'Investment Highlights', 'included']);
+  if(_omHasFinancialData(d))    rows.push([pad(n++), 'Financial Summary',         'included']);
+  if(_omHasPropertyDetailData(d)) rows.push([pad(n++), 'Property Details',        'included']);
+  if(_omHasLocationData(d))     rows.push([pad(n++), 'Location & Market',         'included']);
+  const photos = _omGetOrderedPhotos(d);
+  if(photos.length > 1)         rows.push([pad(n++), 'Additional Photos',         'included']);
+  rows.push([pad(n++), 'Confidentiality & Disclaimer', 'included']);
+  return rows;
+}
+
+// Does this deal have any financial data worth showing?
+function _omHasFinancialData(d){
+  const fields = [
+    'Gross Rental Income (Monthly)', 'Expenses Monthly', 'NOI', 'Cap Rate (CRM)',
+    'RUBS/CAM Income (Monthly)', 'Other Income (Monthly)', 'Property Tax (Monthly)',
+    'Insurance (Monthly)', 'Admin Expenses (Monthly)', 'Maintenance & Repair Costs (Monthly)',
+    'Landscaping (Monthly)', 'Miscellaneous Expenses (Monthly)', 'Capital Reserve (Monthly)',
+    // v102.4: new expense sub-category fields
+    'Accounting (Monthly)', 'Legal (Monthly)', 'Other Admin (Monthly)',
+    'Other Utilities (Monthly)', 'Other Misc (Monthly)', 'Other Tax (Monthly)',
+    'Liability Insurance (Monthly)', 'Other Mgmt (Monthly)',
+    'Property Management Fee (Monthly)',
+  ];
+  return fields.some(f => _omMoney(d[f]) !== null);
+}
+
+// Does this deal have enough property detail to warrant a section?
+function _omHasPropertyDetailData(d){
+  return !!(d['Unit Mix'] || d['Number of Units'] || d['Square Footage']
+         || d['Net Rentable SF'] || d['Year Built'] || d['Property Class']
+         || d['Roof Type'] || d['HVAC'] || d['Exterior'] || d['Foundation']
+         || d['MF Unit Rent Data']);
+}
+
+// Does this deal have enough location info to warrant a Location section?
+function _omHasLocationData(d){
+  return !!(d['Simple County'] || d['Location Class'] || d['Location Type']
+         || d['Location Trending'] || d['Region'] || d['Location Description']);
+}
+
+// ── SECTION 03 — Financial Summary ───────────────────────────────────────
+// Renders an income/expense table using whatever fields are populated.
+// Every row only appears if it has data. NOI + Cap Rate are always shown
+// if they can be computed, even if not stored directly.
+function _omBuildFinancialSummaryPage(d){
+  if(!_omHasFinancialData(d)) return null;
+
+  // Gather income items
+  const incomeItems = [
+    ['Gross Rental Income',    _omMoney(d['Gross Rental Income (Monthly)'])],
+    ['Other Income',           _omMoney(d['Other Income (Monthly)'])],
+    ['RUBS / CAM Income',      _omMoney(d['RUBS/CAM Income (Monthly)'])],
+  ].filter(r => r[1] !== null);
+
+  // Vacancy adjustment (only if rate > 0 and GRI exists)
+  const vacancyRate = Number(d['Vacancy Rate (%)']) || 0;
+  const gri = _omMoney(d['Gross Rental Income (Monthly)']) || 0;
+  const vacancyMonthly = vacancyRate > 0 && gri > 0 ? -(gri * vacancyRate / 100) : null;
+  if(vacancyMonthly !== null) incomeItems.push([`Less: Vacancy (${vacancyRate}%)`, vacancyMonthly]);
+
+  const egi = incomeItems.reduce((sum, r) => sum + (r[1] || 0), 0);
+
+  // v102.3: Expense categories — rollups instead of per-line items.
+  // Each category sums the database fields that belong to it. Categories
+  // with zero total are filtered out so empty rows never appear.
+  // Note: some UI inputs (Accounting, Legal, Other Tax, Liability Ins,
+  // Advertising) don't have database columns yet, so those values don't
+  // persist and are NOT reflected in these totals.
+  const sumFields = (fieldNames) => {
+    const vals = fieldNames.map(f => _omMoney(d[f])).filter(v => v !== null);
+    if(vals.length === 0) return null;
+    return vals.reduce((a, b) => a + b, 0);
+  };
+
+  const expenseItems = [
+    ['Administrative',        sumFields([
+      'Admin Expenses (Monthly)',      // Management Fee
+      'Accounting (Monthly)',
+      'Legal (Monthly)',
+      'Other Admin (Monthly)',
+    ])],
+    ['Repair & Maintenance',  sumFields([
+      'Maintenance & Repair Costs (Monthly)',
+      'Maintenance & Repair Salary (Monthly)',
+      'Janitorial (Monthly)',
+      'Landscaping (Monthly)',
+      'Pool (Monthly)',
+      'Supplies (Monthly)',
+    ])],
+    ['Utilities',             sumFields([
+      'Electric (Monthly)',
+      'Gas (Monthly)',
+      'Water & Sewer (Monthly)',
+      'Trash (Monthly)',
+      'Other Utilities (Monthly)',
+    ])],
+    ['Property Taxes',        sumFields([
+      'Property Tax (Monthly)',
+      'Other Tax (Monthly)',
+    ])],
+    ['Insurance',             sumFields([
+      'Insurance (Monthly)',
+      'Liability Insurance (Monthly)',
+    ])],
+    ['Miscellaneous',         sumFields([
+      'Miscellaneous Expenses (Monthly)',
+      'Other Misc (Monthly)',
+    ])],
+    ['Property Management',   sumFields([
+      'Property Management Fee (Monthly)',
+      'Other Mgmt (Monthly)',
+    ])],
+    ['Capital Reserve',       sumFields(['Capital Reserve (Monthly)'])],
+  ].filter(r => r[1] !== null && r[1] > 0);
+
+  // If no per-category expenses exist but there's a total Expenses Monthly
+  // field, fall back to a single "Total Operating Expenses" line.
+  const totalExpStored = _omMoney(d['Expenses Monthly']);
+  if(expenseItems.length === 0 && totalExpStored !== null){
+    expenseItems.push(['Operating Expenses (Total)', totalExpStored]);
+  }
+
+  // Total monthly expenses: prefer the sum of per-line items if we have them,
+  // otherwise use the stored total. This ensures the total row matches the
+  // sum of the visible rows exactly.
+  const totalExpMo = expenseItems.length > 0
+    ? expenseItems.reduce((sum, r) => sum + r[1], 0)
+    : (_omMoney(d['Expenses Monthly']) || 0);
+
+  // NOI: prefer the stored value, fall back to EGI − expenses
+  let noi = _omMoney(d['NOI']);
+  if(!noi && egi && totalExpMo) noi = (egi - totalExpMo) * 12;
+
+  // Cap rate: prefer stored, fall back to NOI/Ask
+  let capRate = d['Cap Rate (CRM)'] ? Number(d['Cap Rate (CRM)']) : null;
+  const ask = _omMoney(d['Asking Price']);
+  if(!capRate && noi && ask) capRate = noi / ask;
+
+  // Build income table rows
+  const incomeRows = [
+    [
+      { text: 'Income',     color: OM_BRAND.white, bold: true, fontSize: 9, fillColor: OM_BRAND.navy, margin: [8, 6, 8, 6] },
+      { text: 'Monthly',    color: OM_BRAND.white, bold: true, fontSize: 9, fillColor: OM_BRAND.navy, alignment: 'right', margin: [8, 6, 8, 6] },
+      { text: 'Annual',     color: OM_BRAND.white, bold: true, fontSize: 9, fillColor: OM_BRAND.navy, alignment: 'right', margin: [8, 6, 8, 6] },
+    ],
+    ...incomeItems.map((r, i) => [
+      { text: r[0], color: OM_BRAND.text, fontSize: 9, margin: [8, 5, 8, 5], fillColor: i % 2 === 0 ? OM_BRAND.lightGray : null },
+      { text: _omFmtMoney(r[1]), color: OM_BRAND.text, fontSize: 9, alignment: 'right', margin: [8, 5, 8, 5], fillColor: i % 2 === 0 ? OM_BRAND.lightGray : null },
+      { text: _omFmtMoney(r[1] * 12), color: OM_BRAND.text, fontSize: 9, alignment: 'right', margin: [8, 5, 8, 5], fillColor: i % 2 === 0 ? OM_BRAND.lightGray : null },
+    ]),
+  ];
+  if(egi) incomeRows.push([
+    { text: 'Effective Gross Income', color: OM_BRAND.navy, bold: true, fontSize: 9, margin: [8, 6, 8, 6], fillColor: OM_BRAND.cream },
+    { text: _omFmtMoney(egi), color: OM_BRAND.navy, bold: true, fontSize: 9, alignment: 'right', margin: [8, 6, 8, 6], fillColor: OM_BRAND.cream },
+    { text: _omFmtMoney(egi * 12), color: OM_BRAND.navy, bold: true, fontSize: 9, alignment: 'right', margin: [8, 6, 8, 6], fillColor: OM_BRAND.cream },
+  ]);
+
+  // Build expense table rows
+  const expenseRows = expenseItems.length > 0 ? [
+    [
+      { text: 'Operating Expenses', color: OM_BRAND.white, bold: true, fontSize: 9, fillColor: OM_BRAND.navy, margin: [8, 6, 8, 6] },
+      { text: 'Monthly',            color: OM_BRAND.white, bold: true, fontSize: 9, fillColor: OM_BRAND.navy, alignment: 'right', margin: [8, 6, 8, 6] },
+      { text: 'Annual',             color: OM_BRAND.white, bold: true, fontSize: 9, fillColor: OM_BRAND.navy, alignment: 'right', margin: [8, 6, 8, 6] },
+    ],
+    ...expenseItems.map((r, i) => [
+      { text: r[0], color: OM_BRAND.text, fontSize: 9, margin: [8, 5, 8, 5], fillColor: i % 2 === 0 ? OM_BRAND.lightGray : null },
+      { text: _omFmtMoney(r[1]), color: OM_BRAND.text, fontSize: 9, alignment: 'right', margin: [8, 5, 8, 5], fillColor: i % 2 === 0 ? OM_BRAND.lightGray : null },
+      { text: _omFmtMoney(r[1] * 12), color: OM_BRAND.text, fontSize: 9, alignment: 'right', margin: [8, 5, 8, 5], fillColor: i % 2 === 0 ? OM_BRAND.lightGray : null },
+    ]),
+    [
+      { text: 'Total Operating Expenses', color: OM_BRAND.navy, bold: true, fontSize: 9, margin: [8, 6, 8, 6], fillColor: OM_BRAND.cream },
+      { text: _omFmtMoney(totalExpMo), color: OM_BRAND.navy, bold: true, fontSize: 9, alignment: 'right', margin: [8, 6, 8, 6], fillColor: OM_BRAND.cream },
+      { text: _omFmtMoney(totalExpMo * 12), color: OM_BRAND.navy, bold: true, fontSize: 9, alignment: 'right', margin: [8, 6, 8, 6], fillColor: OM_BRAND.cream },
+    ],
+  ] : null;
+
+  // NOI + Cap Rate summary strip
+  const noiCapStrip = (noi || capRate) ? {
+    table: {
+      widths: ['*', '*'],
+      body: [[
+        {
+          stack: [
+            { text: 'NET OPERATING INCOME', color: OM_BRAND.goldLight, fontSize: 8, characterSpacing: 0.6, bold: true },
+            { text: _omFmtMoney(noi), color: OM_BRAND.white, fontSize: 18, bold: true, margin: [0, 4, 0, 0] },
+          ],
+          fillColor: OM_BRAND.navy,
+          margin: [14, 12, 14, 12],
+        },
+        {
+          stack: [
+            { text: 'CAP RATE', color: OM_BRAND.goldLight, fontSize: 8, characterSpacing: 0.6, bold: true },
+            { text: capRate !== null ? _omFmtPct(capRate) : '—', color: OM_BRAND.white, fontSize: 18, bold: true, margin: [0, 4, 0, 0] },
+          ],
+          fillColor: OM_BRAND.navy,
+          margin: [14, 12, 14, 12],
+        },
+      ]],
+    },
+    layout: {
+      hLineWidth: () => 0,
+      vLineWidth: (i) => i === 1 ? 1 : 0,
+      vLineColor: () => OM_BRAND.gold,
+    },
+    margin: [0, 0, 0, 18],
+  } : null;
+
+  // Financial notes paragraph
+  const notesBlock = d['Financial Property Notes'] ? {
+    stack: [
+      { text: 'Financial Notes', color: OM_BRAND.navy, fontSize: 11, bold: true, margin: [0, 14, 0, 6] },
+      { text: d['Financial Property Notes'], color: OM_BRAND.text, fontSize: 9, lineHeight: 1.4, alignment: 'justify' },
+    ],
+  } : null;
+
+  return {
+    stack: [
+      { text: 'SECTION 03', color: OM_BRAND.gold, fontSize: 9, characterSpacing: 1.2, bold: true, margin: [0, 0, 0, 6] },
+      { text: 'Financial Summary', color: OM_BRAND.navy, fontSize: 22, bold: true, margin: [0, 0, 0, 2] },
+      { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 170, y2: 0, lineWidth: 1.5, lineColor: OM_BRAND.gold }], margin: [0, 0, 0, 18] },
+      noiCapStrip,
+      { table: { widths: ['*', 75, 85], body: incomeRows }, layout: { hLineWidth: () => 0.4, vLineWidth: () => 0, hLineColor: () => '#e0e0e0' }, margin: [0, 0, 0, 14] },
+      expenseRows ? { table: { widths: ['*', 75, 85], body: expenseRows }, layout: { hLineWidth: () => 0.4, vLineWidth: () => 0, hLineColor: () => '#e0e0e0' }, margin: [0, 0, 0, 0] } : null,
+      notesBlock,
+    ].filter(Boolean),
+    pageBreak: 'after',
+  };
+}
+
+// ── SECTION 04 — Property Details ────────────────────────────────────────
+// Adapts to asset type: MF shows unit count + mix, Retail shows SF + tenant
+// notes, Industrial shows SF + clear height/loading if available.
+function _omBuildPropertyDetailsPage(d){
+  if(!_omHasPropertyDetailData(d)) return null;
+
+  const family = _omAssetFamily(d);
+  const rows = [];
+  const add = (label, value) => {
+    if(value !== null && value !== undefined && value !== '') rows.push([label, String(value)]);
+  };
+
+  // Core fields — same for all asset types
+  add('Asset Classification', _omSanitizeText(d['CRM Asset Classification'] || d['Simple Text Property Type']));
+  add('Year Built',           d['Year Built']);
+  add('Year Renovated',       d['Year Renovated']);
+
+  // Asset-type specific fields
+  if(family === 'multifamily'){
+    if(d['Number of Units']) add('Total Units', Number(d['Number of Units']).toLocaleString());
+    if(d['Unit Mix'])        add('Unit Mix', d['Unit Mix']);
+    if(d['Square Footage'])  add('Building SF', Number(d['Square Footage']).toLocaleString());
+    if(d['No. of Stories'])  add('Stories', d['No. of Stories']);
+    if(d['No. of Parking Spaces']) add('Parking Spaces', d['No. of Parking Spaces']);
+    if(d['Occupancy (%)'])   add('Occupancy', String(d['Occupancy (%)']).includes('%') ? d['Occupancy (%)'] : d['Occupancy (%)']+'%');
+  } else if(family === 'retail'){
+    if(d['Square Footage'])  add('Gross Building SF', Number(d['Square Footage']).toLocaleString());
+    if(d['Net Rentable SF']) add('Net Rentable SF',   Number(d['Net Rentable SF']).toLocaleString());
+    if(d['Number of Units']) add('Tenant Spaces', d['Number of Units']);
+    if(d['Occupancy (%)'])   add('Occupancy', String(d['Occupancy (%)']).includes('%') ? d['Occupancy (%)'] : d['Occupancy (%)']+'%');
+    if(d['No. of Parking Spaces']) add('Parking Spaces', d['No. of Parking Spaces']);
+    if(d['Parking Ratio'])   add('Parking Ratio', d['Parking Ratio']);
+  } else if(family === 'industrial'){
+    if(d['Square Footage'])  add('Building SF', Number(d['Square Footage']).toLocaleString());
+    if(d['Net Rentable SF']) add('Net Rentable SF', Number(d['Net Rentable SF']).toLocaleString());
+    if(d['No. of Stories'])  add('Stories', d['No. of Stories']);
+    if(d['Occupancy (%)'])   add('Occupancy', String(d['Occupancy (%)']).includes('%') ? d['Occupancy (%)'] : d['Occupancy (%)']+'%');
+    if(d['No. of Parking Spaces']) add('Parking Spaces', d['No. of Parking Spaces']);
+  } else {
+    if(d['Square Footage'])  add('Building SF', Number(d['Square Footage']).toLocaleString());
+    if(d['Net Rentable SF']) add('Net Rentable SF', Number(d['Net Rentable SF']).toLocaleString());
+    if(d['Number of Units']) add('Units / Spaces', d['Number of Units']);
+    if(d['No. of Stories'])  add('Stories', d['No. of Stories']);
+    if(d['Occupancy (%)'])   add('Occupancy', String(d['Occupancy (%)']).includes('%') ? d['Occupancy (%)'] : d['Occupancy (%)']+'%');
+    if(d['No. of Parking Spaces']) add('Parking Spaces', d['No. of Parking Spaces']);
+  }
+
+  // Construction / condition fields — same for all
+  add('Property Class',  d['Property Class']);
+  add('Condition',       d['Property Condition']);
+  add('Roof Type',       d['Roof Type']);
+  add('HVAC',            d['HVAC']);
+  add('Exterior',        d['Exterior']);
+  add('Foundation',      d['Foundation']);
+  add('Paving',          d['Paving']);
+  add('Wiring',          d['Wiring']);
+  add('Piping',          d['Piping']);
+
+  if(rows.length === 0) return null;
+
+  const tableBody = rows.map((r, i) => [
+    { text: r[0], color: OM_BRAND.darkGray, fontSize: 9, bold: true, margin: [8, 6, 8, 6], fillColor: i % 2 === 0 ? OM_BRAND.lightGray : null },
+    { text: r[1], color: OM_BRAND.text,     fontSize: 9,             margin: [8, 6, 8, 6], fillColor: i % 2 === 0 ? OM_BRAND.lightGray : null },
+  ]);
+
+  return {
+    stack: [
+      { text: 'SECTION 04', color: OM_BRAND.gold, fontSize: 9, characterSpacing: 1.2, bold: true, margin: [0, 0, 0, 6] },
+      { text: 'Property Details', color: OM_BRAND.navy, fontSize: 22, bold: true, margin: [0, 0, 0, 2] },
+      { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 155, y2: 0, lineWidth: 1.5, lineColor: OM_BRAND.gold }], margin: [0, 0, 0, 18] },
+      {
+        table: { widths: [160, '*'], body: tableBody },
+        layout: { hLineWidth: () => 0.4, vLineWidth: () => 0, hLineColor: () => '#e0e0e0' },
+      },
+    ],
+    pageBreak: 'after',
+  };
+}
+
+// ── SECTION 05 — Location & Market ───────────────────────────────────────
+function _omBuildLocationPage(d){
+  if(!_omHasLocationData(d)) return null;
+
+  const rows = [];
+  const add = (label, value) => {
+    if(value !== null && value !== undefined && value !== '') rows.push([label, String(value)]);
+  };
+  add('County',            d['Simple County']);
+  add('Region',            d['Region']);
+  add('State',             d['State']);
+  add('Location Type',     d['Location Type']);
+  add('Location Class',    d['Location Class']);
+  add('Trending',          d['Location Trending']);
+
+  const locDesc = d['Location Description'] || d['Nearby Attractions'] || null;
+
+  if(rows.length === 0 && !locDesc) return null;
+
+  const tableBody = rows.map((r, i) => [
+    { text: r[0], color: OM_BRAND.darkGray, fontSize: 9, bold: true, margin: [8, 6, 8, 6], fillColor: i % 2 === 0 ? OM_BRAND.lightGray : null },
+    { text: r[1], color: OM_BRAND.text,     fontSize: 9,             margin: [8, 6, 8, 6], fillColor: i % 2 === 0 ? OM_BRAND.lightGray : null },
+  ]);
+
+  return {
+    stack: [
+      { text: 'SECTION 05', color: OM_BRAND.gold, fontSize: 9, characterSpacing: 1.2, bold: true, margin: [0, 0, 0, 6] },
+      { text: 'Location & Market', color: OM_BRAND.navy, fontSize: 22, bold: true, margin: [0, 0, 0, 2] },
+      { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 175, y2: 0, lineWidth: 1.5, lineColor: OM_BRAND.gold }], margin: [0, 0, 0, 18] },
+      tableBody.length > 0 ? {
+        table: { widths: [140, '*'], body: tableBody },
+        layout: { hLineWidth: () => 0.4, vLineWidth: () => 0, hLineColor: () => '#e0e0e0' },
+        margin: [0, 0, 0, 16],
+      } : null,
+      locDesc ? { text: 'Location Overview', color: OM_BRAND.navy, fontSize: 11, bold: true, margin: [0, 4, 0, 6] } : null,
+      locDesc ? { text: locDesc, color: OM_BRAND.text, fontSize: 9, lineHeight: 1.45, alignment: 'justify' } : null,
+    ].filter(Boolean),
+    pageBreak: 'after',
+  };
+}
+
+// ── SECTION 06 — Additional Photos Gallery ───────────────────────────────
+// Shows photos 2-6 in a 2-column grid. Photo 1 is on the cover so we skip it.
+function _omBuildGalleryPage(d, photoDataUris){
+  // Need at least 2 photos (cover + 1 more) for a gallery
+  if(!photoDataUris || photoDataUris.length < 2) return null;
+
+  const galleryPhotos = photoDataUris.slice(1, 7); // up to 5 extra photos
+  const rows = [];
+  for(let i = 0; i < galleryPhotos.length; i += 2){
+    const left  = galleryPhotos[i];
+    const right = galleryPhotos[i + 1] || null;
+    rows.push([
+      { image: left, fit: [250, 180], alignment: 'center', margin: [0, 0, 0, 12] },
+      right ? { image: right, fit: [250, 180], alignment: 'center', margin: [0, 0, 0, 12] } : { text: '' },
+    ]);
+  }
+
+  return {
+    stack: [
+      { text: 'SECTION 06', color: OM_BRAND.gold, fontSize: 9, characterSpacing: 1.2, bold: true, margin: [0, 0, 0, 6] },
+      { text: 'Additional Photos', color: OM_BRAND.navy, fontSize: 22, bold: true, margin: [0, 0, 0, 2] },
+      { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 160, y2: 0, lineWidth: 1.5, lineColor: OM_BRAND.gold }], margin: [0, 0, 0, 18] },
+      {
+        table: { widths: ['*', '*'], body: rows },
+        layout: { hLineWidth: () => 0, vLineWidth: () => 0, paddingLeft: () => 6, paddingRight: () => 6 },
+      },
+    ],
+    pageBreak: 'after',
+  };
+}
+
+// ── SECTION 07 — Confidentiality & Disclaimer ────────────────────────────
+function _omBuildDisclaimerPage(d){
+  const disclaimerText =
+    'This Offering Memorandum ("OM") has been prepared by Ace Acquisitions ("Broker") for use '
+    + 'by a limited number of parties solely for the purpose of evaluating the potential acquisition '
+    + 'of the subject property. This OM contains selected information about the property and does '
+    + 'not purport to be all-inclusive or to contain all of the information that a prospective '
+    + 'purchaser may require. All financial projections are provided for general reference purposes '
+    + 'only and are based on assumptions relating to the general economy, market conditions, '
+    + 'competition, and other factors beyond the control of Broker and the owner. Therefore, all '
+    + 'projections, assumptions, and other information are subject to material variation. The '
+    + 'information contained in this OM has been obtained from sources believed to be reliable; '
+    + 'however, Broker has not verified, and will not verify, any of the information contained '
+    + 'herein, nor has Broker conducted any investigation regarding these matters. Broker makes '
+    + 'no guarantee, warranty, or representation whatsoever about the accuracy or completeness of '
+    + 'any information provided.\n\n'
+    + 'As a condition of receipt of this OM, the recipient agrees that (1) the OM and its contents '
+    + 'are confidential, (2) the recipient will not reproduce the OM in whole or in part, (3) the '
+    + 'recipient will not distribute the OM or any of its contents to any other person or entity '
+    + 'without the prior written authorization of Broker, and (4) the recipient will hold and treat '
+    + 'the OM in the strictest confidence.\n\n'
+    + 'By accepting this OM, the recipient agrees to release Broker and the property owner from '
+    + 'any liability, and acknowledges that the decision to purchase or not to purchase the '
+    + 'subject property is made solely on the basis of the recipient\'s own investigations.';
+
+  return {
+    stack: [
+      { text: 'SECTION 07', color: OM_BRAND.gold, fontSize: 9, characterSpacing: 1.2, bold: true, margin: [0, 0, 0, 6] },
+      { text: 'Confidentiality & Disclaimer', color: OM_BRAND.navy, fontSize: 22, bold: true, margin: [0, 0, 0, 2] },
+      { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 230, y2: 0, lineWidth: 1.5, lineColor: OM_BRAND.gold }], margin: [0, 0, 0, 18] },
+      { text: disclaimerText, fontSize: 8.5, lineHeight: 1.5, color: OM_BRAND.darkGray, alignment: 'justify' },
+      { text: 'Ace Acquisitions', color: OM_BRAND.navy, fontSize: 11, bold: true, margin: [0, 22, 0, 2] },
+      { text: 'New Jersey | Commercial Real Estate', color: OM_BRAND.gold, fontSize: 9, margin: [0, 0, 0, 0] },
+    ],
+  };
+}
+
+// Premium OM handler — v100 placeholder that shows the real confirmation
+// dialog (including estimated cost) so you can see the flow. v103 will
+// wire in the actual Anthropic Edge Function proxy.
+function _omGeneratePremium(){
+  const missing = _omCheckRequiredFields();
+  if(missing.length > 0){
+    alert('Cannot generate Premium OM — missing required fields:\n\n• ' + missing.join('\n• '));
+    return;
+  }
+  // Show the confirmation modal — same pattern as the logout modal
+  const existing = document.getElementById('omPremiumConfirmModal');
+  if(existing) existing.remove();
+  const modal = document.createElement('div');
+  modal.id = 'omPremiumConfirmModal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.6);z-index:999999;display:flex;align-items:center;justify-content:center;padding:20px;';
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;padding:28px;width:480px;max-width:92vw;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
+        <div style="font-size:36px;">✨</div>
+        <div>
+          <div style="font-size:18px;font-weight:800;color:#0b1f3a;">Generate Premium OM?</div>
+          <div style="font-size:12px;color:#64748b;">AI-enhanced offering memorandum</div>
+        </div>
+      </div>
+      <div style="font-size:13px;color:#334155;line-height:1.6;margin-bottom:16px;">
+        Premium OM uses <strong>Claude Sonnet 4.6</strong> to generate professional prose for:
+        <ul style="margin:8px 0 0 20px;padding:0;color:#475569;">
+          <li>Executive summary</li>
+          <li>Investment highlights (6–8 bullets with descriptions)</li>
+          <li>Site description &amp; market positioning</li>
+        </ul>
+      </div>
+      <div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:12px 14px;margin-bottom:16px;">
+        <div style="font-size:11px;color:#78350f;line-height:1.5;">
+          <strong>💰 Estimated cost:</strong> ~$0.08–$0.12 per OM (one API call, tokens depend on deal data size)<br>
+          <strong>⏱ Time:</strong> 15–25 seconds<br>
+          <strong>🔒 Billed to:</strong> Ace Acquisitions organization account (not your personal key)
+        </div>
+      </div>
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:18px;">
+        Not every deal needs Premium OM. For routine listings, <strong>Standard OM</strong> is free and generates the same template in 3 seconds without AI writing.
+      </div>
+      <div style="display:flex;gap:10px;">
+        <button id="omPremiumCancelBtn" style="flex:1;background:#f1f5f9;color:#475569;border:none;padding:11px;font-size:13px;font-weight:600;border-radius:7px;cursor:pointer;">Cancel</button>
+        <button id="omPremiumConfirmBtn" style="flex:1;background:linear-gradient(180deg,#b8912a,#8a6b1f);color:#fff;border:none;padding:11px;font-size:13px;font-weight:700;border-radius:7px;cursor:pointer;">✨ Generate Premium OM</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  const close = () => { const m = document.getElementById('omPremiumConfirmModal'); if(m) m.remove(); };
+  document.getElementById('omPremiumCancelBtn').onclick = close;
+  modal.addEventListener('click', e => { if(e.target === modal) close(); });
+  const escHandler = e => { if(e.key === 'Escape'){ close(); document.removeEventListener('keydown', escHandler); } };
+  document.addEventListener('keydown', escHandler);
+  document.getElementById('omPremiumConfirmBtn').onclick = () => {
+    close();
+    document.removeEventListener('keydown', escHandler);
+    alert('✓ Premium OM generation is coming in v103.\n\n'
+        + 'This v100 shows the full confirmation flow. In v103 this button will call the anthropic-proxy Edge Function, '
+        + 'wait for the AI response, and feed it into the pdfmake template.\n\n'
+        + 'Required fields check: PASSED\nConfirmation: RECEIVED');
+  };
+}
+
+async function loadBrochurePhotos(recordId){
+  // v100.1: legacy Airtable photo fetcher is now a no-op. Photos come from
+  // deal.photo_attachments (Documents tab) and are rendered by
+  // _omRenderPhotoGrid() via the tab render hook. This function is kept as a
+  // stub so any lingering callers don't throw. Safe to remove in a future turn.
+  return;
 }
 
 function createBrochure(){
@@ -11645,7 +13297,8 @@ function createBrochure(){
   if(!d){ alert('No deal selected.'); return; }
 
   const g  = id => document.getElementById(id)?.value?.trim()||'';
-  const imgs = [0,1,2,3,4,5].map(i=>convertDriveUrl(g('br_img'+i))).filter(Boolean);
+  // v100.1: photos now come from deal.photo_attachments, not br_img* inputs
+  const imgs = _omGetOrderedPhotos(d).map(p => p.url).slice(0, 6);
 
   // ── Gather all data ──────────────────────────────────────
   const propName    = g('br_propName')   || d['Address']||'';
@@ -11689,13 +13342,11 @@ function createBrochure(){
   const wiring    = d['Wiring']         ||'—';
   const piping    = d['Piping']         ||'—';
 
-  // Financial — pull from localStorage if available
-  const fKey = 'fin_'+(d.id||'');
+  // Financial — v102.6: read directly from Supabase deal fields. No more localStorage.
   let fi = {};
-  try{ fi=JSON.parse(_store.get(fKey)||'{}'); }catch(e){}
-  const gri_mo   = fi.aGrossRent ? (fi.aGrossRent/12) : (d['Gross Rental Income (Monthly)']||d['Gross Revenue Monthly']||0);
+  const gri_mo   = d['Gross Rental Income (Monthly)']||d['Gross Revenue Monthly']||0;
   const gri_yr   = gri_mo*12;
-  const vac_pct  = (fi.aVacancy!==null&&fi.aVacancy!==undefined)?fi.aVacancy:(d['Vacancy Rate (%)']||0);
+  const vac_pct  = (d['Vacancy Rate (%)']||0);
   const vac_yr   = gri_yr*(vac_pct/100);
   const egi_yr   = gri_yr - vac_yr;
   const noi_yr   = Number(d['NOI'])||0;
@@ -15155,6 +16806,14 @@ async function _liSubmitSeller(){
     if(expMo)      dealFields['Maintenance & Repair Costs (Monthly)'] = expMo;
     else if(expYr) dealFields['Maintenance & Repair Costs (Monthly)'] = Math.round(expYr/12);
 
+    // v102.9: asset-type-specific fields that were previously dropped on submit.
+    // Each only appears in the UI when the corresponding asset type is selected,
+    // so we just pick up whichever was filled.
+    const autoGas  = gv('li_s_automotive_gas');  if(autoGas)  dealFields['Automotive Gas Type']  = autoGas;
+    const autoWash = gv('li_s_automotive_wash'); if(autoWash) dealFields['Automotive Wash Type'] = autoWash;
+    const retLease = gv('li_s_retail_leasetype');   if(retLease) dealFields['Retail Lease Type']   = retLease;
+    const shopLease= gv('li_s_shopping_leasetype'); if(shopLease) dealFields['Shopping Lease Type']= shopLease;
+
     // Multifamily: write structured data into actual ace_properties columns
     // so the Unit Mix / Property Info sections populate on the deal card.
     if(_liMfData){
@@ -15242,47 +16901,23 @@ async function _liSubmitSeller(){
         console.warn('Contact create/lookup failed:', e.message);
       }
 
-      // 2. Legacy submissions table (kept for backwards compat — boss/legacy tools may still read it)
-      const sbSub = { name: contactName, phone_number: contactPhone,
-        email: contactEmail || null, property_address: gv('li_s_address'),
-        any_other_notes: sellerFields['General Notes']||'', property_type: assetTypeText,
-        asking_price: price||null };
-      try{ await _sbPost(SB_TABLES.submissionSeller, sbSub); }
-      catch(e){ console.warn('ace_submissions_seller write failed (non-fatal):', e.message); }
+      // v102.9: Removed the legacy ace_submissions_seller write. The table
+      // is write-only — nothing in the CRM reads from it, and the "kept for
+      // backwards compat for boss/legacy tools" comment no longer applies
+      // since the boss's tools now read from ace_properties directly.
+      // Seller leads go straight to ace_contacts + ace_properties.
 
       // 3. Create deal in ace_properties, linking the contact as owner
       const propData = _atToSb(dealFields, SB_PROP_MAP);
       if(contactId) propData.owner_contact_id = contactId;
       const createdDeal = await _sbPost(SB_TABLES.properties, propData);
-      // Seed localStorage fin_<id> so the Financial Analysis tab shows GRI/Expenses
-      // immediately in the current browser. Other browsers pick up the values via
-      // the DB fallback added to renderFinancialTab.
-      const newDealId = createdDeal?.id;
-      if(newDealId && (griMo || griYr || expMo || expYr)){
-        try{
-          const finSeed = {};
-          if(griYr)      finSeed.aGrossRent = griYr;
-          else if(griMo) finSeed.aGrossRent = griMo*12;
-          if(expYr)      finSeed.aExpenses = expYr;
-          else if(expMo) finSeed.aExpenses = expMo*12;
-          // Also seed the detailed Maintenance & Repair Costs line item so the
-          // Financial Analysis expense grid shows it in the right row.
-          if(expMo)      finSeed.a_rm_maint_mo = expMo;
-          else if(expYr) finSeed.a_rm_maint_mo = Math.round(expYr/12);
-          _store.set('fin_'+newDealId, JSON.stringify(finSeed));
-        }catch(e){ console.warn('fin_ localStorage seed failed:', e.message); }
-      }
-    } else {
-      const res=await fetch(`https://api.airtable.com/v0/${cfg.base}/tbl18PNC6LWyZcgYd`,{
-        method:'POST',headers:{Authorization:`Bearer ${cfg.key}`,'Content-Type':'application/json'},
-        body:JSON.stringify({fields:sellerFields})
-      });
-      if(!res.ok) throw new Error(await res.text());
-      await fetch(`https://api.airtable.com/v0/${cfg.base}/${cfg.table}`,{
-        method:'POST',headers:{Authorization:`Bearer ${cfg.key}`,'Content-Type':'application/json'},
-        body:JSON.stringify({fields:dealFields})
-      });
+      // v102.6: No more localStorage seeding. Any GRI / expense data from
+      // the intake form is already in dealFields → propData → Supabase.
+      // When the user opens this deal in the Financial Analysis tab, the
+      // values flow from the database directly into fi via _dbExpSeed.
     }
+    // v102.12: Airtable fallback else branch removed. Ace CRM is
+    // Supabase-only; there is no Airtable code path for new deals anymore.
     syncData();
     _liShowSuccess('seller', gv('li_s_name'), gv('li_s_address'));
   }catch(e){
@@ -15488,65 +17123,82 @@ async function _liSubmitBuyer(){
   });
 
   const assetLabels = (_li.assetTypes||[]).join(', ');
-  const countyStr = _li.counties.join(', ');
   const investType = document.getElementById('li_b_investtype')?.value||'';
-  const notesText = [gv('li_b_notes'), investType?`Investor Type: ${investType}`:'', assetCriteria].filter(Boolean).join('\n\n');
 
-  // Map selected counties to exact Airtable choice names
-  const countyChoiceNames = {
-    'Atlantic':'Atlantic County','Bergen':'Bergen County','Burlington':'Burlington County',
-    'Camden':'Camden County','Cape May':'Cape May County','Cumberland':'Cumberland County',
-    'Essex':'Essex County','Gloucester':'Gloucester County','Hudson':'Hudson County',
-    'Hunterdon':'Hunterdon County','Mercer':'Mercer County','Middlesex':'Middlesex County',
-    'Monmouth':'Monmouth County','Morris':'Morris County','Ocean':'Ocean County',
-    'Passaic':'Passaic County','Salem':'Salem County','Somerset':'Somerset County',
-    'Sussex':'Sussex County','Union':'Union County','Warren':'Warren County'
-  };
-  const areaToInvest = (_li.counties||[]).map(c => countyChoiceNames[c] || c).filter(Boolean);
-
-  const fields = {
-    'Name': gv('li_b_name'),
-    'Buyer or Seller': 'Buyer',
-    'Phone Number': gv('li_b_phone'),
-    'Email': gv('li_b_email')||null,
-    'Company': gv('li_b_company')||null,
-    'Contact Notes': gv('li_b_cnotes')||null,
-    'Owned Property Address': gv('li_b_ownedprop')||null,
-    'Property Types': assetLabels||null,
-    'Area to Invest': areaToInvest.length ? areaToInvest : null,
-    'Location': (countyStr+(gv('li_b_locnotes')?'\n'+gv('li_b_locnotes'):''))||null,
-    'Any other buyer Notes?': notesText||null,
-    'Last Deal Purchased? How Much?': gv('li_b_lastdeal')||null,
-  };
-  const cap=gn('li_b_caprate'); if(cap) fields['Minimum Cap Rate']=cap;
-  const mfMin=gn('li_b_multifamily_minunits'); if(mfMin) fields['Minimum # of MF Units']=mfMin;
-  const mfMax=gn('li_b_multifamily_maxunits'); if(mfMax) fields['Max # of MF Units copy']=mfMax;
-  const whMin=gn('li_b_warehouse_minsf'); if(whMin) fields['Warehouse Min Square Footage']=whMin;
-  const whMax=gn('li_b_warehouse_maxsf'); if(whMax) fields['Warehouse Max Square Footage']=whMax;
-
-  Object.keys(fields).forEach(k=>{ if(fields[k]===null||fields[k]===undefined||fields[k]==='') delete fields[k]; });
+  // v102.12: Removed the legacy `fields` object and Airtable-only helpers
+  // (countyStr, countyChoiceNames, areaToInvest, notesText). These existed
+  // solely to feed the Airtable POST branch that was deleted this release.
+  // All data goes directly into the snake_case `bcRow` object below.
 
   try{
     if(isSupabase()){
-      const sbSub = { name: gv('li_b_name'), phone_number: gv('li_b_phone'),
-        email: gv('li_b_email')||null, company: gv('li_b_company')||null,
-        property_types: assetLabels||null,
-        area_to_invest: areaToInvest.length ? areaToInvest : null,
-        location: fields['Location']||null,
-        any_other_notes: fields['Any other buyer Notes?']||null,
-        minimum_cap_rate: fields['Minimum Cap Rate']||null,
-        mf_min_units: fields['Minimum # of MF Units']||null,
-        mf_max_units: fields['Max # of MF Units copy']||null,
-        warehouse_min_sf: fields['Warehouse Min Square Footage']||null,
-        warehouse_max_sf: fields['Warehouse Max Square Footage']||null };
-      await _sbPost(SB_TABLES.submissionBuyer, sbSub);
-    } else {
-      const res=await fetch(`https://api.airtable.com/v0/${cfg.base}/tbltFs4qoI8JhkZBA`,{
-        method:'POST',headers:{Authorization:`Bearer ${cfg.key}`,'Content-Type':'application/json'},
-        body:JSON.stringify({fields})
+      // v102.9: Full rewrite. Previously the buyer submit wrote ONLY to
+      // ace_submissions_buyer — a queue table that nothing reads from. This
+      // was a 100% data-loss bug: buyer leads "submitted successfully" but
+      // never actually appeared as buyer criteria anywhere.
+      //
+      // Now routes the same way the seller intake does:
+      //   1. Create/find ace_contacts row for the buyer
+      //   2. Create ace_buyer_criteria row with contact_id link
+      //
+      // All 28 buyer intake fields persist — including the 7 asset-type
+      // preference fields (automotive, retail, land zoning, etc.) that were
+      // previously collected in the UI but dropped on submit.
+
+      // 1. Create contact row
+      const contactName  = gv('li_b_name');
+      const contactPhone = gv('li_b_phone');
+      const contactEmail = gv('li_b_email');
+      let contactId = null;
+      try {
+        const contactRow = {
+          name: contactName,
+          phone_number: contactPhone,
+          email: contactEmail || null,
+          company: gv('li_b_company') || null,
+          contact_notes: gv('li_b_cnotes') || null,
+          type: ['Buyer'],
+          date_added: new Date().toISOString().slice(0,10)
+        };
+        const createdContact = await _sbPost(SB_TABLES.contacts, contactRow);
+        contactId = createdContact?.id || null;
+      } catch(e){
+        console.warn('Buyer contact create failed:', e.message);
+      }
+
+      // 2. Build the ace_buyer_criteria row directly (no SB_BC_MAP indirection
+      //    needed here since we're writing snake_case columns straight in)
+      const bcRow = {
+        contact_id: contactId,
+        date_added: new Date().toISOString().slice(0,10),
+        desired_property_types: assetLabels || null,
+        preferred_states: (_li.counties && _li.counties.length) ? 'NJ' : null,
+        preferred_counties: _li.counties && _li.counties.length ? _li.counties.join(', ') : null,
+        location_preferences: gv('li_b_locnotes') || null,
+        other_requirements: [gv('li_b_notes'), investType ? `Investor Type: ${investType}` : '', assetCriteria].filter(Boolean).join('\n\n') || null,
+        deals_sent_notes: gv('li_b_lastdeal') || null,
+        minimum_cap_rate: gn('li_b_caprate'),
+        mf_min_units: gn('li_b_multifamily_minunits'),
+        mf_max_units: gn('li_b_multifamily_maxunits'),
+        mf_style_preference: document.getElementById('li_b_multifamily_style')?.value || null,
+        warehouse_min_sf: gn('li_b_warehouse_minsf'),
+        warehouse_max_sf: gn('li_b_warehouse_maxsf'),
+        warehouse_profile_preference: document.getElementById('li_b_warehouse_profile')?.value || null,
+        office_class_preference: document.getElementById('li_b_office_class')?.value || null,
+        // v102.9: new asset-type preference columns
+        automotive_gas_preference: document.getElementById('li_b_automotive_gas')?.value || null,
+        automotive_type_preference: document.getElementById('li_b_automotive_type')?.value || null,
+        land_zoning_preference: document.getElementById('li_b_land_zoning')?.value || null,
+        retail_anchor_preference: document.getElementById('li_b_retail_anchor')?.value || null,
+        retail_lease_preference: document.getElementById('li_b_retail_lease')?.value || null,
+      };
+      // Strip null/empty values so we don't write a bunch of NULLs
+      Object.keys(bcRow).forEach(k => {
+        if(bcRow[k] === null || bcRow[k] === undefined || bcRow[k] === '') delete bcRow[k];
       });
-      if(!res.ok) throw new Error(await res.text());
+      await _sbPost(SB_TABLES.buyerCriteria, bcRow);
     }
+    // v102.12: Airtable fallback else branch removed. Ace CRM is Supabase-only.
     _liShowSuccess('buyer', gv('li_b_name'), null);
   }catch(e){
     if(btn){btn.disabled=false;btn.textContent='✓ Submit Buyer Lead';}
@@ -19449,10 +21101,10 @@ function changeStage(s){
 function setDealTag(tag){
   if(!currentDeal) return;
   currentDeal['Deal Tag'] = tag;
-  _lf.set(currentDeal.id, 'Deal Tag', tag||null);
+  // v102.11: _lf.set removed — deal_tag column exists in ace_properties and
+  // airtableUpdate handles persistence. The localStorage fallback was dead code.
   const entry = allDeals.find(d=>d.id===currentDeal.id);
   if(entry) entry['Deal Tag'] = tag;
-  // Try Airtable — gracefully falls back to local if field doesn't exist
   airtableUpdate(currentDeal.id, {'Deal Tag': tag||null});
   renderDealPage();
   setTimeout(()=>switchTab('dealstatus',null),10);
@@ -19463,7 +21115,7 @@ async function archiveDeal(dealId){
   if(!confirm('Archive this deal? It will disappear from all views but won\'t be deleted. You can un-archive from the Deal Status tab.')) return;
   const d = allDeals.find(x=>x.id===dealId); if(!d) return;
   d['Is Archived'] = true;
-  _lf.set(dealId, 'Is Archived', true);
+  // v102.11: _lf.set removed — is_archived column exists in ace_properties.
   airtableUpdate(dealId, {'Is Archived': true});
   buildSidebar(document.getElementById('sideSearch')?.value||'');
   showSaveConfirm('📦 Deal archived');
@@ -19474,7 +21126,7 @@ async function archiveDeal(dealId){
 async function unarchiveDeal(dealId){
   const d = allDeals.find(x=>x.id===dealId); if(!d) return;
   d['Is Archived'] = false;
-  _lf.set(dealId, 'Is Archived', false);
+  // v102.11: _lf.set removed — is_archived column exists in ace_properties.
   airtableUpdate(dealId, {'Is Archived': false});
   buildSidebar(document.getElementById('sideSearch')?.value||'');
   renderDealPage();
@@ -19776,6 +21428,8 @@ function _defaultPipelineFilters(){
     // Phase A additions: state + region chips + regionChipIds for toggle highlight
     states: [],        // multi-select: state abbreviations resolved from county
     regionChipIds: [], // multi-select: which Pipeline region chips are active
+    // Phase B: show only deals flagged for county review
+    needsReviewOnly: false,
     priceMin: null, priceMax: null,
     sfMin: null, sfMax: null,
     unitsMin: null, unitsMax: null,
@@ -19890,14 +21544,17 @@ function applyPipelineFilters(deals){
     // County
     if(f.counties.length && !f.counties.includes(d['Simple County'])) return false;
     // Phase A: State filter — uses the county→state lookup
+    // (Phase B: passes deal so the DB-backed state column takes priority.)
     if(f.states && f.states.length){
-      const dealState = _countyState(d['Simple County']);
+      const dealState = _countyState(d['Simple County'], d);
       if(!f.states.includes(dealState || 'Other')) return false;
     }
+    // Phase B: Needs Review filter — only show deals flagged for county review
+    if(f.needsReviewOnly && !_isBadCountyName(d['Simple County'], d)) return false;
     // Phase A: Region chips — OR semantics (deal passes if ANY chip matches)
     if(f.regionChipIds && f.regionChipIds.length){
       const county = d['Simple County'] || '';
-      const dealState = _countyState(county);
+      const dealState = _countyState(county, d);
       const dealRegions = _countyRegions(county); // [] for non-NJ counties
       let anyMatch = false;
       for(const chipId of f.regionChipIds){
@@ -19955,6 +21612,7 @@ function _countActiveFilters(){
   if(f.agents.length) n++;
   if(f.states && f.states.length) n++;
   if(f.regionChipIds && f.regionChipIds.length) n++;
+  if(f.needsReviewOnly) n++;
   if(f.priceMin != null || f.priceMax != null) n++;
   if(f.sfMin != null || f.sfMax != null) n++;
   if(f.unitsMin != null || f.unitsMax != null) n++;
@@ -20091,7 +21749,7 @@ function _refreshPipelineBody(){
                 return `<div class="pipeline-card" draggable="true"
                   ondragstart="pipelineDragStart(event, '${d.id}')"
                   ondragend="pipelineDragEnd(event)"
-                  onclick="openDealSnapshot('${d.id}')">${_isBadCountyName(d['Simple County']) ? '<div style="background:#fef3c7;color:#92400e;font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;margin-bottom:4px;display:inline-block;" title="County name needs review">⚠ BAD COUNTY</div>' : ''}${rows}</div>`;
+                  onclick="openDealSnapshot('${d.id}')">${_isBadCountyName(d['Simple County'], d) ? '<div style="background:#fef3c7;color:#92400e;font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;margin-bottom:4px;display:inline-block;" title="County name needs review">⚠ BAD COUNTY</div>' : ''}${rows}</div>`;
               }).join('')}
               ${col.length===0?'<div style="font-size:11px;color:#94a3b8;text-align:center;padding:20px;font-style:italic;">Empty</div>':''}
             </div>
@@ -20391,6 +22049,20 @@ function _buildPipelineFilterPanelHTML(){
       </div>
     </div>`;
 
+  // Phase B: Needs Review toggle — count deals flagged for county review and
+  // render a single button that filters pipeline to just the review queue.
+  // Uses the same DB-backed flag that Phase B populated, with Phase A fallback.
+  const reviewCount = allDeals.filter(d => _isBadCountyName(d['Simple County'], d)).length;
+  const reviewActive = !!f.needsReviewOnly;
+  const reviewToggleHTML = `
+    <div style="margin-bottom:14px;">
+      <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Data Quality</div>
+      <span onclick="togglePipelineNeedsReview()" style="display:inline-block;padding:6px 13px;border-radius:99px;font-size:11px;font-weight:700;cursor:pointer;border:1px solid ${reviewActive?'#b45309':'#fbbf24'};background:${reviewActive?'#b45309':'#fef3c7'};color:${reviewActive?'#fff':'#92400e'};">
+        ⚠ Needs Review Only <span style="background:${reviewActive?'rgba(255,255,255,0.25)':'#fbbf24'};color:${reviewActive?'#fff':'#78350f'};padding:1px 7px;border-radius:99px;margin-left:5px;font-size:10px;">${reviewCount}</span>
+      </span>
+      ${reviewCount > 0 ? `<div style="font-size:10px;color:#94a3b8;margin-top:4px;">${reviewCount} deals have bad, missing, or mismatched county data.</div>` : ''}
+    </div>`;
+
   // Phase A: State dropdown — all states present in data, default "All"
   // Builds the state list from actual deals so unmapped counties show as "Other"
   const stateSet = new Set();
@@ -20444,6 +22116,7 @@ function _buildPipelineFilterPanelHTML(){
         ${regionChipsHTML}
         ${stateDropdownHTML}
         ${countySearchHTML}
+        ${reviewToggleHTML}
       </div>
       <div>
         ${opts.cities.length <= 60 ? multiSelect('City', 'cities', opts.cities) : `
@@ -20505,6 +22178,15 @@ function togglePipelineRegionChip(chipId){
   const idx = f.regionChipIds.indexOf(chipId);
   if(idx >= 0) f.regionChipIds.splice(idx, 1);
   else         f.regionChipIds.push(chipId);
+  savePipelineFilters();
+  showPipelineView();
+}
+
+// Phase B: Toggle the "Needs Review Only" filter. Shows only deals flagged
+// for county review (bad/missing/mismatched county names).
+function togglePipelineNeedsReview(){
+  const f = getPipelineFilters();
+  f.needsReviewOnly = !f.needsReviewOnly;
   savePipelineFilters();
   showPipelineView();
 }
@@ -20875,15 +22557,14 @@ function liveDownCalc(){
 }
 
 // ─── GRI SOURCE TOGGLE (Unit Mix vs Custom) ───────────────────────
-// Lets the user pull Actual Gross Rental Income from Property Details
-// Unit Mix (occupied-only sum) instead of typing a custom number.
+// v102.6: persists through Supabase only. No more localStorage blob.
 function setFinGRISource(source){
   if(!currentDeal) return;
-  const fKey = 'fin_'+currentDeal.id;
-  let fi = {};
-  try { fi = JSON.parse(_store.get(fKey)||'{}'); } catch(e) {}
-  fi.aGRISource = source;
-  _store.set(fKey, JSON.stringify(fi));
+
+  // Persist to Supabase via the normal auto-save path so teammates
+  // see the same GRI mode on their laptops.
+  currentDeal['GRI Source'] = source;
+  if(typeof _finScheduleAutoSave === 'function') _finScheduleAutoSave();
 
   // Update button styles
   const btnUM = document.getElementById('aGRISrc_unitMix');
@@ -20928,12 +22609,10 @@ function _applyFinGRILock(locked){
 
 // If the current deal is in 'unitMix' GRI source mode, push the occupied-only
 // total from Unit Mix into the Financial Analysis GRI inputs and recalculate.
+// v102.6: reads GRI source from currentDeal (Supabase), not localStorage.
 function _refreshFinGRIFromUnitMix(){
   if(!currentDeal) return;
-  const fKey = 'fin_'+currentDeal.id;
-  let fi = {};
-  try { fi = JSON.parse(_store.get(fKey)||'{}'); } catch(e) {}
-  const source = fi.aGRISource || 'custom';
+  const source = currentDeal['GRI Source'] || 'custom';
   const moEl = document.getElementById('fin_aGrossRent_mo');
   const yrEl = document.getElementById('fin_aGrossRent_yr');
   if(!moEl || !yrEl) return; // Financial tab not rendered
@@ -21190,13 +22869,14 @@ function toggleExpCat(catId){
   const isHidden = rows.length>0 && rows[0].style.display==='none';
   rows.forEach(r => r.style.display = isHidden?'table-row':'none');
   if(icon) icon.textContent = isHidden?'−':'+';
-  // Save expand state
+  // v102.6: persist expand/collapse state to the small fin_ui_ localStorage
+  // key. This is UI preference only (not deal data), so localStorage is fine.
   if(currentDeal){
-    const fKey='fin_'+currentDeal.id;
-    let fi={};
-    try{fi=JSON.parse(localStorage.getItem(fKey)||'{}');}catch(e){}
-    fi['exp_'+catId]=isHidden;
-    localStorage.setItem(fKey,JSON.stringify(fi));
+    const uKey='fin_ui_'+currentDeal.id;
+    let ui={};
+    try{ui=JSON.parse(localStorage.getItem(uKey)||'{}');}catch(e){}
+    ui['exp_'+catId]=isHidden;
+    try{localStorage.setItem(uKey,JSON.stringify(ui));}catch(e){}
   }
 }
 
@@ -21216,12 +22896,14 @@ function toggleMortgage(){
   const isHidden = rows.length>0 && rows[0].style.display==='none';
   rows.forEach(r => r.style.display = isHidden?'table-row':'none');
   if(icon) icon.textContent = isHidden?'−':'+';
+  // v102.6: persist mortgage expand/collapse state to the small fin_ui_ key
+  // (UI preference only, not deal data).
   if(currentDeal){
-    const fKey='fin_'+currentDeal.id;
-    let fi={};
-    try{fi=JSON.parse(localStorage.getItem(fKey)||'{}');}catch(e){}
-    fi['exp_mortgage']=isHidden;
-    localStorage.setItem(fKey,JSON.stringify(fi));
+    const uKey='fin_ui_'+currentDeal.id;
+    let ui={};
+    try{ui=JSON.parse(localStorage.getItem(uKey)||'{}');}catch(e){}
+    ui['exp_mortgage']=isHidden;
+    try{localStorage.setItem(uKey,JSON.stringify(ui));}catch(e){}
   }
 }
 
@@ -21340,6 +23022,94 @@ function mortCalc(){
   debouncedRecalc();
 }
 
+// ═══════════════════════════════════════════════════════════════════
+//  FINANCIAL TAB AUTO-SAVE (v102.2)
+//
+//  The Financial Analysis tab has ~30 inputs, each with its own existing
+//  oninput handler (incomeCalc, syncMoYr, liveDownCalc, etc.). Rather than
+//  modify each one, we use event delegation at the tab container level:
+//  a single "input" listener sees every change and schedules a debounced
+//  save 1500ms after the user stops typing.
+//
+//  The green pulse dot sits next to the Save Inputs button and briefly
+//  animates (~900ms) only when an actual write to the database succeeds.
+//  No constant pulsing — only a real save triggers the animation.
+// ═══════════════════════════════════════════════════════════════════
+
+let _finAutoSaveTimer = null;
+let _finAutoSaveWired = false;   // tab-scoped: reset when renderFinancialTab runs
+
+// Fire after 900ms of input idle. Calls saveFinInputs which internally
+// updates currentDeal and fires _finPulseSaveDot on success.
+// v102.5: reduced from 1500ms → 900ms for snappier feel. Matches the
+// global markDirty auto-save debounce so the whole CRM saves at the same pace.
+function _finScheduleAutoSave(){
+  if(!currentDeal || !currentDeal.id) return;
+  if(_finAutoSaveTimer) clearTimeout(_finAutoSaveTimer);
+  _finAutoSaveTimer = setTimeout(() => {
+    _finAutoSaveTimer = null;
+    try { saveFinInputs(currentDeal.id); }
+    catch(e) { console.warn('[OM] Auto-save failed:', e); }
+  }, 900);
+}
+
+// Wire event delegation on the Financial tab's root element. Called once
+// per tab render. Uses a data-attribute flag so we don't double-wire.
+function _finWireAutoSave(){
+  const root = document.querySelector('#mainArea');
+  if(!root || _finAutoSaveWired) return;
+  _finAutoSaveWired = true;
+  root.addEventListener('input', (e) => {
+    const t = e.target;
+    if(!t || !t.id || !t.id.startsWith('fin_')) return;
+    // Skip derived/display-only elements that don't actually get saved
+    if(t.id.endsWith('Display') || t.id.endsWith('Label')) return;
+    _finScheduleAutoSave();
+  });
+  // Also flush pending save if the user switches tabs or navigates away
+  root.addEventListener('focusout', (e) => {
+    const t = e.target;
+    if(!t || !t.id || !t.id.startsWith('fin_')) return;
+    // Don't flush on simple blur — the 1500ms debouncer will catch it.
+    // But if the user is about to navigate (visibilitychange), save now.
+  });
+}
+
+// Pulse the small green dot next to the Save Inputs button. Called by
+// saveFinInputs on successful DB write. Animation is CSS-driven so it
+// automatically cleans up — no setTimeout needed to remove classes.
+function _finPulseSaveDot(){
+  const dot = document.getElementById('finSaveDot');
+  if(!dot) return;
+  // Restart the animation by removing and re-adding the class
+  dot.classList.remove('pulse');
+  // Force a reflow so the browser re-applies the animation from frame 0
+  void dot.offsetWidth;
+  dot.classList.add('pulse');
+}
+
+// Flush any pending auto-save immediately (awaits it). Used by
+// _omGenerateStandard to ensure the OM sees the latest typed values
+// before reading currentDeal. Returns when the save completes.
+async function _finFlushPendingSave(){
+  if(_finAutoSaveTimer){
+    clearTimeout(_finAutoSaveTimer);
+    _finAutoSaveTimer = null;
+  }
+  // Always force a save if there are financial inputs in the DOM.
+  // Mirror of saveFinInputs which is fire-and-forget; we wrap it so
+  // we can await. Check if the financial tab is actually rendered.
+  const hasFinInputs = !!document.getElementById('fin_a_ins_prop_mo')
+                    || !!document.getElementById('fin_a_tax_prop_mo')
+                    || !!document.getElementById('fin_aGrossRent_mo');
+  if(!hasFinInputs) return;
+  if(!currentDeal || !currentDeal.id) return;
+  // saveFinInputs is not async — it fires .then internally. We synthesize
+  // a small wait to let the Supabase write + currentDeal update settle.
+  saveFinInputs(currentDeal.id);
+  await new Promise(r => setTimeout(r, 300));
+}
+
 function saveFinInputs(dealId){
   recalcFinancials(dealId);
   if(!currentDeal) return;
@@ -21379,29 +23149,85 @@ function saveFinInputs(dealId){
   if(get('fin_a_downPct')) fields['Down Payment (%)'] = get('fin_a_downPct');
   if(get('fin_renovation')) fields['Renovation Expense']  = get('fin_renovation');
 
+  // v102.6: remaining Financial Analysis fields that used to live only in
+  // the fin_${dealId} localStorage blob. Now persisted to Supabase so
+  // teammates see the same state.
+  if(get('fin_aNRU_pct'))   fields['Non-Revenue Units (%)']          = get('fin_aNRU_pct');
+  if(get('fin_pNRU_pct'))   fields['Proforma Non-Revenue Units (%)'] = get('fin_pNRU_pct');
+  if(get('fin_p_downPct'))  fields['Proforma Down Payment (%)']      = get('fin_p_downPct');
+  // Radio button state: save the selected down-payment type for each side
+  const aDpTypePctEl = document.getElementById('aDpTypePct');
+  const pDpTypePctEl = document.getElementById('pDpTypePct');
+  if(aDpTypePctEl) fields['Down Payment Type']          = aDpTypePctEl.checked ? 'pct' : 'amount';
+  if(pDpTypePctEl) fields['Proforma Down Payment Type'] = pDpTypePctEl.checked ? 'pct' : 'amount';
+  // GRI source: stored on currentDeal directly by setFinGRISource;
+  // re-read from there so a save triggered by any other path picks it up
+  if(currentDeal['GRI Source']) fields['GRI Source'] = currentDeal['GRI Source'];
+
   // ── Variable Expenses ────────────────────────────────────────
+  // v102.4: full coverage — every expense sub-input in the Financial
+  // Analysis tab now has a backing database column. Previously 8 inputs
+  // (Accounting, Legal, Other Admin, Other Utilities, Other Misc, Other
+  // Tax, Liability Insurance, Other Mgmt) were DOM-only and lost on refresh.
   const expMap = {
-    'fin_a_admin_mgmt_mo':  'Admin Expenses (Monthly)',
+    // Administrative
+    'fin_a_admin_mgmt_mo':  'Admin Expenses (Monthly)',            // "Management Fee" line under Admin
+    'fin_a_admin_acct_mo':  'Accounting (Monthly)',                // NEW
+    'fin_a_admin_legal_mo': 'Legal (Monthly)',                     // NEW
+    'fin_a_admin_other_mo': 'Other Admin (Monthly)',               // NEW
+    // Repair & Maintenance
     'fin_a_rm_jan_mo':      'Janitorial (Monthly)',
     'fin_a_rm_land_mo':     'Landscaping (Monthly)',
     'fin_a_rm_maint_mo':    'Maintenance & Repair Costs (Monthly)',
     'fin_a_rm_sal_mo':      'Maintenance & Repair Salary (Monthly)',
     'fin_a_rm_pool_mo':     'Pool (Monthly)',
     'fin_a_rm_sup_mo':      'Supplies (Monthly)',
+    // Utilities
     'fin_a_util_elec_mo':   'Electric (Monthly)',
     'fin_a_util_gas_mo':    'Gas (Monthly)',
     'fin_a_util_water_mo':  'Water & Sewer (Monthly)',
     'fin_a_util_trash_mo':  'Trash (Monthly)',
-    'fin_a_misc_adv_mo':    'Miscellaneous Expenses (Monthly)',
+    'fin_a_util_other_mo':  'Other Utilities (Monthly)',           // NEW
+    // Miscellaneous
+    'fin_a_misc_adv_mo':    'Miscellaneous Expenses (Monthly)',    // "Advertising" in UI
+    'fin_a_misc_other_mo':  'Other Misc (Monthly)',                // NEW
+    // Taxes
     'fin_a_tax_prop_mo':    'Property Tax (Monthly)',
+    'fin_a_tax_other_mo':   'Other Tax (Monthly)',                 // NEW
+    // Insurance
     'fin_a_ins_prop_mo':    'Insurance (Monthly)',
-    'fin_a_pm_fee_mo':      'Property Management Fee (Monthly)',
+    'fin_a_ins_liab_mo':    'Liability Insurance (Monthly)',       // NEW
+    // Property Management
+    'fin_a_pm_fee_mo':      'Property Management Fee (Monthly)',   // "Management Fee %" under PM
+    'fin_a_pm_other_mo':    'Other Mgmt (Monthly)',                // NEW
+    // Reserves
     'fin_aCapRes_mo':        'Capital Reserve (Monthly)',
   };
   Object.entries(expMap).forEach(([inputId, airtableField]) => {
     const v = get(inputId);
     if(v) fields[airtableField] = v;
   });
+
+  // v102.4: Pro forma expenses — save as a JSONB blob keyed by short item ID.
+  // Keeps the schema clean (1 column vs 23) since pro forma values aren't
+  // queried per-line, only displayed in the UI and optionally in a future
+  // pro forma OM section.
+  const proFormaExpenseKeys = [
+    'admin_mgmt','admin_acct','admin_legal','admin_other',
+    'rm_jan','rm_land','rm_maint','rm_sal','rm_pool','rm_sup',
+    'util_elec','util_gas','util_water','util_trash','util_other',
+    'misc_adv','misc_other',
+    'tax_prop','tax_other',
+    'ins_prop','ins_liab',
+    'pm_fee','pm_other',
+  ];
+  const proFormaBreakdown = {};
+  let hasProForma = false;
+  proFormaExpenseKeys.forEach(k => {
+    const v = get('fin_p_'+k+'_mo');
+    if(v) { proFormaBreakdown[k] = v; hasProForma = true; }
+  });
+  if(hasProForma) fields['Pro Forma Expense Breakdown'] = proFormaBreakdown;
 
   // ── Mortgages ────────────────────────────────────────────────
   [1,2,3].forEach(n => {
@@ -21438,7 +23264,17 @@ function saveFinInputs(dealId){
   // ── Push to Airtable ─────────────────────────────────────────
   if(Object.keys(fields).length > 0){
     airtableUpdate(currentDeal.id, fields).then(ok => {
-      if(ok) showSaveConfirm(`✓ ${Object.keys(fields).length} fields saved`);
+      if(ok) {
+        // v102.2: write the saved fields back into currentDeal so downstream
+        // consumers (OM generator, summary header, etc.) see fresh values
+        // without a round-trip reload. Mirrors the saveNotes/savePriority pattern.
+        Object.assign(currentDeal, fields);
+        // v102.5: removed showSaveConfirm toast — the green pulse dot is the
+        // only visual feedback needed. Toast was creating visual clutter during
+        // rapid typing.
+        // v102.2: pulse the green dot to indicate a real save fired
+        if(typeof _finPulseSaveDot === 'function') _finPulseSaveDot();
+      }
     });
   }
 }
@@ -21524,11 +23360,11 @@ function saveNoteEntry(){
 function recalcFinancials(dealId){
   const get    = id => Number(String(document.getElementById(id)?.value||'').replace(/,/g,''))||0;
   const getRaw = id => { const v=document.getElementById(id)?.value; if(v===''||v==null) return null; const n = Number(String(v).replace(/,/g,'')); return isNaN(n)?null:n; };
-  // Preserve fields that aren't re-derived from DOM inputs
-  let _prevFi = {};
-  try { _prevFi = JSON.parse(_store.get('fin_'+dealId)||'{}'); } catch(e) {}
+  // v102.11: No more localStorage reads. GRI source comes from currentDeal
+  // (Supabase source of truth, set by setFinGRISource during v102.6 rip-out).
+  const aGRISource = (currentDeal && currentDeal['GRI Source']) || 'custom';
   const fi = {
-    aGRISource : _prevFi.aGRISource || 'custom',
+    aGRISource : aGRISource,
     askPrice   : get('fin_askPrice'),
     offerPrice : get('fin_offerPrice'),
     aRenovation: get('fin_a_renovation'),
@@ -21620,11 +23456,10 @@ function recalcFinancials(dealId){
     mort3_assumable:document.getElementById('fin_mort3_assumable')?.checked||false,
     mort3_yrsrem:   document.getElementById('fin_mort3_yrsrem')?.value||'--',
   };
-  // Preserve expand state — merge new fi over existing localStorage
-  const fKey = 'fin_'+dealId;
-  let existing = {};
-  try{ existing = JSON.parse(localStorage.getItem(fKey)||'{}'); }catch(e){}
-  localStorage.setItem(fKey, JSON.stringify({...existing, ...fi}));
+  // v102.11: No more localStorage write. `fi` is only used below to compute
+  // derived display values (NOI, cap rate, CoC return). Real persistence
+  // happens through saveFinInputs → Supabase. This block used to write a
+  // full fin_${dealId} blob to localStorage but nothing reads it anymore.
 
   // Update expense totals from live DOM (synchronous, always fresh)
   updateExpenseTotals();
@@ -22383,9 +24218,18 @@ async function ndwCreateDeal(){
     if(gn('ndw_asking'))   fields['Asking Price']                  = gn('ndw_asking');
     if(gn('ndw_gri'))      fields['Gross Rental Income (Monthly)'] = gn('ndw_gri');
     if(gn('ndw_expenses')) fields['Expenses Monthly']              = gn('ndw_expenses');
+    if(gn('ndw_noi'))      fields['NOI']                           = gn('ndw_noi');
     if(gn('ndw_units'))    fields['No. of Units']                  = gn('ndw_units');
     if(gn('ndw_sf'))       fields['Total Building SF']             = gn('ndw_sf');
-    if(g('ndw_dealNotes') || assetNote) fields['Deal Notes'] = assetNote + (g('ndw_dealNotes')||'');
+    // v102.8: rent roll text is a freeform note collected during intake.
+    // There's no dedicated rent_roll column, so we append it to Deal Notes
+    // with a clear prefix so users can find it later.
+    const rentRollText = g('ndw_rentroll');
+    const notesParts = [];
+    if(assetNote)          notesParts.push(assetNote);
+    if(rentRollText)       notesParts.push('Rent Roll: ' + rentRollText);
+    if(g('ndw_dealNotes')) notesParts.push(g('ndw_dealNotes'));
+    if(notesParts.length)  fields['Deal Notes'] = notesParts.join('\n\n');
     if(g('ndw_nextSteps')) fields['Next Steps'] = g('ndw_nextSteps');
 
     let newId;
@@ -22810,6 +24654,36 @@ function initNewDealAutocomplete(){
 document.addEventListener('DOMContentLoaded', () => {
   const gk = _store.get('google_places_key');
   if(gk && gk.startsWith('AIza')) _loadGooglePlacesAPI(gk);
+
+  // v102.7: wire up online/offline indicator. Listens to the browser's
+  // network status events and updates the badge color + tooltip.
+  // Agents need internet to save — this tells them immediately if they lose it.
+  const updateNetStatus = (isOnline) => {
+    const wrap = document.getElementById('netStatusIndicator');
+    const dot  = document.getElementById('netStatusDot');
+    const txt  = document.getElementById('netStatusText');
+    if(!wrap || !dot || !txt) return;
+    if(isOnline){
+      wrap.style.background   = 'rgba(34,197,94,0.1)';
+      wrap.style.border       = '1px solid rgba(34,197,94,0.3)';
+      wrap.style.color        = '#16a34a';
+      dot.style.background    = '#22c55e';
+      txt.textContent         = 'Online';
+      wrap.title              = 'Online — connected to Supabase';
+    } else {
+      wrap.style.background   = 'rgba(239,68,68,0.1)';
+      wrap.style.border       = '1px solid rgba(239,68,68,0.4)';
+      wrap.style.color        = '#dc2626';
+      dot.style.background    = '#ef4444';
+      txt.textContent         = 'Offline';
+      wrap.title              = 'Offline — changes will not save until you reconnect to the internet. Please reconnect and your changes will retry automatically.';
+    }
+  };
+  // Initial state
+  updateNetStatus(navigator.onLine);
+  // Live updates
+  window.addEventListener('online',  () => updateNetStatus(true));
+  window.addEventListener('offline', () => updateNetStatus(false));
 });
 
 // ── AUTH FUNCTIONS ───────────────────────────────────────────────

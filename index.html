@@ -3445,7 +3445,7 @@ function renderDealPage(){
         <button class="tab-btn" onclick="switchTab('comps',this)">Comparables / Comps</button>
         <button class="tab-btn" style="color:#6a0dad;" onclick="switchTab('aicomm',this)">✦ AI Communication</button>
         <button class="tab-btn" style="color:#1a7a3a;font-weight:bold;" onclick="switchTab('buyermatch',this)">🎯 Buyer Match</button>
-        <button class="tab-btn" style="color:#c05000;font-weight:bold;" onclick="switchTab('brochure',this)">📄 Brochure Creator</button>
+        <button class="tab-btn" style="color:#b8912a;font-weight:bold;" onclick="switchTab('brochure',this)">📄 OM & Flyer Creator</button>
         <button class="tab-btn" style="color:#2a7a2a;font-weight:bold;" onclick="switchTab('tenantmix',this)">🏪 Tenant Mix</button>
         <button class="tab-btn" style="color:#1a3a6e;font-weight:bold;" onclick="switchTab('pitchout',this)">📊 Buyer Pitch</button>
         <button id="fmToggleBtn" onclick="toggleFieldMapDrawer()" title="Show where each field is stored in Airtable"
@@ -3840,7 +3840,7 @@ function renderFieldMapDrawer(){
     documents:'Documents',       dealstatus:'Deal Status',
     contacts:'Contacts / Buyers',notes:'Notes',
     calendar:'Calendar',         comps:'Comparables / Comps',
-    aicomm:'AI Communication',   brochure:'Brochure Creator',  tenantmix:'Tenant Mix'
+    aicomm:'AI Communication',   brochure:'OM & Flyer Creator',  tenantmix:'Tenant Mix'
   };
   const currentTabLabel = TAB_MAP[currentTab] || currentTab;
   if(tabLabel) tabLabel.textContent = showAll ? '(showing all tabs)' : `— ${currentTabLabel}`;
@@ -4071,7 +4071,11 @@ function switchTab(name, btn){
   if(name==='pitchout'   && currentDeal?.id) loadPitchOutTab(currentDeal.id);
   if(name==='offers'     && currentDeal?.id) loadOffersTab(currentDeal.id);
   if(name==='contacts' && currentDeal?.id) loadBuyerPitches(currentDeal.id);
-  if(name==='brochure' && currentDeal?.id) loadBrochurePhotos(currentDeal.id);
+  if(name==='brochure' && currentDeal?.id) {
+    loadBrochurePhotos(currentDeal.id);
+    // v100: check required fields so OM buttons are correctly enabled/disabled
+    setTimeout(_omRefreshRequiredFieldsCheck, 30);
+  }
   if(name==='tasks'    && currentDeal?.id) _loadAndRenderDealTasks(currentDeal.id, currentDeal['Address']||'');
   if(name==='financial'){
     setTimeout(()=>{
@@ -11457,15 +11461,48 @@ function renderBrochureTab(d){
   const genNotes  = d['General Property Notes']||'';
 
   return `
-    <div class="section-hdr"><span class="icon">📄</span> Brochure Creator</div>
+    <div class="section-hdr"><span class="icon">📄</span> OM & Flyer Creator</div>
 
-    <!-- STICKY CREATE BUTTON -->
-    <div style="position:sticky;top:0;z-index:50;background:linear-gradient(180deg,#7a3000,#4a1800);border-bottom:2px solid #f08030;padding:8px 16px;display:flex;align-items:center;gap:12px;">
-      <span style="color:#fff;font-size:11px;font-weight:bold;">Brochure Creator</span>
-      <button onclick="createBrochure()" style="background:linear-gradient(180deg,#f08030,#c05000);color:#fff;border:1px solid #804000;padding:6px 24px;font-size:13px;font-weight:bold;border-radius:3px;cursor:pointer;">
-        📄 Create Brochure
-      </button>
-      <span style="color:#ffc090;font-size:11px;">Opens a print-ready brochure in a new window → use Ctrl/Cmd+P to save as PDF</span>
+    <!-- ══════════════════════════════════════════════════════════════
+         THREE MODES: Quick Flyer, Standard OM, Premium OM
+         ══════════════════════════════════════════════════════════════ -->
+    <div style="position:sticky;top:0;z-index:50;background:linear-gradient(180deg,#0b1f3a,#081529);border-bottom:3px solid #b8912a;padding:14px 18px;">
+      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
+        <div style="color:#b8912a;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">Document Generator</div>
+        <div style="flex:1;"></div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <!-- Quick Flyer — always available, no required-fields check -->
+          <button id="omBtnQuickFlyer" onclick="createBrochure()" title="Print-friendly HTML flyer → use Ctrl/Cmd+P to save as PDF. Good for fast internal handouts."
+            style="background:#fff;color:#0b1f3a;border:1px solid #cbd5e1;padding:8px 16px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:6px;"
+            onmouseenter="this.style.background='#f1f5f9'" onmouseleave="this.style.background='#fff'">
+            <span style="font-size:14px;">📄</span> Quick Flyer
+          </button>
+          <!-- Standard OM — pdfmake template, no LLM, free -->
+          <button id="omBtnStandard" onclick="_omGenerateStandard()" title="Professional multi-page OM using the Ace Acquisitions brand template. Generates instantly from your deal data. Free."
+            style="background:linear-gradient(180deg,#b8912a,#8a6b1f);color:#fff;border:1px solid #6b5217;padding:8px 18px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:6px;box-shadow:0 2px 6px rgba(184,145,42,0.3);"
+            onmouseenter="this.style.transform='translateY(-1px)'" onmouseleave="this.style.transform='translateY(0)'">
+            <span style="font-size:14px;">📑</span> Standard OM <span style="font-size:9px;font-weight:600;background:rgba(255,255,255,0.2);padding:1px 6px;border-radius:99px;margin-left:2px;">FREE</span>
+          </button>
+          <!-- Premium OM — pdfmake + Claude Sonnet API call for prose, ~$0.10 -->
+          <button id="omBtnPremium" onclick="_omGeneratePremium()" title="Institutional-grade OM with AI-generated prose (executive summary, investment highlights, market analysis). Requires confirmation. Costs roughly $0.10 per OM."
+            style="background:linear-gradient(180deg,#1e293b,#0b1f3a);color:#fff;border:1px solid #b8912a;padding:8px 18px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:6px;"
+            onmouseenter="this.style.borderColor='#d4a84b'" onmouseleave="this.style.borderColor='#b8912a'">
+            <span style="font-size:14px;">✨</span> Premium OM <span style="font-size:9px;font-weight:600;background:#b8912a;color:#fff;padding:1px 6px;border-radius:99px;margin-left:2px;">AI · ~$0.10</span>
+          </button>
+        </div>
+      </div>
+      <div style="color:#94a3b8;font-size:10px;margin-top:8px;line-height:1.5;">
+        <strong style="color:#fff;">Quick Flyer:</strong> HTML → Ctrl/Cmd+P to save as PDF. ·
+        <strong style="color:#fff;">Standard OM:</strong> Professional multi-page PDF, generated instantly from your deal data. ·
+        <strong style="color:#fff;">Premium OM:</strong> Standard + AI-written prose sections. Admin confirmation required before each generation.
+      </div>
+    </div>
+
+    <!-- ══════════════════════════════════════════════════════════════
+         REQUIRED FIELDS CHECK — runs on tab render and before Generate
+         ══════════════════════════════════════════════════════════════ -->
+    <div id="omRequiredFieldsCheck" style="padding:0 0 0 0;">
+      <!-- Populated by _omRefreshRequiredFieldsCheck() after the form renders -->
     </div>
 
     <!-- BROKER INFO -->
@@ -11592,6 +11629,8 @@ function updateImgPreview(i){
   if(!prev) return;
   if(url){ prev.innerHTML = '<img src="'+url+'" style="max-height:78px;max-width:100%;object-fit:cover;border-radius:2px;" onerror="this.parentElement.innerHTML=\'<span style=\\\"color:#c00;font-size:10px;\\\">Image failed to load — check URL or Drive sharing settings</span>\'"/>'; }
   else { prev.innerHTML = '<span style="color:#aaa;font-size:10px;">No image</span>'; }
+  // v100: a photo change may flip the At-least-1-photo required field — re-check
+  if(typeof _omRefreshRequiredFieldsCheck === 'function') _omRefreshRequiredFieldsCheck();
 }
 
 function convertDriveUrl(url){
@@ -11615,6 +11654,171 @@ function convertDriveUrl(url){
   if(url.match(/i\.imgur\.com\//)) return url;
 
   return url;
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  OM & FLYER CREATOR — v100 (UI shell)
+//
+//  Three modes:
+//    1. Quick Flyer        → createBrochure()          existing, unchanged
+//    2. Standard OM        → _omGenerateStandard()     pdfmake template (v101+)
+//    3. Premium OM         → _omGeneratePremium()      pdfmake + AI (v103+)
+//
+//  v100 establishes the UI shell: button layout, required-fields gate,
+//  and placeholder handlers. Standard/Premium show "coming soon" alerts
+//  until v101/v103 wire in the actual pdfmake generation.
+// ═══════════════════════════════════════════════════════════════════
+
+// Fields that are required before Standard OM or Premium OM can be generated.
+// Each entry: [label, getter-function, tabName-to-jump-to-on-fix]
+// Quick Flyer is intentionally lenient and ignores this list.
+const OM_REQUIRED_FIELDS = [
+  { label: 'Address',       get: d => d['Address'],                                 tab: 'core'   },
+  { label: 'City/State',    get: d => d['City'] || _omExtractCity(d),               tab: 'core'   },
+  { label: 'Asking Price',  get: d => d['Asking Price'],                            tab: 'financial' },
+  { label: 'Asset Type',    get: d => d['CRM Asset Classification'] || d['Simple Text Property Type'], tab: 'core' },
+  { label: 'County',        get: d => d['Simple County'],                           tab: 'core'   },
+  { label: 'At least 1 photo', get: d => {
+      const urls = [0,1,2,3,4,5].map(i => document.getElementById('br_img'+i)?.value?.trim()).filter(Boolean);
+      return urls.length > 0 ? true : null;
+    }, tab: 'brochure' },
+];
+
+// Try to parse city from the address string if no explicit City field exists.
+function _omExtractCity(d){
+  const addr = d['Address'] || '';
+  const parts = addr.split(',').map(s => s.trim()).filter(Boolean);
+  // Typical format: "123 Main St, Newark, NJ 07102, USA" → parts[1] = "Newark"
+  return parts.length >= 2 ? parts[1] : '';
+}
+
+// Check all required fields against the current deal. Returns an array of
+// missing field labels (empty array = all good).
+function _omCheckRequiredFields(){
+  const d = currentDeal;
+  if(!d) return ['No deal selected'];
+  const missing = [];
+  for(const f of OM_REQUIRED_FIELDS){
+    let v;
+    try { v = f.get(d); } catch(e) { v = null; }
+    if(v === null || v === undefined || v === '' || v === false) missing.push(f.label);
+  }
+  return missing;
+}
+
+// Render the required-fields status banner at the top of the Brochure tab.
+// Called after the tab renders and also after any field change that might
+// affect the check. Updates button disabled state + banner text.
+function _omRefreshRequiredFieldsCheck(){
+  const holder = document.getElementById('omRequiredFieldsCheck');
+  if(!holder) return;
+  const missing = _omCheckRequiredFields();
+  const btnStandard = document.getElementById('omBtnStandard');
+  const btnPremium  = document.getElementById('omBtnPremium');
+  if(missing.length === 0){
+    holder.innerHTML = `
+      <div style="margin:14px 16px 4px;padding:10px 14px;background:#f0fdf4;border:1px solid #86efac;border-radius:6px;font-size:11px;color:#166534;display:flex;align-items:center;gap:8px;">
+        <span style="font-size:14px;">✓</span>
+        <span><strong>Ready to generate.</strong> All required fields for Standard OM and Premium OM are complete.</span>
+      </div>`;
+    if(btnStandard){ btnStandard.style.opacity = '1'; btnStandard.style.cursor = 'pointer'; btnStandard.disabled = false; }
+    if(btnPremium){  btnPremium.style.opacity  = '1'; btnPremium.style.cursor  = 'pointer'; btnPremium.disabled  = false; }
+  } else {
+    holder.innerHTML = `
+      <div style="margin:14px 16px 4px;padding:12px 14px;background:#fef3c7;border:1px solid #fbbf24;border-radius:6px;font-size:11px;color:#78350f;">
+        <div style="display:flex;align-items:flex-start;gap:8px;">
+          <span style="font-size:14px;flex-shrink:0;">⚠</span>
+          <div style="flex:1;">
+            <strong>Missing ${missing.length} required field${missing.length>1?'s':''} for Standard/Premium OM:</strong>
+            <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:6px;">
+              ${missing.map(m => `<span style="background:#fde68a;color:#78350f;padding:3px 8px;border-radius:99px;font-size:10px;font-weight:700;">${m}</span>`).join('')}
+            </div>
+            <div style="margin-top:8px;color:#92400e;font-size:10px;">
+              Quick Flyer is still available and ignores these requirements. Standard/Premium buttons are disabled until all fields are filled.
+            </div>
+          </div>
+        </div>
+      </div>`;
+    if(btnStandard){ btnStandard.style.opacity = '0.5'; btnStandard.style.cursor = 'not-allowed'; btnStandard.disabled = true; }
+    if(btnPremium){  btnPremium.style.opacity  = '0.5'; btnPremium.style.cursor  = 'not-allowed'; btnPremium.disabled  = true; }
+  }
+}
+
+// Standard OM handler — v100 placeholder, v101 will lazy-load pdfmake and
+// render the real cover page + a few body sections.
+function _omGenerateStandard(){
+  const missing = _omCheckRequiredFields();
+  if(missing.length > 0){
+    alert('Cannot generate Standard OM — missing required fields:\n\n• ' + missing.join('\n• '));
+    return;
+  }
+  alert('✓ Standard OM generation is coming in v101.\n\n'
+      + 'This is the v100 UI shell — the button flow, required-fields check, and confirmation dialogs are in place. '
+      + 'Next version will lazy-load pdfmake and produce the actual PDF.\n\n'
+      + 'Required fields check: PASSED');
+}
+
+// Premium OM handler — v100 placeholder that shows the real confirmation
+// dialog (including estimated cost) so you can see the flow. v103 will
+// wire in the actual Anthropic Edge Function proxy.
+function _omGeneratePremium(){
+  const missing = _omCheckRequiredFields();
+  if(missing.length > 0){
+    alert('Cannot generate Premium OM — missing required fields:\n\n• ' + missing.join('\n• '));
+    return;
+  }
+  // Show the confirmation modal — same pattern as the logout modal
+  const existing = document.getElementById('omPremiumConfirmModal');
+  if(existing) existing.remove();
+  const modal = document.createElement('div');
+  modal.id = 'omPremiumConfirmModal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.6);z-index:999999;display:flex;align-items:center;justify-content:center;padding:20px;';
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;padding:28px;width:480px;max-width:92vw;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:14px;">
+        <div style="font-size:36px;">✨</div>
+        <div>
+          <div style="font-size:18px;font-weight:800;color:#0b1f3a;">Generate Premium OM?</div>
+          <div style="font-size:12px;color:#64748b;">AI-enhanced offering memorandum</div>
+        </div>
+      </div>
+      <div style="font-size:13px;color:#334155;line-height:1.6;margin-bottom:16px;">
+        Premium OM uses <strong>Claude Sonnet 4.6</strong> to generate professional prose for:
+        <ul style="margin:8px 0 0 20px;padding:0;color:#475569;">
+          <li>Executive summary</li>
+          <li>Investment highlights (6–8 bullets with descriptions)</li>
+          <li>Site description &amp; market positioning</li>
+        </ul>
+      </div>
+      <div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;padding:12px 14px;margin-bottom:16px;">
+        <div style="font-size:11px;color:#78350f;line-height:1.5;">
+          <strong>💰 Estimated cost:</strong> ~$0.08–$0.12 per OM (one API call, tokens depend on deal data size)<br>
+          <strong>⏱ Time:</strong> 15–25 seconds<br>
+          <strong>🔒 Billed to:</strong> Ace Acquisitions organization account (not your personal key)
+        </div>
+      </div>
+      <div style="font-size:11px;color:#94a3b8;margin-bottom:18px;">
+        Not every deal needs Premium OM. For routine listings, <strong>Standard OM</strong> is free and generates the same template in 3 seconds without AI writing.
+      </div>
+      <div style="display:flex;gap:10px;">
+        <button id="omPremiumCancelBtn" style="flex:1;background:#f1f5f9;color:#475569;border:none;padding:11px;font-size:13px;font-weight:600;border-radius:7px;cursor:pointer;">Cancel</button>
+        <button id="omPremiumConfirmBtn" style="flex:1;background:linear-gradient(180deg,#b8912a,#8a6b1f);color:#fff;border:none;padding:11px;font-size:13px;font-weight:700;border-radius:7px;cursor:pointer;">✨ Generate Premium OM</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  const close = () => { const m = document.getElementById('omPremiumConfirmModal'); if(m) m.remove(); };
+  document.getElementById('omPremiumCancelBtn').onclick = close;
+  modal.addEventListener('click', e => { if(e.target === modal) close(); });
+  const escHandler = e => { if(e.key === 'Escape'){ close(); document.removeEventListener('keydown', escHandler); } };
+  document.addEventListener('keydown', escHandler);
+  document.getElementById('omPremiumConfirmBtn').onclick = () => {
+    close();
+    document.removeEventListener('keydown', escHandler);
+    alert('✓ Premium OM generation is coming in v103.\n\n'
+        + 'This v100 shows the full confirmation flow. In v103 this button will call the anthropic-proxy Edge Function, '
+        + 'wait for the AI response, and feed it into the pdfmake template.\n\n'
+        + 'Required fields check: PASSED\nConfirmation: RECEIVED');
+  };
 }
 
 async function loadBrochurePhotos(recordId){

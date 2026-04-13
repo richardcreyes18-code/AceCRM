@@ -2361,6 +2361,31 @@ function showDashboard(){
   _dashLoadTasks();
   // v102.17: lazy-load buyer lead counts scoped to current agent
   _dashLoadBuyerLeadCounts();
+
+  // v102.19: install one-time listener for crm:lead-created so the dashboard
+  // auto-refreshes when a new seller or buyer lead is submitted from anywhere
+  // in the app. The flag prevents double-binding across multiple showDashboard
+  // calls. The listener checks _dashIsVisible() before re-rendering so it's a
+  // no-op when the user is on a different tab — the next visit will pick up
+  // fresh data via the normal showDashboard flow anyway.
+  if(!window._dashLeadListenerInstalled){
+    window.addEventListener('crm:lead-created', () => {
+      if(_dashIsVisible()){
+        showDashboard();
+      }
+    });
+    window._dashLeadListenerInstalled = true;
+  }
+}
+
+// v102.19: Returns true if the dashboard is currently the visible tab.
+// Used by the crm:lead-created listener to decide whether to re-render.
+function _dashIsVisible(){
+  // The dashboard renders into #mainArea. We detect it by looking for the
+  // characteristic "📊 Dashboard" header that showDashboard always emits.
+  const main = document.getElementById('mainArea');
+  if(!main) return false;
+  return main.innerHTML.includes('📊 Dashboard') && main.innerHTML.includes('New Seller Leads');
 }
 
 // v102.17: Fetch buyer lead counts for the current agent in three date windows.
@@ -11303,98 +11328,106 @@ function showContactDetailPage(recordId, returnTo){
   }
 
   const initials = (f.Name||'?').split(' ').map(s=>s[0]).filter(Boolean).slice(0,2).join('').toUpperCase() || '?';
-  const typeBadges = (f.Type||[]).map(t=>`<span style="font-size:11px;padding:3px 10px;border-radius:10px;margin-right:4px;font-weight:600;${TYPE_COLORS[t]||TYPE_COLORS.Other}">${t}</span>`).join('') || '<span style="font-size:11px;color:#94a3b8;">No type set</span>';
+  // v102.20: FUB-style subtle type badges for the header
+  const primaryType = (f.Type||[])[0] || '';
+  const typeBadges = (f.Type||[]).map(t=>`<span style="font-size:11px;padding:4px 12px;border-radius:12px;margin-right:4px;font-weight:600;${TYPE_COLORS[t]||TYPE_COLORS.Other}">${t}</span>`).join('') || '';
 
   const mainArea = document.getElementById('mainArea');
   if(!mainArea) return;
+  // v102.20: FUB-style redesign. Clean white header, lightened left rail,
+  // flatter right panel. All IDs and onclick handlers preserved — this is
+  // pure visual restyling, no functional changes.
   mainArea.innerHTML = `
-    <div style="display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;font-family:'Inter',system-ui,sans-serif;background:#f1f5f9;overflow:hidden;">
-      <!-- STICKY HEADER -->
-      <div style="background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 100%);color:#fff;padding:14px 22px;display:flex;align-items:center;gap:14px;box-shadow:0 2px 8px rgba(0,0,0,0.15);flex-shrink:0;">
-        <button onclick="${backHandler}" style="background:#fff;color:#1a3a6e;border:none;padding:7px 14px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;">${backLabel}</button>
-        <div style="width:48px;height:48px;border-radius:50%;background:linear-gradient(135deg,#fbbf24,#f59e0b);display:flex;align-items:center;justify-content:center;font-size:19px;font-weight:700;color:#0f172a;flex-shrink:0;margin-left:6px;">${initials}</div>
+    <div style="display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;font-family:'Inter',system-ui,sans-serif;background:#f8fafc;overflow:hidden;">
+
+      <!-- ─── HEADER: clean white bar with avatar + name + actions ───────── -->
+      <div style="background:#fff;border-bottom:1px solid #e2e8f0;padding:18px 28px;display:flex;align-items:center;gap:16px;flex-shrink:0;">
+        <button onclick="${backHandler}" style="background:#f1f5f9;color:#334155;border:1px solid #e2e8f0;padding:8px 14px;font-size:12px;font-weight:600;border-radius:8px;cursor:pointer;">${backLabel}</button>
+        <div style="width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#d97706);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;color:#fff;flex-shrink:0;margin-left:8px;">${initials}</div>
         <div style="flex:1;min-width:0;">
-          <div id="cdp_headerName" style="font-size:19px;font-weight:700;line-height:1.2;">${f.Name||'Unnamed Contact'}</div>
-          <div id="cdp_headerSub" style="font-size:12px;color:#93c5fd;margin-top:2px;">${f.Company||'<em style="color:#64748b;">No company</em>'}${f['Phone Number']?` · 📞 ${f['Phone Number']}`:''}${f.Email?` · ✉️ ${f.Email}`:''}</div>
+          <div id="cdp_headerName" style="font-size:22px;font-weight:800;color:#0f172a;line-height:1.2;">${f.Name||'Unnamed Contact'}</div>
+          <div id="cdp_headerSub" style="font-size:13px;color:#64748b;margin-top:4px;">
+            ${f.Company ? `<span>${f.Company}</span>` : '<em style="color:#94a3b8;">No company</em>'}
+            ${f['Phone Number'] ? ` · 📞 <span style="color:#0369a1;">${f['Phone Number']}</span>` : ''}
+            ${f.Email ? ` · ✉ <span style="color:#0369a1;">${f.Email}</span>` : ''}
+          </div>
         </div>
         <div id="cdp_headerBadges" style="display:flex;gap:6px;align-items:center;">${typeBadges}</div>
         <button id="cdp_relBtn" onclick="toggleContactRelationshipFromDetail('${recordId}')" title="${_isMyRelationship(recordId)?'In your relationships — click to remove':'Add to your personal relationships list'}" style="${_cdpRelBtnStyle(_isMyRelationship(recordId))}">${_cdpRelBtnLabel(_isMyRelationship(recordId))}</button>
-        <div id="cmSaveMsg" style="font-size:11px;color:#90ff90;min-width:80px;text-align:right;"></div>
-        <button onclick="saveContactFromModal('${recordId}')" style="background:linear-gradient(180deg,#22c55e,#16a34a);color:#fff;border:none;padding:8px 22px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,0.2);">✓ Save Changes</button>
+        <div id="cmSaveMsg" style="font-size:11px;color:#16a34a;min-width:80px;text-align:right;font-weight:600;"></div>
+        <button onclick="saveContactFromModal('${recordId}')" style="background:#16a34a;color:#fff;border:none;padding:10px 22px;font-size:13px;font-weight:700;border-radius:8px;cursor:pointer;">✓ Save Changes</button>
       </div>
 
-      <!-- TWO-COLUMN BODY -->
+      <!-- ─── TWO-COLUMN BODY ────────────────────────────────────────────── -->
       <div style="flex:1;display:flex;min-height:0;min-width:0;overflow:hidden;">
-        <!-- LEFT RAIL: INFO FORM -->
-        <div style="width:360px;min-width:360px;background:#fff;border-right:1px solid #e2e8f0;overflow-y:auto;padding:22px;">
-          <div style="font-size:13px;font-weight:700;color:#1a3a6e;margin-bottom:14px;text-transform:uppercase;letter-spacing:0.5px;">📋 Contact Info</div>
 
-          <div style="display:flex;flex-direction:column;gap:14px;">
+        <!-- LEFT RAIL: Contact info — clean white, no section header boxes ── -->
+        <div style="width:340px;min-width:340px;background:#fff;border-right:1px solid #e2e8f0;overflow-y:auto;padding:24px;">
+
+          <div style="display:flex;flex-direction:column;gap:18px;">
             <div>
-              <label style="display:block;font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Full Name *</label>
-              <input class="form-input" id="cm_name" value="${(f.Name||'').replace(/"/g,'&quot;')}" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;box-sizing:border-box;"/>
+              <label style="display:block;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">Full Name *</label>
+              <input class="form-input" id="cm_name" value="${(f.Name||'').replace(/"/g,'&quot;')}" style="width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;box-sizing:border-box;background:#fff;"/>
             </div>
 
             <div>
-              <label style="display:block;font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Type</label>
-              <div style="display:flex;flex-wrap:wrap;gap:6px;">
-                ${types.map(t=>`<label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:4px 10px;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc;"><input type="checkbox" name="cm_type" value="${t}" ${(f.Type||[]).includes(t)?'checked':''}/> ${t}</label>`).join('')}
+              <label style="display:block;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:8px;">Type</label>
+              <div style="display:flex;flex-wrap:wrap;gap:8px;">
+                ${types.map(t=>`<label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;padding:6px 12px;border:1px solid #e2e8f0;border-radius:8px;background:#fff;font-weight:500;color:#334155;"><input type="checkbox" name="cm_type" value="${t}" ${(f.Type||[]).includes(t)?'checked':''} style="cursor:pointer;"/> ${t}</label>`).join('')}
               </div>
             </div>
 
             <div>
-              <label style="display:block;font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">📞 Phone</label>
-              <input class="form-input" id="cm_phone" value="${(f['Phone Number']||'').replace(/"/g,'&quot;')}" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;box-sizing:border-box;"/>
+              <label style="display:block;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">📞 Phone</label>
+              <input class="form-input" id="cm_phone" value="${(f['Phone Number']||'').replace(/"/g,'&quot;')}" style="width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;box-sizing:border-box;background:#fff;"/>
             </div>
 
             <div>
-              <label style="display:block;font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">📞 Secondary Phone</label>
-              <input class="form-input" id="cm_phone2" value="${(f['Secondary Phone Number']||'').replace(/"/g,'&quot;')}" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;box-sizing:border-box;"/>
+              <label style="display:block;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">📞 Secondary Phone</label>
+              <input class="form-input" id="cm_phone2" value="${(f['Secondary Phone Number']||'').replace(/"/g,'&quot;')}" style="width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;box-sizing:border-box;background:#fff;"/>
             </div>
 
             <div>
-              <label style="display:block;font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">✉️ Email</label>
-              <input class="form-input" id="cm_email" value="${(f.Email||'').replace(/"/g,'&quot;')}" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;box-sizing:border-box;"/>
+              <label style="display:block;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">✉ Email</label>
+              <input class="form-input" id="cm_email" value="${(f.Email||'').replace(/"/g,'&quot;')}" style="width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;box-sizing:border-box;background:#fff;"/>
             </div>
 
             <div>
-              <label style="display:block;font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">🏛 Company</label>
-              <input class="form-input" id="cm_company" value="${(f.Company||'').replace(/"/g,'&quot;')}" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;box-sizing:border-box;"/>
+              <label style="display:block;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">🏛 Company</label>
+              <input class="form-input" id="cm_company" value="${(f.Company||'').replace(/"/g,'&quot;')}" style="width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;box-sizing:border-box;background:#fff;"/>
             </div>
 
             <div>
-              <label style="display:block;font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">📝 Contact Notes</label>
-              <textarea class="form-input" id="cm_notes" style="width:100%;height:120px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;resize:vertical;font-family:inherit;box-sizing:border-box;">${f['Contact Notes']||''}</textarea>
+              <label style="display:block;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">📝 Contact Notes</label>
+              <textarea class="form-input" id="cm_notes" style="width:100%;min-height:140px;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;resize:vertical;font-family:inherit;box-sizing:border-box;background:#fff;line-height:1.5;">${f['Contact Notes']||''}</textarea>
             </div>
 
-            ${f['Date Added']?`<div style="font-size:10px;color:#94a3b8;padding-top:6px;border-top:1px solid #f1f5f9;">Added: ${f['Date Added']}</div>`:''}
+            ${f['Date Added']?`<div style="font-size:11px;color:#94a3b8;padding-top:8px;border-top:1px solid #f1f5f9;">Added: ${f['Date Added']}</div>`:''}
           </div>
         </div>
 
-        <!-- RIGHT AREA: TABS + CONTENT -->
-        <div style="flex:1;min-width:0;min-height:0;overflow:hidden;display:flex;flex-direction:column;background:#f1f5f9;">
-          <!-- TABS -->
-          <div style="display:flex;background:#fff;border-bottom:1px solid #e2e8f0;padding:0 22px;gap:2px;flex-shrink:0;">
-            <button id="ctab_comm" onclick="_contactTabSwitch('comm')" style="background:#f8fafc;border:1px solid #e2e8f0;border-bottom:2px solid #2563eb;padding:12px 22px;font-size:13px;font-weight:600;color:#1a3a6e;cursor:pointer;border-radius:6px 6px 0 0;margin-bottom:-1px;">📞 Communication <span id="ctabCommCount" style="background:#e2e8f0;color:#475569;font-size:10px;padding:1px 6px;border-radius:8px;margin-left:4px;">…</span></button>
-            <button id="ctab_props" onclick="_contactTabSwitch('props')" style="background:transparent;border:1px solid transparent;padding:12px 22px;font-size:13px;font-weight:500;color:#64748b;cursor:pointer;border-radius:6px 6px 0 0;">🏢 Properties <span id="ctabPropsCount" style="background:#e2e8f0;color:#475569;font-size:10px;padding:1px 6px;border-radius:8px;margin-left:4px;">…</span></button>
-            <button id="ctab_buyer" onclick="_contactTabSwitch('buyer')" style="background:transparent;border:1px solid transparent;padding:12px 22px;font-size:13px;font-weight:500;color:#64748b;cursor:pointer;border-radius:6px 6px 0 0;">🎯 Buyer Criteria <span id="ctabBuyerCount" style="background:#e2e8f0;color:#475569;font-size:10px;padding:1px 6px;border-radius:8px;margin-left:4px;">…</span></button>
+        <!-- RIGHT AREA: Tabs + content — lighter panel, softer boundaries ─── -->
+        <div style="flex:1;min-width:0;min-height:0;overflow:hidden;display:flex;flex-direction:column;background:#f8fafc;">
+
+          <!-- Tabs — flat, underline-style active state (FUB look) -->
+          <div style="display:flex;background:#fff;border-bottom:1px solid #e2e8f0;padding:0 28px;gap:4px;flex-shrink:0;">
+            <button id="ctab_comm" onclick="_contactTabSwitch('comm')" style="background:transparent;border:none;border-bottom:3px solid #2563eb;padding:16px 20px;font-size:14px;font-weight:700;color:#1e40af;cursor:pointer;margin-bottom:-1px;">📞 Communication <span id="ctabCommCount" style="background:#dbeafe;color:#1e40af;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:700;">…</span></button>
+            <button id="ctab_props" onclick="_contactTabSwitch('props')" style="background:transparent;border:none;border-bottom:3px solid transparent;padding:16px 20px;font-size:14px;font-weight:600;color:#64748b;cursor:pointer;margin-bottom:-1px;">🏢 Properties <span id="ctabPropsCount" style="background:#f1f5f9;color:#64748b;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:700;">…</span></button>
+            <button id="ctab_buyer" onclick="_contactTabSwitch('buyer')" style="background:transparent;border:none;border-bottom:3px solid transparent;padding:16px 20px;font-size:14px;font-weight:600;color:#64748b;cursor:pointer;margin-bottom:-1px;">🎯 Buyer Criteria <span id="ctabBuyerCount" style="background:#f1f5f9;color:#64748b;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:700;">…</span></button>
           </div>
 
-          <!-- CONTENT PANES -->
-          <div style="flex:1;overflow-y:auto;padding:22px;min-width:0;min-height:0;">
-            <!-- COMMUNICATION (default visible) -->
+          <!-- Content panes -->
+          <div style="flex:1;overflow-y:auto;padding:24px 28px;min-width:0;min-height:0;">
             <div id="cpane_comm">
-              <div id="contactCommList" style="color:#64748b;font-size:12px;"><div style="text-align:center;padding:30px;">⏳ Loading communication history...</div></div>
+              <div id="contactCommList" style="color:#64748b;font-size:13px;"><div style="text-align:center;padding:40px;">⏳ Loading communication history...</div></div>
             </div>
 
-            <!-- PROPERTIES -->
             <div id="cpane_props" style="display:none;">
-              <div id="contactPropsList" style="color:#64748b;font-size:12px;"><div style="text-align:center;padding:30px;">⏳ Loading linked properties...</div></div>
+              <div id="contactPropsList" style="color:#64748b;font-size:13px;"><div style="text-align:center;padding:40px;">⏳ Loading linked properties...</div></div>
             </div>
 
-            <!-- BUYER CRITERIA -->
             <div id="cpane_buyer" style="display:none;">
-              <div id="contactBuyerList" style="color:#64748b;font-size:12px;"><div style="text-align:center;padding:30px;">⏳ Loading buyer criteria...</div></div>
+              <div id="contactBuyerList" style="color:#64748b;font-size:13px;"><div style="text-align:center;padding:40px;">⏳ Loading buyer criteria...</div></div>
             </div>
           </div>
         </div>
@@ -11420,30 +11453,38 @@ function showContactDetailPage(recordId, returnTo){
 }
 
 // Tab switcher for the in-depth contact view.
-// In the full-page layout, the Info form lives in a fixed left rail (always visible),
-// so only props/buyer/comm are toggleable. In the legacy modal (add-new-contact)
-// we only show info, so the switcher is a no-op there.
+// v102.20: FUB-style underline tabs. Active tab has a 3px blue bottom border,
+// inactive tabs have a transparent bottom border. Count pills switch between
+// blue-filled (active) and grey (inactive).
 function _contactTabSwitch(tab){
   const tabs = ['props','buyer','comm','info'];
+  const pillIdMap = { props:'ctabPropsCount', buyer:'ctabBuyerCount', comm:'ctabCommCount' };
   tabs.forEach(t=>{
     const btn = document.getElementById('ctab_'+t);
     const pane = document.getElementById('cpane_'+t);
     if(!btn||!pane) return;
     if(t===tab){
-      btn.style.background = '#fff';
-      btn.style.borderBottom = '2px solid #2563eb';
-      btn.style.color = '#1a3a6e';
-      btn.style.fontWeight = '600';
-      btn.style.border = '1px solid #e2e8f0';
-      btn.style.borderBottom = '2px solid #2563eb';
+      btn.style.borderBottom = '3px solid #2563eb';
+      btn.style.color = '#1e40af';
+      btn.style.fontWeight = '700';
       pane.style.display = 'block';
+      // Active pill — blue background
+      const pill = document.getElementById(pillIdMap[t]);
+      if(pill){
+        pill.style.background = '#dbeafe';
+        pill.style.color = '#1e40af';
+      }
     } else {
-      btn.style.background = 'transparent';
-      btn.style.borderBottom = '';
+      btn.style.borderBottom = '3px solid transparent';
       btn.style.color = '#64748b';
-      btn.style.fontWeight = '500';
-      btn.style.border = '1px solid transparent';
+      btn.style.fontWeight = '600';
       pane.style.display = 'none';
+      // Inactive pill — grey
+      const pill = document.getElementById(pillIdMap[t]);
+      if(pill){
+        pill.style.background = '#f1f5f9';
+        pill.style.color = '#64748b';
+      }
     }
   });
 }
@@ -17149,6 +17190,13 @@ async function _liSubmitSeller(){
     // _liShowSuccess fires. Without await, the user can navigate to the
     // dashboard before the refresh completes and see stale counts.
     await syncData();
+    // v102.19: broadcast the lead-created event so any open dashboard
+    // (or other live counter) refreshes itself automatically. The dashboard
+    // listener at the bottom of showDashboard re-runs the render whenever
+    // this fires, so the "Today" counter increments without manual nav.
+    try {
+      window.dispatchEvent(new CustomEvent('crm:lead-created', { detail: { type: 'seller' } }));
+    } catch(e) { /* CustomEvent unsupported — extremely old browser, ignore */ }
     _liShowSuccess('seller', gv('li_s_name'), gv('li_s_address'));
   }catch(e){
     if(btn){btn.disabled=false;btn.textContent='✓ Submit Seller Lead';}
@@ -17636,6 +17684,10 @@ async function _liSubmitBuyer(){
     // dashboard counts that depend on allDeals stay fresh.
     if(typeof _bcLastLoadMs !== 'undefined') _bcLastLoadMs = 0;
     try { await syncData(); } catch(e) { console.warn('syncData after buyer submit failed:', e.message); }
+    // v102.19: broadcast the lead-created event for live dashboard refresh.
+    try {
+      window.dispatchEvent(new CustomEvent('crm:lead-created', { detail: { type: 'buyer' } }));
+    } catch(e) {}
     _liShowSuccess('buyer', gv('li_b_name'), null);
   }catch(e){
     if(btn){btn.disabled=false;btn.textContent='✓ Submit Buyer Lead';}
@@ -17652,7 +17704,6 @@ function _liShowSuccess(type, name, address){
       ${address?`<div style="font-size:13px;color:#94a3b8;margin-bottom:24px;">${address}</div>`:'<div style="margin-bottom:24px;"></div>'}
       <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
         <button onclick="showLeadIntakePage()" style="background:#1a3a6e;color:#fff;border:none;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">+ Add Another Lead</button>
-        <button onclick="setNav(document.querySelectorAll('.nav-btn')[0],'home');showDashboard();" style="background:#0369a1;color:#fff;border:none;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">📊 Back to Dashboard</button>
         ${type==='buyer'?`<button onclick="setNav(document.querySelector('.nav-btn[onclick*=buyercriteria]'),'buyercriteria')" style="background:#f1f5f9;color:#1a3a6e;border:none;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">View Buyer Criteria →</button>`
         :`<button onclick="setNav(document.querySelectorAll('.nav-btn')[1],'pipeline')" style="background:#f1f5f9;color:#1a3a6e;border:none;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">View Deals →</button>`}
       </div>

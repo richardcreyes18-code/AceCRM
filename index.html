@@ -1183,6 +1183,17 @@ const SB_PROP_MAP = {
   property_mgmt_fee_monthly:'Property Management Fee (Monthly)',
   capital_reserve_monthly:'Capital Reserve (Monthly)',
   admin_expenses_monthly:'Admin Expenses (Monthly)',
+  // v102.4: new expense sub-category columns so every Financial Analysis input persists
+  accounting_monthly:'Accounting (Monthly)',
+  legal_monthly:'Legal (Monthly)',
+  other_admin_monthly:'Other Admin (Monthly)',
+  other_utilities_monthly:'Other Utilities (Monthly)',
+  other_misc_monthly:'Other Misc (Monthly)',
+  other_tax_monthly:'Other Tax (Monthly)',
+  liability_insurance_monthly:'Liability Insurance (Monthly)',
+  other_mgmt_monthly:'Other Mgmt (Monthly)',
+  // v102.4: JSONB column for pro forma expense per-line values
+  pro_forma_expense_breakdown:'Pro Forma Expense Breakdown',
   mortgage1_loan_type:'Mortgage 1 Loan Type', mortgage1_principal:'Mortgage 1 Principal Balance',
   mortgage1_amortization_yrs:'Mortgage 1 Amortization (Years)',
   mortgage1_interest_rate_pct:'Mortgage 1 Interest Rate (%)',
@@ -6855,22 +6866,39 @@ function renderFinancialTab(d){
   // machine for the first time), populate the per-category expense inputs
   // from their corresponding ace_properties columns so nothing looks blank.
   // Reverse of the expMap used in _extractFinFields.
+  // v102.4: expanded to cover all 23 actual-side expense sub-categories.
   const _dbExpSeed = {
+    // Administrative
     'a_admin_mgmt_mo':  d['Admin Expenses (Monthly)'],
+    'a_admin_acct_mo':  d['Accounting (Monthly)'],
+    'a_admin_legal_mo': d['Legal (Monthly)'],
+    'a_admin_other_mo': d['Other Admin (Monthly)'],
+    // Repair & Maintenance
     'a_rm_jan_mo':      d['Janitorial (Monthly)'],
     'a_rm_land_mo':     d['Landscaping (Monthly)'],
     'a_rm_maint_mo':    d['Maintenance & Repair Costs (Monthly)'],
     'a_rm_sal_mo':      d['Maintenance & Repair Salary (Monthly)'],
     'a_rm_pool_mo':     d['Pool (Monthly)'],
     'a_rm_sup_mo':      d['Supplies (Monthly)'],
+    // Utilities
     'a_util_elec_mo':   d['Electric (Monthly)'],
     'a_util_gas_mo':    d['Gas (Monthly)'],
     'a_util_water_mo':  d['Water & Sewer (Monthly)'],
     'a_util_trash_mo':  d['Trash (Monthly)'],
+    'a_util_other_mo':  d['Other Utilities (Monthly)'],
+    // Miscellaneous
     'a_misc_adv_mo':    d['Miscellaneous Expenses (Monthly)'],
+    'a_misc_other_mo':  d['Other Misc (Monthly)'],
+    // Taxes
     'a_tax_prop_mo':    d['Property Tax (Monthly)'],
+    'a_tax_other_mo':   d['Other Tax (Monthly)'],
+    // Insurance
     'a_ins_prop_mo':    d['Insurance (Monthly)'],
+    'a_ins_liab_mo':    d['Liability Insurance (Monthly)'],
+    // Property Management
     'a_pm_fee_mo':      d['Property Management Fee (Monthly)'],
+    'a_pm_other_mo':    d['Other Mgmt (Monthly)'],
+    // Reserves
     'aCapRes_mo':       d['Capital Reserve (Monthly)'],
   };
   Object.entries(_dbExpSeed).forEach(([key, dbVal])=>{
@@ -6878,6 +6906,19 @@ function renderFinancialTab(d){
       fi[key] = Number(dbVal);
     }
   });
+
+  // v102.4: Seed pro forma expense values from the JSONB column when
+  // localStorage is empty. Same pattern as actual-side, but unpacks a
+  // single JSON object instead of reading individual columns.
+  const _dbProFormaExp = d['Pro Forma Expense Breakdown'];
+  if(_dbProFormaExp && typeof _dbProFormaExp === 'object'){
+    Object.entries(_dbProFormaExp).forEach(([itemId, val]) => {
+      const fiKey = 'p_' + itemId + '_mo';
+      if((fi[fiKey] === undefined || fi[fiKey] === null || fi[fiKey] === '') && val != null && val !== ''){
+        fi[fiKey] = Number(val);
+      }
+    });
+  }
 
   // ── Pull from Airtable as fallback only ────────────────────
   // Ask/Offer price: prefer localStorage (what user typed) over Airtable
@@ -12417,8 +12458,13 @@ function _omHasFinancialData(d){
   const fields = [
     'Gross Rental Income (Monthly)', 'Expenses Monthly', 'NOI', 'Cap Rate (CRM)',
     'RUBS/CAM Income (Monthly)', 'Other Income (Monthly)', 'Property Tax (Monthly)',
-    'Insurance (Monthly)', 'Admin Expenses (Monthly)', 'Maintenance Repair (Monthly)',
+    'Insurance (Monthly)', 'Admin Expenses (Monthly)', 'Maintenance & Repair Costs (Monthly)',
     'Landscaping (Monthly)', 'Miscellaneous Expenses (Monthly)', 'Capital Reserve (Monthly)',
+    // v102.4: new expense sub-category fields
+    'Accounting (Monthly)', 'Legal (Monthly)', 'Other Admin (Monthly)',
+    'Other Utilities (Monthly)', 'Other Misc (Monthly)', 'Other Tax (Monthly)',
+    'Liability Insurance (Monthly)', 'Other Mgmt (Monthly)',
+    'Property Management Fee (Monthly)',
   ];
   return fields.some(f => _omMoney(d[f]) !== null);
 }
@@ -12459,33 +12505,61 @@ function _omBuildFinancialSummaryPage(d){
 
   const egi = incomeItems.reduce((sum, r) => sum + (r[1] || 0), 0);
 
-  // Gather expense items. Only rows with actual data will appear.
-  // Expense categories grouped by type, matching the Financial Analysis tab.
-  const expenseItems = [
-    // Administrative
-    ['Property Management Fee', _omMoney(d['Property Management Fee (Monthly)'])],
-    ['Administrative',          _omMoney(d['Admin Expenses (Monthly)'])],
-    // Repair & Maintenance
-    ['Maintenance & Repairs',   _omMoney(d['Maintenance & Repair Costs (Monthly)'])],
-    ['Maintenance Salary',      _omMoney(d['Maintenance & Repair Salary (Monthly)'])],
-    ['Janitorial',              _omMoney(d['Janitorial (Monthly)'])],
-    ['Landscaping',             _omMoney(d['Landscaping (Monthly)'])],
-    ['Pool',                    _omMoney(d['Pool (Monthly)'])],
-    ['Supplies',                _omMoney(d['Supplies (Monthly)'])],
-    // Utilities
-    ['Electric',                _omMoney(d['Electric (Monthly)'])],
-    ['Gas',                     _omMoney(d['Gas (Monthly)'])],
-    ['Water & Sewer',           _omMoney(d['Water & Sewer (Monthly)'])],
-    ['Trash',                   _omMoney(d['Trash (Monthly)'])],
-    // Taxes / Insurance / Reserves
-    ['Property Taxes',          _omMoney(d['Property Tax (Monthly)'])],
-    ['Insurance',               _omMoney(d['Insurance (Monthly)'])],
-    ['Capital Reserve',         _omMoney(d['Capital Reserve (Monthly)'])],
-    ['Miscellaneous',           _omMoney(d['Miscellaneous Expenses (Monthly)'])],
-  ].filter(r => r[1] !== null);
+  // v102.3: Expense categories — rollups instead of per-line items.
+  // Each category sums the database fields that belong to it. Categories
+  // with zero total are filtered out so empty rows never appear.
+  // Note: some UI inputs (Accounting, Legal, Other Tax, Liability Ins,
+  // Advertising) don't have database columns yet, so those values don't
+  // persist and are NOT reflected in these totals.
+  const sumFields = (fieldNames) => {
+    const vals = fieldNames.map(f => _omMoney(d[f])).filter(v => v !== null);
+    if(vals.length === 0) return null;
+    return vals.reduce((a, b) => a + b, 0);
+  };
 
-  // If no per-line expenses exist but there's a total Expenses Monthly field,
-  // show that as a single "Total Operating Expenses" line.
+  const expenseItems = [
+    ['Administrative',        sumFields([
+      'Admin Expenses (Monthly)',      // Management Fee
+      'Accounting (Monthly)',
+      'Legal (Monthly)',
+      'Other Admin (Monthly)',
+    ])],
+    ['Repair & Maintenance',  sumFields([
+      'Maintenance & Repair Costs (Monthly)',
+      'Maintenance & Repair Salary (Monthly)',
+      'Janitorial (Monthly)',
+      'Landscaping (Monthly)',
+      'Pool (Monthly)',
+      'Supplies (Monthly)',
+    ])],
+    ['Utilities',             sumFields([
+      'Electric (Monthly)',
+      'Gas (Monthly)',
+      'Water & Sewer (Monthly)',
+      'Trash (Monthly)',
+      'Other Utilities (Monthly)',
+    ])],
+    ['Property Taxes',        sumFields([
+      'Property Tax (Monthly)',
+      'Other Tax (Monthly)',
+    ])],
+    ['Insurance',             sumFields([
+      'Insurance (Monthly)',
+      'Liability Insurance (Monthly)',
+    ])],
+    ['Miscellaneous',         sumFields([
+      'Miscellaneous Expenses (Monthly)',
+      'Other Misc (Monthly)',
+    ])],
+    ['Property Management',   sumFields([
+      'Property Management Fee (Monthly)',
+      'Other Mgmt (Monthly)',
+    ])],
+    ['Capital Reserve',       sumFields(['Capital Reserve (Monthly)'])],
+  ].filter(r => r[1] !== null && r[1] > 0);
+
+  // If no per-category expenses exist but there's a total Expenses Monthly
+  // field, fall back to a single "Total Operating Expenses" line.
   const totalExpStored = _omMoney(d['Expenses Monthly']);
   if(expenseItems.length === 0 && totalExpStored !== null){
     expenseItems.push(['Operating Expenses (Total)', totalExpStored]);
@@ -22714,28 +22788,69 @@ function saveFinInputs(dealId){
   if(get('fin_renovation')) fields['Renovation Expense']  = get('fin_renovation');
 
   // ── Variable Expenses ────────────────────────────────────────
+  // v102.4: full coverage — every expense sub-input in the Financial
+  // Analysis tab now has a backing database column. Previously 8 inputs
+  // (Accounting, Legal, Other Admin, Other Utilities, Other Misc, Other
+  // Tax, Liability Insurance, Other Mgmt) were DOM-only and lost on refresh.
   const expMap = {
-    'fin_a_admin_mgmt_mo':  'Admin Expenses (Monthly)',
+    // Administrative
+    'fin_a_admin_mgmt_mo':  'Admin Expenses (Monthly)',            // "Management Fee" line under Admin
+    'fin_a_admin_acct_mo':  'Accounting (Monthly)',                // NEW
+    'fin_a_admin_legal_mo': 'Legal (Monthly)',                     // NEW
+    'fin_a_admin_other_mo': 'Other Admin (Monthly)',               // NEW
+    // Repair & Maintenance
     'fin_a_rm_jan_mo':      'Janitorial (Monthly)',
     'fin_a_rm_land_mo':     'Landscaping (Monthly)',
     'fin_a_rm_maint_mo':    'Maintenance & Repair Costs (Monthly)',
     'fin_a_rm_sal_mo':      'Maintenance & Repair Salary (Monthly)',
     'fin_a_rm_pool_mo':     'Pool (Monthly)',
     'fin_a_rm_sup_mo':      'Supplies (Monthly)',
+    // Utilities
     'fin_a_util_elec_mo':   'Electric (Monthly)',
     'fin_a_util_gas_mo':    'Gas (Monthly)',
     'fin_a_util_water_mo':  'Water & Sewer (Monthly)',
     'fin_a_util_trash_mo':  'Trash (Monthly)',
-    'fin_a_misc_adv_mo':    'Miscellaneous Expenses (Monthly)',
+    'fin_a_util_other_mo':  'Other Utilities (Monthly)',           // NEW
+    // Miscellaneous
+    'fin_a_misc_adv_mo':    'Miscellaneous Expenses (Monthly)',    // "Advertising" in UI
+    'fin_a_misc_other_mo':  'Other Misc (Monthly)',                // NEW
+    // Taxes
     'fin_a_tax_prop_mo':    'Property Tax (Monthly)',
+    'fin_a_tax_other_mo':   'Other Tax (Monthly)',                 // NEW
+    // Insurance
     'fin_a_ins_prop_mo':    'Insurance (Monthly)',
-    'fin_a_pm_fee_mo':      'Property Management Fee (Monthly)',
+    'fin_a_ins_liab_mo':    'Liability Insurance (Monthly)',       // NEW
+    // Property Management
+    'fin_a_pm_fee_mo':      'Property Management Fee (Monthly)',   // "Management Fee %" under PM
+    'fin_a_pm_other_mo':    'Other Mgmt (Monthly)',                // NEW
+    // Reserves
     'fin_aCapRes_mo':        'Capital Reserve (Monthly)',
   };
   Object.entries(expMap).forEach(([inputId, airtableField]) => {
     const v = get(inputId);
     if(v) fields[airtableField] = v;
   });
+
+  // v102.4: Pro forma expenses — save as a JSONB blob keyed by short item ID.
+  // Keeps the schema clean (1 column vs 23) since pro forma values aren't
+  // queried per-line, only displayed in the UI and optionally in a future
+  // pro forma OM section.
+  const proFormaExpenseKeys = [
+    'admin_mgmt','admin_acct','admin_legal','admin_other',
+    'rm_jan','rm_land','rm_maint','rm_sal','rm_pool','rm_sup',
+    'util_elec','util_gas','util_water','util_trash','util_other',
+    'misc_adv','misc_other',
+    'tax_prop','tax_other',
+    'ins_prop','ins_liab',
+    'pm_fee','pm_other',
+  ];
+  const proFormaBreakdown = {};
+  let hasProForma = false;
+  proFormaExpenseKeys.forEach(k => {
+    const v = get('fin_p_'+k+'_mo');
+    if(v) { proFormaBreakdown[k] = v; hasProForma = true; }
+  });
+  if(hasProForma) fields['Pro Forma Expense Breakdown'] = proFormaBreakdown;
 
   // ── Mortgages ────────────────────────────────────────────────
   [1,2,3].forEach(n => {

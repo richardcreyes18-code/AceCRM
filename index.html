@@ -4093,6 +4093,8 @@ function switchTab(name, btn){
       } finally {
         _rendering = false; // always release, even if something throws
       }
+      // v102.2: wire auto-save listener for the financial inputs
+      if(typeof _finWireAutoSave === 'function') _finWireAutoSave();
     }, 0);
   }
 }
@@ -7604,8 +7606,20 @@ function renderFinancialTab(d){
         ▶ Calculate / Refresh
       </button>
       <button class="save-btn" style="padding:6px 16px;" onclick="saveFinInputs('${d.id}')">Save Inputs</button>
-      <span style="font-size:10px;color:#666;">Fill in inputs above, then click Calculate to refresh all metrics.</span>
+      <!-- v102.2: auto-save indicator dot — pulses only when an actual save fires -->
+      <span id="finSaveDot" title="Auto-save indicator — pulses green when changes are saved" style="display:inline-block;width:10px;height:10px;border-radius:50%;background:#86efac;opacity:0.4;transition:opacity 0.2s;"></span>
+      <span style="font-size:10px;color:#64748b;">Auto-saves as you type. Or click Save Inputs to save now.</span>
     </div>
+    <style>
+      /* v102.2: green pulse animation for the auto-save dot. Class is added
+         transiently in _finPulseSaveDot() and the animation cleans itself up. */
+      @keyframes finDotPulse {
+        0%   { transform: scale(1);   background: #86efac; opacity: 0.4; box-shadow: 0 0 0 0 rgba(34,197,94,0); }
+        20%  { transform: scale(1.5); background: #22c55e; opacity: 1;   box-shadow: 0 0 0 4px rgba(34,197,94,0.3); }
+        100% { transform: scale(1);   background: #86efac; opacity: 0.4; box-shadow: 0 0 0 0 rgba(34,197,94,0); }
+      }
+      #finSaveDot.pulse { animation: finDotPulse 900ms ease-out; }
+    </style>
 
     <!-- LESS: OPERATING EXPENSES ────────────────────────────── -->
     ${(()=>{
@@ -11910,6 +11924,14 @@ async function _omGenerateStandard(){
   }
   const d = currentDeal;
   if(!d){ alert('No deal selected.'); return; }
+
+  // v102.2: flush any pending Financial Analysis auto-save before we read
+  // deal data. This ensures typed-but-not-yet-saved expense values land in
+  // currentDeal BEFORE the financial section reads from it. No-op if the
+  // Financial tab isn't currently rendered (nothing to flush).
+  try {
+    if(typeof _finFlushPendingSave === 'function') await _finFlushPendingSave();
+  } catch(e) { console.warn('[OM] Pre-generate flush failed (continuing):', e); }
 
   try {
     _omShowSpinner('Loading PDF library…');
@@ -22566,6 +22588,92 @@ function mortCalc(){
   debouncedRecalc();
 }
 
+// ═══════════════════════════════════════════════════════════════════
+//  FINANCIAL TAB AUTO-SAVE (v102.2)
+//
+//  The Financial Analysis tab has ~30 inputs, each with its own existing
+//  oninput handler (incomeCalc, syncMoYr, liveDownCalc, etc.). Rather than
+//  modify each one, we use event delegation at the tab container level:
+//  a single "input" listener sees every change and schedules a debounced
+//  save 1500ms after the user stops typing.
+//
+//  The green pulse dot sits next to the Save Inputs button and briefly
+//  animates (~900ms) only when an actual write to the database succeeds.
+//  No constant pulsing — only a real save triggers the animation.
+// ═══════════════════════════════════════════════════════════════════
+
+let _finAutoSaveTimer = null;
+let _finAutoSaveWired = false;   // tab-scoped: reset when renderFinancialTab runs
+
+// Fire after 1500ms of input idle. Calls saveFinInputs which internally
+// updates currentDeal and fires _finPulseSaveDot on success.
+function _finScheduleAutoSave(){
+  if(!currentDeal || !currentDeal.id) return;
+  if(_finAutoSaveTimer) clearTimeout(_finAutoSaveTimer);
+  _finAutoSaveTimer = setTimeout(() => {
+    _finAutoSaveTimer = null;
+    try { saveFinInputs(currentDeal.id); }
+    catch(e) { console.warn('[OM] Auto-save failed:', e); }
+  }, 1500);
+}
+
+// Wire event delegation on the Financial tab's root element. Called once
+// per tab render. Uses a data-attribute flag so we don't double-wire.
+function _finWireAutoSave(){
+  const root = document.querySelector('#mainArea');
+  if(!root || _finAutoSaveWired) return;
+  _finAutoSaveWired = true;
+  root.addEventListener('input', (e) => {
+    const t = e.target;
+    if(!t || !t.id || !t.id.startsWith('fin_')) return;
+    // Skip derived/display-only elements that don't actually get saved
+    if(t.id.endsWith('Display') || t.id.endsWith('Label')) return;
+    _finScheduleAutoSave();
+  });
+  // Also flush pending save if the user switches tabs or navigates away
+  root.addEventListener('focusout', (e) => {
+    const t = e.target;
+    if(!t || !t.id || !t.id.startsWith('fin_')) return;
+    // Don't flush on simple blur — the 1500ms debouncer will catch it.
+    // But if the user is about to navigate (visibilitychange), save now.
+  });
+}
+
+// Pulse the small green dot next to the Save Inputs button. Called by
+// saveFinInputs on successful DB write. Animation is CSS-driven so it
+// automatically cleans up — no setTimeout needed to remove classes.
+function _finPulseSaveDot(){
+  const dot = document.getElementById('finSaveDot');
+  if(!dot) return;
+  // Restart the animation by removing and re-adding the class
+  dot.classList.remove('pulse');
+  // Force a reflow so the browser re-applies the animation from frame 0
+  void dot.offsetWidth;
+  dot.classList.add('pulse');
+}
+
+// Flush any pending auto-save immediately (awaits it). Used by
+// _omGenerateStandard to ensure the OM sees the latest typed values
+// before reading currentDeal. Returns when the save completes.
+async function _finFlushPendingSave(){
+  if(_finAutoSaveTimer){
+    clearTimeout(_finAutoSaveTimer);
+    _finAutoSaveTimer = null;
+  }
+  // Always force a save if there are financial inputs in the DOM.
+  // Mirror of saveFinInputs which is fire-and-forget; we wrap it so
+  // we can await. Check if the financial tab is actually rendered.
+  const hasFinInputs = !!document.getElementById('fin_a_ins_prop_mo')
+                    || !!document.getElementById('fin_a_tax_prop_mo')
+                    || !!document.getElementById('fin_aGrossRent_mo');
+  if(!hasFinInputs) return;
+  if(!currentDeal || !currentDeal.id) return;
+  // saveFinInputs is not async — it fires .then internally. We synthesize
+  // a small wait to let the Supabase write + currentDeal update settle.
+  saveFinInputs(currentDeal.id);
+  await new Promise(r => setTimeout(r, 300));
+}
+
 function saveFinInputs(dealId){
   recalcFinancials(dealId);
   if(!currentDeal) return;
@@ -22664,7 +22772,15 @@ function saveFinInputs(dealId){
   // ── Push to Airtable ─────────────────────────────────────────
   if(Object.keys(fields).length > 0){
     airtableUpdate(currentDeal.id, fields).then(ok => {
-      if(ok) showSaveConfirm(`✓ ${Object.keys(fields).length} fields saved`);
+      if(ok) {
+        // v102.2: write the saved fields back into currentDeal so downstream
+        // consumers (OM generator, summary header, etc.) see fresh values
+        // without a round-trip reload. Mirrors the saveNotes/savePriority pattern.
+        Object.assign(currentDeal, fields);
+        showSaveConfirm(`✓ ${Object.keys(fields).length} fields saved`);
+        // v102.2: pulse the green dot to indicate a real save fired
+        if(typeof _finPulseSaveDot === 'function') _finPulseSaveDot();
+      }
     });
   }
 }

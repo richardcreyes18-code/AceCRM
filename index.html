@@ -12014,17 +12014,7 @@ function _omBuildStandardDocDefinition(d, photoDataUris){
       { text: 'CONTENTS', color: OM_BRAND.gold, fontSize: 10, characterSpacing: 1.4, bold: true, margin: [0, 0, 0, 8] },
       { text: 'Table of Contents', color: OM_BRAND.navy, fontSize: 26, bold: true, margin: [0, 0, 0, 4] },
       { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 180, y2: 0, lineWidth: 1.5, lineColor: OM_BRAND.gold }], margin: [0, 0, 0, 24] },
-      _omBuildTocTable([
-        ['01', 'Executive Summary',                '2'],
-        ['02', 'Investment Highlights',            '3'],
-        ['03', 'Development Program',              'v102'],
-        ['04', 'Approval & Entitlement Summary',   'v102'],
-        ['05', 'Site Description & Location',      'v102'],
-        ['06', 'Renderings & Additional Photos',   'v102'],
-        ['07', 'Architectural Plans',              'v102'],
-        ['08', 'Legal Description & Survey',       'v102'],
-        ['09', 'Confidentiality & Disclaimer',     'v102'],
-      ]),
+      _omBuildTocTable(_omBuildTocRows(d)),
     ],
     pageBreak: 'after',
   };
@@ -12058,7 +12048,18 @@ function _omBuildStandardDocDefinition(d, photoDataUris){
         : [{ text: 'Add Investment Highlights by entering them as line-separated bullets in the deal\'s General Property Notes field.', italics: true, color: OM_BRAND.darkGray, fontSize: 10 }]
       ),
     ],
+    pageBreak: 'after',
   };
+
+  // v102: new sections — Financial Summary, Property Details, Location,
+  // Additional Photos gallery, Confidentiality & Disclaimer.
+  // Each section-builder returns null if the deal has no data for that section,
+  // which we filter out below so empty sections never appear in the PDF.
+  const financialPage         = _omBuildFinancialSummaryPage(d);
+  const propertyDetailsPage   = _omBuildPropertyDetailsPage(d);
+  const locationPage          = _omBuildLocationPage(d);
+  const galleryPage           = _omBuildGalleryPage(d, photoDataUris);
+  const disclaimerPage        = _omBuildDisclaimerPage(d);
 
   return {
     pageSize: 'LETTER',
@@ -12124,7 +12125,13 @@ function _omBuildStandardDocDefinition(d, photoDataUris){
       tocPage,
       execSummaryPage,
       investmentHighlightsPage,
-    ],
+      // v102: conditional sections — only included if they have data
+      financialPage,
+      propertyDetailsPage,
+      locationPage,
+      galleryPage,
+      disclaimerPage,
+    ].filter(Boolean),
     defaultStyle: {
       font: 'Roboto',
       fontSize: 10,
@@ -12301,6 +12308,412 @@ function _omExtractCityStateZip(d){
   if(m) return m[1].trim();
   if(d['City']) return d['City'] + (d['State'] ? ', ' + d['State'] : '');
   return d['Simple County'] || '';
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  v102 — ADDITIONAL SECTIONS
+//
+//  New sections focused on Ace's real deal flow: Multifamily, Retail,
+//  Industrial. Each section builder returns null if there's no data for
+//  that section, so empty pages never appear in the generated OM.
+// ═══════════════════════════════════════════════════════════════════
+
+// Normalize a money value from any field shape (number, string with $, etc.)
+function _omMoney(v){
+  if(v === null || v === undefined || v === '') return null;
+  const n = Number(String(v).replace(/[$,]/g, ''));
+  return isFinite(n) && n !== 0 ? n : null;
+}
+
+// Format a number as $X,XXX
+function _omFmtMoney(n){
+  if(n === null || n === undefined || !isFinite(n)) return '—';
+  return '$' + Number(n).toLocaleString(undefined, { maximumFractionDigits: 0 });
+}
+
+// Format a decimal as a percentage. Accepts 0.075 → "7.50%" or 7.5 → "7.50%".
+function _omFmtPct(n){
+  if(n === null || n === undefined || !isFinite(n)) return '—';
+  const v = Number(n);
+  const scaled = Math.abs(v) <= 1 ? v * 100 : v;
+  return scaled.toFixed(2) + '%';
+}
+
+// Simplified asset-type detector. Returns one of: 'multifamily', 'retail',
+// 'industrial', 'office', 'mixed', 'other'.
+function _omAssetFamily(d){
+  const raw = ((_dealAssetType ? _dealAssetType(d) : null) || d['CRM Asset Classification'] || d['Simple Text Property Type'] || '').toLowerCase();
+  if(raw.includes('multifamily') || raw.includes('apartment')) return 'multifamily';
+  if(raw.includes('retail') || raw.includes('shopping') || raw.includes('strip')) return 'retail';
+  if(raw.includes('industrial') || raw.includes('warehouse') || raw.includes('distribution')) return 'industrial';
+  if(raw.includes('office')) return 'office';
+  if(raw.includes('mixed')) return 'mixed';
+  return 'other';
+}
+
+// Build the TOC rows dynamically based on which sections actually have data.
+// Keeps section numbers consistent with the final PDF (no gaps).
+function _omBuildTocRows(d){
+  const rows = [];
+  let n = 1;
+  const pad = (i) => String(i).padStart(2, '0');
+  rows.push([pad(n++), 'Executive Summary',     'included']);
+  rows.push([pad(n++), 'Investment Highlights', 'included']);
+  if(_omHasFinancialData(d))    rows.push([pad(n++), 'Financial Summary',         'included']);
+  if(_omHasPropertyDetailData(d)) rows.push([pad(n++), 'Property Details',        'included']);
+  if(_omHasLocationData(d))     rows.push([pad(n++), 'Location & Market',         'included']);
+  const photos = _omGetOrderedPhotos(d);
+  if(photos.length > 1)         rows.push([pad(n++), 'Additional Photos',         'included']);
+  rows.push([pad(n++), 'Confidentiality & Disclaimer', 'included']);
+  return rows;
+}
+
+// Does this deal have any financial data worth showing?
+function _omHasFinancialData(d){
+  const fields = [
+    'Gross Rental Income (Monthly)', 'Expenses Monthly', 'NOI', 'Cap Rate (CRM)',
+    'RUBS/CAM Income (Monthly)', 'Other Income (Monthly)', 'Property Tax (Monthly)',
+    'Insurance (Monthly)', 'Admin Expenses (Monthly)', 'Maintenance Repair (Monthly)',
+    'Landscaping (Monthly)', 'Miscellaneous Expenses (Monthly)', 'Capital Reserve (Monthly)',
+  ];
+  return fields.some(f => _omMoney(d[f]) !== null);
+}
+
+// Does this deal have enough property detail to warrant a section?
+function _omHasPropertyDetailData(d){
+  return !!(d['Unit Mix'] || d['Number of Units'] || d['Square Footage']
+         || d['Net Rentable SF'] || d['Year Built'] || d['Property Class']
+         || d['Roof Type'] || d['HVAC'] || d['Exterior'] || d['Foundation']
+         || d['MF Unit Rent Data']);
+}
+
+// Does this deal have enough location info to warrant a Location section?
+function _omHasLocationData(d){
+  return !!(d['Simple County'] || d['Location Class'] || d['Location Type']
+         || d['Location Trending'] || d['Region'] || d['Location Description']);
+}
+
+// ── SECTION 03 — Financial Summary ───────────────────────────────────────
+// Renders an income/expense table using whatever fields are populated.
+// Every row only appears if it has data. NOI + Cap Rate are always shown
+// if they can be computed, even if not stored directly.
+function _omBuildFinancialSummaryPage(d){
+  if(!_omHasFinancialData(d)) return null;
+
+  // Gather income items
+  const incomeItems = [
+    ['Gross Rental Income',    _omMoney(d['Gross Rental Income (Monthly)'])],
+    ['Other Income',           _omMoney(d['Other Income (Monthly)'])],
+    ['RUBS / CAM Income',      _omMoney(d['RUBS/CAM Income (Monthly)'])],
+  ].filter(r => r[1] !== null);
+
+  // Vacancy adjustment (only if rate > 0 and GRI exists)
+  const vacancyRate = Number(d['Vacancy Rate (%)']) || 0;
+  const gri = _omMoney(d['Gross Rental Income (Monthly)']) || 0;
+  const vacancyMonthly = vacancyRate > 0 && gri > 0 ? -(gri * vacancyRate / 100) : null;
+  if(vacancyMonthly !== null) incomeItems.push([`Less: Vacancy (${vacancyRate}%)`, vacancyMonthly]);
+
+  const egi = incomeItems.reduce((sum, r) => sum + (r[1] || 0), 0);
+
+  // Gather expense items
+  const expenseItems = [
+    ['Administrative',         _omMoney(d['Admin Expenses (Monthly)'])],
+    ['Maintenance & Repair',   _omMoney(d['Maintenance Repair (Monthly)'])],
+    ['Landscaping',            _omMoney(d['Landscaping (Monthly)'])],
+    ['Property Taxes',         _omMoney(d['Property Tax (Monthly)'])],
+    ['Insurance',              _omMoney(d['Insurance (Monthly)'])],
+    ['Miscellaneous',          _omMoney(d['Miscellaneous Expenses (Monthly)'])],
+    ['Capital Reserve',        _omMoney(d['Capital Reserve (Monthly)'])],
+  ].filter(r => r[1] !== null);
+
+  const totalExpMo = _omMoney(d['Expenses Monthly']) || expenseItems.reduce((sum, r) => sum + r[1], 0);
+
+  // NOI: prefer the stored value, fall back to EGI − expenses
+  let noi = _omMoney(d['NOI']);
+  if(!noi && egi && totalExpMo) noi = (egi - totalExpMo) * 12;
+
+  // Cap rate: prefer stored, fall back to NOI/Ask
+  let capRate = d['Cap Rate (CRM)'] ? Number(d['Cap Rate (CRM)']) : null;
+  const ask = _omMoney(d['Asking Price']);
+  if(!capRate && noi && ask) capRate = noi / ask;
+
+  // Build income table rows
+  const incomeRows = [
+    [
+      { text: 'Income',     color: OM_BRAND.white, bold: true, fontSize: 9, fillColor: OM_BRAND.navy, margin: [8, 6, 8, 6] },
+      { text: 'Monthly',    color: OM_BRAND.white, bold: true, fontSize: 9, fillColor: OM_BRAND.navy, alignment: 'right', margin: [8, 6, 8, 6] },
+      { text: 'Annual',     color: OM_BRAND.white, bold: true, fontSize: 9, fillColor: OM_BRAND.navy, alignment: 'right', margin: [8, 6, 8, 6] },
+    ],
+    ...incomeItems.map((r, i) => [
+      { text: r[0], color: OM_BRAND.text, fontSize: 9, margin: [8, 5, 8, 5], fillColor: i % 2 === 0 ? OM_BRAND.lightGray : null },
+      { text: _omFmtMoney(r[1]), color: OM_BRAND.text, fontSize: 9, alignment: 'right', margin: [8, 5, 8, 5], fillColor: i % 2 === 0 ? OM_BRAND.lightGray : null },
+      { text: _omFmtMoney(r[1] * 12), color: OM_BRAND.text, fontSize: 9, alignment: 'right', margin: [8, 5, 8, 5], fillColor: i % 2 === 0 ? OM_BRAND.lightGray : null },
+    ]),
+  ];
+  if(egi) incomeRows.push([
+    { text: 'Effective Gross Income', color: OM_BRAND.navy, bold: true, fontSize: 9, margin: [8, 6, 8, 6], fillColor: OM_BRAND.cream },
+    { text: _omFmtMoney(egi), color: OM_BRAND.navy, bold: true, fontSize: 9, alignment: 'right', margin: [8, 6, 8, 6], fillColor: OM_BRAND.cream },
+    { text: _omFmtMoney(egi * 12), color: OM_BRAND.navy, bold: true, fontSize: 9, alignment: 'right', margin: [8, 6, 8, 6], fillColor: OM_BRAND.cream },
+  ]);
+
+  // Build expense table rows
+  const expenseRows = expenseItems.length > 0 ? [
+    [
+      { text: 'Operating Expenses', color: OM_BRAND.white, bold: true, fontSize: 9, fillColor: OM_BRAND.navy, margin: [8, 6, 8, 6] },
+      { text: 'Monthly',            color: OM_BRAND.white, bold: true, fontSize: 9, fillColor: OM_BRAND.navy, alignment: 'right', margin: [8, 6, 8, 6] },
+      { text: 'Annual',             color: OM_BRAND.white, bold: true, fontSize: 9, fillColor: OM_BRAND.navy, alignment: 'right', margin: [8, 6, 8, 6] },
+    ],
+    ...expenseItems.map((r, i) => [
+      { text: r[0], color: OM_BRAND.text, fontSize: 9, margin: [8, 5, 8, 5], fillColor: i % 2 === 0 ? OM_BRAND.lightGray : null },
+      { text: _omFmtMoney(r[1]), color: OM_BRAND.text, fontSize: 9, alignment: 'right', margin: [8, 5, 8, 5], fillColor: i % 2 === 0 ? OM_BRAND.lightGray : null },
+      { text: _omFmtMoney(r[1] * 12), color: OM_BRAND.text, fontSize: 9, alignment: 'right', margin: [8, 5, 8, 5], fillColor: i % 2 === 0 ? OM_BRAND.lightGray : null },
+    ]),
+    [
+      { text: 'Total Operating Expenses', color: OM_BRAND.navy, bold: true, fontSize: 9, margin: [8, 6, 8, 6], fillColor: OM_BRAND.cream },
+      { text: _omFmtMoney(totalExpMo), color: OM_BRAND.navy, bold: true, fontSize: 9, alignment: 'right', margin: [8, 6, 8, 6], fillColor: OM_BRAND.cream },
+      { text: _omFmtMoney(totalExpMo * 12), color: OM_BRAND.navy, bold: true, fontSize: 9, alignment: 'right', margin: [8, 6, 8, 6], fillColor: OM_BRAND.cream },
+    ],
+  ] : null;
+
+  // NOI + Cap Rate summary strip
+  const noiCapStrip = (noi || capRate) ? {
+    table: {
+      widths: ['*', '*'],
+      body: [[
+        {
+          stack: [
+            { text: 'NET OPERATING INCOME', color: OM_BRAND.goldLight, fontSize: 8, characterSpacing: 0.6, bold: true },
+            { text: _omFmtMoney(noi), color: OM_BRAND.white, fontSize: 18, bold: true, margin: [0, 4, 0, 0] },
+          ],
+          fillColor: OM_BRAND.navy,
+          margin: [14, 12, 14, 12],
+        },
+        {
+          stack: [
+            { text: 'CAP RATE', color: OM_BRAND.goldLight, fontSize: 8, characterSpacing: 0.6, bold: true },
+            { text: capRate !== null ? _omFmtPct(capRate) : '—', color: OM_BRAND.white, fontSize: 18, bold: true, margin: [0, 4, 0, 0] },
+          ],
+          fillColor: OM_BRAND.navy,
+          margin: [14, 12, 14, 12],
+        },
+      ]],
+    },
+    layout: {
+      hLineWidth: () => 0,
+      vLineWidth: (i) => i === 1 ? 1 : 0,
+      vLineColor: () => OM_BRAND.gold,
+    },
+    margin: [0, 0, 0, 18],
+  } : null;
+
+  // Financial notes paragraph
+  const notesBlock = d['Financial Property Notes'] ? {
+    stack: [
+      { text: 'Financial Notes', color: OM_BRAND.navy, fontSize: 11, bold: true, margin: [0, 14, 0, 6] },
+      { text: d['Financial Property Notes'], color: OM_BRAND.text, fontSize: 9, lineHeight: 1.4, alignment: 'justify' },
+    ],
+  } : null;
+
+  return {
+    stack: [
+      { text: 'SECTION 03', color: OM_BRAND.gold, fontSize: 9, characterSpacing: 1.2, bold: true, margin: [0, 0, 0, 6] },
+      { text: 'Financial Summary', color: OM_BRAND.navy, fontSize: 22, bold: true, margin: [0, 0, 0, 2] },
+      { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 170, y2: 0, lineWidth: 1.5, lineColor: OM_BRAND.gold }], margin: [0, 0, 0, 18] },
+      noiCapStrip,
+      { table: { widths: ['*', 75, 85], body: incomeRows }, layout: { hLineWidth: () => 0.4, vLineWidth: () => 0, hLineColor: () => '#e0e0e0' }, margin: [0, 0, 0, 14] },
+      expenseRows ? { table: { widths: ['*', 75, 85], body: expenseRows }, layout: { hLineWidth: () => 0.4, vLineWidth: () => 0, hLineColor: () => '#e0e0e0' }, margin: [0, 0, 0, 0] } : null,
+      notesBlock,
+    ].filter(Boolean),
+    pageBreak: 'after',
+  };
+}
+
+// ── SECTION 04 — Property Details ────────────────────────────────────────
+// Adapts to asset type: MF shows unit count + mix, Retail shows SF + tenant
+// notes, Industrial shows SF + clear height/loading if available.
+function _omBuildPropertyDetailsPage(d){
+  if(!_omHasPropertyDetailData(d)) return null;
+
+  const family = _omAssetFamily(d);
+  const rows = [];
+  const add = (label, value) => {
+    if(value !== null && value !== undefined && value !== '') rows.push([label, String(value)]);
+  };
+
+  // Core fields — same for all asset types
+  add('Asset Classification', d['CRM Asset Classification'] || d['Simple Text Property Type']);
+  add('Year Built',           d['Year Built']);
+  add('Year Renovated',       d['Year Renovated']);
+
+  // Asset-type specific fields
+  if(family === 'multifamily'){
+    if(d['Number of Units']) add('Total Units', Number(d['Number of Units']).toLocaleString());
+    if(d['Unit Mix'])        add('Unit Mix', d['Unit Mix']);
+    if(d['Square Footage'])  add('Building SF', Number(d['Square Footage']).toLocaleString());
+    if(d['No. of Stories'])  add('Stories', d['No. of Stories']);
+    if(d['No. of Parking Spaces']) add('Parking Spaces', d['No. of Parking Spaces']);
+    if(d['Occupancy (%)'])   add('Occupancy', String(d['Occupancy (%)']).includes('%') ? d['Occupancy (%)'] : d['Occupancy (%)']+'%');
+  } else if(family === 'retail'){
+    if(d['Square Footage'])  add('Gross Building SF', Number(d['Square Footage']).toLocaleString());
+    if(d['Net Rentable SF']) add('Net Rentable SF',   Number(d['Net Rentable SF']).toLocaleString());
+    if(d['Number of Units']) add('Tenant Spaces', d['Number of Units']);
+    if(d['Occupancy (%)'])   add('Occupancy', String(d['Occupancy (%)']).includes('%') ? d['Occupancy (%)'] : d['Occupancy (%)']+'%');
+    if(d['No. of Parking Spaces']) add('Parking Spaces', d['No. of Parking Spaces']);
+    if(d['Parking Ratio'])   add('Parking Ratio', d['Parking Ratio']);
+  } else if(family === 'industrial'){
+    if(d['Square Footage'])  add('Building SF', Number(d['Square Footage']).toLocaleString());
+    if(d['Net Rentable SF']) add('Net Rentable SF', Number(d['Net Rentable SF']).toLocaleString());
+    if(d['No. of Stories'])  add('Stories', d['No. of Stories']);
+    if(d['Occupancy (%)'])   add('Occupancy', String(d['Occupancy (%)']).includes('%') ? d['Occupancy (%)'] : d['Occupancy (%)']+'%');
+    if(d['No. of Parking Spaces']) add('Parking Spaces', d['No. of Parking Spaces']);
+  } else {
+    if(d['Square Footage'])  add('Building SF', Number(d['Square Footage']).toLocaleString());
+    if(d['Net Rentable SF']) add('Net Rentable SF', Number(d['Net Rentable SF']).toLocaleString());
+    if(d['Number of Units']) add('Units / Spaces', d['Number of Units']);
+    if(d['No. of Stories'])  add('Stories', d['No. of Stories']);
+    if(d['Occupancy (%)'])   add('Occupancy', String(d['Occupancy (%)']).includes('%') ? d['Occupancy (%)'] : d['Occupancy (%)']+'%');
+    if(d['No. of Parking Spaces']) add('Parking Spaces', d['No. of Parking Spaces']);
+  }
+
+  // Construction / condition fields — same for all
+  add('Property Class',  d['Property Class']);
+  add('Condition',       d['Property Condition']);
+  add('Roof Type',       d['Roof Type']);
+  add('HVAC',            d['HVAC']);
+  add('Exterior',        d['Exterior']);
+  add('Foundation',      d['Foundation']);
+  add('Paving',          d['Paving']);
+  add('Wiring',          d['Wiring']);
+  add('Piping',          d['Piping']);
+
+  if(rows.length === 0) return null;
+
+  const tableBody = rows.map((r, i) => [
+    { text: r[0], color: OM_BRAND.darkGray, fontSize: 9, bold: true, margin: [8, 6, 8, 6], fillColor: i % 2 === 0 ? OM_BRAND.lightGray : null },
+    { text: r[1], color: OM_BRAND.text,     fontSize: 9,             margin: [8, 6, 8, 6], fillColor: i % 2 === 0 ? OM_BRAND.lightGray : null },
+  ]);
+
+  return {
+    stack: [
+      { text: 'SECTION 04', color: OM_BRAND.gold, fontSize: 9, characterSpacing: 1.2, bold: true, margin: [0, 0, 0, 6] },
+      { text: 'Property Details', color: OM_BRAND.navy, fontSize: 22, bold: true, margin: [0, 0, 0, 2] },
+      { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 155, y2: 0, lineWidth: 1.5, lineColor: OM_BRAND.gold }], margin: [0, 0, 0, 18] },
+      {
+        table: { widths: [160, '*'], body: tableBody },
+        layout: { hLineWidth: () => 0.4, vLineWidth: () => 0, hLineColor: () => '#e0e0e0' },
+      },
+    ],
+    pageBreak: 'after',
+  };
+}
+
+// ── SECTION 05 — Location & Market ───────────────────────────────────────
+function _omBuildLocationPage(d){
+  if(!_omHasLocationData(d)) return null;
+
+  const rows = [];
+  const add = (label, value) => {
+    if(value !== null && value !== undefined && value !== '') rows.push([label, String(value)]);
+  };
+  add('County',            d['Simple County']);
+  add('Region',            d['Region']);
+  add('State',             d['State']);
+  add('Location Type',     d['Location Type']);
+  add('Location Class',    d['Location Class']);
+  add('Trending',          d['Location Trending']);
+
+  const locDesc = d['Location Description'] || d['Nearby Attractions'] || null;
+
+  if(rows.length === 0 && !locDesc) return null;
+
+  const tableBody = rows.map((r, i) => [
+    { text: r[0], color: OM_BRAND.darkGray, fontSize: 9, bold: true, margin: [8, 6, 8, 6], fillColor: i % 2 === 0 ? OM_BRAND.lightGray : null },
+    { text: r[1], color: OM_BRAND.text,     fontSize: 9,             margin: [8, 6, 8, 6], fillColor: i % 2 === 0 ? OM_BRAND.lightGray : null },
+  ]);
+
+  return {
+    stack: [
+      { text: 'SECTION 05', color: OM_BRAND.gold, fontSize: 9, characterSpacing: 1.2, bold: true, margin: [0, 0, 0, 6] },
+      { text: 'Location & Market', color: OM_BRAND.navy, fontSize: 22, bold: true, margin: [0, 0, 0, 2] },
+      { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 175, y2: 0, lineWidth: 1.5, lineColor: OM_BRAND.gold }], margin: [0, 0, 0, 18] },
+      tableBody.length > 0 ? {
+        table: { widths: [140, '*'], body: tableBody },
+        layout: { hLineWidth: () => 0.4, vLineWidth: () => 0, hLineColor: () => '#e0e0e0' },
+        margin: [0, 0, 0, 16],
+      } : null,
+      locDesc ? { text: 'Location Overview', color: OM_BRAND.navy, fontSize: 11, bold: true, margin: [0, 4, 0, 6] } : null,
+      locDesc ? { text: locDesc, color: OM_BRAND.text, fontSize: 9, lineHeight: 1.45, alignment: 'justify' } : null,
+    ].filter(Boolean),
+    pageBreak: 'after',
+  };
+}
+
+// ── SECTION 06 — Additional Photos Gallery ───────────────────────────────
+// Shows photos 2-6 in a 2-column grid. Photo 1 is on the cover so we skip it.
+function _omBuildGalleryPage(d, photoDataUris){
+  // Need at least 2 photos (cover + 1 more) for a gallery
+  if(!photoDataUris || photoDataUris.length < 2) return null;
+
+  const galleryPhotos = photoDataUris.slice(1, 7); // up to 5 extra photos
+  const rows = [];
+  for(let i = 0; i < galleryPhotos.length; i += 2){
+    const left  = galleryPhotos[i];
+    const right = galleryPhotos[i + 1] || null;
+    rows.push([
+      { image: left, fit: [250, 180], alignment: 'center', margin: [0, 0, 0, 12] },
+      right ? { image: right, fit: [250, 180], alignment: 'center', margin: [0, 0, 0, 12] } : { text: '' },
+    ]);
+  }
+
+  return {
+    stack: [
+      { text: 'SECTION 06', color: OM_BRAND.gold, fontSize: 9, characterSpacing: 1.2, bold: true, margin: [0, 0, 0, 6] },
+      { text: 'Additional Photos', color: OM_BRAND.navy, fontSize: 22, bold: true, margin: [0, 0, 0, 2] },
+      { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 160, y2: 0, lineWidth: 1.5, lineColor: OM_BRAND.gold }], margin: [0, 0, 0, 18] },
+      {
+        table: { widths: ['*', '*'], body: rows },
+        layout: { hLineWidth: () => 0, vLineWidth: () => 0, paddingLeft: () => 6, paddingRight: () => 6 },
+      },
+    ],
+    pageBreak: 'after',
+  };
+}
+
+// ── SECTION 07 — Confidentiality & Disclaimer ────────────────────────────
+function _omBuildDisclaimerPage(d){
+  const disclaimerText =
+    'This Offering Memorandum ("OM") has been prepared by Ace Acquisitions ("Broker") for use '
+    + 'by a limited number of parties solely for the purpose of evaluating the potential acquisition '
+    + 'of the subject property. This OM contains selected information about the property and does '
+    + 'not purport to be all-inclusive or to contain all of the information that a prospective '
+    + 'purchaser may require. All financial projections are provided for general reference purposes '
+    + 'only and are based on assumptions relating to the general economy, market conditions, '
+    + 'competition, and other factors beyond the control of Broker and the owner. Therefore, all '
+    + 'projections, assumptions, and other information are subject to material variation. The '
+    + 'information contained in this OM has been obtained from sources believed to be reliable; '
+    + 'however, Broker has not verified, and will not verify, any of the information contained '
+    + 'herein, nor has Broker conducted any investigation regarding these matters. Broker makes '
+    + 'no guarantee, warranty, or representation whatsoever about the accuracy or completeness of '
+    + 'any information provided.\n\n'
+    + 'As a condition of receipt of this OM, the recipient agrees that (1) the OM and its contents '
+    + 'are confidential, (2) the recipient will not reproduce the OM in whole or in part, (3) the '
+    + 'recipient will not distribute the OM or any of its contents to any other person or entity '
+    + 'without the prior written authorization of Broker, and (4) the recipient will hold and treat '
+    + 'the OM in the strictest confidence.\n\n'
+    + 'By accepting this OM, the recipient agrees to release Broker and the property owner from '
+    + 'any liability, and acknowledges that the decision to purchase or not to purchase the '
+    + 'subject property is made solely on the basis of the recipient\'s own investigations.';
+
+  return {
+    stack: [
+      { text: 'SECTION 07', color: OM_BRAND.gold, fontSize: 9, characterSpacing: 1.2, bold: true, margin: [0, 0, 0, 6] },
+      { text: 'Confidentiality & Disclaimer', color: OM_BRAND.navy, fontSize: 22, bold: true, margin: [0, 0, 0, 2] },
+      { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 230, y2: 0, lineWidth: 1.5, lineColor: OM_BRAND.gold }], margin: [0, 0, 0, 18] },
+      { text: disclaimerText, fontSize: 8.5, lineHeight: 1.5, color: OM_BRAND.darkGray, alignment: 'justify' },
+      { text: 'Ace Acquisitions', color: OM_BRAND.navy, fontSize: 11, bold: true, margin: [0, 22, 0, 2] },
+      { text: 'New Jersey | Commercial Real Estate', color: OM_BRAND.gold, fontSize: 9, margin: [0, 0, 0, 0] },
+    ],
+  };
 }
 
 // Premium OM handler — v100 placeholder that shows the real confirmation

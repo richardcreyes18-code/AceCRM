@@ -4261,7 +4261,14 @@ function switchTab(name, btn){
   document.getElementById('tabContent').innerHTML = content[name]||'<p>Coming soon</p>';
   _rendering = false;
 
-  // Scroll back to top of mainArea now that new content is in the DOM
+  // v102.22: Reset scroll position to the top of the tab when switching tabs.
+  // Previously only #mainArea was reset, but the actual scrolling element is
+  // #tabContent (it has overflow-y:auto). If the user was scrolled to the
+  // bottom of Property Details and clicked Financial Analysis, the new tab
+  // would render at the old scroll position — confusing UX. Now we reset
+  // #tabContent to 0 AND #mainArea as a defensive belt-and-suspenders.
+  const _tc = document.getElementById('tabContent');
+  if(_tc) _tc.scrollTop = 0;
   const _ma = document.getElementById('mainArea');
   if(_ma) _ma.scrollTop = 0;
 

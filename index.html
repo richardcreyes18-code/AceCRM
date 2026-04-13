@@ -11962,7 +11962,7 @@ function _omBuildStandardDocDefinition(d, photoDataUris){
   const units      = Number(d['Number of Units'] || d['No. of Units']) || 0;
   const sqft       = Number(d['Square Footage'] || d['Total Building SF'] || d['Net Rentable SF']) || 0;
   const county     = d['Simple County'] || '';
-  const assetType  = _dealAssetType(d) || d['Simple Text Property Type'] || 'Commercial Property';
+  const assetType  = _omSanitizeText(_dealAssetType(d) || d['Simple Text Property Type'] || 'Commercial Property');
   const stories    = d['No. of Stories'] || '';
   const yearBuilt  = d['Year Built'] || '';
   const genNotes   = d['General Property Notes'] || '';
@@ -11977,12 +11977,12 @@ function _omBuildStandardDocDefinition(d, photoDataUris){
   const tags = [];
   if(d['Top Priority'])        tags.push('Priority Listing');
   if(d['Pipeline Stage'] === 'Hot Active Listing') tags.push('Hot Listing');
-  if(assetType)                tags.push(assetType);
-  if(county)                   tags.push(county);
-  if(d['Property Class'])      tags.push('Class ' + d['Property Class']);
-  if(d['Location Trending'])   tags.push(d['Location Trending']);
+  if(assetType)                tags.push(_omSanitizeText(assetType));
+  if(county)                   tags.push(_omSanitizeText(county));
+  if(d['Property Class'])      tags.push(_omSanitizeText('Class ' + d['Property Class']));
+  if(d['Location Trending'])   tags.push(_omSanitizeText(d['Location Trending']));
 
-  const highlights = genNotes
+  const highlights = _omSanitizeText(genNotes)
     .split('\n')
     .map(s => s.trim())
     .filter(s => s.length > 0)
@@ -12212,7 +12212,7 @@ function _omBuildExecSummaryProse(d){
   const addr      = d['Address'] || 'this property';
   const cityState = _omExtractCityStateZip(d);
   const county    = d['Simple County'] || '';
-  const assetType = (_dealAssetType(d) || d['Simple Text Property Type'] || 'commercial real estate').toLowerCase();
+  const assetType = _omSanitizeText((_dealAssetType(d) || d['Simple Text Property Type'] || 'commercial real estate')).toLowerCase();
   const units     = Number(d['Number of Units'] || d['No. of Units']) || 0;
   const sqft      = Number(d['Square Footage'] || d['Total Building SF'] || d['Net Rentable SF']) || 0;
   const ask       = d['Asking Price'] ? '$' + Number(d['Asking Price']).toLocaleString() : null;
@@ -12242,7 +12242,7 @@ function _omBuildExecSummaryProse(d){
     sentences.push('The property is offered at a price available upon request.');
   }
 
-  sentences.push('Additional details on the development program, site characteristics, and investment highlights are provided in the sections that follow.');
+  sentences.push('Additional details on financial performance, property specifications, and investment highlights are provided in the sections that follow.');
 
   return sentences.join(' ');
 }
@@ -12302,6 +12302,28 @@ function _omBuildHighlightBullet(line){
 }
 
 // Extract "City, STATE ZIP" from the deal's address field.
+// Strip emojis, private-use area glyphs, and other non-printable characters
+// that Roboto (pdfmake's default font) can't render. Without this, characters
+// like 🟣 show as empty square boxes ("tofu") in the output PDF.
+// Keeps normal punctuation, extended Latin, em dashes, and common CRE symbols.
+function _omSanitizeText(s){
+  if(s === null || s === undefined) return '';
+  return String(s)
+    // Emoji: Misc Symbols & Pictographs, Emoticons, Transport, Supplemental, etc.
+    .replace(/[\u{1F300}-\u{1FAFF}]/gu, '')
+    .replace(/[\u{2600}-\u{27BF}]/gu, '')
+    .replace(/[\u{1F000}-\u{1F2FF}]/gu, '')
+    // Private Use Area (where weird custom icons sometimes live)
+    .replace(/[\u{E000}-\u{F8FF}]/gu, '')
+    // Variation selectors
+    .replace(/[\u{FE00}-\u{FE0F}]/gu, '')
+    // Zero-width characters
+    .replace(/[\u200B-\u200F\u202A-\u202E\u2060-\u206F]/g, '')
+    // Collapse any resulting whitespace runs
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 function _omExtractCityStateZip(d){
   const addr = d['Address'] || '';
   const m = addr.match(/,\s*([^,]+,\s*[A-Z]{2}\s+\d{5})/);
@@ -12415,18 +12437,44 @@ function _omBuildFinancialSummaryPage(d){
 
   const egi = incomeItems.reduce((sum, r) => sum + (r[1] || 0), 0);
 
-  // Gather expense items
+  // Gather expense items. Only rows with actual data will appear.
+  // Expense categories grouped by type, matching the Financial Analysis tab.
   const expenseItems = [
-    ['Administrative',         _omMoney(d['Admin Expenses (Monthly)'])],
-    ['Maintenance & Repair',   _omMoney(d['Maintenance Repair (Monthly)'])],
-    ['Landscaping',            _omMoney(d['Landscaping (Monthly)'])],
-    ['Property Taxes',         _omMoney(d['Property Tax (Monthly)'])],
-    ['Insurance',              _omMoney(d['Insurance (Monthly)'])],
-    ['Miscellaneous',          _omMoney(d['Miscellaneous Expenses (Monthly)'])],
-    ['Capital Reserve',        _omMoney(d['Capital Reserve (Monthly)'])],
+    // Administrative
+    ['Property Management Fee', _omMoney(d['Property Management Fee (Monthly)'])],
+    ['Administrative',          _omMoney(d['Admin Expenses (Monthly)'])],
+    // Repair & Maintenance
+    ['Maintenance & Repairs',   _omMoney(d['Maintenance & Repair Costs (Monthly)'])],
+    ['Maintenance Salary',      _omMoney(d['Maintenance & Repair Salary (Monthly)'])],
+    ['Janitorial',              _omMoney(d['Janitorial (Monthly)'])],
+    ['Landscaping',             _omMoney(d['Landscaping (Monthly)'])],
+    ['Pool',                    _omMoney(d['Pool (Monthly)'])],
+    ['Supplies',                _omMoney(d['Supplies (Monthly)'])],
+    // Utilities
+    ['Electric',                _omMoney(d['Electric (Monthly)'])],
+    ['Gas',                     _omMoney(d['Gas (Monthly)'])],
+    ['Water & Sewer',           _omMoney(d['Water & Sewer (Monthly)'])],
+    ['Trash',                   _omMoney(d['Trash (Monthly)'])],
+    // Taxes / Insurance / Reserves
+    ['Property Taxes',          _omMoney(d['Property Tax (Monthly)'])],
+    ['Insurance',               _omMoney(d['Insurance (Monthly)'])],
+    ['Capital Reserve',         _omMoney(d['Capital Reserve (Monthly)'])],
+    ['Miscellaneous',           _omMoney(d['Miscellaneous Expenses (Monthly)'])],
   ].filter(r => r[1] !== null);
 
-  const totalExpMo = _omMoney(d['Expenses Monthly']) || expenseItems.reduce((sum, r) => sum + r[1], 0);
+  // If no per-line expenses exist but there's a total Expenses Monthly field,
+  // show that as a single "Total Operating Expenses" line.
+  const totalExpStored = _omMoney(d['Expenses Monthly']);
+  if(expenseItems.length === 0 && totalExpStored !== null){
+    expenseItems.push(['Operating Expenses (Total)', totalExpStored]);
+  }
+
+  // Total monthly expenses: prefer the sum of per-line items if we have them,
+  // otherwise use the stored total. This ensures the total row matches the
+  // sum of the visible rows exactly.
+  const totalExpMo = expenseItems.length > 0
+    ? expenseItems.reduce((sum, r) => sum + r[1], 0)
+    : (_omMoney(d['Expenses Monthly']) || 0);
 
   // NOI: prefer the stored value, fall back to EGI − expenses
   let noi = _omMoney(d['NOI']);
@@ -12541,7 +12589,7 @@ function _omBuildPropertyDetailsPage(d){
   };
 
   // Core fields — same for all asset types
-  add('Asset Classification', d['CRM Asset Classification'] || d['Simple Text Property Type']);
+  add('Asset Classification', _omSanitizeText(d['CRM Asset Classification'] || d['Simple Text Property Type']));
   add('Year Built',           d['Year Built']);
   add('Year Renovated',       d['Year Renovated']);
 

@@ -1316,7 +1316,13 @@ const SB_BC_MAP = {
   land_zoning_preference:'Land Zoning Preference',
   retail_anchor_preference:'Retail Anchor Preference',
   retail_lease_preference:'Retail Lease Preference',
-  warehouse_profile_preference:'Warehouse Profile Preference'
+  warehouse_profile_preference:'Warehouse Profile Preference',
+  // v102.14: buyer intake form redesign — "How They Buy" card + office tenant range
+  budget_is_deal_dependent:'Budget Deal Dependent',
+  financing_type:'Financing Type',
+  office_max_sf:'Office Max SF',
+  office_min_tenants:'Office Min Tenants',
+  office_max_tenants:'Office Max Tenants'
 };
 
 // Tasks map (ace_tasks)
@@ -16946,25 +16952,73 @@ function _liRenderBuyerForm(){
           ${_liField('Email','li_b_email','email','email@example.com','1fr')}
           ${_liField('Company','li_b_company','text','LLC, Corp, etc.','1fr')}
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+        <div style="display:grid;grid-template-columns:1fr;gap:14px;">
           ${_liField('Owned Property Address (if applicable)','li_b_ownedprop','text','Current property they own...','1fr')}
-          ${_liField('Minimum Cap Rate (%)','li_b_caprate','number','e.g. 6.5','1fr')}
         </div>
         ${_liTextarea('Contact Notes','li_b_cnotes','How they were met, relationship notes...',2)}
+      `)}
+
+      ${_liSection('💰 How They Buy', `
+        <div style="font-size:12px;color:#64748b;margin-bottom:12px;">Budget range and financing preferences</div>
+
+        <!-- Deal Dependent toggle — when checked, hides the min/max price inputs -->
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:14px;">
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;font-weight:600;color:#0f172a;">
+            <input type="checkbox" id="li_b_deal_dependent" onchange="_liBuyerToggleDealDependent()" style="width:16px;height:16px;cursor:pointer;"/>
+            <span>💬 Deal Dependent — budget varies based on the opportunity</span>
+          </label>
+        </div>
+
+        <!-- Price range inputs -->
+        <div id="li_b_price_wrap" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
+          ${_liNumField('Min Purchase Price ($)','li_b_minprice','e.g. 1000000')}
+          ${_liNumField('Max Purchase Price ($)','li_b_maxprice','e.g. 5000000')}
+        </div>
+
+        <!-- Financing type + Min cap rate -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+          <div>
+            <label style="${_liLabelStyle()}">Financing Type</label>
+            <select id="li_b_financing" style="${_liInputStyle()}">
+              <option value="">Select...</option>
+              <option value="cash">💵 Cash</option>
+              <option value="financing">🏦 Financing</option>
+              <option value="mixed">⚖️ Mixed / Depends on deal</option>
+            </select>
+          </div>
+          ${_liField('Minimum Cap Rate (%)','li_b_caprate','number','e.g. 6.5','1fr')}
+        </div>
+      `)}
+
+      ${_liSection('📍 Target Areas', `
+        <div style="font-size:12px;color:#64748b;margin-bottom:10px;">Select all NJ counties this buyer is actively looking in</div>
+        <div id="li_b_counties" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">
+          ${NJ_COUNTIES.map(c=>`<div id="li_b_co_${c.replace(' ','_')}" onclick="_liToggleCounty('${c}')"
+            style="background:#f1f5f9;border:2px solid #e2e8f0;border-radius:99px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;transition:all 0.15s;color:#475569;">${c}</div>`).join('')}
+        </div>
+
+        <!-- Preferred Cities subsection — mirrors the pattern from the Buyer Criteria profile page -->
+        <div style="border-top:1px solid #e2e8f0;padding-top:14px;margin-top:6px;">
+          <label style="${_liLabelStyle()}">📍 Preferred Cities / Towns <span style="color:#94a3b8;font-weight:400;">(optional — click ✕ to remove)</span></label>
+          <div id="li_b_city_pills" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px;min-height:28px;padding:6px;background:#f8faff;border:1px solid #e2e8f0;border-radius:8px;"></div>
+          <div style="position:relative;margin-bottom:4px;">
+            <input id="li_b_city_input" placeholder="Type city name to search NJ municipalities..."
+              oninput="_liCitySearch(this.value)"
+              onkeydown="if(event.key==='Escape'){document.getElementById('li_b_city_dropdown').style.display='none';}"
+              autocomplete="off"
+              style="${_liInputStyle()}"/>
+            <div id="li_b_city_dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid #e2e8f0;border-radius:0 0 8px 8px;max-height:180px;overflow-y:auto;z-index:200;box-shadow:0 4px 12px rgba(0,0,0,0.15);"></div>
+          </div>
+          <div style="font-size:10px;color:#94a3b8;margin-top:2px;">Searchable list of all NJ municipalities — uniform spelling guaranteed.</div>
+          <input type="hidden" id="li_b_cities_hidden" value=""/>
+        </div>
+
+        ${_liTextarea('Additional Location Notes','li_b_locnotes','Specific towns, zip codes, neighborhoods...',2)}
       `)}
 
       ${_liSection('🏗️ Asset Types They Buy *', `
         ${_liAssetSelector('b')}
         <div id="li_b_conditional"></div>
-      `)}
-
-      ${_liSection('📍 Target Areas — NJ Counties', `
-        <div style="font-size:12px;color:#64748b;margin-bottom:10px;">Select all counties this buyer is actively looking in</div>
-        <div id="li_b_counties" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
-          ${NJ_COUNTIES.map(c=>`<div id="li_b_co_${c.replace(' ','_')}" onclick="_liToggleCounty('${c}')"
-            style="background:#f1f5f9;border:2px solid #e2e8f0;border-radius:99px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;transition:all 0.15s;color:#475569;">${c}</div>`).join('')}
-        </div>
-        ${_liTextarea('Additional Location Notes','li_b_locnotes','Specific towns, zip codes, neighborhoods...',2)}
       `)}
 
       ${_liSection('💼 Investment Profile', `
@@ -16982,9 +17036,86 @@ function _liRenderBuyerForm(){
 
       <button onclick="_liSubmitBuyer()" id="li_b_submit"
         style="width:100%;background:linear-gradient(135deg,#14532d,#166534);color:#fff;border:none;padding:16px;font-size:16px;font-weight:700;border-radius:10px;cursor:pointer;">
-        ✓ Submit Buyer Lead to Airtable
+        ✓ Submit Buyer Lead
       </button>
     </div>`;
+}
+
+// v102.14: Deal Dependent toggle — hides/shows the price range inputs when
+// the buyer's budget depends on the specific deal.
+function _liBuyerToggleDealDependent(){
+  const chk = document.getElementById('li_b_deal_dependent');
+  const wrap = document.getElementById('li_b_price_wrap');
+  if(!chk || !wrap) return;
+  if(chk.checked){
+    wrap.style.opacity = '0.4';
+    wrap.style.pointerEvents = 'none';
+    // Clear the values so they don't get saved as a binding range
+    const min = document.getElementById('li_b_minprice');
+    const max = document.getElementById('li_b_maxprice');
+    if(min) min.value = '';
+    if(max) max.value = '';
+  } else {
+    wrap.style.opacity = '1';
+    wrap.style.pointerEvents = 'auto';
+  }
+}
+
+// v102.14: NJ municipality autocomplete for the buyer intake form.
+// Parallels the _bc* helpers on the Buyer Criteria profile page, but
+// targets the li_b_city_* element IDs so both forms can coexist.
+function _liCitySearch(q){
+  const dd = document.getElementById('li_b_city_dropdown');
+  if(!dd) return;
+  if(!q || q.length < 2){ dd.style.display='none'; return; }
+  if(typeof _NJ_MUNICIPALITIES === 'undefined'){ dd.style.display='none'; return; }
+  const matches = _NJ_MUNICIPALITIES.filter(c => c.toLowerCase().includes(q.toLowerCase())).slice(0, 10);
+  if(!matches.length){ dd.style.display='none'; return; }
+  dd.innerHTML = matches.map(c => `
+    <div onclick="_liAddCity('${c.replace(/'/g, "\\'")}')"
+      style="padding:8px 12px;cursor:pointer;font-size:12px;color:#1a3a6e;"
+      onmouseenter="this.style.background='#e8f0fe'" onmouseleave="this.style.background=''">
+      📍 ${c}, NJ
+    </div>`).join('');
+  dd.style.display = 'block';
+}
+
+function _liAddCity(cityName){
+  const pills = document.getElementById('li_b_city_pills');
+  if(!pills) return;
+  // Skip duplicates
+  const existing = Array.from(pills.querySelectorAll('[data-city]')).map(el => el.getAttribute('data-city'));
+  if(existing.includes(cityName)){
+    const inp = document.getElementById('li_b_city_input');
+    if(inp){ inp.value = ''; inp.focus(); }
+    const dd = document.getElementById('li_b_city_dropdown');
+    if(dd) dd.style.display = 'none';
+    return;
+  }
+  // Create pill
+  const pill = document.createElement('span');
+  pill.setAttribute('data-city', cityName);
+  pill.style.cssText = 'background:#7c3aed;color:#fff;padding:4px 10px;border-radius:99px;font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:5px;cursor:pointer;';
+  pill.title = 'Click to remove';
+  pill.innerHTML = `${cityName} <span style="opacity:0.75;font-size:10px;">✕</span>`;
+  pill.onclick = () => { pill.remove(); _liSyncCities(); };
+  pills.appendChild(pill);
+  _liSyncCities();
+  // Clear the input, keep focus for the next entry
+  const inp = document.getElementById('li_b_city_input');
+  if(inp){ inp.value = ''; inp.focus(); }
+  const dd = document.getElementById('li_b_city_dropdown');
+  if(dd) dd.style.display = 'none';
+}
+
+function _liSyncCities(){
+  const pills = document.getElementById('li_b_city_pills');
+  const hidden = document.getElementById('li_b_cities_hidden');
+  if(!pills || !hidden) return;
+  const names = Array.from(pills.querySelectorAll('[data-city]'))
+    .map(el => el.getAttribute('data-city'))
+    .filter(Boolean);
+  hidden.value = names.join(', ');
 }
 
 function _liToggleCounty(county){
@@ -17040,10 +17171,14 @@ function _liBuyerAssetFields(id){
     </div>`;
 
   if(id==='office') return `
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px;">
       ${g('Min SF','minsf','number','e.g. 3000')}
       ${g('Max SF','maxsf','number','e.g. 30000')}
       <div><label style="${_liLabelStyle()}">Class Preference</label><select id="li_b_office_class" style="${_liInputStyle()}"><option value="">Any</option><option>A</option><option>B</option><option>C</option><option>Medical</option></select></div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;">
+      ${g('Min # of Tenants','mintenants','number','e.g. 1')}
+      ${g('Max # of Tenants','maxtenants','number','e.g. 20')}
     </div>`;
 
   if(id==='land') return `
@@ -17168,15 +17303,23 @@ async function _liSubmitBuyer(){
 
       // 2. Build the ace_buyer_criteria row directly (no SB_BC_MAP indirection
       //    needed here since we're writing snake_case columns straight in)
+      const dealDependent = document.getElementById('li_b_deal_dependent')?.checked === true;
       const bcRow = {
         contact_id: contactId,
         date_added: new Date().toISOString().slice(0,10),
         desired_property_types: assetLabels || null,
         preferred_states: (_li.counties && _li.counties.length) ? 'NJ' : null,
         preferred_counties: _li.counties && _li.counties.length ? _li.counties.join(', ') : null,
+        // v102.14: Preferred Cities from the NJ municipality autocomplete
+        preferred_cities: gv('li_b_cities_hidden') || null,
         location_preferences: gv('li_b_locnotes') || null,
         other_requirements: [gv('li_b_notes'), investType ? `Investor Type: ${investType}` : '', assetCriteria].filter(Boolean).join('\n\n') || null,
         deals_sent_notes: gv('li_b_lastdeal') || null,
+        // v102.14: "How They Buy" card — budget range, deal-dependent flag, financing, cap rate
+        min_purchase_price: dealDependent ? null : gn('li_b_minprice'),
+        max_purchase_price: dealDependent ? null : gn('li_b_maxprice'),
+        budget_is_deal_dependent: dealDependent,
+        financing_type: document.getElementById('li_b_financing')?.value || null,
         minimum_cap_rate: gn('li_b_caprate'),
         mf_min_units: gn('li_b_multifamily_minunits'),
         mf_max_units: gn('li_b_multifamily_maxunits'),
@@ -17184,6 +17327,11 @@ async function _liSubmitBuyer(){
         warehouse_min_sf: gn('li_b_warehouse_minsf'),
         warehouse_max_sf: gn('li_b_warehouse_maxsf'),
         warehouse_profile_preference: document.getElementById('li_b_warehouse_profile')?.value || null,
+        office_min_sf: gn('li_b_office_minsf'),
+        // v102.14: office max SF + tenant range
+        office_max_sf: gn('li_b_office_maxsf'),
+        office_min_tenants: gn('li_b_office_mintenants'),
+        office_max_tenants: gn('li_b_office_maxtenants'),
         office_class_preference: document.getElementById('li_b_office_class')?.value || null,
         // v102.9: new asset-type preference columns
         automotive_gas_preference: document.getElementById('li_b_automotive_gas')?.value || null,
@@ -17192,8 +17340,11 @@ async function _liSubmitBuyer(){
         retail_anchor_preference: document.getElementById('li_b_retail_anchor')?.value || null,
         retail_lease_preference: document.getElementById('li_b_retail_lease')?.value || null,
       };
-      // Strip null/empty values so we don't write a bunch of NULLs
+      // Strip null/empty values so we don't write a bunch of NULLs.
+      // Note: we explicitly keep `budget_is_deal_dependent` even when false,
+      // because false is a meaningful state (not "unknown").
       Object.keys(bcRow).forEach(k => {
+        if(k === 'budget_is_deal_dependent') return;
         if(bcRow[k] === null || bcRow[k] === undefined || bcRow[k] === '') delete bcRow[k];
       });
       await _sbPost(SB_TABLES.buyerCriteria, bcRow);

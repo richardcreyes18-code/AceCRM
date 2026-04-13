@@ -11730,25 +11730,25 @@ async function _contactLoadCommunication(contactId){
     const noteCount = notes.filter(n=>n.body&&n.body.length>=20).length;
 
     let html = `
-      <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
-        <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:8px 12px;flex:1;min-width:120px;">
-          <div style="font-size:10px;color:#1e40af;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Calls</div>
-          <div style="font-size:18px;font-weight:700;color:#1e3a8a;">${callCount}</div>
-          <div style="font-size:10px;color:#64748b;">${substantiveCalls} substantive · ${callsWithNotes} with notes</div>
+      <div style="display:flex;gap:14px;margin-bottom:20px;flex-wrap:wrap;">
+        <div style="background:#fff;border:1px solid #e2e8f0;border-left:4px solid #2563eb;border-radius:10px;padding:14px 18px;flex:1;min-width:160px;">
+          <div style="font-size:11px;color:#1e40af;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:4px;">Calls</div>
+          <div style="font-size:28px;font-weight:800;color:#0f172a;line-height:1;margin-bottom:4px;">${callCount}</div>
+          <div style="font-size:11px;color:#64748b;">${substantiveCalls} substantive · ${callsWithNotes} with notes</div>
         </div>
-        <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:8px 12px;flex:1;min-width:120px;">
-          <div style="font-size:10px;color:#92400e;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">FUB Notes</div>
-          <div style="font-size:18px;font-weight:700;color:#78350f;">${noteCount}</div>
-          <div style="font-size:10px;color:#64748b;">synced from FUB</div>
+        <div style="background:#fffbeb;border:1px solid #fde68a;border-left:4px solid #d97706;border-radius:10px;padding:14px 18px;flex:1;min-width:160px;">
+          <div style="font-size:11px;color:#92400e;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:4px;">FUB Notes</div>
+          <div style="font-size:28px;font-weight:800;color:#0f172a;line-height:1;margin-bottom:4px;">${noteCount}</div>
+          <div style="font-size:11px;color:#64748b;">synced from FUB</div>
         </div>
-        <div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:6px;padding:8px 12px;flex:1;min-width:120px;">
-          <div style="font-size:10px;color:#065f46;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Our Outreach</div>
-          <div style="font-size:18px;font-weight:700;color:#064e3b;">${outreach.length}</div>
-          <div style="font-size:10px;color:#64748b;">logged from CRM</div>
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-left:4px solid #16a34a;border-radius:10px;padding:14px 18px;flex:1;min-width:160px;">
+          <div style="font-size:11px;color:#065f46;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:4px;">Our Outreach</div>
+          <div style="font-size:28px;font-weight:800;color:#0f172a;line-height:1;margin-bottom:4px;">${outreach.length}</div>
+          <div style="font-size:11px;color:#64748b;">logged from CRM</div>
         </div>
       </div>
-      ${fubContactId ? `<div style="font-size:10px;color:#94a3b8;margin-bottom:10px;">FUB Contact ID: ${fubContactId} · Showing most recent ${items.length} events</div>` : ''}
-      <div style="display:flex;flex-direction:column;gap:8px;">`;
+      ${fubContactId ? `<div style="font-size:11px;color:#94a3b8;margin-bottom:14px;">FUB Contact ID: ${fubContactId} · Showing most recent ${items.length} events</div>` : ''}
+      <div style="display:flex;flex-direction:column;gap:1px;background:#e2e8f0;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">`;
 
     for(const item of items){
       const meta = TYPE_META[item.type];
@@ -11757,46 +11757,46 @@ async function _contactLoadCommunication(contactId){
         const dirIcon = c.direction === 'inbound' ? '⬇ IN' : '⬆ OUT';
         const dirColor = c.direction === 'inbound' ? '#16a34a' : '#2563eb';
         html += `
-          <div style="background:${meta.bg};border:1px solid ${meta.border};border-radius:8px;padding:10px 14px;">
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
-              <div style="font-size:16px;">${meta.icon}</div>
-              <div style="font-size:10px;font-weight:700;color:${meta.color};letter-spacing:0.5px;">${meta.label}</div>
-              <div style="font-size:10px;font-weight:600;color:${dirColor};background:#fff;padding:1px 6px;border-radius:3px;border:1px solid ${dirColor};">${dirIcon}</div>
-              <div style="font-size:10px;color:#64748b;background:#fff;padding:1px 6px;border-radius:3px;">⏱ ${fmtDuration(c.duration)}</div>
-              ${c.outcome ? `<div style="font-size:10px;color:#64748b;background:#fff;padding:1px 6px;border-radius:3px;">${escapeHtml(c.outcome)}</div>` : ''}
-              <div style="margin-left:auto;font-size:10px;color:#64748b;">${fmtDate(c.date)}</div>
+          <div style="background:#fff;padding:12px 16px;">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:${c.note?'8px':'0'};">
+              <div style="font-size:14px;">${meta.icon}</div>
+              <div style="font-size:11px;font-weight:700;color:${meta.color};letter-spacing:0.5px;">CALL</div>
+              <div style="font-size:10px;font-weight:600;color:${dirColor};background:${c.direction==='inbound'?'#f0fdf4':'#eff6ff'};padding:2px 8px;border-radius:4px;border:1px solid ${dirColor};">${dirIcon}</div>
+              <div style="font-size:11px;color:#64748b;">⏱ ${fmtDuration(c.duration)}</div>
+              ${c.outcome ? `<div style="font-size:11px;color:#64748b;">${escapeHtml(c.outcome)}</div>` : ''}
+              <div style="margin-left:auto;font-size:11px;color:#94a3b8;">${fmtDate(c.date)}</div>
             </div>
-            ${c.note ? `<div style="font-size:12px;color:#1e293b;white-space:pre-wrap;background:#fff;padding:8px 10px;border-radius:5px;border:1px solid ${meta.border};margin-top:4px;line-height:1.5;">${escapeHtml(c.note)}</div>` : '<div style="font-size:10px;color:#94a3b8;font-style:italic;padding:2px 2px 0;">No agent note</div>'}
+            ${c.note ? `<div style="font-size:13px;color:#1e293b;white-space:pre-wrap;line-height:1.55;padding-left:22px;">${escapeHtml(c.note)}</div>` : '<div style="font-size:11px;color:#cbd5e1;font-style:italic;padding-left:22px;">No agent note</div>'}
           </div>`;
       } else if(item.type === 'note'){
         const n = item.data;
         const body = cleanNoteBody(n.body);
         const truncated = body.length > 600 ? body.substring(0,600)+'…' : body;
         html += `
-          <div style="background:${meta.bg};border:1px solid ${meta.border};border-radius:8px;padding:10px 14px;">
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
-              <div style="font-size:16px;">${meta.icon}</div>
-              <div style="font-size:10px;font-weight:700;color:${meta.color};letter-spacing:0.5px;">${meta.label}</div>
-              ${n.subject ? `<div style="font-size:10px;color:#64748b;background:#fff;padding:1px 6px;border-radius:3px;">${escapeHtml(n.subject)}</div>` : ''}
-              <div style="margin-left:auto;font-size:10px;color:#64748b;">${fmtDate(n.date)}</div>
+          <div style="background:#fffbeb;padding:12px 16px;">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+              <div style="font-size:14px;">${meta.icon}</div>
+              <div style="font-size:11px;font-weight:700;color:${meta.color};letter-spacing:0.5px;">FUB NOTE</div>
+              ${n.subject ? `<div style="font-size:11px;color:#64748b;">${escapeHtml(n.subject)}</div>` : ''}
+              <div style="margin-left:auto;font-size:11px;color:#94a3b8;">${fmtDate(n.date)}</div>
             </div>
-            <div style="font-size:12px;color:#1e293b;white-space:pre-wrap;background:#fff;padding:8px 10px;border-radius:5px;border:1px solid ${meta.border};margin-top:4px;line-height:1.5;">${escapeHtml(truncated)}</div>
+            <div style="font-size:13px;color:#1e293b;white-space:pre-wrap;line-height:1.55;padding-left:22px;">${escapeHtml(truncated)}</div>
           </div>`;
       } else if(item.type === 'outreach'){
         const o = item.data;
         const typeLabel = (o.activity_type||'').toUpperCase() || 'ACTIVITY';
         const statusLabel = (o.response_status||'no_response').replace(/_/g,' ');
         html += `
-          <div style="background:${meta.bg};border:1px solid ${meta.border};border-radius:8px;padding:10px 14px;">
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
-              <div style="font-size:16px;">${meta.icon}</div>
-              <div style="font-size:10px;font-weight:700;color:${meta.color};letter-spacing:0.5px;">${meta.label}</div>
-              <div style="font-size:10px;font-weight:600;color:${meta.color};background:#fff;padding:1px 6px;border-radius:3px;border:1px solid ${meta.border};">${escapeHtml(typeLabel)}</div>
-              <div style="font-size:10px;color:#64748b;background:#fff;padding:1px 6px;border-radius:3px;">${escapeHtml(statusLabel)}</div>
-              ${o.agent_name ? `<div style="font-size:10px;color:#64748b;">by ${escapeHtml(o.agent_name)}</div>` : ''}
-              <div style="margin-left:auto;font-size:10px;color:#64748b;">${fmtDate(o.date)}</div>
+          <div style="background:#f0fdf4;padding:12px 16px;">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:${(o.interest_notes || o.response_notes)?'8px':'0'};">
+              <div style="font-size:14px;">${meta.icon}</div>
+              <div style="font-size:11px;font-weight:700;color:${meta.color};letter-spacing:0.5px;">OUR OUTREACH</div>
+              <div style="font-size:10px;font-weight:600;color:${meta.color};background:#fff;padding:2px 8px;border-radius:4px;border:1px solid ${meta.border};">${escapeHtml(typeLabel)}</div>
+              <div style="font-size:11px;color:#64748b;">${escapeHtml(statusLabel)}</div>
+              ${o.agent_name ? `<div style="font-size:11px;color:#64748b;">by ${escapeHtml(o.agent_name)}</div>` : ''}
+              <div style="margin-left:auto;font-size:11px;color:#94a3b8;">${fmtDate(o.date)}</div>
             </div>
-            ${(o.interest_notes || o.response_notes) ? `<div style="font-size:12px;color:#1e293b;white-space:pre-wrap;background:#fff;padding:8px 10px;border-radius:5px;border:1px solid ${meta.border};margin-top:4px;line-height:1.5;">${escapeHtml(o.interest_notes || o.response_notes)}</div>` : ''}
+            ${(o.interest_notes || o.response_notes) ? `<div style="font-size:13px;color:#1e293b;white-space:pre-wrap;line-height:1.55;padding-left:22px;">${escapeHtml(o.interest_notes || o.response_notes)}</div>` : ''}
           </div>`;
       }
     }

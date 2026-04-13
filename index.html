@@ -3560,7 +3560,7 @@ function clearPendingEdits(){
 }
 
 let _autoSaveTimer = null;
-const AUTO_SAVE_DELAY = 1800; // ms after last change before auto-saving
+const AUTO_SAVE_DELAY = 900; // ms after last change before auto-saving (v102.5: was 1800)
 
 function markDirty(){
   if(!currentDeal) return;
@@ -3568,22 +3568,21 @@ function markDirty(){
   // Don't trigger auto-save when user is filling out a lead intake form
   if(document.getElementById('li_s_name') || document.getElementById('li_b_name')) return;
   _dealDirty = true;
-  const banner = document.getElementById('unsavedBanner');
+  // v102.5: silent auto-save — no orange banner, no "Auto-saving..." toast.
+  // The global Save button still turns amber as a subtle visual hint that
+  // there are unsaved changes, but no distracting popup/banner appears.
   const btn    = document.getElementById('globalSaveBtn');
-  if(banner) banner.style.display = 'block';
   if(btn)    btn.style.background = 'linear-gradient(180deg,#c05000,#a03800)';
 
   // Debounced auto-save: reset timer on every change
   clearTimeout(_autoSaveTimer);
   _autoSaveTimer = setTimeout(async () => {
     if(!_dealDirty || !currentDeal?.id) return;
-    const banner2 = document.getElementById('unsavedBanner');
-    if(banner2) banner2.textContent = '⏳ Auto-saving...';
     try{
       await masterSave();
-      // masterSave calls clearDirty which hides the banner
+      // masterSave clears _dealDirty and resets the Save button color on success
     } catch(e){
-      if(banner2){ banner2.textContent = '⚠ Unsaved Changes'; }
+      console.warn('[autosave] masterSave failed silently:', e);
     }
   }, AUTO_SAVE_DELAY);
 }
@@ -3644,7 +3643,9 @@ async function masterSave(){
     // Update the CAPTURED deal object (not currentDeal which may have changed)
     Object.assign(dealToSave, fields);
     clearDirty();
-    showSaveConfirm('✓ Saved');
+    // v102.5: no success toast — the Save button color reset is visual feedback
+    // enough. Manual save (clicking the global Save button) still works the same
+    // way, but without the noisy green toast popping up every 900ms.
     // Refresh sidebar to reflect any address/stage changes
     buildSidebar(document.getElementById('sideSearch')?.value||'');
   } catch(e){
@@ -22679,8 +22680,10 @@ function mortCalc(){
 let _finAutoSaveTimer = null;
 let _finAutoSaveWired = false;   // tab-scoped: reset when renderFinancialTab runs
 
-// Fire after 1500ms of input idle. Calls saveFinInputs which internally
+// Fire after 900ms of input idle. Calls saveFinInputs which internally
 // updates currentDeal and fires _finPulseSaveDot on success.
+// v102.5: reduced from 1500ms → 900ms for snappier feel. Matches the
+// global markDirty auto-save debounce so the whole CRM saves at the same pace.
 function _finScheduleAutoSave(){
   if(!currentDeal || !currentDeal.id) return;
   if(_finAutoSaveTimer) clearTimeout(_finAutoSaveTimer);
@@ -22688,7 +22691,7 @@ function _finScheduleAutoSave(){
     _finAutoSaveTimer = null;
     try { saveFinInputs(currentDeal.id); }
     catch(e) { console.warn('[OM] Auto-save failed:', e); }
-  }, 1500);
+  }, 900);
 }
 
 // Wire event delegation on the Financial tab's root element. Called once
@@ -22892,7 +22895,9 @@ function saveFinInputs(dealId){
         // consumers (OM generator, summary header, etc.) see fresh values
         // without a round-trip reload. Mirrors the saveNotes/savePriority pattern.
         Object.assign(currentDeal, fields);
-        showSaveConfirm(`✓ ${Object.keys(fields).length} fields saved`);
+        // v102.5: removed showSaveConfirm toast — the green pulse dot is the
+        // only visual feedback needed. Toast was creating visual clutter during
+        // rapid typing.
         // v102.2: pulse the green dot to indicate a real save fired
         if(typeof _finPulseSaveDot === 'function') _finPulseSaveDot();
       }

@@ -1005,6 +1005,17 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   <button class="nav-btn" onclick="setNav(this,'fieldmap')" style="color:#2060b0;">⇄ Field Map</button>
   <div class="nav-spacer"></div>
   <span class="nav-user" id="navUser">Welcome, Ricky</span>
+  <!-- v102.7: online/offline indicator. Green when Supabase is reachable,
+       red with tooltip when offline. Listens to window.online / window.offline
+       events. Users need internet for the CRM to save — this tells them why
+       saves fail if connectivity drops. -->
+  <span id="netStatusIndicator" title="Online — connected to Supabase"
+    style="display:inline-flex;align-items:center;gap:6px;padding:4px 10px;margin-right:8px;
+           background:rgba(34,197,94,0.1);border:1px solid rgba(34,197,94,0.3);
+           border-radius:12px;font-size:11px;font-weight:600;color:#16a34a;">
+    <span id="netStatusDot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;"></span>
+    <span id="netStatusText">Online</span>
+  </span>
   <button class="nav-btn" onclick="syncData()" id="syncNavBtn">↻ Sync</button>
 </div>
 
@@ -1127,8 +1138,10 @@ const SB_TABLES = {
   buyerCriteria: 'ace_buyer_criteria',
   tasks:         'ace_tasks',
   buyerInterests:'ace_buyer_interests',
-  submissionBuyer:  'ace_submissions_buyer',
-  submissionSeller: 'ace_submissions_seller',
+  // v102.12: submissionBuyer / submissionSeller removed. The tables they
+  // referenced (ace_submissions_buyer, ace_submissions_seller) were dropped
+  // in the v102.12 migration after v102.9 rewired lead intake to write
+  // directly to the real tables.
   documents:     'ace_documents',
   tenantMix:     'ace_properties'  // tenant mix lives in the property record
 };
@@ -1194,6 +1207,24 @@ const SB_PROP_MAP = {
   other_mgmt_monthly:'Other Mgmt (Monthly)',
   // v102.4: JSONB column for pro forma expense per-line values
   pro_forma_expense_breakdown:'Pro Forma Expense Breakdown',
+  // v102.6: Final localStorage → Supabase migration. These 6 fields used to
+  // only live in the fin_${dealId} localStorage blob, which meant teammates
+  // couldn't see each other's updates. Now persisted to dedicated columns.
+  non_revenue_units_pct:'Non-Revenue Units (%)',
+  proforma_non_revenue_units_pct:'Proforma Non-Revenue Units (%)',
+  gri_source:'GRI Source',
+  down_payment_type:'Down Payment Type',
+  proforma_down_payment_pct:'Proforma Down Payment (%)',
+  proforma_down_payment_type:'Proforma Down Payment Type',
+  // v102.8: Lot Size Unit radio toggle persistence (sf / acres)
+  lot_size_unit:'Lot Size Unit',
+  // v102.8: Total Lot Size — latent bug, input had no DB column or collect path
+  total_lot_size:'Total Lot Size',
+  // v102.9: lead intake asset-type-specific fields
+  automotive_gas_type:'Automotive Gas Type',
+  automotive_wash_type:'Automotive Wash Type',
+  retail_lease_type:'Retail Lease Type',
+  shopping_lease_type:'Shopping Lease Type',
   mortgage1_loan_type:'Mortgage 1 Loan Type', mortgage1_principal:'Mortgage 1 Principal Balance',
   mortgage1_amortization_yrs:'Mortgage 1 Amortization (Years)',
   mortgage1_interest_rate_pct:'Mortgage 1 Interest Rate (%)',
@@ -1276,7 +1307,16 @@ const SB_BC_MAP = {
   office_min_sf:'Office Min SF', office_class_preference:'Office Class Preference',
   land_min_acreage:'Land Min Acreage', land_intended_use:'Land Intended Use',
   other_requirements:'Other Requirements ', deals_sent_notes:'Deals Sent Notes',
-  is_vip_buyer:'Is VIP Buyer'
+  is_vip_buyer:'Is VIP Buyer',
+  // v102.9: columns added for buyer lead intake fields that were previously
+  // collected in the UI but dropped on submit due to missing SB_BC_MAP entries
+  preferred_counties:'Preferred Counties',
+  automotive_gas_preference:'Automotive Gas Preference',
+  automotive_type_preference:'Automotive Type Preference',
+  land_zoning_preference:'Land Zoning Preference',
+  retail_anchor_preference:'Retail Anchor Preference',
+  retail_lease_preference:'Retail Lease Preference',
+  warehouse_profile_preference:'Warehouse Profile Preference'
 };
 
 // Tasks map (ace_tasks)
@@ -1916,6 +1956,14 @@ async function syncData(){
     // Land on Dashboard by default, not the first deal
     showDashboard();
     setTimeout(()=>_bgGeocodeAll(), 3000);
+    // v102.6: run the one-shot legacy localStorage migration in the background.
+    // Pushes any stale fin_${dealId} blobs on this laptop to Supabase so no data
+    // is lost when we stop reading localStorage. Silent unless something's wrong.
+    setTimeout(() => {
+      _migrateLegacyFinLocalStorage().catch(e => {
+        console.warn('[v102.6 migration] Unhandled error:', e);
+      });
+    }, 2000);
   }catch(e){
     if(typeof _splashDone==='function') _splashDone();
     const msg = e.name==='AbortError'
@@ -3202,8 +3250,8 @@ async function saveEditAddressModal(){
   try {
     if(isSupabase()){
       const sbData = _atToSb(fields, SB_PROP_MAP);
-      // Filter out fields that don't have a column mapping (Property Name, Complex Name, Municipality)
-      // — the SB_PROP_MAP only has the columns that exist in ace_properties
+      // v102.11: All 4 address fields (Property Name, Complex Name, Municipality,
+      // Simple County) are mapped in SB_PROP_MAP and have columns in ace_properties.
       await _sbPatch(SB_TABLES.properties, currentDeal.id, sbData);
     } else {
       const cfg = getConfig();
@@ -3741,6 +3789,12 @@ function collectAllDealFields(){
   s(fields,'No. of Stories',        getNum('noStories'));
   s(fields,'No. of Parking Spaces', getNum('prop_parkingSpaces') || getNum('parkingSpaces'));
   const parkRatio = getVal('prop_parkingRatio'); if(parkRatio) fields['Parking Ratio'] = parkRatio;
+  // v102.8: Total Lot Size was previously wired with oninput="markDirty()"
+  // but never collected here — values typed silently vanished. Now collected.
+  s(fields,'Total Lot Size',        getNum('prop_lotSize'));
+  // v102.8: Lot size unit (sf vs acres) — the radio toggle persists now too
+  const lotUnit = getRadio('lotUnit');
+  if(lotUnit) fields['Lot Size Unit'] = lotUnit;
   s(fields,'Roof Type',   getVal('roofType')||null);
   s(fields,'Foundation',  getVal('foundationType')||null);
   s(fields,'Exterior',    getVal('exteriorType')||null);
@@ -3753,6 +3807,9 @@ function collectAllDealFields(){
   // Property info text
   const propDesc = getVal('prop_propDesc');  if(propDesc) fields['General Property Notes'] = propDesc;
   const locDesc  = getVal('prop_locDesc');   if(locDesc)  fields['Location Description']   = locDesc;
+  // v102.11: AI clarifying notes had markDirty() on oninput but was never collected.
+  // Every value users typed here silently vanished on save.
+  const aiClarify = getVal('prop_aiClarifying'); if(aiClarify) fields['AI Clarifying Notes'] = aiClarify;
 
   // Unit mix
   s(fields,'No. of Units',           getNum('um_totalUnits')||getNum('fin_aUnits'));
@@ -4715,8 +4772,8 @@ function renderPropertyTab(d){
                 <label class="pd-lbl">Total Lot Size</label>
                 <div class="pd-row">
                   <input id="prop_lotSize" class="form-input" value="${d['Total Lot Size']||''}" placeholder="e.g. 15.5" oninput="markDirty()"/>
-                  <label style="font-size:11px;color:#334155;display:inline-flex;align-items:center;gap:3px;white-space:nowrap;"><input type="radio" name="lotUnit" id="prop_lotSF" value="sf" ${d['Lot Size Unit']==='sf'?'checked':''}/>SF</label>
-                  <label style="font-size:11px;color:#334155;display:inline-flex;align-items:center;gap:3px;white-space:nowrap;"><input type="radio" name="lotUnit" id="prop_lotAcres" value="acres" ${d['Lot Size Unit']!=='sf'?'checked':''}/>Ac</label>
+                  <label style="font-size:11px;color:#334155;display:inline-flex;align-items:center;gap:3px;white-space:nowrap;"><input type="radio" name="lotUnit" id="prop_lotSF" value="sf" ${d['Lot Size Unit']==='sf'?'checked':''} onchange="markDirty()"/>SF</label>
+                  <label style="font-size:11px;color:#334155;display:inline-flex;align-items:center;gap:3px;white-space:nowrap;"><input type="radio" name="lotUnit" id="prop_lotAcres" value="acres" ${d['Lot Size Unit']!=='sf'?'checked':''} onchange="markDirty()"/>Ac</label>
                 </div>
               </div>
               <div class="pd-field">
@@ -6856,18 +6913,239 @@ async function _submitAddOffer(dealId){
   }
 }
 
-function renderFinancialTab(d){
-  // ── Pull saved fin inputs from localStorage first ──────────
-  const fKey = 'fin_'+d.id;
-  let fi = {};
-  try{ fi=JSON.parse(_store.get(fKey)||'{}'); }catch(e){}
+// ═══════════════════════════════════════════════════════════════════
+//  ONE-SHOT LEGACY LOCALSTORAGE MIGRATION (v102.6)
+//
+//  Before v102.6, the Financial Analysis tab stored per-deal state in
+//  localStorage keys named fin_${dealId}. This could lose data when
+//  teammates opened the same deal on different laptops. v102.6 makes
+//  Supabase the sole source of truth and adds this migration to ensure
+//  no existing data is lost:
+//
+//    1. On app load (after syncData succeeds), find all fin_* keys
+//    2. For each, PATCH the matching Supabase row with the localStorage
+//       values (using the same field mapping saveFinInputs uses)
+//    3. Preserve the expand/collapse UI state by moving it to a smaller
+//       fin_ui_${dealId} key (per the "views aren't critical" rule)
+//    4. On successful Supabase write, delete the fin_${dealId} blob
+//    5. On failure, keep the blob so we retry next app load
+//
+//  Runs at most once per app session. Silent unless something interesting
+//  happens (console.info on migrations, console.warn on failures).
+// ═══════════════════════════════════════════════════════════════════
+let _finLegacyMigrationDone = false;
 
-  // ── DB fallback seed for detailed expense line items ───────
-  // When localStorage is empty (new deal, or teammate opening on a different
-  // machine for the first time), populate the per-category expense inputs
-  // from their corresponding ace_properties columns so nothing looks blank.
-  // Reverse of the expMap used in _extractFinFields.
-  // v102.4: expanded to cover all 23 actual-side expense sub-categories.
+async function _migrateLegacyFinLocalStorage(){
+  if(_finLegacyMigrationDone) return;
+  _finLegacyMigrationDone = true; // only run once per session even if called multiple times
+
+  // Collect all fin_<uuid> keys from localStorage
+  const finKeys = [];
+  try {
+    for(let i = 0; i < localStorage.length; i++){
+      const k = localStorage.key(i);
+      if(k && k.startsWith('fin_') && !k.startsWith('fin_ui_')){
+        // fin_ UUIDs are 36 chars; "fin_" + 36 = 40
+        if(k.length >= 10) finKeys.push(k);
+      }
+    }
+  } catch(e) {
+    console.warn('[v102.6 migration] Could not enumerate localStorage:', e.message);
+    return;
+  }
+
+  if(finKeys.length === 0) return; // nothing to migrate
+
+  console.info(`[v102.6 migration] Found ${finKeys.length} legacy fin_ blob(s). Migrating to Supabase…`);
+
+  // Mapping from localStorage fi.X key → Supabase column name (via airtableUpdate).
+  // Mirrors saveFinInputs but operates on the blob instead of DOM inputs.
+  const fiKeyMap = {
+    // Income
+    aGrossRent:   { field: 'Gross Rental Income (Monthly)',   transform: v => Math.round(Number(v)/12) },  // blob stores yearly, column is monthly
+    aVacancy:     { field: 'Vacancy Rate (%)' },
+    aOtherInc:    { field: 'Other Income (Monthly)',          transform: v => Math.round(Number(v)/12) },
+    aRUBS_mo:     { field: 'RUBS/CAM Income (Monthly)' },
+    aOI_mo:       { field: 'Other Income (Monthly)' },
+    aNRU:         { field: 'Non-Revenue Units (%)' },
+    aGRISource:   { field: 'GRI Source' },
+    pGrossRent:   { field: 'Proforma Gross Rent (Monthly)',   transform: v => Math.round(Number(v)/12) },
+    pVacancy:     { field: 'Vacancy Rate Proforma (%)' },
+    pOI_mo:       { field: 'Proforma Other Income (Monthly)' },
+    pRUBS_mo:     { field: 'Proforma RUBS/CAM (Monthly)' },
+    pNRU:         { field: 'Proforma Non-Revenue Units (%)' },
+    // Size & Building
+    aNetRentSF:   { field: 'Net Rentable SF' },
+    aTotalSF:     { field: 'Total Building SF' },
+    aUnits:       { field: 'No. of Units' },
+    aOccupancy:   { field: 'Occupancy (%)' },
+    // Purchase / Cash
+    askPrice:     { field: 'Asking Price' },
+    offerPrice:   { field: 'Offer Price' },
+    aDownPct:     { field: 'Down Payment (%)' },
+    pDownPct:     { field: 'Proforma Down Payment (%)' },
+    aDpType:      { field: 'Down Payment Type' },
+    pDpType:      { field: 'Proforma Down Payment Type' },
+    aRenovation:  { field: 'Renovation Expense' },
+    renovation:   { field: 'Renovation Expense' },  // legacy alias
+    // Capital reserve
+    aCapRes_mo:   { field: 'Capital Reserve (Monthly)' },
+  };
+
+  // Per-item expense map: fi key 'a_<id>_mo' → Supabase column
+  // Same id-to-column mapping saveFinInputs uses
+  const expItemToField = {
+    admin_mgmt:  'Admin Expenses (Monthly)',
+    admin_acct:  'Accounting (Monthly)',
+    admin_legal: 'Legal (Monthly)',
+    admin_other: 'Other Admin (Monthly)',
+    rm_jan:      'Janitorial (Monthly)',
+    rm_land:     'Landscaping (Monthly)',
+    rm_maint:    'Maintenance & Repair Costs (Monthly)',
+    rm_sal:      'Maintenance & Repair Salary (Monthly)',
+    rm_pool:     'Pool (Monthly)',
+    rm_sup:      'Supplies (Monthly)',
+    util_elec:   'Electric (Monthly)',
+    util_gas:    'Gas (Monthly)',
+    util_water:  'Water & Sewer (Monthly)',
+    util_trash:  'Trash (Monthly)',
+    util_other:  'Other Utilities (Monthly)',
+    misc_adv:    'Miscellaneous Expenses (Monthly)',
+    misc_other:  'Other Misc (Monthly)',
+    tax_prop:    'Property Tax (Monthly)',
+    tax_other:   'Other Tax (Monthly)',
+    ins_prop:    'Insurance (Monthly)',
+    ins_liab:    'Liability Insurance (Monthly)',
+    pm_fee:      'Property Management Fee (Monthly)',
+    pm_other:    'Other Mgmt (Monthly)',
+  };
+
+  // Mortgage fields
+  const mortFieldMap = {
+    bal:       n => `Mortgage ${n} Principal Balance`,
+    amort:     n => `Mortgage ${n} Amortization (Years)`,
+    rate:      n => `Mortgage ${n} Interest Rate (%)`,
+    type:      n => `Mortgage ${n} Loan Type`,
+    assumable: n => `Mortgage ${n} Assumable`,
+    yrsrem:    n => `Mortgage ${n} Years Remaining`,
+  };
+
+  let migratedCount = 0;
+  let failedCount = 0;
+
+  for(const key of finKeys){
+    const dealId = key.slice(4); // strip "fin_"
+    if(!dealId || dealId.length < 10) continue; // guard against bad keys
+
+    let blob = null;
+    try { blob = JSON.parse(localStorage.getItem(key) || '{}'); } catch(e) { blob = null; }
+    if(!blob || typeof blob !== 'object') {
+      // Unparseable blob — delete it, nothing to save
+      try { localStorage.removeItem(key); } catch(e) {}
+      continue;
+    }
+
+    // Build the Supabase PATCH payload from the blob
+    const fields = {};
+
+    // 1. Simple named fields
+    for(const [fiKey, mapping] of Object.entries(fiKeyMap)){
+      if(blob[fiKey] !== undefined && blob[fiKey] !== null && blob[fiKey] !== ''){
+        const val = mapping.transform ? mapping.transform(blob[fiKey]) : blob[fiKey];
+        if(val !== null && val !== undefined && val !== '' && !Number.isNaN(val)){
+          fields[mapping.field] = val;
+        }
+      }
+    }
+
+    // 2. Per-item expenses (actual side — individual columns)
+    for(const [itemId, field] of Object.entries(expItemToField)){
+      const blobKey = 'a_' + itemId + '_mo';
+      if(blob[blobKey] !== undefined && blob[blobKey] !== null && blob[blobKey] !== ''){
+        const n = Number(blob[blobKey]);
+        if(!Number.isNaN(n) && n > 0) fields[field] = n;
+      }
+    }
+
+    // 3. Pro forma expenses → JSONB blob
+    const proFormaBreakdown = {};
+    let hasProForma = false;
+    for(const itemId of Object.keys(expItemToField)){
+      const blobKey = 'p_' + itemId + '_mo';
+      if(blob[blobKey] !== undefined && blob[blobKey] !== null && blob[blobKey] !== ''){
+        const n = Number(blob[blobKey]);
+        if(!Number.isNaN(n) && n > 0){
+          proFormaBreakdown[itemId] = n;
+          hasProForma = true;
+        }
+      }
+    }
+    if(hasProForma) fields['Pro Forma Expense Breakdown'] = proFormaBreakdown;
+
+    // 4. Mortgages
+    for(let n = 1; n <= 3; n++){
+      for(const [suffix, colFn] of Object.entries(mortFieldMap)){
+        const blobKey = 'mort' + n + '_' + suffix;
+        if(blob[blobKey] !== undefined && blob[blobKey] !== null && blob[blobKey] !== ''){
+          fields[colFn(n)] = blob[blobKey];
+        }
+      }
+    }
+
+    // 5. Preserve expand/collapse UI state in a separate small key
+    const uiState = {};
+    ['exp_admin','exp_rm','exp_util','exp_misc','exp_tax','exp_ins','exp_pm','exp_mortgage'].forEach(k => {
+      if(blob[k] !== undefined) uiState[k] = blob[k];
+    });
+    if(Object.keys(uiState).length > 0){
+      try { localStorage.setItem('fin_ui_' + dealId, JSON.stringify(uiState)); } catch(e) {}
+    }
+
+    // If there's nothing to push to Supabase, just delete the key and move on
+    if(Object.keys(fields).length === 0){
+      try { localStorage.removeItem(key); } catch(e) {}
+      continue;
+    }
+
+    // Push to Supabase via the same path saveFinInputs uses
+    try {
+      const ok = await airtableUpdate(dealId, fields);
+      if(ok){
+        // Update currentDeal if this deal happens to be loaded
+        if(currentDeal && currentDeal.id === dealId) Object.assign(currentDeal, fields);
+        // Delete the migrated blob
+        localStorage.removeItem(key);
+        migratedCount++;
+      } else {
+        failedCount++;
+        console.warn(`[v102.6 migration] Supabase write failed for ${dealId}, blob preserved for retry`);
+      }
+    } catch(e) {
+      failedCount++;
+      console.warn(`[v102.6 migration] Error migrating ${dealId}:`, e.message);
+      // Don't delete the blob — retry next session
+    }
+  }
+
+  if(migratedCount > 0 || failedCount > 0){
+    console.info(`[v102.6 migration] Complete. Migrated: ${migratedCount}, Failed: ${failedCount}`);
+  }
+}
+
+function renderFinancialTab(d){
+  // v102.6: Supabase is now the source of truth for all Financial Analysis
+  // fields. Previously this tab read from a fin_${dealId} localStorage blob
+  // as primary source, which caused teammates to see different data on
+  // different laptops. Now fi starts empty and is populated entirely from
+  // the deal object (which came from Supabase on load). See _omMigrateLegacyFinLocalStorage
+  // for the one-shot sweep that pushes any stale localStorage data to
+  // Supabase on app load and then deletes the blob.
+  let fi = {};
+
+  // ── DB seed for detailed expense line items ───────────────
+  // Populate the per-category expense inputs from their corresponding
+  // ace_properties columns. This is now the ONLY source — no more
+  // localStorage fallback.
   const _dbExpSeed = {
     // Administrative
     'a_admin_mgmt_mo':  d['Admin Expenses (Monthly)'],
@@ -6921,37 +7199,86 @@ function renderFinancialTab(d){
     });
   }
 
-  // ── Pull from Airtable as fallback only ────────────────────
-  // Ask/Offer price: prefer localStorage (what user typed) over Airtable
-  const ask    = Number(fi.askPrice)   || Number(d['Asking Price'])||0;
-  const offer  = Number(fi.offerPrice) || Number(d['Offer Price'])||0;
+  // ── Pull all values from Supabase (the deal object). ──────
+  // v102.6: No more localStorage — d[...] is the only source of truth.
+  // Each field uses DB column first, sensible default second.
+  const ask    = Number(d['Asking Price'])||0;
+  const offer  = Number(d['Offer Price'])||0;
   const noiAt  = Number(d['NOI'])||0;
   const debt   = Number(d['Annual Debt Service'])||0;
 
-  // Actual inputs (fall back to Airtable where possible)
-  // If localStorage is empty (e.g. on a brand-new deal submitted from lead intake,
-  // or when another teammate opens the deal for the first time on their machine),
-  // fall back to the DB columns so the Gross Rental Income and Expenses fields
-  // aren't blank on the first render. Source of truth is still localStorage once
-  // the user edits anything here, but the DB fallback ensures no data is lost.
-  const aGrossRent   = Number(fi.aGrossRent)  || Number(d['Gross Revenue Yearly']) || (Number(d['Gross Revenue Monthly'])||0)*12 || 0;
-  const aVacancy     = (fi.aVacancy !== null && fi.aVacancy !== undefined) ? Number(fi.aVacancy) : '';
-  const aOtherInc    = Number(fi.aOtherInc)   || 0;
-  const aExpenses    = Number(fi.aExpenses)   || Number(d['Expenses Yearly']) || (Number(d['Expenses Monthly'])||0)*12 || 0;
-  const aDownPct     = Number(fi.aDownPct)    || 25;
-  const pDownPct     = Number(fi.pDownPct)    || aDownPct;
-  const aIntRate     = Number(fi.aIntRate)    || 7;
-  const aAmort       = Number(fi.aAmort)      || 30;
-  const aNetRentSF   = Number(fi.aNetRentSF)  || 0;
-  const aTotalSF     = Number(fi.aTotalSF)    || 0;
-  const aUnits       = Number(fi.aUnits)      || 0;
-  const aOccupancy   = Number(fi.aOccupancy)  || 100;
+  // Actual inputs
+  const aGrossRent   = Number(d['Gross Revenue Yearly']) || (Number(d['Gross Rental Income (Monthly)'])||0)*12 || (Number(d['Gross Revenue Monthly'])||0)*12 || 0;
+  const aVacancy     = (d['Vacancy Rate (%)'] !== null && d['Vacancy Rate (%)'] !== undefined && d['Vacancy Rate (%)'] !== '') ? Number(d['Vacancy Rate (%)']) : '';
+  const aOtherInc    = (Number(d['Other Income (Monthly)'])||0)*12;
+  const aExpenses    = Number(d['Expenses Yearly']) || (Number(d['Expenses Monthly'])||0)*12 || 0;
+  const aDownPct     = Number(d['Down Payment (%)']) || 25;
+  const pDownPct     = Number(d['Proforma Down Payment (%)']) || aDownPct;
+  const aIntRate     = 7;   // global default, no per-deal storage
+  const aAmort       = 30;  // global default, no per-deal storage
+  const aNetRentSF   = Number(d['Net Rentable SF'])  || 0;
+  const aTotalSF     = Number(d['Total Building SF']) || 0;
+  const aUnits       = Number(d['No. of Units']) || Number(d['Number of Units']) || 0;
+  const aOccupancy   = Number(d['Occupancy (%)']) || 100;
 
   // Proforma inputs
-  const pGrossRent   = Number(fi.pGrossRent)  || 0;
-  const pVacancy     = (fi.pVacancy !== null && fi.pVacancy !== undefined) ? Number(fi.pVacancy) : '';
-  const pOtherInc    = Number(fi.pOtherInc)   || 0;
-  const pExpenses    = Number(fi.pExpenses)   || 0;
+  const pGrossRent   = (Number(d['Proforma Gross Rent (Monthly)'])||0)*12;
+  const pVacancy     = (d['Vacancy Rate Proforma (%)'] !== null && d['Vacancy Rate Proforma (%)'] !== undefined && d['Vacancy Rate Proforma (%)'] !== '') ? Number(d['Vacancy Rate Proforma (%)']) : '';
+  const pOtherInc    = (Number(d['Proforma Other Income (Monthly)'])||0)*12;
+  const pExpenses    = Number(d['Pro Forma Expenses Yearly']) || (Number(d['Pro Forma Expenses Monthly'])||0)*12 || 0;
+
+  // Seed fi for the rest of the tab render code that still reads fi.X
+  // (e.g. expense item subrows, down payment type radio buttons, renovation).
+  // Every field below comes from DB columns.
+  fi.askPrice    = ask;
+  fi.offerPrice  = offer;
+  fi.aGrossRent  = aGrossRent;
+  fi.pGrossRent  = pGrossRent;
+  fi.aVacancy    = aVacancy;
+  fi.pVacancy    = pVacancy;
+  fi.aOtherInc   = aOtherInc;
+  fi.pOtherInc   = pOtherInc;
+  fi.aExpenses   = aExpenses;
+  fi.pExpenses   = pExpenses;
+  fi.aDownPct    = aDownPct;
+  fi.pDownPct    = pDownPct;
+  fi.aNetRentSF  = aNetRentSF;
+  fi.aTotalSF    = aTotalSF;
+  fi.aUnits      = aUnits;
+  fi.aOccupancy  = aOccupancy;
+  fi.aDpType     = d['Down Payment Type']          || 'percent';
+  fi.pDpType     = d['Proforma Down Payment Type'] || 'percent';
+  fi.aGRISource  = d['GRI Source']                 || 'custom';
+  fi.aRenovation = Number(d['Renovation Expense']) || 0;
+  fi.renovation  = fi.aRenovation; // legacy alias
+  // NRU % fields
+  if(d['Non-Revenue Units (%)'] != null)          fi.aNRU = Number(d['Non-Revenue Units (%)']);
+  if(d['Proforma Non-Revenue Units (%)'] != null) fi.pNRU = Number(d['Proforma Non-Revenue Units (%)']);
+
+  // Mortgages — all 18 fields flow from SB_PROP_MAP into d[...]
+  for(let n = 1; n <= 3; n++){
+    fi['mort'+n+'_bal']       = Number(d[`Mortgage ${n} Principal Balance`])  || 0;
+    fi['mort'+n+'_amort']     = Number(d[`Mortgage ${n} Amortization (Years)`]) || 0;
+    fi['mort'+n+'_rate']      = Number(d[`Mortgage ${n} Interest Rate (%)`])  || 0;
+    fi['mort'+n+'_type']      = d[`Mortgage ${n} Loan Type`]         || '';
+    fi['mort'+n+'_assumable'] = !!d[`Mortgage ${n} Assumable`];
+    fi['mort'+n+'_yrsrem']    = Number(d[`Mortgage ${n} Years Remaining`])    || 0;
+  }
+
+  // Expand/collapse UI state — keep in localStorage per your guidance.
+  // Not sensitive data, just display preference. Loaded here from a
+  // separate small key so the big fin_ blob can stay deleted.
+  try {
+    const uiState = JSON.parse(_store.get('fin_ui_'+d.id) || '{}');
+    if(uiState.exp_admin !== undefined)    fi.exp_admin    = uiState.exp_admin;
+    if(uiState.exp_rm !== undefined)       fi.exp_rm       = uiState.exp_rm;
+    if(uiState.exp_util !== undefined)     fi.exp_util     = uiState.exp_util;
+    if(uiState.exp_misc !== undefined)     fi.exp_misc     = uiState.exp_misc;
+    if(uiState.exp_tax !== undefined)      fi.exp_tax      = uiState.exp_tax;
+    if(uiState.exp_ins !== undefined)      fi.exp_ins      = uiState.exp_ins;
+    if(uiState.exp_pm !== undefined)       fi.exp_pm       = uiState.exp_pm;
+    if(uiState.exp_mortgage !== undefined) fi.exp_mortgage = uiState.exp_mortgage;
+  } catch(e) {}
 
   // ── Actual calculations ────────────────────────────────────
   const aEGI   = aGrossRent * (1 - aVacancy/100) + aOtherInc;
@@ -12982,13 +13309,11 @@ function createBrochure(){
   const wiring    = d['Wiring']         ||'—';
   const piping    = d['Piping']         ||'—';
 
-  // Financial — pull from localStorage if available
-  const fKey = 'fin_'+(d.id||'');
+  // Financial — v102.6: read directly from Supabase deal fields. No more localStorage.
   let fi = {};
-  try{ fi=JSON.parse(_store.get(fKey)||'{}'); }catch(e){}
-  const gri_mo   = fi.aGrossRent ? (fi.aGrossRent/12) : (d['Gross Rental Income (Monthly)']||d['Gross Revenue Monthly']||0);
+  const gri_mo   = d['Gross Rental Income (Monthly)']||d['Gross Revenue Monthly']||0;
   const gri_yr   = gri_mo*12;
-  const vac_pct  = (fi.aVacancy!==null&&fi.aVacancy!==undefined)?fi.aVacancy:(d['Vacancy Rate (%)']||0);
+  const vac_pct  = (d['Vacancy Rate (%)']||0);
   const vac_yr   = gri_yr*(vac_pct/100);
   const egi_yr   = gri_yr - vac_yr;
   const noi_yr   = Number(d['NOI'])||0;
@@ -16448,6 +16773,14 @@ async function _liSubmitSeller(){
     if(expMo)      dealFields['Maintenance & Repair Costs (Monthly)'] = expMo;
     else if(expYr) dealFields['Maintenance & Repair Costs (Monthly)'] = Math.round(expYr/12);
 
+    // v102.9: asset-type-specific fields that were previously dropped on submit.
+    // Each only appears in the UI when the corresponding asset type is selected,
+    // so we just pick up whichever was filled.
+    const autoGas  = gv('li_s_automotive_gas');  if(autoGas)  dealFields['Automotive Gas Type']  = autoGas;
+    const autoWash = gv('li_s_automotive_wash'); if(autoWash) dealFields['Automotive Wash Type'] = autoWash;
+    const retLease = gv('li_s_retail_leasetype');   if(retLease) dealFields['Retail Lease Type']   = retLease;
+    const shopLease= gv('li_s_shopping_leasetype'); if(shopLease) dealFields['Shopping Lease Type']= shopLease;
+
     // Multifamily: write structured data into actual ace_properties columns
     // so the Unit Mix / Property Info sections populate on the deal card.
     if(_liMfData){
@@ -16535,47 +16868,23 @@ async function _liSubmitSeller(){
         console.warn('Contact create/lookup failed:', e.message);
       }
 
-      // 2. Legacy submissions table (kept for backwards compat — boss/legacy tools may still read it)
-      const sbSub = { name: contactName, phone_number: contactPhone,
-        email: contactEmail || null, property_address: gv('li_s_address'),
-        any_other_notes: sellerFields['General Notes']||'', property_type: assetTypeText,
-        asking_price: price||null };
-      try{ await _sbPost(SB_TABLES.submissionSeller, sbSub); }
-      catch(e){ console.warn('ace_submissions_seller write failed (non-fatal):', e.message); }
+      // v102.9: Removed the legacy ace_submissions_seller write. The table
+      // is write-only — nothing in the CRM reads from it, and the "kept for
+      // backwards compat for boss/legacy tools" comment no longer applies
+      // since the boss's tools now read from ace_properties directly.
+      // Seller leads go straight to ace_contacts + ace_properties.
 
       // 3. Create deal in ace_properties, linking the contact as owner
       const propData = _atToSb(dealFields, SB_PROP_MAP);
       if(contactId) propData.owner_contact_id = contactId;
       const createdDeal = await _sbPost(SB_TABLES.properties, propData);
-      // Seed localStorage fin_<id> so the Financial Analysis tab shows GRI/Expenses
-      // immediately in the current browser. Other browsers pick up the values via
-      // the DB fallback added to renderFinancialTab.
-      const newDealId = createdDeal?.id;
-      if(newDealId && (griMo || griYr || expMo || expYr)){
-        try{
-          const finSeed = {};
-          if(griYr)      finSeed.aGrossRent = griYr;
-          else if(griMo) finSeed.aGrossRent = griMo*12;
-          if(expYr)      finSeed.aExpenses = expYr;
-          else if(expMo) finSeed.aExpenses = expMo*12;
-          // Also seed the detailed Maintenance & Repair Costs line item so the
-          // Financial Analysis expense grid shows it in the right row.
-          if(expMo)      finSeed.a_rm_maint_mo = expMo;
-          else if(expYr) finSeed.a_rm_maint_mo = Math.round(expYr/12);
-          _store.set('fin_'+newDealId, JSON.stringify(finSeed));
-        }catch(e){ console.warn('fin_ localStorage seed failed:', e.message); }
-      }
-    } else {
-      const res=await fetch(`https://api.airtable.com/v0/${cfg.base}/tbl18PNC6LWyZcgYd`,{
-        method:'POST',headers:{Authorization:`Bearer ${cfg.key}`,'Content-Type':'application/json'},
-        body:JSON.stringify({fields:sellerFields})
-      });
-      if(!res.ok) throw new Error(await res.text());
-      await fetch(`https://api.airtable.com/v0/${cfg.base}/${cfg.table}`,{
-        method:'POST',headers:{Authorization:`Bearer ${cfg.key}`,'Content-Type':'application/json'},
-        body:JSON.stringify({fields:dealFields})
-      });
+      // v102.6: No more localStorage seeding. Any GRI / expense data from
+      // the intake form is already in dealFields → propData → Supabase.
+      // When the user opens this deal in the Financial Analysis tab, the
+      // values flow from the database directly into fi via _dbExpSeed.
     }
+    // v102.12: Airtable fallback else branch removed. Ace CRM is
+    // Supabase-only; there is no Airtable code path for new deals anymore.
     syncData();
     _liShowSuccess('seller', gv('li_s_name'), gv('li_s_address'));
   }catch(e){
@@ -16781,65 +17090,82 @@ async function _liSubmitBuyer(){
   });
 
   const assetLabels = (_li.assetTypes||[]).join(', ');
-  const countyStr = _li.counties.join(', ');
   const investType = document.getElementById('li_b_investtype')?.value||'';
-  const notesText = [gv('li_b_notes'), investType?`Investor Type: ${investType}`:'', assetCriteria].filter(Boolean).join('\n\n');
 
-  // Map selected counties to exact Airtable choice names
-  const countyChoiceNames = {
-    'Atlantic':'Atlantic County','Bergen':'Bergen County','Burlington':'Burlington County',
-    'Camden':'Camden County','Cape May':'Cape May County','Cumberland':'Cumberland County',
-    'Essex':'Essex County','Gloucester':'Gloucester County','Hudson':'Hudson County',
-    'Hunterdon':'Hunterdon County','Mercer':'Mercer County','Middlesex':'Middlesex County',
-    'Monmouth':'Monmouth County','Morris':'Morris County','Ocean':'Ocean County',
-    'Passaic':'Passaic County','Salem':'Salem County','Somerset':'Somerset County',
-    'Sussex':'Sussex County','Union':'Union County','Warren':'Warren County'
-  };
-  const areaToInvest = (_li.counties||[]).map(c => countyChoiceNames[c] || c).filter(Boolean);
-
-  const fields = {
-    'Name': gv('li_b_name'),
-    'Buyer or Seller': 'Buyer',
-    'Phone Number': gv('li_b_phone'),
-    'Email': gv('li_b_email')||null,
-    'Company': gv('li_b_company')||null,
-    'Contact Notes': gv('li_b_cnotes')||null,
-    'Owned Property Address': gv('li_b_ownedprop')||null,
-    'Property Types': assetLabels||null,
-    'Area to Invest': areaToInvest.length ? areaToInvest : null,
-    'Location': (countyStr+(gv('li_b_locnotes')?'\n'+gv('li_b_locnotes'):''))||null,
-    'Any other buyer Notes?': notesText||null,
-    'Last Deal Purchased? How Much?': gv('li_b_lastdeal')||null,
-  };
-  const cap=gn('li_b_caprate'); if(cap) fields['Minimum Cap Rate']=cap;
-  const mfMin=gn('li_b_multifamily_minunits'); if(mfMin) fields['Minimum # of MF Units']=mfMin;
-  const mfMax=gn('li_b_multifamily_maxunits'); if(mfMax) fields['Max # of MF Units copy']=mfMax;
-  const whMin=gn('li_b_warehouse_minsf'); if(whMin) fields['Warehouse Min Square Footage']=whMin;
-  const whMax=gn('li_b_warehouse_maxsf'); if(whMax) fields['Warehouse Max Square Footage']=whMax;
-
-  Object.keys(fields).forEach(k=>{ if(fields[k]===null||fields[k]===undefined||fields[k]==='') delete fields[k]; });
+  // v102.12: Removed the legacy `fields` object and Airtable-only helpers
+  // (countyStr, countyChoiceNames, areaToInvest, notesText). These existed
+  // solely to feed the Airtable POST branch that was deleted this release.
+  // All data goes directly into the snake_case `bcRow` object below.
 
   try{
     if(isSupabase()){
-      const sbSub = { name: gv('li_b_name'), phone_number: gv('li_b_phone'),
-        email: gv('li_b_email')||null, company: gv('li_b_company')||null,
-        property_types: assetLabels||null,
-        area_to_invest: areaToInvest.length ? areaToInvest : null,
-        location: fields['Location']||null,
-        any_other_notes: fields['Any other buyer Notes?']||null,
-        minimum_cap_rate: fields['Minimum Cap Rate']||null,
-        mf_min_units: fields['Minimum # of MF Units']||null,
-        mf_max_units: fields['Max # of MF Units copy']||null,
-        warehouse_min_sf: fields['Warehouse Min Square Footage']||null,
-        warehouse_max_sf: fields['Warehouse Max Square Footage']||null };
-      await _sbPost(SB_TABLES.submissionBuyer, sbSub);
-    } else {
-      const res=await fetch(`https://api.airtable.com/v0/${cfg.base}/tbltFs4qoI8JhkZBA`,{
-        method:'POST',headers:{Authorization:`Bearer ${cfg.key}`,'Content-Type':'application/json'},
-        body:JSON.stringify({fields})
+      // v102.9: Full rewrite. Previously the buyer submit wrote ONLY to
+      // ace_submissions_buyer — a queue table that nothing reads from. This
+      // was a 100% data-loss bug: buyer leads "submitted successfully" but
+      // never actually appeared as buyer criteria anywhere.
+      //
+      // Now routes the same way the seller intake does:
+      //   1. Create/find ace_contacts row for the buyer
+      //   2. Create ace_buyer_criteria row with contact_id link
+      //
+      // All 28 buyer intake fields persist — including the 7 asset-type
+      // preference fields (automotive, retail, land zoning, etc.) that were
+      // previously collected in the UI but dropped on submit.
+
+      // 1. Create contact row
+      const contactName  = gv('li_b_name');
+      const contactPhone = gv('li_b_phone');
+      const contactEmail = gv('li_b_email');
+      let contactId = null;
+      try {
+        const contactRow = {
+          name: contactName,
+          phone_number: contactPhone,
+          email: contactEmail || null,
+          company: gv('li_b_company') || null,
+          contact_notes: gv('li_b_cnotes') || null,
+          type: ['Buyer'],
+          date_added: new Date().toISOString().slice(0,10)
+        };
+        const createdContact = await _sbPost(SB_TABLES.contacts, contactRow);
+        contactId = createdContact?.id || null;
+      } catch(e){
+        console.warn('Buyer contact create failed:', e.message);
+      }
+
+      // 2. Build the ace_buyer_criteria row directly (no SB_BC_MAP indirection
+      //    needed here since we're writing snake_case columns straight in)
+      const bcRow = {
+        contact_id: contactId,
+        date_added: new Date().toISOString().slice(0,10),
+        desired_property_types: assetLabels || null,
+        preferred_states: (_li.counties && _li.counties.length) ? 'NJ' : null,
+        preferred_counties: _li.counties && _li.counties.length ? _li.counties.join(', ') : null,
+        location_preferences: gv('li_b_locnotes') || null,
+        other_requirements: [gv('li_b_notes'), investType ? `Investor Type: ${investType}` : '', assetCriteria].filter(Boolean).join('\n\n') || null,
+        deals_sent_notes: gv('li_b_lastdeal') || null,
+        minimum_cap_rate: gn('li_b_caprate'),
+        mf_min_units: gn('li_b_multifamily_minunits'),
+        mf_max_units: gn('li_b_multifamily_maxunits'),
+        mf_style_preference: document.getElementById('li_b_multifamily_style')?.value || null,
+        warehouse_min_sf: gn('li_b_warehouse_minsf'),
+        warehouse_max_sf: gn('li_b_warehouse_maxsf'),
+        warehouse_profile_preference: document.getElementById('li_b_warehouse_profile')?.value || null,
+        office_class_preference: document.getElementById('li_b_office_class')?.value || null,
+        // v102.9: new asset-type preference columns
+        automotive_gas_preference: document.getElementById('li_b_automotive_gas')?.value || null,
+        automotive_type_preference: document.getElementById('li_b_automotive_type')?.value || null,
+        land_zoning_preference: document.getElementById('li_b_land_zoning')?.value || null,
+        retail_anchor_preference: document.getElementById('li_b_retail_anchor')?.value || null,
+        retail_lease_preference: document.getElementById('li_b_retail_lease')?.value || null,
+      };
+      // Strip null/empty values so we don't write a bunch of NULLs
+      Object.keys(bcRow).forEach(k => {
+        if(bcRow[k] === null || bcRow[k] === undefined || bcRow[k] === '') delete bcRow[k];
       });
-      if(!res.ok) throw new Error(await res.text());
+      await _sbPost(SB_TABLES.buyerCriteria, bcRow);
     }
+    // v102.12: Airtable fallback else branch removed. Ace CRM is Supabase-only.
     _liShowSuccess('buyer', gv('li_b_name'), null);
   }catch(e){
     if(btn){btn.disabled=false;btn.textContent='✓ Submit Buyer Lead';}
@@ -20742,10 +21068,10 @@ function changeStage(s){
 function setDealTag(tag){
   if(!currentDeal) return;
   currentDeal['Deal Tag'] = tag;
-  _lf.set(currentDeal.id, 'Deal Tag', tag||null);
+  // v102.11: _lf.set removed — deal_tag column exists in ace_properties and
+  // airtableUpdate handles persistence. The localStorage fallback was dead code.
   const entry = allDeals.find(d=>d.id===currentDeal.id);
   if(entry) entry['Deal Tag'] = tag;
-  // Try Airtable — gracefully falls back to local if field doesn't exist
   airtableUpdate(currentDeal.id, {'Deal Tag': tag||null});
   renderDealPage();
   setTimeout(()=>switchTab('dealstatus',null),10);
@@ -20756,7 +21082,7 @@ async function archiveDeal(dealId){
   if(!confirm('Archive this deal? It will disappear from all views but won\'t be deleted. You can un-archive from the Deal Status tab.')) return;
   const d = allDeals.find(x=>x.id===dealId); if(!d) return;
   d['Is Archived'] = true;
-  _lf.set(dealId, 'Is Archived', true);
+  // v102.11: _lf.set removed — is_archived column exists in ace_properties.
   airtableUpdate(dealId, {'Is Archived': true});
   buildSidebar(document.getElementById('sideSearch')?.value||'');
   showSaveConfirm('📦 Deal archived');
@@ -20767,7 +21093,7 @@ async function archiveDeal(dealId){
 async function unarchiveDeal(dealId){
   const d = allDeals.find(x=>x.id===dealId); if(!d) return;
   d['Is Archived'] = false;
-  _lf.set(dealId, 'Is Archived', false);
+  // v102.11: _lf.set removed — is_archived column exists in ace_properties.
   airtableUpdate(dealId, {'Is Archived': false});
   buildSidebar(document.getElementById('sideSearch')?.value||'');
   renderDealPage();
@@ -22198,15 +22524,14 @@ function liveDownCalc(){
 }
 
 // ─── GRI SOURCE TOGGLE (Unit Mix vs Custom) ───────────────────────
-// Lets the user pull Actual Gross Rental Income from Property Details
-// Unit Mix (occupied-only sum) instead of typing a custom number.
+// v102.6: persists through Supabase only. No more localStorage blob.
 function setFinGRISource(source){
   if(!currentDeal) return;
-  const fKey = 'fin_'+currentDeal.id;
-  let fi = {};
-  try { fi = JSON.parse(_store.get(fKey)||'{}'); } catch(e) {}
-  fi.aGRISource = source;
-  _store.set(fKey, JSON.stringify(fi));
+
+  // Persist to Supabase via the normal auto-save path so teammates
+  // see the same GRI mode on their laptops.
+  currentDeal['GRI Source'] = source;
+  if(typeof _finScheduleAutoSave === 'function') _finScheduleAutoSave();
 
   // Update button styles
   const btnUM = document.getElementById('aGRISrc_unitMix');
@@ -22251,12 +22576,10 @@ function _applyFinGRILock(locked){
 
 // If the current deal is in 'unitMix' GRI source mode, push the occupied-only
 // total from Unit Mix into the Financial Analysis GRI inputs and recalculate.
+// v102.6: reads GRI source from currentDeal (Supabase), not localStorage.
 function _refreshFinGRIFromUnitMix(){
   if(!currentDeal) return;
-  const fKey = 'fin_'+currentDeal.id;
-  let fi = {};
-  try { fi = JSON.parse(_store.get(fKey)||'{}'); } catch(e) {}
-  const source = fi.aGRISource || 'custom';
+  const source = currentDeal['GRI Source'] || 'custom';
   const moEl = document.getElementById('fin_aGrossRent_mo');
   const yrEl = document.getElementById('fin_aGrossRent_yr');
   if(!moEl || !yrEl) return; // Financial tab not rendered
@@ -22513,13 +22836,14 @@ function toggleExpCat(catId){
   const isHidden = rows.length>0 && rows[0].style.display==='none';
   rows.forEach(r => r.style.display = isHidden?'table-row':'none');
   if(icon) icon.textContent = isHidden?'−':'+';
-  // Save expand state
+  // v102.6: persist expand/collapse state to the small fin_ui_ localStorage
+  // key. This is UI preference only (not deal data), so localStorage is fine.
   if(currentDeal){
-    const fKey='fin_'+currentDeal.id;
-    let fi={};
-    try{fi=JSON.parse(localStorage.getItem(fKey)||'{}');}catch(e){}
-    fi['exp_'+catId]=isHidden;
-    localStorage.setItem(fKey,JSON.stringify(fi));
+    const uKey='fin_ui_'+currentDeal.id;
+    let ui={};
+    try{ui=JSON.parse(localStorage.getItem(uKey)||'{}');}catch(e){}
+    ui['exp_'+catId]=isHidden;
+    try{localStorage.setItem(uKey,JSON.stringify(ui));}catch(e){}
   }
 }
 
@@ -22539,12 +22863,14 @@ function toggleMortgage(){
   const isHidden = rows.length>0 && rows[0].style.display==='none';
   rows.forEach(r => r.style.display = isHidden?'table-row':'none');
   if(icon) icon.textContent = isHidden?'−':'+';
+  // v102.6: persist mortgage expand/collapse state to the small fin_ui_ key
+  // (UI preference only, not deal data).
   if(currentDeal){
-    const fKey='fin_'+currentDeal.id;
-    let fi={};
-    try{fi=JSON.parse(localStorage.getItem(fKey)||'{}');}catch(e){}
-    fi['exp_mortgage']=isHidden;
-    localStorage.setItem(fKey,JSON.stringify(fi));
+    const uKey='fin_ui_'+currentDeal.id;
+    let ui={};
+    try{ui=JSON.parse(localStorage.getItem(uKey)||'{}');}catch(e){}
+    ui['exp_mortgage']=isHidden;
+    try{localStorage.setItem(uKey,JSON.stringify(ui));}catch(e){}
   }
 }
 
@@ -22790,6 +23116,21 @@ function saveFinInputs(dealId){
   if(get('fin_a_downPct')) fields['Down Payment (%)'] = get('fin_a_downPct');
   if(get('fin_renovation')) fields['Renovation Expense']  = get('fin_renovation');
 
+  // v102.6: remaining Financial Analysis fields that used to live only in
+  // the fin_${dealId} localStorage blob. Now persisted to Supabase so
+  // teammates see the same state.
+  if(get('fin_aNRU_pct'))   fields['Non-Revenue Units (%)']          = get('fin_aNRU_pct');
+  if(get('fin_pNRU_pct'))   fields['Proforma Non-Revenue Units (%)'] = get('fin_pNRU_pct');
+  if(get('fin_p_downPct'))  fields['Proforma Down Payment (%)']      = get('fin_p_downPct');
+  // Radio button state: save the selected down-payment type for each side
+  const aDpTypePctEl = document.getElementById('aDpTypePct');
+  const pDpTypePctEl = document.getElementById('pDpTypePct');
+  if(aDpTypePctEl) fields['Down Payment Type']          = aDpTypePctEl.checked ? 'pct' : 'amount';
+  if(pDpTypePctEl) fields['Proforma Down Payment Type'] = pDpTypePctEl.checked ? 'pct' : 'amount';
+  // GRI source: stored on currentDeal directly by setFinGRISource;
+  // re-read from there so a save triggered by any other path picks it up
+  if(currentDeal['GRI Source']) fields['GRI Source'] = currentDeal['GRI Source'];
+
   // ── Variable Expenses ────────────────────────────────────────
   // v102.4: full coverage — every expense sub-input in the Financial
   // Analysis tab now has a backing database column. Previously 8 inputs
@@ -22986,11 +23327,11 @@ function saveNoteEntry(){
 function recalcFinancials(dealId){
   const get    = id => Number(String(document.getElementById(id)?.value||'').replace(/,/g,''))||0;
   const getRaw = id => { const v=document.getElementById(id)?.value; if(v===''||v==null) return null; const n = Number(String(v).replace(/,/g,'')); return isNaN(n)?null:n; };
-  // Preserve fields that aren't re-derived from DOM inputs
-  let _prevFi = {};
-  try { _prevFi = JSON.parse(_store.get('fin_'+dealId)||'{}'); } catch(e) {}
+  // v102.11: No more localStorage reads. GRI source comes from currentDeal
+  // (Supabase source of truth, set by setFinGRISource during v102.6 rip-out).
+  const aGRISource = (currentDeal && currentDeal['GRI Source']) || 'custom';
   const fi = {
-    aGRISource : _prevFi.aGRISource || 'custom',
+    aGRISource : aGRISource,
     askPrice   : get('fin_askPrice'),
     offerPrice : get('fin_offerPrice'),
     aRenovation: get('fin_a_renovation'),
@@ -23082,11 +23423,10 @@ function recalcFinancials(dealId){
     mort3_assumable:document.getElementById('fin_mort3_assumable')?.checked||false,
     mort3_yrsrem:   document.getElementById('fin_mort3_yrsrem')?.value||'--',
   };
-  // Preserve expand state — merge new fi over existing localStorage
-  const fKey = 'fin_'+dealId;
-  let existing = {};
-  try{ existing = JSON.parse(localStorage.getItem(fKey)||'{}'); }catch(e){}
-  localStorage.setItem(fKey, JSON.stringify({...existing, ...fi}));
+  // v102.11: No more localStorage write. `fi` is only used below to compute
+  // derived display values (NOI, cap rate, CoC return). Real persistence
+  // happens through saveFinInputs → Supabase. This block used to write a
+  // full fin_${dealId} blob to localStorage but nothing reads it anymore.
 
   // Update expense totals from live DOM (synchronous, always fresh)
   updateExpenseTotals();
@@ -23845,9 +24185,18 @@ async function ndwCreateDeal(){
     if(gn('ndw_asking'))   fields['Asking Price']                  = gn('ndw_asking');
     if(gn('ndw_gri'))      fields['Gross Rental Income (Monthly)'] = gn('ndw_gri');
     if(gn('ndw_expenses')) fields['Expenses Monthly']              = gn('ndw_expenses');
+    if(gn('ndw_noi'))      fields['NOI']                           = gn('ndw_noi');
     if(gn('ndw_units'))    fields['No. of Units']                  = gn('ndw_units');
     if(gn('ndw_sf'))       fields['Total Building SF']             = gn('ndw_sf');
-    if(g('ndw_dealNotes') || assetNote) fields['Deal Notes'] = assetNote + (g('ndw_dealNotes')||'');
+    // v102.8: rent roll text is a freeform note collected during intake.
+    // There's no dedicated rent_roll column, so we append it to Deal Notes
+    // with a clear prefix so users can find it later.
+    const rentRollText = g('ndw_rentroll');
+    const notesParts = [];
+    if(assetNote)          notesParts.push(assetNote);
+    if(rentRollText)       notesParts.push('Rent Roll: ' + rentRollText);
+    if(g('ndw_dealNotes')) notesParts.push(g('ndw_dealNotes'));
+    if(notesParts.length)  fields['Deal Notes'] = notesParts.join('\n\n');
     if(g('ndw_nextSteps')) fields['Next Steps'] = g('ndw_nextSteps');
 
     let newId;
@@ -24272,6 +24621,36 @@ function initNewDealAutocomplete(){
 document.addEventListener('DOMContentLoaded', () => {
   const gk = _store.get('google_places_key');
   if(gk && gk.startsWith('AIza')) _loadGooglePlacesAPI(gk);
+
+  // v102.7: wire up online/offline indicator. Listens to the browser's
+  // network status events and updates the badge color + tooltip.
+  // Agents need internet to save — this tells them immediately if they lose it.
+  const updateNetStatus = (isOnline) => {
+    const wrap = document.getElementById('netStatusIndicator');
+    const dot  = document.getElementById('netStatusDot');
+    const txt  = document.getElementById('netStatusText');
+    if(!wrap || !dot || !txt) return;
+    if(isOnline){
+      wrap.style.background   = 'rgba(34,197,94,0.1)';
+      wrap.style.border       = '1px solid rgba(34,197,94,0.3)';
+      wrap.style.color        = '#16a34a';
+      dot.style.background    = '#22c55e';
+      txt.textContent         = 'Online';
+      wrap.title              = 'Online — connected to Supabase';
+    } else {
+      wrap.style.background   = 'rgba(239,68,68,0.1)';
+      wrap.style.border       = '1px solid rgba(239,68,68,0.4)';
+      wrap.style.color        = '#dc2626';
+      dot.style.background    = '#ef4444';
+      txt.textContent         = 'Offline';
+      wrap.title              = 'Offline — changes will not save until you reconnect to the internet. Please reconnect and your changes will retry automatically.';
+    }
+  };
+  // Initial state
+  updateNetStatus(navigator.onLine);
+  // Live updates
+  window.addEventListener('online',  () => updateNetStatus(true));
+  window.addEventListener('offline', () => updateNetStatus(false));
 });
 
 // ── AUTH FUNCTIONS ───────────────────────────────────────────────

@@ -11771,16 +11771,536 @@ function _omRenderPhotoGrid(){
 
 // Standard OM handler — v100 placeholder, v101 will lazy-load pdfmake and
 // render the real cover page + a few body sections.
-function _omGenerateStandard(){
+// ═══════════════════════════════════════════════════════════════════
+//  PDFMAKE LAZY-LOADER (v101)
+//
+//  pdfmake is a 350KB JS library that we only need when the user actually
+//  clicks "Generate Standard OM" or "Generate Premium OM". Loading it on
+//  demand keeps the initial page load fast. Once loaded, it's cached in
+//  window.pdfMake and subsequent calls are instant.
+//
+//  Uses CDN: cdnjs. Two scripts required:
+//    1. pdfmake.min.js — the core library
+//    2. vfs_fonts.js — embedded Roboto font family (required by pdfmake)
+// ═══════════════════════════════════════════════════════════════════
+let _pdfmakeLoadPromise = null;
+function _omLoadPdfMake(){
+  if(window.pdfMake && window.pdfMake.createPdf) return Promise.resolve(window.pdfMake);
+  if(_pdfmakeLoadPromise) return _pdfmakeLoadPromise;
+  _pdfmakeLoadPromise = (async () => {
+    const loadScript = (src) => new Promise((resolve, reject) => {
+      const s = document.createElement('script');
+      s.src = src;
+      s.onload = () => resolve();
+      s.onerror = () => reject(new Error('Failed to load ' + src));
+      document.head.appendChild(s);
+    });
+    try {
+      await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.10/pdfmake.min.js');
+      await loadScript('https://cdnjs.cloudflare.com/ajax/libs/pdfmake/0.2.10/vfs_fonts.js');
+      if(!window.pdfMake || !window.pdfMake.createPdf){
+        throw new Error('pdfmake loaded but window.pdfMake.createPdf missing');
+      }
+      return window.pdfMake;
+    } catch (e) {
+      _pdfmakeLoadPromise = null; // allow retry on next click
+      throw e;
+    }
+  })();
+  return _pdfmakeLoadPromise;
+}
+
+// Fetch a photo URL and convert it to a base64 data URI for pdfmake embedding.
+// Uses Supabase Storage public URLs which have CORS enabled (verified).
+// Returns null on failure (caller decides whether to skip or abort).
+async function _omFetchPhotoAsDataUri(url){
+  try {
+    const resp = await fetch(url, { mode: 'cors', cache: 'force-cache' });
+    if(!resp.ok) throw new Error('HTTP ' + resp.status);
+    const blob = await resp.blob();
+    return await new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onload  = () => resolve(reader.result);
+      reader.onerror = () => reject(reader.error || new Error('FileReader failed'));
+      reader.readAsDataURL(blob);
+    });
+  } catch (e) {
+    console.warn('[OM] Photo fetch failed for', url, e);
+    return null;
+  }
+}
+
+// Show/hide a blocking spinner overlay while the OM is being generated.
+// Photos-download and PDF-build can take 3-15 seconds depending on how many
+// photos are in the deal, so we need to show progress or the user will think
+// the CRM froze.
+function _omShowSpinner(message){
+  const existing = document.getElementById('omSpinnerOverlay');
+  if(existing) existing.remove();
+  const overlay = document.createElement('div');
+  overlay.id = 'omSpinnerOverlay';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:999999;display:flex;align-items:center;justify-content:center;';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:12px;padding:32px 40px;box-shadow:0 20px 60px rgba(0,0,0,0.3);min-width:320px;text-align:center;">
+      <div style="font-size:36px;margin-bottom:14px;">📑</div>
+      <div id="omSpinnerMsg" style="font-size:14px;font-weight:700;color:#0f172a;margin-bottom:8px;">${message || 'Generating OM…'}</div>
+      <div style="font-size:11px;color:#64748b;margin-bottom:18px;">This may take a few seconds.</div>
+      <div style="width:100%;height:4px;background:#e2e8f0;border-radius:99px;overflow:hidden;">
+        <div style="width:40%;height:100%;background:linear-gradient(90deg,#2563eb,#1a3a6e);border-radius:99px;animation:omSpinPulse 1.2s ease-in-out infinite;"></div>
+      </div>
+    </div>
+    <style>
+      @keyframes omSpinPulse {
+        0% { transform: translateX(-100%); }
+        100% { transform: translateX(250%); }
+      }
+    </style>`;
+  document.body.appendChild(overlay);
+}
+
+function _omUpdateSpinner(message){
+  const m = document.getElementById('omSpinnerMsg');
+  if(m) m.textContent = message;
+}
+
+function _omHideSpinner(){
+  const el = document.getElementById('omSpinnerOverlay');
+  if(el) el.remove();
+}
+
+// ═══════════════════════════════════════════════════════════════════
+//  STANDARD OM GENERATION (v101)
+//
+//  Produces a multi-page PDF using the Ace Acquisitions brand template.
+//  Matches the visual design of the reference Edgewater OM:
+//    - Navy background + gold accent cover page with hero image
+//    - Navy/gold header bar + footer on every interior page
+//    - Section numbers in gold, section titles in navy with gold underline
+//    - Professional tables with navy header row, alternating body rows
+//
+//  v101 includes: Cover, TOC, Executive Summary, Investment Highlights
+//  v102 will add: Development Program, Site Description, Renderings, Legal
+//
+//  No LLM — all prose comes from deterministic templates or deal fields.
+//  Photos come from deal.photo_attachments (Property Photos in Documents tab).
+// ═══════════════════════════════════════════════════════════════════
+
+// Brand constants — match the Ace Acquisitions OM brand standard from the
+// Opus package. These are PDF-only colors and do NOT appear in the CRM UI.
+const OM_BRAND = {
+  navy:       '#0b1f3a',
+  navyDark:   '#081529',
+  gold:       '#b8912a',
+  goldLight:  '#d4a84b',
+  cream:      '#f7f4ee',
+  lightGray:  '#f2f2f2',
+  midGray:    '#d0d0d0',
+  darkGray:   '#444444',
+  text:       '#1c1c1c',
+  white:      '#ffffff',
+};
+
+// Main Standard OM generator. Checks required fields, loads pdfmake, fetches
+// photos, builds the docDefinition, and triggers a download.
+async function _omGenerateStandard(){
   const missing = _omCheckRequiredFields();
   if(missing.length > 0){
     alert('Cannot generate Standard OM — missing required fields:\n\n• ' + missing.join('\n• '));
     return;
   }
-  alert('✓ Standard OM generation is coming in v101.\n\n'
-      + 'This is the v100 UI shell — the button flow, required-fields check, and confirmation dialogs are in place. '
-      + 'Next version will lazy-load pdfmake and produce the actual PDF.\n\n'
-      + 'Required fields check: PASSED');
+  const d = currentDeal;
+  if(!d){ alert('No deal selected.'); return; }
+
+  try {
+    _omShowSpinner('Loading PDF library…');
+    const pdfMake = await _omLoadPdfMake();
+
+    _omUpdateSpinner('Downloading photos…');
+    const photos = _omGetOrderedPhotos(d);
+    const photoDataUris = [];
+    for(let i = 0; i < photos.length && i < 6; i++){
+      _omUpdateSpinner(`Downloading photo ${i+1} of ${Math.min(photos.length,6)}…`);
+      const uri = await _omFetchPhotoAsDataUri(photos[i].url);
+      if(uri) photoDataUris.push(uri);
+    }
+    if(photoDataUris.length === 0){
+      _omHideSpinner();
+      alert('Could not download any photos from the deal. Check your connection and try again, or ensure the deal has at least one valid photo.');
+      return;
+    }
+
+    _omUpdateSpinner('Building PDF…');
+    await new Promise(r => setTimeout(r, 20));
+
+    const docDefinition = _omBuildStandardDocDefinition(d, photoDataUris);
+
+    _omUpdateSpinner('Finalizing…');
+    await new Promise(r => setTimeout(r, 20));
+
+    const addrSlug = (d['Address'] || 'Property')
+      .replace(/[^\w\s-]/g, '')
+      .replace(/\s+/g, '_')
+      .slice(0, 80);
+    const filename = `${addrSlug}_Offering_Memorandum.pdf`;
+
+    pdfMake.createPdf(docDefinition).download(filename, () => {
+      _omHideSpinner();
+    });
+  } catch (e) {
+    _omHideSpinner();
+    console.error('[OM] Standard OM generation failed:', e);
+    alert('Failed to generate OM: ' + (e.message || e));
+  }
+}
+
+// Build the pdfmake docDefinition for a Standard OM.
+function _omBuildStandardDocDefinition(d, photoDataUris){
+  const coverPhoto = photoDataUris[0];
+  const addr       = d['Address'] || 'Property';
+  const cityState  = _omExtractCityStateZip(d);
+  const ask        = d['Asking Price'] ? '$' + Number(d['Asking Price']).toLocaleString() : 'Call for Price';
+  const units      = Number(d['Number of Units'] || d['No. of Units']) || 0;
+  const sqft       = Number(d['Square Footage'] || d['Total Building SF'] || d['Net Rentable SF']) || 0;
+  const county     = d['Simple County'] || '';
+  const assetType  = _dealAssetType(d) || d['Simple Text Property Type'] || 'Commercial Property';
+  const stories    = d['No. of Stories'] || '';
+  const yearBuilt  = d['Year Built'] || '';
+  const genNotes   = d['General Property Notes'] || '';
+
+  const statBoxes = [];
+  if(d['Asking Price']) statBoxes.push({ value: ask, label: 'ASKING PRICE' });
+  if(units)             statBoxes.push({ value: units.toLocaleString(),          label: assetType.toLowerCase().includes('multifamily') ? 'UNITS' : 'SPACES' });
+  if(sqft)              statBoxes.push({ value: sqft.toLocaleString() + ' SF',   label: 'BUILDING AREA' });
+  if(stories)           statBoxes.push({ value: stories + (stories==1?' Story':' Stories'), label: 'HEIGHT' });
+  if(yearBuilt)         statBoxes.push({ value: yearBuilt, label: 'YEAR BUILT' });
+
+  const tags = [];
+  if(d['Top Priority'])        tags.push('Priority Listing');
+  if(d['Pipeline Stage'] === 'Hot Active Listing') tags.push('Hot Listing');
+  if(assetType)                tags.push(assetType);
+  if(county)                   tags.push(county);
+  if(d['Property Class'])      tags.push('Class ' + d['Property Class']);
+  if(d['Location Trending'])   tags.push(d['Location Trending']);
+
+  const highlights = genNotes
+    .split('\n')
+    .map(s => s.trim())
+    .filter(s => s.length > 0)
+    .slice(0, 10);
+
+  const coverPage = {
+    stack: [
+      {
+        image: coverPhoto,
+        width: 540,
+        height: 320,
+        fit: [540, 320],
+        alignment: 'center',
+        margin: [0, 28, 0, 0],
+      },
+      { canvas: [{ type: 'line', x1: 0, y1: 10, x2: 540, y2: 10, lineWidth: 2.5, lineColor: OM_BRAND.gold }], margin: [0, 14, 0, 14] },
+      { text: 'CONFIDENTIAL OFFERING MEMORANDUM', color: OM_BRAND.goldLight, fontSize: 10, characterSpacing: 1.2, margin: [0, 0, 0, 6] },
+      { text: addr, color: OM_BRAND.white, fontSize: 32, bold: true, margin: [0, 0, 0, 4] },
+      { text: cityState, color: '#b0c4de', fontSize: 16, margin: [0, 0, 0, 18] },
+      { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 540, y2: 0, lineWidth: 1.5, lineColor: OM_BRAND.gold }], margin: [0, 0, 0, 16] },
+      _omBuildCoverStatBoxes(statBoxes),
+      { margin: [0, 18, 0, 0], ..._omBuildCoverTagPills(tags.slice(0, 5)) },
+    ],
+    pageBreak: 'after',
+  };
+
+  const tocPage = {
+    stack: [
+      { text: 'CONTENTS', color: OM_BRAND.gold, fontSize: 10, characterSpacing: 1.4, bold: true, margin: [0, 0, 0, 8] },
+      { text: 'Table of Contents', color: OM_BRAND.navy, fontSize: 26, bold: true, margin: [0, 0, 0, 4] },
+      { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 180, y2: 0, lineWidth: 1.5, lineColor: OM_BRAND.gold }], margin: [0, 0, 0, 24] },
+      _omBuildTocTable([
+        ['01', 'Executive Summary',                '2'],
+        ['02', 'Investment Highlights',            '3'],
+        ['03', 'Development Program',              'v102'],
+        ['04', 'Approval & Entitlement Summary',   'v102'],
+        ['05', 'Site Description & Location',      'v102'],
+        ['06', 'Renderings & Additional Photos',   'v102'],
+        ['07', 'Architectural Plans',              'v102'],
+        ['08', 'Legal Description & Survey',       'v102'],
+        ['09', 'Confidentiality & Disclaimer',     'v102'],
+      ]),
+    ],
+    pageBreak: 'after',
+  };
+
+  const execSummaryPage = {
+    stack: [
+      { text: 'SECTION 01', color: OM_BRAND.gold, fontSize: 9, characterSpacing: 1.2, bold: true, margin: [0, 0, 0, 6] },
+      { text: 'Executive Summary', color: OM_BRAND.navy, fontSize: 22, bold: true, margin: [0, 0, 0, 2] },
+      { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 160, y2: 0, lineWidth: 1.5, lineColor: OM_BRAND.gold }], margin: [0, 0, 0, 18] },
+      {
+        text: _omBuildExecSummaryProse(d),
+        fontSize: 10,
+        lineHeight: 1.45,
+        color: OM_BRAND.text,
+        alignment: 'justify',
+        margin: [0, 0, 0, 20],
+      },
+      { text: 'Property', color: OM_BRAND.navy, fontSize: 11, bold: true, margin: [0, 0, 0, 8] },
+      _omBuildPropertySummaryTable(d),
+    ],
+    pageBreak: 'after',
+  };
+
+  const investmentHighlightsPage = {
+    stack: [
+      { text: 'SECTION 02', color: OM_BRAND.gold, fontSize: 9, characterSpacing: 1.2, bold: true, margin: [0, 0, 0, 6] },
+      { text: 'Investment Highlights', color: OM_BRAND.navy, fontSize: 22, bold: true, margin: [0, 0, 0, 2] },
+      { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 200, y2: 0, lineWidth: 1.5, lineColor: OM_BRAND.gold }], margin: [0, 0, 0, 18] },
+      ...(highlights.length > 0
+        ? highlights.map(h => _omBuildHighlightBullet(h))
+        : [{ text: 'Add Investment Highlights by entering them as line-separated bullets in the deal\'s General Property Notes field.', italics: true, color: OM_BRAND.darkGray, fontSize: 10 }]
+      ),
+    ],
+  };
+
+  return {
+    pageSize: 'LETTER',
+    pageMargins: [36, 76, 36, 58],
+    info: {
+      title: `${addr} — Offering Memorandum`,
+      author: 'Ace Acquisitions',
+      subject: 'Confidential Offering Memorandum',
+      creator: 'Ace Acquisitions CRM',
+    },
+    background: function(currentPage) {
+      if(currentPage === 1){
+        return [
+          { canvas: [{ type: 'rect', x: 0, y: 0, w: 612, h: 792, color: OM_BRAND.navy }] },
+          { canvas: [{ type: 'rect', x: 0, y: 0, w: 7, h: 792, color: OM_BRAND.gold }] },
+        ];
+      }
+      return null;
+    },
+    header: function(currentPage){
+      if(currentPage === 1) return null;
+      return {
+        stack: [
+          {
+            canvas: [
+              { type: 'rect', x: 0, y: 0, w: 612, h: 36, color: OM_BRAND.navy },
+              { type: 'rect', x: 0, y: 36, w: 612, h: 2.5, color: OM_BRAND.gold },
+            ],
+            absolutePosition: { x: 0, y: 0 },
+          },
+          {
+            columns: [
+              { text: `${addr.toUpperCase()}  |  ${cityState.toUpperCase()}`, color: OM_BRAND.white, fontSize: 9, bold: true, margin: [36, -24, 0, 0] },
+              { text: 'CONFIDENTIAL OFFERING MEMORANDUM', color: OM_BRAND.white, fontSize: 9, bold: true, alignment: 'right', margin: [0, -24, 36, 0] },
+            ],
+          },
+        ],
+      };
+    },
+    footer: function(currentPage, pageCount){
+      if(currentPage === 1) return null;
+      return {
+        stack: [
+          {
+            canvas: [
+              { type: 'rect', x: 0, y: 0, w: 612, h: 2, color: OM_BRAND.gold },
+              { type: 'rect', x: 0, y: 2, w: 612, h: 28, color: OM_BRAND.navy },
+            ],
+            absolutePosition: { x: 0, y: 762 },
+          },
+          {
+            columns: [
+              { text: 'ACE ACQUISITIONS', color: OM_BRAND.goldLight, fontSize: 8, bold: true, characterSpacing: 0.8, margin: [36, 10, 0, 0] },
+              { text: `Page ${currentPage - 1}`, color: OM_BRAND.white, fontSize: 8, alignment: 'center', margin: [0, 10, 0, 0] },
+              { text: 'CONFIDENTIAL — NOT FOR DISTRIBUTION', color: OM_BRAND.goldLight, fontSize: 8, bold: true, alignment: 'right', margin: [0, 10, 36, 0] },
+            ],
+          },
+        ],
+      };
+    },
+    content: [
+      coverPage,
+      tocPage,
+      execSummaryPage,
+      investmentHighlightsPage,
+    ],
+    defaultStyle: {
+      font: 'Roboto',
+      fontSize: 10,
+      color: OM_BRAND.text,
+    },
+  };
+}
+
+// ── Cover page builders ──────────────────────────────────────────────────
+
+function _omBuildCoverStatBoxes(stats){
+  if(!stats.length) return { text: '' };
+  return {
+    columns: stats.map(s => ({
+      stack: [
+        { canvas: [{ type: 'line', x1: 10, y1: 0, x2: 90, y2: 0, lineWidth: 1, lineColor: OM_BRAND.gold }], margin: [0, 0, 0, 6] },
+        { text: s.value, color: OM_BRAND.white, fontSize: 13, bold: true, alignment: 'center', margin: [0, 0, 0, 3] },
+        { text: s.label, color: OM_BRAND.goldLight, fontSize: 7, characterSpacing: 0.8, alignment: 'center' },
+      ],
+      width: '*',
+    })),
+    columnGap: 6,
+  };
+}
+
+function _omBuildCoverTagPills(tags){
+  if(!tags.length) return { text: '' };
+  return {
+    table: {
+      widths: tags.map(() => '*'),
+      body: [
+        tags.map(t => ({
+          text: t,
+          color: OM_BRAND.goldLight,
+          fontSize: 8,
+          bold: true,
+          alignment: 'center',
+          margin: [2, 5, 2, 5],
+        })),
+      ],
+    },
+    layout: {
+      hLineWidth: () => 0.8,
+      vLineWidth: () => 0.8,
+      hLineColor: () => OM_BRAND.gold,
+      vLineColor: () => OM_BRAND.gold,
+      paddingTop: () => 2,
+      paddingBottom: () => 2,
+    },
+  };
+}
+
+// ── Table of Contents builder ────────────────────────────────────────────
+
+function _omBuildTocTable(rows){
+  return {
+    table: {
+      widths: [30, '*', 60],
+      body: rows.map(r => [
+        { text: r[0], color: OM_BRAND.gold, bold: true, fontSize: 11, margin: [0, 8, 0, 8] },
+        { text: r[1], color: OM_BRAND.navy, bold: true, fontSize: 11, margin: [0, 8, 0, 8] },
+        { text: r[2], color: OM_BRAND.darkGray, fontSize: 10, alignment: 'right', margin: [0, 8, 0, 8] },
+      ]),
+    },
+    layout: {
+      hLineWidth: (i) => (i === 0 ? 0 : 0.5),
+      vLineWidth: () => 0,
+      hLineColor: () => '#e0e0e0',
+      paddingLeft: () => 0,
+      paddingRight: () => 0,
+    },
+  };
+}
+
+// ── Executive Summary builders ───────────────────────────────────────────
+
+function _omBuildExecSummaryProse(d){
+  const addr      = d['Address'] || 'this property';
+  const cityState = _omExtractCityStateZip(d);
+  const county    = d['Simple County'] || '';
+  const assetType = (_dealAssetType(d) || d['Simple Text Property Type'] || 'commercial real estate').toLowerCase();
+  const units     = Number(d['Number of Units'] || d['No. of Units']) || 0;
+  const sqft      = Number(d['Square Footage'] || d['Total Building SF'] || d['Net Rentable SF']) || 0;
+  const ask       = d['Asking Price'] ? '$' + Number(d['Asking Price']).toLocaleString() : null;
+  const yearBuilt = d['Year Built'] || '';
+  const occupancy = d['Occupancy (%)'] || '';
+
+  const sentences = [];
+  let intro = `Ace Acquisitions is pleased to present the opportunity to acquire ${addr}`;
+  if(cityState) intro += `, a ${assetType} property located in ${cityState}`;
+  if(county && !cityState.includes(county)) intro += ` (${county})`;
+  intro += '.';
+  sentences.push(intro);
+
+  const programParts = [];
+  if(units)     programParts.push(`${units.toLocaleString()} ${units === 1 ? 'unit' : 'units'}`);
+  if(sqft)      programParts.push(`${sqft.toLocaleString()} square feet of building area`);
+  if(yearBuilt) programParts.push(`originally built in ${yearBuilt}`);
+  if(programParts.length) {
+    sentences.push(`The property comprises ${programParts.join(', ')}.`);
+  }
+
+  if(occupancy) sentences.push(`Current occupancy stands at ${occupancy}${String(occupancy).includes('%') ? '' : '%'}.`);
+
+  if(ask) {
+    sentences.push(`The property is offered at ${ask}.`);
+  } else {
+    sentences.push('The property is offered at a price available upon request.');
+  }
+
+  sentences.push('Additional details on the development program, site characteristics, and investment highlights are provided in the sections that follow.');
+
+  return sentences.join(' ');
+}
+
+function _omBuildPropertySummaryTable(d){
+  const rows = [];
+  const addOrSkip = (label, value) => {
+    if(value !== null && value !== undefined && value !== '') rows.push([label, String(value)]);
+  };
+  addOrSkip('Address',          d['Address']);
+  addOrSkip('County',           d['Simple County']);
+  addOrSkip('Municipality',     _omExtractCityStateZip(d));
+  addOrSkip('Asset Type',       _dealAssetType(d) || d['Simple Text Property Type']);
+  if(d['Number of Units']) addOrSkip('Total Units', Number(d['Number of Units']).toLocaleString());
+  if(d['Square Footage'])  addOrSkip('Building Area', Number(d['Square Footage']).toLocaleString() + ' SF');
+  if(d['No. of Stories'])  addOrSkip('Stories', d['No. of Stories']);
+  if(d['Year Built'])      addOrSkip('Year Built', d['Year Built']);
+  if(d['Year Renovated'])  addOrSkip('Year Renovated', d['Year Renovated']);
+  if(d['No. of Parking Spaces']) addOrSkip('Parking Spaces', d['No. of Parking Spaces']);
+  if(d['Occupancy (%)'])   addOrSkip('Occupancy', String(d['Occupancy (%)']).includes('%') ? d['Occupancy (%)'] : d['Occupancy (%)']+'%');
+  if(d['Asking Price'])    addOrSkip('Asking Price', '$' + Number(d['Asking Price']).toLocaleString());
+  return {
+    table: {
+      widths: [140, '*'],
+      body: rows.map((r, i) => [
+        { text: r[0], color: OM_BRAND.darkGray, fontSize: 9, bold: true,  margin: [6, 6, 6, 6], fillColor: i % 2 === 0 ? OM_BRAND.lightGray : null },
+        { text: r[1], color: OM_BRAND.text,     fontSize: 9,              margin: [6, 6, 6, 6], fillColor: i % 2 === 0 ? OM_BRAND.lightGray : null },
+      ]),
+    },
+    layout: {
+      hLineWidth: () => 0.4,
+      vLineWidth: () => 0,
+      hLineColor: () => '#e0e0e0',
+    },
+  };
+}
+
+// ── Investment Highlights builder ────────────────────────────────────────
+
+function _omBuildHighlightBullet(line){
+  const splitMatch = line.match(/^(.+?)\s+[—-]\s+(.+)$/);
+  const title = splitMatch ? splitMatch[1] : null;
+  const body  = splitMatch ? splitMatch[2] : line;
+  return {
+    columns: [
+      { text: '■', color: OM_BRAND.gold, fontSize: 11, width: 14, margin: [0, 2, 0, 0] },
+      {
+        stack: [
+          title ? { text: title, color: OM_BRAND.navy, fontSize: 11, bold: true, margin: [0, 0, 0, 3] } : null,
+          { text: body, color: OM_BRAND.text, fontSize: 9.5, lineHeight: 1.4, alignment: 'justify' },
+        ].filter(Boolean),
+        width: '*',
+      },
+    ],
+    margin: [0, 0, 0, 12],
+  };
+}
+
+// Extract "City, STATE ZIP" from the deal's address field.
+function _omExtractCityStateZip(d){
+  const addr = d['Address'] || '';
+  const m = addr.match(/,\s*([^,]+,\s*[A-Z]{2}\s+\d{5})/);
+  if(m) return m[1].trim();
+  if(d['City']) return d['City'] + (d['State'] ? ', ' + d['State'] : '');
+  return d['Simple County'] || '';
 }
 
 // Premium OM handler — v100 placeholder that shows the real confirmation

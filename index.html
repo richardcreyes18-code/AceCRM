@@ -17852,28 +17852,87 @@ function _bmSearch(){
 }
 
 function _bmBuildEmail(){
+  // v102.23: Rewritten for a modern, clean plain-text look. No ASCII box-drawing,
+  // no pipe separators, no noisy "NOI: —" lines. Label/value pairs are tab-aligned
+  // so email clients render them in two visual columns, and stats with missing
+  // data are simply omitted instead of showing an em-dash placeholder.
   const selDeals=allDeals.filter(d=>_bm.selected.has(d.id));
-  const tl={warehouse:'INDUSTRIAL / WAREHOUSE',retail:'RETAIL',multifamily:'MULTIFAMILY'};
-  let b='Hi '+(_bm.buyerName.split(' ')[0]||_bm.buyerName)+',\n\nHope you\'re doing well. I\'ve gone through our active pipeline and put together a curated list of properties that align with your acquisition criteria. See the snapshot below — happy to send full packages or jump on a call for anything that looks interesting.\n\n';
-  ['warehouse','retail','multifamily'].forEach(t=>{
-    const ds=selDeals.filter(d=>_bmDealType(d)===t);
+  const SECTION_LABELS={multifamily:'MULTIFAMILY',warehouse:'INDUSTRIAL / WAREHOUSE',retail:'RETAIL'};
+  const SECTION_ORDER=['multifamily','warehouse','retail'];
+
+  // Local helper: format a single stat line as "label<TAB>value", indented 6 spaces
+  // under its property entry. Returns an empty string if the value is missing
+  // or an em-dash placeholder, so the caller can concatenate without guarding.
+  const statLine = (label, value) => {
+    if(value===null || value===undefined || value==='' || value==='—') return '';
+    return '      '+label+'\t'+value+'\n';
+  };
+
+  const firstName = _bm.buyerName.split(' ')[0] || _bm.buyerName;
+
+  let b = 'Hi '+firstName+',\n\n';
+  b += 'Hope you\'re doing well. I put together a curated list of properties '
+     + 'that align with your acquisition criteria. Details below — happy to '
+     + 'send full packages or jump on a call for anything that looks interesting.\n';
+
+  SECTION_ORDER.forEach(t => {
+    const ds = selDeals.filter(d => _bmDealType(d) === t);
     if(!ds.length) return;
-    b+='━━━ '+tl[t]+' ━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n';
-    ds.forEach((d,i)=>{
-      const cr=_bmCapRate(d), sf=_bmSF(d), units=_bmUnits(d), ppsf=_bmPPSF(d), ppu=_bmPPU(d);
-      const noi=Number(d['NOI']||0);
-      b+=(i+1)+'.  '+(d['Address']||'—')+'\n';
-      b+='    Asking Price: '+_bmFmt(d['Asking Price'])+'   |   NOI: '+_bmFmt(noi)+'   |   Cap Rate: '+_bmPct(cr)+'\n';
-      if(t==='warehouse'&&sf) b+='    '+_bmFS(sf)+(ppsf?'   |   $'+Math.round(ppsf)+'/SF':'')+'\n';
-      if(t==='retail'&&sf) b+='    '+_bmFS(sf)+(ppsf?'   |   $'+Math.round(ppsf)+'/SF':'')+'\n';
-      if(t==='multifamily'&&units) b+='    '+units+' Units'+(ppu?'   |   '+_bmFmt(ppu)+'/Unit':'')+'\n';
-      b+='    '+(_bmCounty(d)||'—')+' County\n';
-      if(_bm.notes[d.id]) b+='    Notes: '+_bm.notes[d.id]+'\n';
-      b+='\n';
+
+    // Section header: blank lines above, all-caps label, blank line below.
+    // The whitespace + caps is the header — no ASCII rule needed.
+    b += '\n\n'+SECTION_LABELS[t]+'\n\n';
+
+    ds.forEach((d,i) => {
+      const cr    = _bmCapRate(d);
+      const sf    = _bmSF(d);
+      const units = _bmUnits(d);
+      const ppsf  = _bmPPSF(d);
+      const ppu   = _bmPPU(d);
+      const noi   = Number(d['NOI']||0);
+      const askingFmt = _bmFmt(d['Asking Price']);
+      const noiFmt    = _bmFmt(noi);
+      const capFmt    = _bmPct(cr);
+
+      // Address line: "1.  123 Main St, City, NJ 01234"
+      b += '  '+(i+1)+'.  '+(d['Address']||'—')+'\n\n';
+
+      // Stat block — each line only appears if the value is real.
+      b += statLine('Asking Price', askingFmt);
+      b += statLine('NOI',          noiFmt);
+      b += statLine('Cap Rate',     capFmt);
+
+      // Asset-specific secondary stats
+      if(t==='warehouse' || t==='retail'){
+        if(sf)  b += statLine('Building SF',  Number(sf).toLocaleString());
+        if(ppsf) b += statLine('Price / SF',   '$'+Math.round(ppsf));
+      }
+      if(t==='multifamily'){
+        if(units) b += statLine('Units',      String(units));
+        if(ppu)   b += statLine('Price / Unit', _bmFmt(ppu));
+      }
+
+      // County — always included since almost every deal has one
+      const county = _bmCounty(d);
+      if(county) b += statLine('County', county);
+
+      // Optional per-deal note the agent typed in the Review & Compose modal
+      if(_bm.notes[d.id]) b += statLine('Notes', _bm.notes[d.id]);
+
+      // Double newline between properties inside the same section
+      b += '\n';
     });
   });
-  b+='\nLet me know what you think — happy to send full packages on anything that looks interesting!\n\nBest,\nRicky\nAce Acquisitions · KW Commercial NJ\n848.420.9972';
-  _bm.emailText=b; _bm.showEmail=true; _renderBM();
+
+  b += '\nLet me know what stands out — happy to send full packages on any of these.\n\n'
+     + 'Best,\n'
+     + 'Ricky\n'
+     + 'Ace Acquisitions · KW Commercial NJ\n'
+     + '848.420.9972';
+
+  _bm.emailText = b;
+  _bm.showEmail = true;
+  _renderBM();
 }
 
 function _bmOpenGmail(){

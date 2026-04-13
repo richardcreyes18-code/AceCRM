@@ -1316,7 +1316,30 @@ const SB_BC_MAP = {
   land_zoning_preference:'Land Zoning Preference',
   retail_anchor_preference:'Retail Anchor Preference',
   retail_lease_preference:'Retail Lease Preference',
-  warehouse_profile_preference:'Warehouse Profile Preference'
+  warehouse_profile_preference:'Warehouse Profile Preference',
+  // v102.14: buyer intake form redesign — "How They Buy" card + office tenant range
+  budget_is_deal_dependent:'Budget Deal Dependent',
+  financing_type:'Financing Type',
+  office_max_sf:'Office Max SF',
+  office_min_tenants:'Office Min Tenants',
+  office_max_tenants:'Office Max Tenants',
+  // v102.15: buyer criteria detail page symmetry — every intake field needs a column
+  mf_class_preference:'MF Class Preference',
+  mf_deal_profile:'MF Deal Profile',
+  mf_max_price_per_unit:'MF Max Price Per Unit',
+  warehouse_min_clear_height:'Warehouse Min Clear Height',
+  warehouse_min_docks:'Warehouse Min Docks',
+  warehouse_investor_or_owner:'Warehouse Investor or Owner',
+  retail_min_sf:'Retail Min SF',
+  retail_max_sf:'Retail Max SF',
+  land_max_acreage:'Land Max Acreage',
+  mixeduse_min_residential:'MixedUse Min Residential',
+  mixeduse_min_commercial:'MixedUse Min Commercial',
+  mixeduse_min_sf:'MixedUse Min SF',
+  automotive_min_bays:'Automotive Min Bays',
+  shopping_min_sf:'Shopping Min SF',
+  shopping_max_sf:'Shopping Max SF',
+  shopping_min_tenants:'Shopping Min Tenants'
 };
 
 // Tasks map (ace_tasks)
@@ -14518,39 +14541,20 @@ async function showBuyerCriteriaPage(){
               '_fubContactId': c.fub_contact_id || null
             };
           }
-          // Wrap in Airtable-like structure so rest of BC code works unchanged
-          records.push({ id: row.id, fields: {
-            'Simple Text Desired Property Type': row.desired_property_types||'',
-            'Simple Area Preference':            row.simple_area_preference||'',
-            'Location Preferences':              row.location_preferences||'',
-            'Preferred Cities':                  row.preferred_cities||'',
-            'Preferred States':                  row.preferred_states||'',
-            '_reviewStatus':                     row.review_status||'',
-            '_reviewNotes':                      row.review_notes||'',
-            'Minumum Cap Rate':                  row.minimum_cap_rate,
-            'Min Purchase Price':                row.min_purchase_price,
-            'Max Purchase Price':                row.max_purchase_price,
-            'Minimum # of Units MF':             row.mf_min_units,
-            'Max # of Units MF':                 row.mf_max_units,
-            'MF Style Preference':               row.mf_style_preference||'',
-            'Warehouse Min Square Footage':      row.warehouse_min_sf,
-            'Warehouse Max Square Footage':      row.warehouse_max_sf,
-            'Warehouse Features':                row.warehouse_features||'',
-            'Retail Min Tenants':                row.retail_min_tenants,
-            'Retail Tenant Type':                row.retail_tenant_type||'',
-            'Retail Min Occupancy':              row.retail_min_occupancy,
-            'Office Min SF':                     row.office_min_sf,
-            'Office Class Preference':           row.office_class_preference||'',
-            'Land Min Acreage':                  row.land_min_acreage,
-            'Land Intended Use':                 row.land_intended_use||'',
-            'Other Requirements ':               row.other_requirements||'',
-            'Deals Sent Notes':                  row.deals_sent_notes||'',
-            'Is VIP Buyer':                      row.is_vip_buyer||false,
-            'Date Added Buyer':                  row.date_added||'',
-            'Import Source':                     row.import_source||'',
-            'Buyer':                             row.contact_id ? [row.contact_id] : [],
-            '_contactId':                        row.contact_id
-          }});
+          // v102.15: SB_BC_MAP-driven translation (was hardcoded list missing
+          // ~25 columns). See the matching loader below for the longer comment.
+          const fields = {};
+          for(const [snake, atLabel] of Object.entries(SB_BC_MAP)){
+            if(snake === 'id') continue;
+            const v = row[snake];
+            fields[atLabel] = (v === null || v === undefined) ? '' : v;
+          }
+          fields['_reviewStatus'] = row.review_status || '';
+          fields['_reviewNotes']  = row.review_notes  || '';
+          fields['Import Source'] = row.import_source || '';
+          fields['Buyer']         = row.contact_id ? [row.contact_id] : [];
+          fields['_contactId']    = row.contact_id;
+          records.push({ id: row.id, fields });
         });
         if(rows.length < batchSize) break;
         from += batchSize;
@@ -14855,36 +14859,26 @@ async function bcOpenExpanded(recordId){
           from += batchSize;
         }
         // Wrap rows in Airtable-like { id, fields } shape matching showBuyerCriteriaPage
-        allBuyerCriteria = rows.map(row => ({ id: row.id, fields: {
-          'Simple Text Desired Property Type': row.desired_property_types||'',
-          'Simple Area Preference':            row.simple_area_preference||'',
-          'Location Preferences':              row.location_preferences||'',
-          'Preferred Cities':                  row.preferred_cities||'',
-            'Preferred States':                  row.preferred_states||'',
-          'Minumum Cap Rate':                  row.minimum_cap_rate,
-          'Min Purchase Price':                row.min_purchase_price,
-          'Max Purchase Price':                row.max_purchase_price,
-          'Minimum # of Units MF':             row.mf_min_units,
-          'Max # of Units MF':                 row.mf_max_units,
-          'MF Style Preference':               row.mf_style_preference||'',
-          'Warehouse Min Square Footage':      row.warehouse_min_sf,
-          'Warehouse Max Square Footage':      row.warehouse_max_sf,
-          'Warehouse Features':                row.warehouse_features||'',
-          'Retail Min Tenants':                row.retail_min_tenants,
-          'Retail Tenant Type':                row.retail_tenant_type||'',
-          'Retail Min Occupancy':              row.retail_min_occupancy,
-          'Office Min SF':                     row.office_min_sf,
-          'Office Class Preference':           row.office_class_preference||'',
-          'Land Min Acreage':                  row.land_min_acreage,
-          'Land Intended Use':                 row.land_intended_use||'',
-          'Other Requirements ':               row.other_requirements||'',
-          'Deals Sent Notes':                  row.deals_sent_notes||'',
-          'Is VIP Buyer':                      row.is_vip_buyer||false,
-          'Date Added Buyer':                  row.date_added||'',
-          'Import Source':                     row.import_source||'',
-          'Buyer':                             row.contact_id ? [row.contact_id] : [],
-          '_contactId':                        row.contact_id
-        }}));
+        // v102.15: Use SB_BC_MAP for the snake_case → Airtable label translation
+        // instead of a hardcoded list. Previously the hardcoded list was missing
+        // ~25 columns (preferred_counties, all v102.9 + v102.14 + v102.15 additions),
+        // which is why the buyer criteria detail page showed empty Counties pills,
+        // missing Financing Type, missing asset-specific fields, etc. Now any
+        // future column added to SB_BC_MAP automatically flows through here.
+        allBuyerCriteria = rows.map(row => {
+          const fields = {};
+          for(const [snake, atLabel] of Object.entries(SB_BC_MAP)){
+            if(snake === 'id') continue;  // id is set separately on the row object
+            const v = row[snake];
+            // Preserve falsy values that have meaning (false, 0, ''), but null/undefined → ''
+            fields[atLabel] = (v === null || v === undefined) ? '' : v;
+          }
+          // Compatibility extras the loader has always provided that aren't in SB_BC_MAP:
+          fields['Import Source']  = row.import_source || '';
+          fields['Buyer']          = row.contact_id ? [row.contact_id] : [];
+          fields['_contactId']     = row.contact_id;
+          return { id: row.id, fields };
+        });
         // Load contacts in batches of 40 to avoid URL length limits.
         // fub_contact_id is included so the Review & Apply panel can pull call notes.
         const contactIds = [...new Set(allBuyerCriteria.map(r=>r.fields._contactId).filter(Boolean))];
@@ -15163,10 +15157,18 @@ async function bcOpenExpanded(recordId){
               <!-- COUNTIES — searchable pill input -->
               <div class="bc-label" style="margin-bottom:6px;">Counties <span style="color:#888;font-weight:400;">(click ✕ to remove)</span></div>
               <div id="bcf_county_pills" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px;min-height:28px;padding:4px;background:#f8faff;border:1px solid #c0d0e8;border-radius:5px;">
-                ${(f['Simple Area Preference']||'').split(',').map(c=>c.trim()).filter(Boolean).map(c=>`
-                  <span style="background:#0ea5e9;color:#fff;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:600;display:flex;align-items:center;gap:5px;cursor:pointer;"
-                    onclick="this.remove();_bcSyncCounties()"
-                    title="Click to remove">${c} <span style="opacity:0.7;font-size:10px;">✕</span></span>`).join('')}
+                ${(() => {
+                  // v102.15: Read both the legacy Simple Area Preference field
+                  // (pre-v102.9 buyers) and the new preferred_counties field
+                  // (v102.9+ intake), de-duplicating so each county only renders once.
+                  const legacy = (f['Simple Area Preference']||'').split(',').map(c=>c.trim()).filter(Boolean);
+                  const newer  = (f['Preferred Counties']||'').split(',').map(c=>c.trim()).filter(Boolean);
+                  const merged = [...new Set([...legacy, ...newer])];
+                  return merged.map(c=>`
+                    <span style="background:#0ea5e9;color:#fff;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:600;display:flex;align-items:center;gap:5px;cursor:pointer;"
+                      onclick="this.remove();_bcSyncCounties()"
+                      title="Click to remove">${c} <span style="opacity:0.7;font-size:10px;">✕</span></span>`).join('');
+                })()}
               </div>
               <div style="position:relative;margin-bottom:6px;">
                 <input id="bcf_county_input" class="form-input" placeholder="Type county name — add a state above for suggestions..." style="width:100%;font-size:11px;box-sizing:border-box;"
@@ -15176,7 +15178,11 @@ async function bcOpenExpanded(recordId){
                 <div id="bcf_county_dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid #c0d0e8;border-radius:0 0 5px 5px;max-height:220px;overflow-y:auto;z-index:200;box-shadow:0 4px 12px rgba(0,0,0,0.15);"></div>
               </div>
               <div style="font-size:10px;color:#888;margin-top:2px;">NJ, NY, FL, CT, PA, MA have curated county lists · free-text supported for other states.</div>
-              <input type="hidden" id="bcf_counties_hidden" value="${f['Simple Area Preference']||''}"/>
+              <input type="hidden" id="bcf_counties_hidden" value="${(() => {
+                const legacy = (f['Simple Area Preference']||'').split(',').map(c=>c.trim()).filter(Boolean);
+                const newer  = (f['Preferred Counties']||'').split(',').map(c=>c.trim()).filter(Boolean);
+                return [...new Set([...legacy, ...newer])].join(', ');
+              })()}"/>
 
               <!-- LOCATION FREE TEXT -->
               <div class="bc-label" style="margin-top:10px;">Location Notes (free text)</div>
@@ -15188,13 +15194,28 @@ async function bcOpenExpanded(recordId){
               <input class="form-input" id="bcf_caprate" value="${f['Minumum Cap Rate']||''}" placeholder="e.g. 6.5" style="width:120px;margin-bottom:12px;"/>
               <div class="bc-label">Purchase Price Range</div>
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
-                <input class="form-input" id="bcf_minprice" value="${f['Min Purchase Price']||''}" placeholder="Min $" style="width:105px;" type="number"/>
+                <input class="form-input num-input" id="bcf_minprice" value="${_fmtNum(f['Min Purchase Price'])}" placeholder="Min $" style="width:115px;" type="text" inputmode="numeric"/>
                 <span style="color:#888;font-size:12px;">to</span>
-                <input class="form-input" id="bcf_maxprice" value="${f['Max Purchase Price']||''}" placeholder="Max $" style="width:105px;" type="number"/>
+                <input class="form-input num-input" id="bcf_maxprice" value="${_fmtNum(f['Max Purchase Price'])}" placeholder="Max $" style="width:115px;" type="text" inputmode="numeric"/>
               </div>
               <div class="bc-label">Date Added</div>
               <input class="form-input" id="bcf_dateadded" type="date" value="${f['Date Added Buyer']||''}" style="width:160px;margin-bottom:14px;"/>
 
+              <!-- v102.15: How They Buy — Deal Dependent flag + Financing Type -->
+              <div class="bc-label" style="margin-bottom:6px;">💰 How They Buy</div>
+              <div style="background:#f8faff;border:1px solid #c0d0e8;border-radius:5px;padding:8px 10px;margin-bottom:14px;">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px;font-weight:600;color:#1a3a6e;margin-bottom:8px;">
+                  <input type="checkbox" id="bcf_deal_dependent" ${f['Budget Deal Dependent']===true?'checked':''} style="width:14px;height:14px;cursor:pointer;" onchange="_bcAutoSave()"/>
+                  <span>Deal Dependent — budget varies by opportunity</span>
+                </label>
+                <div class="bc-label" style="font-size:10px;margin-bottom:3px;">Financing Type</div>
+                <select id="bcf_financing" class="form-input" style="width:100%;font-size:11px;" onchange="_bcAutoSave()">
+                  <option value="">Select...</option>
+                  <option value="cash"      ${f['Financing Type']==='cash'?'selected':''}>💵 Cash</option>
+                  <option value="financing" ${f['Financing Type']==='financing'?'selected':''}>🏦 Financing</option>
+                  <option value="mixed"     ${f['Financing Type']==='mixed'?'selected':''}>⚖️ Mixed / Depends on deal</option>
+                </select>
+              </div>
               <!-- PREFERRED CITIES -->
               <div class="bc-label" style="margin-bottom:6px;">📍 Preferred Cities / Towns <span style="color:#888;font-weight:400;">(click ✕ to remove)</span></div>
               <div id="bcf_city_pills" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px;min-height:28px;padding:4px;background:#f8faff;border:1px solid #c0d0e8;border-radius:5px;">
@@ -15239,84 +15260,129 @@ async function bcOpenExpanded(recordId){
 }
 
 function bcExpandedAssetSection(asset, f){
+  // v102.15: Full schema-symmetric field rendering. Every field in the buyer
+  // lead intake form has a matching input here. Adding a field to the intake
+  // requires adding the matching column + SB_BC_MAP entry + render block here
+  // + collection in bcSaveExpanded — no exceptions.
   const assetClean = asset.trim();
+  const lc = assetClean.toLowerCase();
   let fields = '';
 
-  if(assetClean.toLowerCase().includes('multi') || assetClean.toLowerCase().includes('multifamily')){
+  // Helper: numeric input with live comma formatting (uses num-input class
+  // which the global delegated listener formats with thousands separators).
+  // v102.16: switched from <input type="number"> so values like 1,500,000
+  // display correctly. _fmtNum on read formats the stored numeric value.
+  const num = (label, id, value, ph) => `
+    <div>
+      <div class="bc-label">${label}</div>
+      <input class="form-input num-input" id="${id}" value="${_fmtNum(value)}" placeholder="${ph||''}" type="text" inputmode="numeric" style="width:100%;" onchange="_bcAutoSave()"/>
+    </div>`;
+  // Helper: text input
+  const txt = (label, id, value, ph) => `
+    <div>
+      <div class="bc-label">${label}</div>
+      <input class="form-input" id="${id}" value="${value||''}" placeholder="${ph||''}" style="width:100%;" onchange="_bcAutoSave()"/>
+    </div>`;
+  // Helper: select dropdown
+  const sel = (label, id, value, options) => `
+    <div>
+      <div class="bc-label">${label}</div>
+      <select class="form-input" id="${id}" style="width:100%;" onchange="_bcAutoSave()">
+        ${options.map(o => `<option value="${o.v}" ${value===o.v?'selected':''}>${o.l}</option>`).join('')}
+      </select>
+    </div>`;
+
+  if(lc.includes('multi') || lc.includes('multifamily')){
     fields = `
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:10px;">
+        ${num('Min # of Units',     'bcf_minunits',     f['Minimum # of Units MF'], 'e.g. 4')}
+        ${num('Max # of Units',     'bcf_maxunits',     f['Max # of Units MF'],     'e.g. 50')}
+        ${sel('MF Class',           'bcf_mf_class',     f['MF Class Preference'],   [{v:'',l:'Any'},{v:'A',l:'A'},{v:'B',l:'B'},{v:'C',l:'C'},{v:'B/C',l:'B/C'}])}
+      </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
-        <div>
-          <div class="bc-label">Minimum Units</div>
-          <input class="form-input" id="bcf_minunits" value="${f['Minimum # of Units MF']||''}" placeholder="e.g. 4" style="width:100%;" onchange="_bcAutoSave()"/>
-        </div>
-        <div>
-          <div class="bc-label">Maximum Units</div>
-          <input class="form-input" id="bcf_maxunits" value="${f['Max # of Units MF']||''}" placeholder="e.g. 50" style="width:100%;" onchange="_bcAutoSave()"/>
-        </div>
-        <div>
-          <div class="bc-label">Style Preferences</div>
-          <input class="form-input" id="bcf_mf_style" value="${f['MF Style Preference']||''}" placeholder="e.g. Garden, Mid-Rise..." style="width:100%;" onchange="_bcAutoSave()"/>
-        </div>
+        ${sel('Deal Profile',       'bcf_mf_profile',   f['MF Deal Profile'],       [{v:'',l:'Any'},{v:'Value Add',l:'Value Add'},{v:'Turn-Key',l:'Turn-Key'},{v:'Stabilized',l:'Stabilized'},{v:'Core Plus',l:'Core Plus'},{v:'Opportunistic',l:'Opportunistic'}])}
+        ${txt('Style Preference',   'bcf_mf_style',     f['MF Style Preference'],   'e.g. Garden, Mid-Rise...')}
+        ${num('Max Price Per Unit', 'bcf_mf_maxppu',    f['MF Max Price Per Unit'], 'e.g. 150000')}
       </div>`;
 
-  } else if(assetClean.toLowerCase().includes('warehouse') || assetClean.toLowerCase().includes('industrial') || assetClean.toLowerCase().includes('distribution') || assetClean.toLowerCase().includes('flex')){
+  } else if(lc.includes('warehouse') || lc.includes('industrial') || lc.includes('distribution') || lc.includes('flex')){
     fields = `
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
-        <div>
-          <div class="bc-label">Minimum SF</div>
-          <input class="form-input" id="bcf_minSF" value="${f['Warehouse Min Square Footage']||''}" placeholder="e.g. 5000" style="width:100%;" onchange="_bcAutoSave()"/>
-        </div>
-        <div>
-          <div class="bc-label">Maximum SF</div>
-          <input class="form-input" id="bcf_maxSF" value="${f['Warehouse Max Square Footage']||''}" placeholder="e.g. 50000" style="width:100%;" onchange="_bcAutoSave()"/>
-        </div>
-        <div>
-          <div class="bc-label">Dock Doors / Features</div>
-          <input class="form-input" id="bcf_wh_features" value="${f['Warehouse Features']||''}" placeholder="e.g. Drive-in, Dock High..." style="width:100%;" onchange="_bcAutoSave()"/>
-        </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:10px;">
+        ${num('Min SF',             'bcf_minSF',        f['Warehouse Min Square Footage'], 'e.g. 5000')}
+        ${num('Max SF',             'bcf_maxSF',        f['Warehouse Max Square Footage'], 'e.g. 100000')}
+        ${num('Min Clear Height (ft)','bcf_wh_height',  f['Warehouse Min Clear Height'],   'e.g. 20')}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:10px;">
+        ${num('Min # Loading Docks','bcf_wh_docks',     f['Warehouse Min Docks'],          'e.g. 2')}
+        ${sel('Investor or Owner-Occ?','bcf_wh_invown', f['Warehouse Investor or Owner'],  [{v:'',l:'Either'},{v:'Investor',l:'Investor'},{v:'Owner-Occupier',l:'Owner-Occupier'}])}
+        ${sel('Deal Profile',       'bcf_wh_profile',   f['Warehouse Profile Preference'], [{v:'',l:'Any'},{v:'Value Add',l:'Value Add'},{v:'NNN',l:'NNN'},{v:'Stabilized',l:'Stabilized'},{v:'Vacant',l:'Vacant'}])}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr;gap:12px;">
+        ${txt('Dock Doors / Features (free text)','bcf_wh_features', f['Warehouse Features'], 'e.g. Drive-in, Dock High, Rail access...')}
       </div>`;
 
-  } else if(assetClean.toLowerCase().includes('retail') || assetClean.toLowerCase().includes('shopping')){
+  } else if(lc.includes('shopping')){
+    // Shopping center is its own asset type, distinct from retail strip mall
     fields = `
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
-        <div>
-          <div class="bc-label">Min # of Tenants / Units</div>
-          <input class="form-input" id="bcf_ret_minunits" value="${f['Retail Min Tenants']||''}" placeholder="e.g. 5" style="width:100%;" onchange="_bcAutoSave()"/>
-        </div>
-        <div>
-          <div class="bc-label">Tenant Type Preference</div>
-          <input class="form-input" id="bcf_ret_tenants" value="${f['Retail Tenant Type']||''}" placeholder="e.g. NNN, Credit tenants..." style="width:100%;" onchange="_bcAutoSave()"/>
-        </div>
-        <div>
-          <div class="bc-label">Min Occupancy (%)</div>
-          <input class="form-input" id="bcf_ret_occ" value="${f['Retail Min Occupancy']||''}" placeholder="e.g. 85" style="width:100%;" onchange="_bcAutoSave()"/>
-        </div>
+        ${num('Min SF',             'bcf_shop_minSF',   f['Shopping Min SF'],        'e.g. 10000')}
+        ${num('Max SF',             'bcf_shop_maxSF',   f['Shopping Max SF'],        'e.g. 80000')}
+        ${num('Min # of Tenants',   'bcf_shop_mintenants', f['Shopping Min Tenants'],'e.g. 6')}
       </div>`;
 
-  } else if(assetClean.toLowerCase().includes('office')){
+  } else if(lc.includes('retail')){
     fields = `
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:10px;">
+        ${num('Min SF',             'bcf_ret_minSF',    f['Retail Min SF'],          'e.g. 2000')}
+        ${num('Max SF',             'bcf_ret_maxSF',    f['Retail Max SF'],          'e.g. 20000')}
+        ${num('Min # of Tenants',   'bcf_ret_minunits', f['Retail Min Tenants'],     'e.g. 3')}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+        ${sel('Lease Preference',   'bcf_ret_lease',    f['Retail Lease Preference'],[{v:'',l:'Any'},{v:'NNN Preferred',l:'NNN Preferred'},{v:'Gross OK',l:'Gross OK'},{v:'Mixed',l:'Mixed'}])}
+        ${sel('Anchor Preference',  'bcf_ret_anchor',   f['Retail Anchor Preference'],[{v:'',l:'No Preference'},{v:'Anchored Preferred',l:'Anchored Preferred'},{v:'Unanchored OK',l:'Unanchored OK'}])}
+        ${num('Min Occupancy (%)',  'bcf_ret_occ',      f['Retail Min Occupancy'],   'e.g. 80')}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-top:10px;">
+        ${txt('Tenant Type Preference (free text)','bcf_ret_tenants', f['Retail Tenant Type'], 'e.g. NNN, Credit tenants...')}
+      </div>`;
+
+  } else if(lc.includes('office')){
+    fields = `
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:10px;">
+        ${num('Min SF',             'bcf_off_minSF',    f['Office Min SF'],          'e.g. 3000')}
+        ${num('Max SF',             'bcf_off_maxSF',    f['Office Max SF'],          'e.g. 30000')}
+        ${sel('Class Preference',   'bcf_off_class',    f['Office Class Preference'],[{v:'',l:'Any'},{v:'A',l:'A'},{v:'B',l:'B'},{v:'C',l:'C'},{v:'Medical',l:'Medical'}])}
+      </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-        <div>
-          <div class="bc-label">Min SF</div>
-          <input class="form-input" id="bcf_off_minSF" value="${f['Office Min SF']||''}" placeholder="e.g. 2000" style="width:100%;" onchange="_bcAutoSave()"/>
-        </div>
-        <div>
-          <div class="bc-label">Class Preference</div>
-          <input class="form-input" id="bcf_off_class" value="${f['Office Class Preference']||''}" placeholder="e.g. A, B, Medical..." style="width:100%;" onchange="_bcAutoSave()"/>
-        </div>
+        ${num('Min # of Tenants',   'bcf_off_mintenants', f['Office Min Tenants'],   'e.g. 1')}
+        ${num('Max # of Tenants',   'bcf_off_maxtenants', f['Office Max Tenants'],   'e.g. 20')}
       </div>`;
 
-  } else if(assetClean.toLowerCase().includes('land')){
+  } else if(lc.includes('land')){
     fields = `
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
-        <div>
-          <div class="bc-label">Min Acreage</div>
-          <input class="form-input" id="bcf_land_min" value="${f['Land Min Acreage']||''}" placeholder="e.g. 1" style="width:100%;" onchange="_bcAutoSave()"/>
-        </div>
-        <div>
-          <div class="bc-label">Intended Use</div>
-          <input class="form-input" id="bcf_land_use" value="${f['Land Intended Use']||''}" placeholder="e.g. Development, Parking..." style="width:100%;" onchange="_bcAutoSave()"/>
-        </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:10px;">
+        ${num('Min Acres',          'bcf_land_min',     f['Land Min Acreage'],       'e.g. 1')}
+        ${num('Max Acres',          'bcf_land_max',     f['Land Max Acreage'],       'e.g. 20')}
+        ${sel('Zoning Preference',  'bcf_land_zoning',  f['Land Zoning Preference'], [{v:'',l:'Any'},{v:'Residential',l:'Residential'},{v:'Commercial',l:'Commercial'},{v:'Industrial',l:'Industrial'},{v:'Mixed',l:'Mixed'}])}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr;gap:12px;">
+        ${txt('Intended Use (free text)','bcf_land_use', f['Land Intended Use'],     'e.g. Development, Parking...')}
+      </div>`;
+
+  } else if(lc.includes('mixed')){
+    fields = `
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+        ${num('Min Residential Units','bcf_mu_minres', f['MixedUse Min Residential'],'e.g. 2')}
+        ${num('Min Commercial Spaces','bcf_mu_mincom', f['MixedUse Min Commercial'], 'e.g. 1')}
+        ${num('Min Building SF',      'bcf_mu_minsf',  f['MixedUse Min SF'],         'e.g. 3000')}
+      </div>`;
+
+  } else if(lc.includes('automotive') || lc.includes('auto')){
+    fields = `
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+        ${num('Min # of Bays',      'bcf_auto_bays',    f['Automotive Min Bays'],          'e.g. 4')}
+        ${sel('Gas Station Needed?','bcf_auto_gas',     f['Automotive Gas Preference'],    [{v:'',l:'No Preference'},{v:'Yes',l:'Yes'},{v:'No',l:'No'}])}
+        ${sel('Owner-Occ or Investor?','bcf_auto_type', f['Automotive Type Preference'],   [{v:'',l:'Either'},{v:'Owner-Occupier',l:'Owner-Occupier'},{v:'Investor',l:'Investor'}])}
       </div>`;
 
   } else {
@@ -15650,7 +15716,13 @@ async function bcSaveExpanded(recordId, isAuto=false){
   if(!cfg.key){ alert('Connect Supabase first.'); return; }
 
   const gv = id => document.getElementById(id)?.value?.trim()||'';
-  const gn = id => { const v = parseFloat(document.getElementById(id)?.value); return isNaN(v) ? null : v; };
+  // v102.16: strip commas before parseFloat so values like "1,000,000" save correctly
+  const gn = id => {
+    const raw = document.getElementById(id)?.value;
+    if(raw == null || raw === '') return null;
+    const v = parseFloat(String(raw).replace(/,/g,''));
+    return isNaN(v) ? null : v;
+  };
 
   const fields = {};
   const sv = (f,v) => { if(v !== null && v !== undefined && v !== '') fields[f] = v; else if(v==='') fields[f] = ''; };
@@ -15679,24 +15751,66 @@ async function bcSaveExpanded(recordId, isAuto=false){
   const minU  = gn('bcf_minunits');   if(minU!==null) fields['Minimum # of Units MF'] = minU;
   const maxU  = gn('bcf_maxunits');   if(maxU!==null) fields['Max # of Units MF'] = maxU;
   sv('MF Style Preference',              gv('bcf_mf_style'));
+  // v102.15: new MF fields
+  sv('MF Class Preference',              gv('bcf_mf_class'));
+  sv('MF Deal Profile',                  gv('bcf_mf_profile'));
+  const mfPpu = gn('bcf_mf_maxppu');  if(mfPpu!==null) fields['MF Max Price Per Unit'] = mfPpu;
 
   // Warehouse / Industrial
   const minSF = gn('bcf_minSF');      if(minSF!==null) fields['Warehouse Min Square Footage'] = minSF;
   const maxSF = gn('bcf_maxSF');      if(maxSF!==null) fields['Warehouse Max Square Footage'] = maxSF;
   sv('Warehouse Features',               gv('bcf_wh_features'));
+  // v102.15: new warehouse fields
+  const whHeight = gn('bcf_wh_height'); if(whHeight!==null) fields['Warehouse Min Clear Height'] = whHeight;
+  const whDocks  = gn('bcf_wh_docks');  if(whDocks!==null)  fields['Warehouse Min Docks']        = whDocks;
+  sv('Warehouse Investor or Owner',      gv('bcf_wh_invown'));
+  sv('Warehouse Profile Preference',     gv('bcf_wh_profile'));
 
   // Retail
   const retMin = gn('bcf_ret_minunits'); if(retMin!==null) fields['Retail Min Tenants'] = retMin;
   sv('Retail Tenant Type',               gv('bcf_ret_tenants'));
   const retOcc = gn('bcf_ret_occ');      if(retOcc!==null) fields['Retail Min Occupancy'] = retOcc;
+  // v102.15: new retail fields
+  const retMinSF = gn('bcf_ret_minSF');  if(retMinSF!==null) fields['Retail Min SF']    = retMinSF;
+  const retMaxSF = gn('bcf_ret_maxSF');  if(retMaxSF!==null) fields['Retail Max SF']    = retMaxSF;
+  sv('Retail Lease Preference',          gv('bcf_ret_lease'));
+  sv('Retail Anchor Preference',         gv('bcf_ret_anchor'));
 
   // Office
   const offSF = gn('bcf_off_minSF');  if(offSF!==null) fields['Office Min SF'] = offSF;
   sv('Office Class Preference',          gv('bcf_off_class'));
+  // v102.15: new office fields
+  const offMaxSF = gn('bcf_off_maxSF');  if(offMaxSF!==null) fields['Office Max SF']      = offMaxSF;
+  const offMinT  = gn('bcf_off_mintenants'); if(offMinT!==null) fields['Office Min Tenants'] = offMinT;
+  const offMaxT  = gn('bcf_off_maxtenants'); if(offMaxT!==null) fields['Office Max Tenants'] = offMaxT;
 
   // Land
   const landAc = gn('bcf_land_min');  if(landAc!==null) fields['Land Min Acreage'] = landAc;
   sv('Land Intended Use',                gv('bcf_land_use'));
+  // v102.15: new land fields
+  const landMax = gn('bcf_land_max'); if(landMax!==null) fields['Land Max Acreage'] = landMax;
+  sv('Land Zoning Preference',           gv('bcf_land_zoning'));
+
+  // v102.15: Mixed Use
+  const muRes = gn('bcf_mu_minres'); if(muRes!==null) fields['MixedUse Min Residential'] = muRes;
+  const muCom = gn('bcf_mu_mincom'); if(muCom!==null) fields['MixedUse Min Commercial']  = muCom;
+  const muSF  = gn('bcf_mu_minsf');  if(muSF!==null)  fields['MixedUse Min SF']          = muSF;
+
+  // v102.15: Automotive
+  const autoBays = gn('bcf_auto_bays'); if(autoBays!==null) fields['Automotive Min Bays'] = autoBays;
+  sv('Automotive Gas Preference',        gv('bcf_auto_gas'));
+  sv('Automotive Type Preference',       gv('bcf_auto_type'));
+
+  // v102.15: Shopping Center (separate from retail strip mall)
+  const shopMinSF = gn('bcf_shop_minSF');     if(shopMinSF!==null) fields['Shopping Min SF']      = shopMinSF;
+  const shopMaxSF = gn('bcf_shop_maxSF');     if(shopMaxSF!==null) fields['Shopping Max SF']      = shopMaxSF;
+  const shopMinT  = gn('bcf_shop_mintenants');if(shopMinT!==null)  fields['Shopping Min Tenants'] = shopMinT;
+
+  // v102.15: How They Buy — Deal Dependent flag + Financing Type
+  // Deal dependent is a boolean; explicitly preserve false (meaningful state)
+  const ddEl = document.getElementById('bcf_deal_dependent');
+  if(ddEl) fields['Budget Deal Dependent'] = ddEl.checked === true;
+  sv('Financing Type',                   gv('bcf_financing'));
 
   if(!Object.keys(fields).length){ return; }
 
@@ -16946,25 +17060,73 @@ function _liRenderBuyerForm(){
           ${_liField('Email','li_b_email','email','email@example.com','1fr')}
           ${_liField('Company','li_b_company','text','LLC, Corp, etc.','1fr')}
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+        <div style="display:grid;grid-template-columns:1fr;gap:14px;">
           ${_liField('Owned Property Address (if applicable)','li_b_ownedprop','text','Current property they own...','1fr')}
-          ${_liField('Minimum Cap Rate (%)','li_b_caprate','number','e.g. 6.5','1fr')}
         </div>
         ${_liTextarea('Contact Notes','li_b_cnotes','How they were met, relationship notes...',2)}
+      `)}
+
+      ${_liSection('💰 How They Buy', `
+        <div style="font-size:12px;color:#64748b;margin-bottom:12px;">Budget range and financing preferences</div>
+
+        <!-- Deal Dependent toggle — when checked, hides the min/max price inputs -->
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:14px;">
+          <label style="display:flex;align-items:center;gap:10px;cursor:pointer;font-size:13px;font-weight:600;color:#0f172a;">
+            <input type="checkbox" id="li_b_deal_dependent" onchange="_liBuyerToggleDealDependent()" style="width:16px;height:16px;cursor:pointer;"/>
+            <span>💬 Deal Dependent — budget varies based on the opportunity</span>
+          </label>
+        </div>
+
+        <!-- Price range inputs -->
+        <div id="li_b_price_wrap" style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
+          ${_liNumField('Min Purchase Price ($)','li_b_minprice','e.g. 1000000')}
+          ${_liNumField('Max Purchase Price ($)','li_b_maxprice','e.g. 5000000')}
+        </div>
+
+        <!-- Financing type + Min cap rate -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+          <div>
+            <label style="${_liLabelStyle()}">Financing Type</label>
+            <select id="li_b_financing" style="${_liInputStyle()}">
+              <option value="">Select...</option>
+              <option value="cash">💵 Cash</option>
+              <option value="financing">🏦 Financing</option>
+              <option value="mixed">⚖️ Mixed / Depends on deal</option>
+            </select>
+          </div>
+          ${_liField('Minimum Cap Rate (%)','li_b_caprate','number','e.g. 6.5','1fr')}
+        </div>
+      `)}
+
+      ${_liSection('📍 Target Areas', `
+        <div style="font-size:12px;color:#64748b;margin-bottom:10px;">Select all NJ counties this buyer is actively looking in</div>
+        <div id="li_b_counties" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">
+          ${NJ_COUNTIES.map(c=>`<div id="li_b_co_${c.replace(' ','_')}" onclick="_liToggleCounty('${c}')"
+            style="background:#f1f5f9;border:2px solid #e2e8f0;border-radius:99px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;transition:all 0.15s;color:#475569;">${c}</div>`).join('')}
+        </div>
+
+        <!-- Preferred Cities subsection — mirrors the pattern from the Buyer Criteria profile page -->
+        <div style="border-top:1px solid #e2e8f0;padding-top:14px;margin-top:6px;">
+          <label style="${_liLabelStyle()}">📍 Preferred Cities / Towns <span style="color:#94a3b8;font-weight:400;">(optional — click ✕ to remove)</span></label>
+          <div id="li_b_city_pills" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px;min-height:28px;padding:6px;background:#f8faff;border:1px solid #e2e8f0;border-radius:8px;"></div>
+          <div style="position:relative;margin-bottom:4px;">
+            <input id="li_b_city_input" placeholder="Type city name to search NJ municipalities..."
+              oninput="_liCitySearch(this.value)"
+              onkeydown="if(event.key==='Escape'){document.getElementById('li_b_city_dropdown').style.display='none';}"
+              autocomplete="off"
+              style="${_liInputStyle()}"/>
+            <div id="li_b_city_dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid #e2e8f0;border-radius:0 0 8px 8px;max-height:180px;overflow-y:auto;z-index:200;box-shadow:0 4px 12px rgba(0,0,0,0.15);"></div>
+          </div>
+          <div style="font-size:10px;color:#94a3b8;margin-top:2px;">Searchable list of all NJ municipalities — uniform spelling guaranteed.</div>
+          <input type="hidden" id="li_b_cities_hidden" value=""/>
+        </div>
+
+        ${_liTextarea('Additional Location Notes','li_b_locnotes','Specific towns, zip codes, neighborhoods...',2)}
       `)}
 
       ${_liSection('🏗️ Asset Types They Buy *', `
         ${_liAssetSelector('b')}
         <div id="li_b_conditional"></div>
-      `)}
-
-      ${_liSection('📍 Target Areas — NJ Counties', `
-        <div style="font-size:12px;color:#64748b;margin-bottom:10px;">Select all counties this buyer is actively looking in</div>
-        <div id="li_b_counties" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:12px;">
-          ${NJ_COUNTIES.map(c=>`<div id="li_b_co_${c.replace(' ','_')}" onclick="_liToggleCounty('${c}')"
-            style="background:#f1f5f9;border:2px solid #e2e8f0;border-radius:99px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;transition:all 0.15s;color:#475569;">${c}</div>`).join('')}
-        </div>
-        ${_liTextarea('Additional Location Notes','li_b_locnotes','Specific towns, zip codes, neighborhoods...',2)}
       `)}
 
       ${_liSection('💼 Investment Profile', `
@@ -16982,9 +17144,86 @@ function _liRenderBuyerForm(){
 
       <button onclick="_liSubmitBuyer()" id="li_b_submit"
         style="width:100%;background:linear-gradient(135deg,#14532d,#166534);color:#fff;border:none;padding:16px;font-size:16px;font-weight:700;border-radius:10px;cursor:pointer;">
-        ✓ Submit Buyer Lead to Airtable
+        ✓ Submit Buyer Lead
       </button>
     </div>`;
+}
+
+// v102.14: Deal Dependent toggle — hides/shows the price range inputs when
+// the buyer's budget depends on the specific deal.
+function _liBuyerToggleDealDependent(){
+  const chk = document.getElementById('li_b_deal_dependent');
+  const wrap = document.getElementById('li_b_price_wrap');
+  if(!chk || !wrap) return;
+  if(chk.checked){
+    wrap.style.opacity = '0.4';
+    wrap.style.pointerEvents = 'none';
+    // Clear the values so they don't get saved as a binding range
+    const min = document.getElementById('li_b_minprice');
+    const max = document.getElementById('li_b_maxprice');
+    if(min) min.value = '';
+    if(max) max.value = '';
+  } else {
+    wrap.style.opacity = '1';
+    wrap.style.pointerEvents = 'auto';
+  }
+}
+
+// v102.14: NJ municipality autocomplete for the buyer intake form.
+// Parallels the _bc* helpers on the Buyer Criteria profile page, but
+// targets the li_b_city_* element IDs so both forms can coexist.
+function _liCitySearch(q){
+  const dd = document.getElementById('li_b_city_dropdown');
+  if(!dd) return;
+  if(!q || q.length < 2){ dd.style.display='none'; return; }
+  if(typeof _NJ_MUNICIPALITIES === 'undefined'){ dd.style.display='none'; return; }
+  const matches = _NJ_MUNICIPALITIES.filter(c => c.toLowerCase().includes(q.toLowerCase())).slice(0, 10);
+  if(!matches.length){ dd.style.display='none'; return; }
+  dd.innerHTML = matches.map(c => `
+    <div onclick="_liAddCity('${c.replace(/'/g, "\\'")}')"
+      style="padding:8px 12px;cursor:pointer;font-size:12px;color:#1a3a6e;"
+      onmouseenter="this.style.background='#e8f0fe'" onmouseleave="this.style.background=''">
+      📍 ${c}, NJ
+    </div>`).join('');
+  dd.style.display = 'block';
+}
+
+function _liAddCity(cityName){
+  const pills = document.getElementById('li_b_city_pills');
+  if(!pills) return;
+  // Skip duplicates
+  const existing = Array.from(pills.querySelectorAll('[data-city]')).map(el => el.getAttribute('data-city'));
+  if(existing.includes(cityName)){
+    const inp = document.getElementById('li_b_city_input');
+    if(inp){ inp.value = ''; inp.focus(); }
+    const dd = document.getElementById('li_b_city_dropdown');
+    if(dd) dd.style.display = 'none';
+    return;
+  }
+  // Create pill
+  const pill = document.createElement('span');
+  pill.setAttribute('data-city', cityName);
+  pill.style.cssText = 'background:#7c3aed;color:#fff;padding:4px 10px;border-radius:99px;font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:5px;cursor:pointer;';
+  pill.title = 'Click to remove';
+  pill.innerHTML = `${cityName} <span style="opacity:0.75;font-size:10px;">✕</span>`;
+  pill.onclick = () => { pill.remove(); _liSyncCities(); };
+  pills.appendChild(pill);
+  _liSyncCities();
+  // Clear the input, keep focus for the next entry
+  const inp = document.getElementById('li_b_city_input');
+  if(inp){ inp.value = ''; inp.focus(); }
+  const dd = document.getElementById('li_b_city_dropdown');
+  if(dd) dd.style.display = 'none';
+}
+
+function _liSyncCities(){
+  const pills = document.getElementById('li_b_city_pills');
+  const hidden = document.getElementById('li_b_cities_hidden');
+  if(!pills || !hidden) return;
+  const names = Array.from(pills.querySelectorAll('[data-city]'))
+    .map(el => el.getAttribute('data-city'))
+    .filter(Boolean);
+  hidden.value = names.join(', ');
 }
 
 function _liToggleCounty(county){
@@ -17002,76 +17241,85 @@ function _liToggleCounty(county){
 
 
 function _liBuyerAssetFields(id){
+  // v102.16: gNum uses _liNumField (text input + num-input class) which gets
+  // live comma formatting via the global delegated listener. gTxt is the
+  // legacy plain field. Use gNum for any dollar amount, square footage,
+  // unit count, or other large number that benefits from thousands separators.
+  const gNum = (lbl,fid,ph) => _liNumField(lbl,'li_b_'+id+'_'+fid,ph);
   const g = (lbl,fid,type,ph) => _liField(lbl,'li_b_'+id+'_'+fid,type,ph,'1fr');
   if(id==='multifamily') return `
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px;">
-      ${g('Min # of Units','minunits','number','e.g. 4')}
-      ${g('Max # of Units','maxunits','number','e.g. 50')}
+      ${gNum('Min # of Units','minunits','e.g. 4')}
+      ${gNum('Max # of Units','maxunits','e.g. 50')}
       <div><label style="${_liLabelStyle()}">MF Class</label><select id="li_b_multifamily_class" style="${_liInputStyle()}"><option value="">Any</option><option>A</option><option>B</option><option>C</option><option>B/C</option></select></div>
     </div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
       <div><label style="${_liLabelStyle()}">Deal Profile</label><select id="li_b_multifamily_profile" style="${_liInputStyle()}"><option value="">Any</option><option>Value Add</option><option>Turn-Key</option><option>Stabilized</option><option>Core Plus</option><option>Opportunistic</option></select></div>
       <div><label style="${_liLabelStyle()}">Style Preference</label><select id="li_b_multifamily_style" style="${_liInputStyle()}"><option value="">Any</option><option>Garden</option><option>Elevator</option><option>Mid-Rise</option><option>Townhouse</option></select></div>
-      ${g('Max Price Per Unit','maxppu','number','e.g. 150000')}
+      ${gNum('Max Price Per Unit ($)','maxppu','e.g. 150,000')}
     </div>`;
 
   if(id==='warehouse') return `
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px;">
-      ${g('Min SF','minsf','number','e.g. 5000')}
-      ${g('Max SF','maxsf','number','e.g. 100000')}
-      ${g('Min Clear Height (ft)','height','number','e.g. 20')}
+      ${gNum('Min SF','minsf','e.g. 5,000')}
+      ${gNum('Max SF','maxsf','e.g. 100,000')}
+      ${gNum('Min Clear Height (ft)','height','e.g. 20')}
     </div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
-      ${g('Min # Loading Docks','docks','number','e.g. 2')}
+      ${gNum('Min # Loading Docks','docks','e.g. 2')}
       <div><label style="${_liLabelStyle()}">Investor or Owner-Occ?</label><select id="li_b_warehouse_type" style="${_liInputStyle()}"><option value="">Either</option><option>Investor</option><option>Owner-Occupier</option></select></div>
       <div><label style="${_liLabelStyle()}">Deal Profile</label><select id="li_b_warehouse_profile" style="${_liInputStyle()}"><option value="">Any</option><option>Value Add</option><option>NNN</option><option>Stabilized</option><option>Vacant</option></select></div>
     </div>`;
 
   if(id==='retail') return `
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px;">
-      ${g('Min SF','minsf','number','e.g. 2000')}
-      ${g('Max SF','maxsf','number','e.g. 20000')}
-      ${g('Min # of Tenants','mintenants','number','e.g. 3')}
+      ${gNum('Min SF','minsf','e.g. 2,000')}
+      ${gNum('Max SF','maxsf','e.g. 20,000')}
+      ${gNum('Min # of Tenants','mintenants','e.g. 3')}
     </div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
       <div><label style="${_liLabelStyle()}">Lease Preference</label><select id="li_b_retail_lease" style="${_liInputStyle()}"><option value="">Any</option><option>NNN Preferred</option><option>Gross OK</option><option>Mixed</option></select></div>
       <div><label style="${_liLabelStyle()}">Anchor Preference</label><select id="li_b_retail_anchor" style="${_liInputStyle()}"><option value="">No Preference</option><option>Anchored Preferred</option><option>Unanchored OK</option></select></div>
-      ${g('Min Occupancy (%)','minocc','number','e.g. 80')}
+      ${gNum('Min Occupancy (%)','minocc','e.g. 80')}
     </div>`;
 
   if(id==='office') return `
-    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
-      ${g('Min SF','minsf','number','e.g. 3000')}
-      ${g('Max SF','maxsf','number','e.g. 30000')}
+    <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px;">
+      ${gNum('Min SF','minsf','e.g. 3,000')}
+      ${gNum('Max SF','maxsf','e.g. 30,000')}
       <div><label style="${_liLabelStyle()}">Class Preference</label><select id="li_b_office_class" style="${_liInputStyle()}"><option value="">Any</option><option>A</option><option>B</option><option>C</option><option>Medical</option></select></div>
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;">
+      ${gNum('Min # of Tenants','mintenants','e.g. 1')}
+      ${gNum('Max # of Tenants','maxtenants','e.g. 20')}
     </div>`;
 
   if(id==='land') return `
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
-      ${g('Min Acres','minacres','number','e.g. 1')}
-      ${g('Max Acres','maxacres','number','e.g. 20')}
+      ${gNum('Min Acres','minacres','e.g. 1')}
+      ${gNum('Max Acres','maxacres','e.g. 20')}
       <div><label style="${_liLabelStyle()}">Zoning Preference</label><select id="li_b_land_zoning" style="${_liInputStyle()}"><option value="">Any</option><option>Residential</option><option>Commercial</option><option>Industrial</option><option>Mixed</option></select></div>
     </div>`;
 
   if(id==='mixeduse') return `
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
-      ${g('Min Residential Units','minres','number','e.g. 2')}
-      ${g('Min Commercial Spaces','mincom','number','e.g. 1')}
-      ${g('Min Building SF','minsf','number','e.g. 3000')}
+      ${gNum('Min Residential Units','minres','e.g. 2')}
+      ${gNum('Min Commercial Spaces','mincom','e.g. 1')}
+      ${gNum('Min Building SF','minsf','e.g. 3,000')}
     </div>`;
 
   if(id==='automotive') return `
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
-      ${g('Min # of Bays','minbays','number','e.g. 4')}
+      ${gNum('Min # of Bays','minbays','e.g. 4')}
       <div><label style="${_liLabelStyle()}">Gas Station Needed?</label><select id="li_b_automotive_gas" style="${_liInputStyle()}"><option value="">No Preference</option><option>Yes</option><option>No</option></select></div>
       <div><label style="${_liLabelStyle()}">Owner-Occ or Investor?</label><select id="li_b_automotive_type" style="${_liInputStyle()}"><option value="">Either</option><option>Owner-Occupier</option><option>Investor</option></select></div>
     </div>`;
 
   if(id==='shopping') return `
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
-      ${g('Min SF','minsf','number','e.g. 10000')}
-      ${g('Max SF','maxsf','number','e.g. 80000')}
-      ${g('Min # of Tenants','mintenants','number','e.g. 6')}
+      ${gNum('Min SF','minsf','e.g. 10,000')}
+      ${gNum('Max SF','maxsf','e.g. 80,000')}
+      ${gNum('Min # of Tenants','mintenants','e.g. 6')}
     </div>`;
 
   return `<div style="font-size:12px;color:#666;">Use the notes section to specify requirements.</div>`;
@@ -17079,7 +17327,17 @@ function _liBuyerAssetFields(id){
 
 async function _liSubmitBuyer(){
   const gv = id => document.getElementById(id)?.value?.trim()||'';
-  const gn = id => { const v=Number(document.getElementById(id)?.value); return isNaN(v)||v===0?null:v; };
+  // v102.16: gn strips commas before parsing. Without this, any value the
+  // user typed with thousands separators (e.g. "1,000,000") becomes NaN
+  // and silently gets dropped from the submission. This fixed the Min/Max
+  // Purchase Price not transferring bug, and the same fix went into every
+  // other gn helper in the file.
+  const gn = id => {
+    const raw = document.getElementById(id)?.value;
+    if(raw == null || raw === '') return null;
+    const v = Number(String(raw).replace(/,/g,''));
+    return isNaN(v) || v===0 ? null : v;
+  };
   const errEl = document.getElementById('li_b_error');
   const btn = document.getElementById('li_b_submit');
 
@@ -17168,32 +17426,83 @@ async function _liSubmitBuyer(){
 
       // 2. Build the ace_buyer_criteria row directly (no SB_BC_MAP indirection
       //    needed here since we're writing snake_case columns straight in)
+      const dealDependent = document.getElementById('li_b_deal_dependent')?.checked === true;
       const bcRow = {
         contact_id: contactId,
         date_added: new Date().toISOString().slice(0,10),
         desired_property_types: assetLabels || null,
         preferred_states: (_li.counties && _li.counties.length) ? 'NJ' : null,
         preferred_counties: _li.counties && _li.counties.length ? _li.counties.join(', ') : null,
+        // v102.15: ALSO write to simple_area_preference for backwards compat
+        // with legacy code paths and queries that still read from that column.
+        simple_area_preference: _li.counties && _li.counties.length ? _li.counties.join(', ') : null,
+        // v102.14: Preferred Cities from the NJ municipality autocomplete
+        preferred_cities: gv('li_b_cities_hidden') || null,
         location_preferences: gv('li_b_locnotes') || null,
         other_requirements: [gv('li_b_notes'), investType ? `Investor Type: ${investType}` : '', assetCriteria].filter(Boolean).join('\n\n') || null,
         deals_sent_notes: gv('li_b_lastdeal') || null,
+        // v102.14: "How They Buy" card — budget range, deal-dependent flag, financing, cap rate
+        min_purchase_price: dealDependent ? null : gn('li_b_minprice'),
+        max_purchase_price: dealDependent ? null : gn('li_b_maxprice'),
+        budget_is_deal_dependent: dealDependent,
+        financing_type: document.getElementById('li_b_financing')?.value || null,
         minimum_cap_rate: gn('li_b_caprate'),
+        // ── Multifamily ─────────────────────────────────────────────
         mf_min_units: gn('li_b_multifamily_minunits'),
         mf_max_units: gn('li_b_multifamily_maxunits'),
         mf_style_preference: document.getElementById('li_b_multifamily_style')?.value || null,
+        // v102.15: MF class, deal profile, max price per unit
+        mf_class_preference: document.getElementById('li_b_multifamily_class')?.value || null,
+        mf_deal_profile: document.getElementById('li_b_multifamily_profile')?.value || null,
+        mf_max_price_per_unit: gn('li_b_multifamily_maxppu'),
+        // ── Warehouse / Industrial ──────────────────────────────────
         warehouse_min_sf: gn('li_b_warehouse_minsf'),
         warehouse_max_sf: gn('li_b_warehouse_maxsf'),
         warehouse_profile_preference: document.getElementById('li_b_warehouse_profile')?.value || null,
+        // v102.15: warehouse clear height, docks, investor-or-owner
+        warehouse_min_clear_height: gn('li_b_warehouse_height'),
+        warehouse_min_docks: gn('li_b_warehouse_docks'),
+        warehouse_investor_or_owner: document.getElementById('li_b_warehouse_type')?.value || null,
+        // ── Office ──────────────────────────────────────────────────
+        office_min_sf: gn('li_b_office_minsf'),
+        office_max_sf: gn('li_b_office_maxsf'),
+        office_min_tenants: gn('li_b_office_mintenants'),
+        office_max_tenants: gn('li_b_office_maxtenants'),
         office_class_preference: document.getElementById('li_b_office_class')?.value || null,
-        // v102.9: new asset-type preference columns
-        automotive_gas_preference: document.getElementById('li_b_automotive_gas')?.value || null,
-        automotive_type_preference: document.getElementById('li_b_automotive_type')?.value || null,
-        land_zoning_preference: document.getElementById('li_b_land_zoning')?.value || null,
+        // ── Retail (strip mall) ─────────────────────────────────────
+        retail_min_tenants: gn('li_b_retail_mintenants'),
+        retail_min_occupancy: gn('li_b_retail_minocc'),
         retail_anchor_preference: document.getElementById('li_b_retail_anchor')?.value || null,
         retail_lease_preference: document.getElementById('li_b_retail_lease')?.value || null,
+        // v102.15: retail min/max SF
+        retail_min_sf: gn('li_b_retail_minsf'),
+        retail_max_sf: gn('li_b_retail_maxsf'),
+        // ── Land ────────────────────────────────────────────────────
+        land_min_acreage: gn('li_b_land_minacres'),
+        land_zoning_preference: document.getElementById('li_b_land_zoning')?.value || null,
+        // v102.15: land max acreage
+        land_max_acreage: gn('li_b_land_maxacres'),
+        // ── Automotive ──────────────────────────────────────────────
+        automotive_gas_preference: document.getElementById('li_b_automotive_gas')?.value || null,
+        automotive_type_preference: document.getElementById('li_b_automotive_type')?.value || null,
+        // v102.15: automotive min bays
+        automotive_min_bays: gn('li_b_automotive_minbays'),
+        // ── Mixed Use ───────────────────────────────────────────────
+        // v102.15: mixed use residential / commercial / building SF
+        mixeduse_min_residential: gn('li_b_mixeduse_minres'),
+        mixeduse_min_commercial: gn('li_b_mixeduse_mincom'),
+        mixeduse_min_sf: gn('li_b_mixeduse_minsf'),
+        // ── Shopping Center ─────────────────────────────────────────
+        // v102.15: shopping center is a separate asset type from retail strip mall
+        shopping_min_sf: gn('li_b_shopping_minsf'),
+        shopping_max_sf: gn('li_b_shopping_maxsf'),
+        shopping_min_tenants: gn('li_b_shopping_mintenants'),
       };
-      // Strip null/empty values so we don't write a bunch of NULLs
+      // Strip null/empty values so we don't write a bunch of NULLs.
+      // Note: we explicitly keep `budget_is_deal_dependent` even when false,
+      // because false is a meaningful state (not "unknown").
       Object.keys(bcRow).forEach(k => {
+        if(k === 'budget_is_deal_dependent') return;
         if(bcRow[k] === null || bcRow[k] === undefined || bcRow[k] === '') delete bcRow[k];
       });
       await _sbPost(SB_TABLES.buyerCriteria, bcRow);
@@ -19078,7 +19387,13 @@ async function tmSaveTenant(existingId){
   if(!cfg.key || !currentDeal?.id) return;
 
   const g  = id => document.getElementById('tmf_'+id)?.value?.trim()||null;
-  const gn = id => { const v=parseFloat(document.getElementById('tmf_'+id)?.value||''); return isNaN(v)||v===0?null:v; };
+  // v102.16: strip commas — tenant rents like "$1,500/mo" were being saved as 1
+  const gn = id => {
+    const raw = document.getElementById('tmf_'+id)?.value || '';
+    if(raw === '') return null;
+    const v = parseFloat(String(raw).replace(/,/g,''));
+    return isNaN(v) || v===0 ? null : v;
+  };
   const gc = id => document.getElementById('tmf_'+id)?.checked||false;
 
   const sf   = gn('sf');
@@ -24193,7 +24508,15 @@ async function ndwCreateDeal(){
   if(!cfg.isConnected && !cfg.key){ alert('Connect your database first (Settings).'); return; }
 
   const g  = id => document.getElementById(id)?.value?.trim()||'';
-  const gn = id => { const v=Number(document.getElementById(id)?.value); return v||null; };
+  // v102.16: strip commas — Asking Price like "1,500,000" was becoming NaN and
+  // silently dropped on every new deal. Affected all NDW numeric fields:
+  // asking, GRI, expenses, NOI, units, SF.
+  const gn = id => {
+    const raw = document.getElementById(id)?.value;
+    if(raw == null || raw === '') return null;
+    const v = Number(String(raw).replace(/,/g,''));
+    return isNaN(v) || v===0 ? null : v;
+  };
 
   const addr = g('ndw_address');
   if(!addr){

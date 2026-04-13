@@ -15194,9 +15194,9 @@ async function bcOpenExpanded(recordId){
               <input class="form-input" id="bcf_caprate" value="${f['Minumum Cap Rate']||''}" placeholder="e.g. 6.5" style="width:120px;margin-bottom:12px;"/>
               <div class="bc-label">Purchase Price Range</div>
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
-                <input class="form-input" id="bcf_minprice" value="${f['Min Purchase Price']||''}" placeholder="Min $" style="width:105px;" type="number"/>
+                <input class="form-input num-input" id="bcf_minprice" value="${_fmtNum(f['Min Purchase Price'])}" placeholder="Min $" style="width:115px;" type="text" inputmode="numeric"/>
                 <span style="color:#888;font-size:12px;">to</span>
-                <input class="form-input" id="bcf_maxprice" value="${f['Max Purchase Price']||''}" placeholder="Max $" style="width:105px;" type="number"/>
+                <input class="form-input num-input" id="bcf_maxprice" value="${_fmtNum(f['Max Purchase Price'])}" placeholder="Max $" style="width:115px;" type="text" inputmode="numeric"/>
               </div>
               <div class="bc-label">Date Added</div>
               <input class="form-input" id="bcf_dateadded" type="date" value="${f['Date Added Buyer']||''}" style="width:160px;margin-bottom:14px;"/>
@@ -15268,11 +15268,14 @@ function bcExpandedAssetSection(asset, f){
   const lc = assetClean.toLowerCase();
   let fields = '';
 
-  // Helper: numeric input
+  // Helper: numeric input with live comma formatting (uses num-input class
+  // which the global delegated listener formats with thousands separators).
+  // v102.16: switched from <input type="number"> so values like 1,500,000
+  // display correctly. _fmtNum on read formats the stored numeric value.
   const num = (label, id, value, ph) => `
     <div>
       <div class="bc-label">${label}</div>
-      <input class="form-input" id="${id}" value="${value??''}" placeholder="${ph||''}" style="width:100%;" type="number" onchange="_bcAutoSave()"/>
+      <input class="form-input num-input" id="${id}" value="${_fmtNum(value)}" placeholder="${ph||''}" type="text" inputmode="numeric" style="width:100%;" onchange="_bcAutoSave()"/>
     </div>`;
   // Helper: text input
   const txt = (label, id, value, ph) => `
@@ -15713,7 +15716,13 @@ async function bcSaveExpanded(recordId, isAuto=false){
   if(!cfg.key){ alert('Connect Supabase first.'); return; }
 
   const gv = id => document.getElementById(id)?.value?.trim()||'';
-  const gn = id => { const v = parseFloat(document.getElementById(id)?.value); return isNaN(v) ? null : v; };
+  // v102.16: strip commas before parseFloat so values like "1,000,000" save correctly
+  const gn = id => {
+    const raw = document.getElementById(id)?.value;
+    if(raw == null || raw === '') return null;
+    const v = parseFloat(String(raw).replace(/,/g,''));
+    return isNaN(v) ? null : v;
+  };
 
   const fields = {};
   const sv = (f,v) => { if(v !== null && v !== undefined && v !== '') fields[f] = v; else if(v==='') fields[f] = ''; };
@@ -17232,80 +17241,85 @@ function _liToggleCounty(county){
 
 
 function _liBuyerAssetFields(id){
+  // v102.16: gNum uses _liNumField (text input + num-input class) which gets
+  // live comma formatting via the global delegated listener. gTxt is the
+  // legacy plain field. Use gNum for any dollar amount, square footage,
+  // unit count, or other large number that benefits from thousands separators.
+  const gNum = (lbl,fid,ph) => _liNumField(lbl,'li_b_'+id+'_'+fid,ph);
   const g = (lbl,fid,type,ph) => _liField(lbl,'li_b_'+id+'_'+fid,type,ph,'1fr');
   if(id==='multifamily') return `
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px;">
-      ${g('Min # of Units','minunits','number','e.g. 4')}
-      ${g('Max # of Units','maxunits','number','e.g. 50')}
+      ${gNum('Min # of Units','minunits','e.g. 4')}
+      ${gNum('Max # of Units','maxunits','e.g. 50')}
       <div><label style="${_liLabelStyle()}">MF Class</label><select id="li_b_multifamily_class" style="${_liInputStyle()}"><option value="">Any</option><option>A</option><option>B</option><option>C</option><option>B/C</option></select></div>
     </div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
       <div><label style="${_liLabelStyle()}">Deal Profile</label><select id="li_b_multifamily_profile" style="${_liInputStyle()}"><option value="">Any</option><option>Value Add</option><option>Turn-Key</option><option>Stabilized</option><option>Core Plus</option><option>Opportunistic</option></select></div>
       <div><label style="${_liLabelStyle()}">Style Preference</label><select id="li_b_multifamily_style" style="${_liInputStyle()}"><option value="">Any</option><option>Garden</option><option>Elevator</option><option>Mid-Rise</option><option>Townhouse</option></select></div>
-      ${g('Max Price Per Unit','maxppu','number','e.g. 150000')}
+      ${gNum('Max Price Per Unit ($)','maxppu','e.g. 150,000')}
     </div>`;
 
   if(id==='warehouse') return `
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px;">
-      ${g('Min SF','minsf','number','e.g. 5000')}
-      ${g('Max SF','maxsf','number','e.g. 100000')}
-      ${g('Min Clear Height (ft)','height','number','e.g. 20')}
+      ${gNum('Min SF','minsf','e.g. 5,000')}
+      ${gNum('Max SF','maxsf','e.g. 100,000')}
+      ${gNum('Min Clear Height (ft)','height','e.g. 20')}
     </div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
-      ${g('Min # Loading Docks','docks','number','e.g. 2')}
+      ${gNum('Min # Loading Docks','docks','e.g. 2')}
       <div><label style="${_liLabelStyle()}">Investor or Owner-Occ?</label><select id="li_b_warehouse_type" style="${_liInputStyle()}"><option value="">Either</option><option>Investor</option><option>Owner-Occupier</option></select></div>
       <div><label style="${_liLabelStyle()}">Deal Profile</label><select id="li_b_warehouse_profile" style="${_liInputStyle()}"><option value="">Any</option><option>Value Add</option><option>NNN</option><option>Stabilized</option><option>Vacant</option></select></div>
     </div>`;
 
   if(id==='retail') return `
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px;">
-      ${g('Min SF','minsf','number','e.g. 2000')}
-      ${g('Max SF','maxsf','number','e.g. 20000')}
-      ${g('Min # of Tenants','mintenants','number','e.g. 3')}
+      ${gNum('Min SF','minsf','e.g. 2,000')}
+      ${gNum('Max SF','maxsf','e.g. 20,000')}
+      ${gNum('Min # of Tenants','mintenants','e.g. 3')}
     </div>
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
       <div><label style="${_liLabelStyle()}">Lease Preference</label><select id="li_b_retail_lease" style="${_liInputStyle()}"><option value="">Any</option><option>NNN Preferred</option><option>Gross OK</option><option>Mixed</option></select></div>
       <div><label style="${_liLabelStyle()}">Anchor Preference</label><select id="li_b_retail_anchor" style="${_liInputStyle()}"><option value="">No Preference</option><option>Anchored Preferred</option><option>Unanchored OK</option></select></div>
-      ${g('Min Occupancy (%)','minocc','number','e.g. 80')}
+      ${gNum('Min Occupancy (%)','minocc','e.g. 80')}
     </div>`;
 
   if(id==='office') return `
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px;">
-      ${g('Min SF','minsf','number','e.g. 3000')}
-      ${g('Max SF','maxsf','number','e.g. 30000')}
+      ${gNum('Min SF','minsf','e.g. 3,000')}
+      ${gNum('Max SF','maxsf','e.g. 30,000')}
       <div><label style="${_liLabelStyle()}">Class Preference</label><select id="li_b_office_class" style="${_liInputStyle()}"><option value="">Any</option><option>A</option><option>B</option><option>C</option><option>Medical</option></select></div>
     </div>
     <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;">
-      ${g('Min # of Tenants','mintenants','number','e.g. 1')}
-      ${g('Max # of Tenants','maxtenants','number','e.g. 20')}
+      ${gNum('Min # of Tenants','mintenants','e.g. 1')}
+      ${gNum('Max # of Tenants','maxtenants','e.g. 20')}
     </div>`;
 
   if(id==='land') return `
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
-      ${g('Min Acres','minacres','number','e.g. 1')}
-      ${g('Max Acres','maxacres','number','e.g. 20')}
+      ${gNum('Min Acres','minacres','e.g. 1')}
+      ${gNum('Max Acres','maxacres','e.g. 20')}
       <div><label style="${_liLabelStyle()}">Zoning Preference</label><select id="li_b_land_zoning" style="${_liInputStyle()}"><option value="">Any</option><option>Residential</option><option>Commercial</option><option>Industrial</option><option>Mixed</option></select></div>
     </div>`;
 
   if(id==='mixeduse') return `
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
-      ${g('Min Residential Units','minres','number','e.g. 2')}
-      ${g('Min Commercial Spaces','mincom','number','e.g. 1')}
-      ${g('Min Building SF','minsf','number','e.g. 3000')}
+      ${gNum('Min Residential Units','minres','e.g. 2')}
+      ${gNum('Min Commercial Spaces','mincom','e.g. 1')}
+      ${gNum('Min Building SF','minsf','e.g. 3,000')}
     </div>`;
 
   if(id==='automotive') return `
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
-      ${g('Min # of Bays','minbays','number','e.g. 4')}
+      ${gNum('Min # of Bays','minbays','e.g. 4')}
       <div><label style="${_liLabelStyle()}">Gas Station Needed?</label><select id="li_b_automotive_gas" style="${_liInputStyle()}"><option value="">No Preference</option><option>Yes</option><option>No</option></select></div>
       <div><label style="${_liLabelStyle()}">Owner-Occ or Investor?</label><select id="li_b_automotive_type" style="${_liInputStyle()}"><option value="">Either</option><option>Owner-Occupier</option><option>Investor</option></select></div>
     </div>`;
 
   if(id==='shopping') return `
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;">
-      ${g('Min SF','minsf','number','e.g. 10000')}
-      ${g('Max SF','maxsf','number','e.g. 80000')}
-      ${g('Min # of Tenants','mintenants','number','e.g. 6')}
+      ${gNum('Min SF','minsf','e.g. 10,000')}
+      ${gNum('Max SF','maxsf','e.g. 80,000')}
+      ${gNum('Min # of Tenants','mintenants','e.g. 6')}
     </div>`;
 
   return `<div style="font-size:12px;color:#666;">Use the notes section to specify requirements.</div>`;
@@ -17313,7 +17327,17 @@ function _liBuyerAssetFields(id){
 
 async function _liSubmitBuyer(){
   const gv = id => document.getElementById(id)?.value?.trim()||'';
-  const gn = id => { const v=Number(document.getElementById(id)?.value); return isNaN(v)||v===0?null:v; };
+  // v102.16: gn strips commas before parsing. Without this, any value the
+  // user typed with thousands separators (e.g. "1,000,000") becomes NaN
+  // and silently gets dropped from the submission. This fixed the Min/Max
+  // Purchase Price not transferring bug, and the same fix went into every
+  // other gn helper in the file.
+  const gn = id => {
+    const raw = document.getElementById(id)?.value;
+    if(raw == null || raw === '') return null;
+    const v = Number(String(raw).replace(/,/g,''));
+    return isNaN(v) || v===0 ? null : v;
+  };
   const errEl = document.getElementById('li_b_error');
   const btn = document.getElementById('li_b_submit');
 
@@ -19363,7 +19387,13 @@ async function tmSaveTenant(existingId){
   if(!cfg.key || !currentDeal?.id) return;
 
   const g  = id => document.getElementById('tmf_'+id)?.value?.trim()||null;
-  const gn = id => { const v=parseFloat(document.getElementById('tmf_'+id)?.value||''); return isNaN(v)||v===0?null:v; };
+  // v102.16: strip commas — tenant rents like "$1,500/mo" were being saved as 1
+  const gn = id => {
+    const raw = document.getElementById('tmf_'+id)?.value || '';
+    if(raw === '') return null;
+    const v = parseFloat(String(raw).replace(/,/g,''));
+    return isNaN(v) || v===0 ? null : v;
+  };
   const gc = id => document.getElementById('tmf_'+id)?.checked||false;
 
   const sf   = gn('sf');
@@ -24478,7 +24508,15 @@ async function ndwCreateDeal(){
   if(!cfg.isConnected && !cfg.key){ alert('Connect your database first (Settings).'); return; }
 
   const g  = id => document.getElementById(id)?.value?.trim()||'';
-  const gn = id => { const v=Number(document.getElementById(id)?.value); return v||null; };
+  // v102.16: strip commas — Asking Price like "1,500,000" was becoming NaN and
+  // silently dropped on every new deal. Affected all NDW numeric fields:
+  // asking, GRI, expenses, NOI, units, SF.
+  const gn = id => {
+    const raw = document.getElementById(id)?.value;
+    if(raw == null || raw === '') return null;
+    const v = Number(String(raw).replace(/,/g,''));
+    return isNaN(v) || v===0 ? null : v;
+  };
 
   const addr = g('ndw_address');
   if(!addr){

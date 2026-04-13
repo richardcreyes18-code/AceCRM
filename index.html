@@ -4074,7 +4074,11 @@ function switchTab(name, btn){
   if(name==='brochure' && currentDeal?.id) {
     loadBrochurePhotos(currentDeal.id);
     // v100: check required fields so OM buttons are correctly enabled/disabled
-    setTimeout(_omRefreshRequiredFieldsCheck, 30);
+    // v100.1: also render the read-only photo grid pulled from Property Photos
+    setTimeout(() => {
+      _omRenderPhotoGrid();
+      _omRefreshRequiredFieldsCheck();
+    }, 30);
   }
   if(name==='tasks'    && currentDeal?.id) _loadAndRenderDealTasks(currentDeal.id, currentDeal['Address']||'');
   if(name==='financial'){
@@ -11465,36 +11469,37 @@ function renderBrochureTab(d){
 
     <!-- ══════════════════════════════════════════════════════════════
          THREE MODES: Quick Flyer, Standard OM, Premium OM
+         Matches CRM's white/navy palette (not the gold PDF brand)
          ══════════════════════════════════════════════════════════════ -->
-    <div style="position:sticky;top:0;z-index:50;background:linear-gradient(180deg,#0b1f3a,#081529);border-bottom:3px solid #b8912a;padding:14px 18px;">
-      <div style="display:flex;align-items:center;gap:16px;flex-wrap:wrap;">
-        <div style="color:#b8912a;font-size:11px;font-weight:700;letter-spacing:0.08em;text-transform:uppercase;">Document Generator</div>
+    <div style="position:sticky;top:0;z-index:50;background:#fff;border-bottom:2px solid #1a3a6e;padding:12px 16px;box-shadow:0 2px 4px rgba(0,0,0,0.04);">
+      <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+        <div style="color:#1a3a6e;font-size:11px;font-weight:700;letter-spacing:0.06em;text-transform:uppercase;">Document Generator</div>
         <div style="flex:1;"></div>
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
           <!-- Quick Flyer — always available, no required-fields check -->
           <button id="omBtnQuickFlyer" onclick="createBrochure()" title="Print-friendly HTML flyer → use Ctrl/Cmd+P to save as PDF. Good for fast internal handouts."
-            style="background:#fff;color:#0b1f3a;border:1px solid #cbd5e1;padding:8px 16px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:6px;"
-            onmouseenter="this.style.background='#f1f5f9'" onmouseleave="this.style.background='#fff'">
+            style="background:#f1f5f9;color:#334155;border:1px solid #cbd5e1;padding:8px 16px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:6px;"
+            onmouseenter="this.style.background='#e2e8f0'" onmouseleave="this.style.background='#f1f5f9'">
             <span style="font-size:14px;">📄</span> Quick Flyer
           </button>
           <!-- Standard OM — pdfmake template, no LLM, free -->
           <button id="omBtnStandard" onclick="_omGenerateStandard()" title="Professional multi-page OM using the Ace Acquisitions brand template. Generates instantly from your deal data. Free."
-            style="background:linear-gradient(180deg,#b8912a,#8a6b1f);color:#fff;border:1px solid #6b5217;padding:8px 18px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:6px;box-shadow:0 2px 6px rgba(184,145,42,0.3);"
+            style="background:linear-gradient(180deg,#2563eb,#1a3a6e);color:#fff;border:1px solid #14305a;padding:8px 18px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:6px;box-shadow:0 2px 6px rgba(26,58,110,0.25);"
             onmouseenter="this.style.transform='translateY(-1px)'" onmouseleave="this.style.transform='translateY(0)'">
-            <span style="font-size:14px;">📑</span> Standard OM <span style="font-size:9px;font-weight:600;background:rgba(255,255,255,0.2);padding:1px 6px;border-radius:99px;margin-left:2px;">FREE</span>
+            <span style="font-size:14px;">📑</span> Standard OM <span style="font-size:9px;font-weight:600;background:rgba(255,255,255,0.22);padding:1px 6px;border-radius:99px;margin-left:2px;">FREE</span>
           </button>
           <!-- Premium OM — pdfmake + Claude Sonnet API call for prose, ~$0.10 -->
           <button id="omBtnPremium" onclick="_omGeneratePremium()" title="Institutional-grade OM with AI-generated prose (executive summary, investment highlights, market analysis). Requires confirmation. Costs roughly $0.10 per OM."
-            style="background:linear-gradient(180deg,#1e293b,#0b1f3a);color:#fff;border:1px solid #b8912a;padding:8px 18px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:6px;"
-            onmouseenter="this.style.borderColor='#d4a84b'" onmouseleave="this.style.borderColor='#b8912a'">
-            <span style="font-size:14px;">✨</span> Premium OM <span style="font-size:9px;font-weight:600;background:#b8912a;color:#fff;padding:1px 6px;border-radius:99px;margin-left:2px;">AI · ~$0.10</span>
+            style="background:linear-gradient(180deg,#7c3aed,#5b21b6);color:#fff;border:1px solid #4c1d95;padding:8px 18px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:6px;box-shadow:0 2px 6px rgba(91,33,182,0.25);"
+            onmouseenter="this.style.transform='translateY(-1px)'" onmouseleave="this.style.transform='translateY(0)'">
+            <span style="font-size:14px;">✨</span> Premium OM <span style="font-size:9px;font-weight:600;background:rgba(255,255,255,0.22);padding:1px 6px;border-radius:99px;margin-left:2px;">AI · ~$0.10</span>
           </button>
         </div>
       </div>
-      <div style="color:#94a3b8;font-size:10px;margin-top:8px;line-height:1.5;">
-        <strong style="color:#fff;">Quick Flyer:</strong> HTML → Ctrl/Cmd+P to save as PDF. ·
-        <strong style="color:#fff;">Standard OM:</strong> Professional multi-page PDF, generated instantly from your deal data. ·
-        <strong style="color:#fff;">Premium OM:</strong> Standard + AI-written prose sections. Admin confirmation required before each generation.
+      <div style="color:#64748b;font-size:10px;margin-top:8px;line-height:1.5;">
+        <strong style="color:#1a3a6e;">Quick Flyer:</strong> HTML → Ctrl/Cmd+P to save as PDF. ·
+        <strong style="color:#1a3a6e;">Standard OM:</strong> Professional multi-page PDF, generated instantly from your deal data. ·
+        <strong style="color:#1a3a6e;">Premium OM:</strong> Standard + AI-written prose sections. Admin confirmation required before each generation.
       </div>
     </div>
 
@@ -11565,72 +11570,32 @@ All information is deemed reliable but not guaranteed.</textarea>
       </div>
     </div>
 
-    <!-- IMAGES -->
+    <!-- PROPERTY PHOTOS (READ-ONLY, PULLED FROM DEAL) -->
     <div class="info-box">
-      <div class="info-box-title">Images</div>
-
-      <!-- Imgur Instructions -->
-      <div style="background:#f0f7ff;border:1px solid #b8d4f0;border-radius:4px;padding:10px 14px;margin-bottom:12px;font-size:11px;line-height:1.8;">
-        <div style="font-weight:bold;color:#1a3a6e;margin-bottom:4px;">📷 How to get Imgur image URLs:</div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:4px 20px;">
-          <div><span style="color:#c05000;font-weight:bold;">Album link (won't work):</span><br/>
-            <code style="background:#fff;padding:1px 4px;border:1px solid #ddd;font-size:10px;">imgur.com/a/fD3oR9n</code>
-          </div>
-          <div><span style="color:#080;font-weight:bold;">Direct image link (paste this):</span><br/>
-            <code style="background:#fff;padding:1px 4px;border:1px solid #ddd;font-size:10px;">i.imgur.com/XXXXXXX.jpg</code>
-          </div>
-        </div>
-        <div style="margin-top:6px;color:#555;">
-          <strong>To get the direct link from an album:</strong> Open the album → click on one image → right-click the image → <em>"Copy image address"</em> → paste here. It should start with <code style="background:#fff;padding:1px 3px;border:1px solid #ddd;">https://i.imgur.com/</code>
-        </div>
+      <div class="info-box-title" style="display:flex;align-items:center;justify-content:space-between;">
+        <span>Property Photos</span>
+        <span style="font-size:10px;font-weight:normal;color:#64748b;">
+          Uploaded via the Documents tab → <a onclick="switchTab('documents', document.querySelector('[onclick*=\\'switchTab(\\\\\\'documents\\\\\\')\\']'))" style="color:#2563eb;cursor:pointer;text-decoration:underline;">Manage photos →</a>
+        </span>
       </div>
-
-      <div id="brochurePhotoStatus" style="font-size:11px;color:#2060b0;margin-bottom:8px;"></div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:11px;">
-        <div>
-          <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Cover Image (Main)</label>
-          <input class="form-input" id="br_img0" placeholder="https://..." style="width:100%;margin-bottom:4px;" oninput="updateImgPreview(0)"/>
-          <div id="br_img0_preview" style="height:80px;background:#eee;border:1px solid #ccc;border-radius:3px;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:10px;">No image</div>
-        </div>
-        <div>
-          <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Sub-Image 1</label>
-          <input class="form-input" id="br_img1" placeholder="https://..." style="width:100%;margin-bottom:4px;" oninput="updateImgPreview(1)"/>
-          <div id="br_img1_preview" style="height:80px;background:#eee;border:1px solid #ccc;border-radius:3px;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:10px;">No image</div>
-        </div>
-        <div>
-          <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Sub-Image 2</label>
-          <input class="form-input" id="br_img2" placeholder="https://..." style="width:100%;margin-bottom:4px;" oninput="updateImgPreview(2)"/>
-          <div id="br_img2_preview" style="height:80px;background:#eee;border:1px solid #ccc;border-radius:3px;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:10px;">No image</div>
-        </div>
-        <div>
-          <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Sub-Image 3</label>
-          <input class="form-input" id="br_img3" placeholder="https://..." style="width:100%;margin-bottom:4px;" oninput="updateImgPreview(3)"/>
-          <div id="br_img3_preview" style="height:80px;background:#eee;border:1px solid #ccc;border-radius:3px;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:10px;">No image</div>
-        </div>
-        <div>
-          <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Sub-Image 4</label>
-          <input class="form-input" id="br_img4" placeholder="https://..." style="width:100%;margin-bottom:4px;" oninput="updateImgPreview(4)"/>
-          <div id="br_img4_preview" style="height:80px;background:#eee;border:1px solid #ccc;border-radius:3px;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:10px;">No image</div>
-        </div>
-        <div>
-          <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Sub-Image 5</label>
-          <input class="form-input" id="br_img5" placeholder="https://..." style="width:100%;margin-bottom:4px;" oninput="updateImgPreview(5)"/>
-          <div id="br_img5_preview" style="height:80px;background:#eee;border:1px solid #ccc;border-radius:3px;display:flex;align-items:center;justify-content:center;color:#aaa;font-size:10px;">No image</div>
-        </div>
+      <div style="font-size:11px;color:#555;margin-bottom:12px;line-height:1.5;">
+        Photos uploaded to this deal's <strong>Documents → Property Photos</strong> section are automatically available to all three OM/flyer generators.
+        The <strong>main photo</strong> is used as the cover image; remaining photos appear as interior shots in upload order.
+      </div>
+      <div id="omPhotoGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;">
+        <!-- Populated by _omRenderPhotoGrid() when the tab renders -->
+      </div>
+      <div id="omPhotoEmpty" style="display:none;padding:20px;background:#fef3c7;border:1px dashed #fbbf24;border-radius:6px;font-size:12px;color:#78350f;text-align:center;">
+        ⚠ No photos uploaded yet. Upload photos in the <strong>Documents tab → Property Photos</strong> section to enable OM generation.
       </div>
     </div>`;
 }
 
 function updateImgPreview(i){
-  let url = document.getElementById('br_img'+i)?.value?.trim();
-  if(url) url = convertDriveUrl(url);
-  const inp = document.getElementById('br_img'+i);
-  const prev = document.getElementById('br_img'+i+'_preview');
-  if(!prev) return;
-  if(url){ prev.innerHTML = '<img src="'+url+'" style="max-height:78px;max-width:100%;object-fit:cover;border-radius:2px;" onerror="this.parentElement.innerHTML=\'<span style=\\\"color:#c00;font-size:10px;\\\">Image failed to load — check URL or Drive sharing settings</span>\'"/>'; }
-  else { prev.innerHTML = '<span style="color:#aaa;font-size:10px;">No image</span>'; }
-  // v100: a photo change may flip the At-least-1-photo required field — re-check
-  if(typeof _omRefreshRequiredFieldsCheck === 'function') _omRefreshRequiredFieldsCheck();
+  // v100.1: no-op. The br_img* inputs this function used to manage were
+  // removed when photos moved to the Documents tab / photo_attachments source.
+  // Kept as a stub in case any legacy onclick handler still references it.
+  return;
 }
 
 function convertDriveUrl(url){
@@ -11679,9 +11644,11 @@ const OM_REQUIRED_FIELDS = [
   { label: 'Asset Type',    get: d => d['CRM Asset Classification'] || d['Simple Text Property Type'], tab: 'core' },
   { label: 'County',        get: d => d['Simple County'],                           tab: 'core'   },
   { label: 'At least 1 photo', get: d => {
-      const urls = [0,1,2,3,4,5].map(i => document.getElementById('br_img'+i)?.value?.trim()).filter(Boolean);
-      return urls.length > 0 ? true : null;
-    }, tab: 'brochure' },
+      // v100.1: photos come from deal.photo_attachments (Documents tab), not
+      // the old Imgur URL inputs. See _omGetOrderedPhotos() for details.
+      const photos = _omGetOrderedPhotos(d);
+      return photos.length > 0 ? true : null;
+    }, tab: 'documents' },
 ];
 
 // Try to parse city from the address string if no explicit City field exists.
@@ -11742,6 +11709,64 @@ function _omRefreshRequiredFieldsCheck(){
     if(btnStandard){ btnStandard.style.opacity = '0.5'; btnStandard.style.cursor = 'not-allowed'; btnStandard.disabled = true; }
     if(btnPremium){  btnPremium.style.opacity  = '0.5'; btnPremium.style.cursor  = 'not-allowed'; btnPremium.disabled  = true; }
   }
+}
+
+// Return the deal's photos in OM order: main photo first, then the rest in
+// upload order. Each item is { id, url, filename, isMain }. Returns [] if
+// the deal has no photos.
+//
+// Handles all possible field-name shapes:
+//   - d['PHOTO'] (SB_PROP_MAP → 'PHOTO', actual in-memory field name)
+//   - d['photo_attachments'] (raw Supabase column name)
+//   - d['Photo Attachments'] (legacy title-case form)
+// and for the main-photo id:
+//   - d['Main Photo'] (SB_PROP_MAP → 'Main Photo')
+//   - d['main_photo_attachment_id'] (raw column name)
+function _omGetOrderedPhotos(d){
+  d = d || currentDeal;
+  if(!d) return [];
+  const atts = Array.isArray(d['PHOTO']) ? d['PHOTO']
+             : Array.isArray(d['photo_attachments']) ? d['photo_attachments']
+             : Array.isArray(d['Photo Attachments']) ? d['Photo Attachments']
+             : [];
+  if(!atts.length) return [];
+  const mainId = d['Main Photo'] || d['main_photo_attachment_id'] || d['Main Photo Attachment ID'] || null;
+  // Main photo first (or first upload if no main designated), then the rest
+  const mainIdx = mainId ? atts.findIndex(p => p && p.id === mainId) : -1;
+  let ordered;
+  if(mainIdx >= 0){
+    ordered = [atts[mainIdx], ...atts.filter((_, i) => i !== mainIdx)];
+  } else {
+    ordered = [...atts];
+  }
+  return ordered.filter(p => p && p.url).map((p, i) => ({
+    id: p.id,
+    url: p.url,
+    filename: p.filename || 'photo',
+    isMain: i === 0,
+  }));
+}
+
+// Render the read-only photo grid at the top of the OM Creator tab.
+// Called after the tab renders. Pulls from currentDeal.photo_attachments.
+function _omRenderPhotoGrid(){
+  const grid  = document.getElementById('omPhotoGrid');
+  const empty = document.getElementById('omPhotoEmpty');
+  if(!grid) return;
+  const photos = _omGetOrderedPhotos(currentDeal);
+  if(photos.length === 0){
+    grid.style.display = 'none';
+    if(empty) empty.style.display = 'block';
+    return;
+  }
+  grid.style.display = 'grid';
+  if(empty) empty.style.display = 'none';
+  grid.innerHTML = photos.map((p, i) => `
+    <div style="position:relative;border:2px solid ${p.isMain?'#2563eb':'#e2e8f0'};border-radius:6px;overflow:hidden;aspect-ratio:4/3;background:#f1f5f9;">
+      <img src="${p.url}" alt="${(p.filename||'').replace(/"/g,'&quot;')}" style="width:100%;height:100%;object-fit:cover;display:block;" onerror="this.style.display='none';this.parentElement.style.background='#fef2f2';this.parentElement.innerHTML='<div style=\\'padding:12px;font-size:10px;color:#c00;text-align:center;\\'>Image failed to load</div>';"/>
+      ${p.isMain ? '<div style="position:absolute;top:4px;left:4px;background:#2563eb;color:#fff;font-size:9px;font-weight:700;padding:2px 8px;border-radius:99px;box-shadow:0 1px 3px rgba(0,0,0,0.2);">★ COVER</div>' : `<div style="position:absolute;top:4px;left:4px;background:rgba(15,23,42,0.75);color:#fff;font-size:9px;font-weight:700;padding:2px 7px;border-radius:99px;">#${i+1}</div>`}
+    </div>
+  `).join('');
 }
 
 // Standard OM handler — v100 placeholder, v101 will lazy-load pdfmake and
@@ -11822,34 +11847,11 @@ function _omGeneratePremium(){
 }
 
 async function loadBrochurePhotos(recordId){
-  const cfg = getConfig();
-  if(!cfg.key && !isSupabase()) return;
-  const statusEl = document.getElementById('brochurePhotoStatus');
-
-  try{
-    // Photos are stored in Supabase Storage — no separate PHOTO field fetch needed
-    if(isSupabase()){
-      if(statusEl) statusEl.textContent = 'Upload brochure photos via the Property Photos section.';
-      return;
-    }
-    const res = await fetch(`https://api.airtable.com/v0/${cfg.base}/${cfg.table}/${recordId}`,
-      {headers:{Authorization:`Bearer ${cfg.key}`}});
-    const rec = await res.json();
-    const photos = (rec.fields['PHOTO']||[]).filter(a=>a.type&&a.type.startsWith('image/'));
-    if(photos.length){
-      if(statusEl) statusEl.textContent = `✓ ${photos.length} photo${photos.length>1?'s':''} loaded`;
-      photos.slice(0,6).forEach((photo,i)=>{
-        const inp = document.getElementById('br_img'+i);
-        if(inp && !inp.value){
-          inp.value = photo.url;
-          const prev = document.getElementById('br_img'+i+'_preview');
-          if(prev) prev.innerHTML = `<img src="${photo.url}" style="max-height:78px;max-width:100%;object-fit:cover;border-radius:2px;"/>`;
-        }
-      });
-    } else {
-      if(statusEl) statusEl.textContent = 'No photos found — paste image URLs above.';
-    }
-  }catch(e){}
+  // v100.1: legacy Airtable photo fetcher is now a no-op. Photos come from
+  // deal.photo_attachments (Documents tab) and are rendered by
+  // _omRenderPhotoGrid() via the tab render hook. This function is kept as a
+  // stub so any lingering callers don't throw. Safe to remove in a future turn.
+  return;
 }
 
 function createBrochure(){
@@ -11857,7 +11859,8 @@ function createBrochure(){
   if(!d){ alert('No deal selected.'); return; }
 
   const g  = id => document.getElementById(id)?.value?.trim()||'';
-  const imgs = [0,1,2,3,4,5].map(i=>convertDriveUrl(g('br_img'+i))).filter(Boolean);
+  // v100.1: photos now come from deal.photo_attachments, not br_img* inputs
+  const imgs = _omGetOrderedPhotos(d).map(p => p.url).slice(0, 6);
 
   // ── Gather all data ──────────────────────────────────────
   const propName    = g('br_propName')   || d['Address']||'';

@@ -7048,11 +7048,14 @@ async function _migrateLegacyFinLocalStorage(){
     // Build the Supabase PATCH payload from the blob
     const fields = {};
 
+    // Helper: is this blob value a real value, or a UI placeholder like '--'?
+    const isRealValue = (v) => v !== undefined && v !== null && v !== '' && v !== '--';
+
     // 1. Simple named fields
     for(const [fiKey, mapping] of Object.entries(fiKeyMap)){
-      if(blob[fiKey] !== undefined && blob[fiKey] !== null && blob[fiKey] !== ''){
+      if(isRealValue(blob[fiKey])){
         const val = mapping.transform ? mapping.transform(blob[fiKey]) : blob[fiKey];
-        if(val !== null && val !== undefined && val !== '' && !Number.isNaN(val)){
+        if(val !== null && val !== undefined && val !== '' && val !== '--' && !Number.isNaN(val)){
           fields[mapping.field] = val;
         }
       }
@@ -7061,7 +7064,7 @@ async function _migrateLegacyFinLocalStorage(){
     // 2. Per-item expenses (actual side — individual columns)
     for(const [itemId, field] of Object.entries(expItemToField)){
       const blobKey = 'a_' + itemId + '_mo';
-      if(blob[blobKey] !== undefined && blob[blobKey] !== null && blob[blobKey] !== ''){
+      if(isRealValue(blob[blobKey])){
         const n = Number(blob[blobKey]);
         if(!Number.isNaN(n) && n > 0) fields[field] = n;
       }
@@ -7072,7 +7075,7 @@ async function _migrateLegacyFinLocalStorage(){
     let hasProForma = false;
     for(const itemId of Object.keys(expItemToField)){
       const blobKey = 'p_' + itemId + '_mo';
-      if(blob[blobKey] !== undefined && blob[blobKey] !== null && blob[blobKey] !== ''){
+      if(isRealValue(blob[blobKey])){
         const n = Number(blob[blobKey]);
         if(!Number.isNaN(n) && n > 0){
           proFormaBreakdown[itemId] = n;
@@ -7083,11 +7086,32 @@ async function _migrateLegacyFinLocalStorage(){
     if(hasProForma) fields['Pro Forma Expense Breakdown'] = proFormaBreakdown;
 
     // 4. Mortgages
+    // v102.13 hotfix: `recalcFinancials` historically set string '--' as the
+    // default value for empty select dropdowns (amort, type, yrsrem). Those
+    // '--' strings ended up in the fin_${dealId} localStorage blobs and
+    // then the v102.6 migration tried to write them straight through — which
+    // Postgres rejected with "invalid input syntax for type integer: --"
+    // because amort/yrsrem/bal/rate are numeric columns. Now we validate:
+    //   - numeric mortgage fields: must Number() cleanly and be > 0
+    //   - type: any non-'--' string is allowed
+    //   - assumable: boolean only
+    const numericMortFields = new Set(['bal','amort','rate','yrsrem']);
     for(let n = 1; n <= 3; n++){
       for(const [suffix, colFn] of Object.entries(mortFieldMap)){
         const blobKey = 'mort' + n + '_' + suffix;
-        if(blob[blobKey] !== undefined && blob[blobKey] !== null && blob[blobKey] !== ''){
-          fields[colFn(n)] = blob[blobKey];
+        const raw = blob[blobKey];
+        if(!isRealValue(raw)) continue;
+
+        if(numericMortFields.has(suffix)){
+          // Coerce to number, skip if invalid or zero (Postgres won't accept '--' on integer/numeric columns)
+          const num = Number(String(raw).replace(/,/g,''));
+          if(!Number.isNaN(num) && num > 0) fields[colFn(n)] = num;
+        } else if(suffix === 'assumable'){
+          // Boolean column
+          fields[colFn(n)] = raw === true || raw === 'true';
+        } else {
+          // type (text column)
+          fields[colFn(n)] = String(raw);
         }
       }
     }
@@ -7107,22 +7131,31 @@ async function _migrateLegacyFinLocalStorage(){
       continue;
     }
 
-    // Push to Supabase via the same path saveFinInputs uses
+    // v102.13 hotfix: Push to Supabase directly via _sbPatch. We deliberately
+    // bypass airtableUpdate() here because that function fires a user-facing
+    // alert('Save failed: ...') on any error, which is the wrong UX for
+    // a silent background migration. If the migration fails for one deal,
+    // we want to silently log and keep the blob for next-session retry.
     try {
-      const ok = await airtableUpdate(dealId, fields);
-      if(ok){
-        // Update currentDeal if this deal happens to be loaded
-        if(currentDeal && currentDeal.id === dealId) Object.assign(currentDeal, fields);
-        // Delete the migrated blob
-        localStorage.removeItem(key);
-        migratedCount++;
-      } else {
-        failedCount++;
-        console.warn(`[v102.6 migration] Supabase write failed for ${dealId}, blob preserved for retry`);
+      // Translate Airtable-style keys → snake_case columns
+      const sbData = _atToSb(fields, SB_PROP_MAP);
+      if(Object.keys(sbData).length === 0){
+        // Nothing left after mapping — treat as success, delete blob
+        try { localStorage.removeItem(key); } catch(e) {}
+        continue;
       }
+      await _sbPatch(SB_TABLES.properties, dealId, sbData);
+      // Update currentDeal if this deal happens to be loaded
+      if(currentDeal && currentDeal.id === dealId) Object.assign(currentDeal, fields);
+      // Mirror into allDeals too so Pipeline / Dashboard see fresh values
+      const entry = allDeals.find(x => x.id === dealId);
+      if(entry) Object.assign(entry, fields);
+      // Delete the migrated blob only on success
+      try { localStorage.removeItem(key); } catch(e) {}
+      migratedCount++;
     } catch(e) {
       failedCount++;
-      console.warn(`[v102.6 migration] Error migrating ${dealId}:`, e.message);
+      console.warn(`[v102.6 migration] Error migrating ${dealId}, blob preserved for retry:`, e.message);
       // Don't delete the blob — retry next session
     }
   }

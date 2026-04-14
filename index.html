@@ -878,7 +878,7 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
       </div>
       <div class="config-field">
         <label>Supabase Anon Key</label>
-        <input type="password" id="cfgSbKey" value="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt4dHVlZ2pwdHZ6cXljZ3l6ZWhqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2ODg5NzQsImV4cCI6MjA5MTI2NDk3NH0.FctjQCWJfjxqD_07gbmKn9r5rCbNUNtEWNhYIhDo5Dc" style="background:#f5f5f5;"/>
+        <input type="password" id="cfgSbKey" name="sb_anon_key" autocomplete="off" data-lpignore="true" data-1p-ignore="true" value="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt4dHVlZ2pwdHZ6cXljZ3l6ZWhqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2ODg5NzQsImV4cCI6MjA5MTI2NDk3NH0.FctjQCWJfjxqD_07gbmKn9r5rCbNUNtEWNhYIhDo5Dc" style="background:#f5f5f5;"/>
       </div>
       <div id="cfgError" style="color:#c00;font-size:11px;display:none;margin-top:6px;"></div>
 
@@ -889,7 +889,7 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
         Get your key: <a href="https://console.cloud.google.com/apis/credentials" target="_blank" style="color:#1a6a1a;">console.cloud.google.com</a> → Create credentials → API key → Enable <strong>Places API</strong> and <strong>Maps JavaScript API</strong>.</p>
         <div class="config-field">
           <label>Google Places API Key</label>
-          <input type="password" id="cfgGoogleKey" placeholder="AIzaSy..."/>
+          <input type="password" id="cfgGoogleKey" name="gplaces_api_key" autocomplete="off" data-lpignore="true" data-1p-ignore="true" placeholder="AIzaSy..."/>
         </div>
         <div id="cfgGoogleStatus" style="font-size:11px;margin-top:4px;color:#888;"></div>
       </div>
@@ -902,7 +902,7 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
         <p style="font-size:11px;color:#666;margin-bottom:8px;">Powers AI rent roll parsing and other smart features. Get your key at <a href="https://console.anthropic.com" target="_blank" style="color:#6a0dad;">console.anthropic.com</a>. Stored locally only.</p>
         <div class="config-field">
           <label>Anthropic API Key (starts with "sk-ant-...")</label>
-          <input type="password" id="cfgAnthropicKey" placeholder="sk-ant-api03-..."/>
+          <input type="password" id="cfgAnthropicKey" name="anthropic_api_key" autocomplete="off" data-lpignore="true" data-1p-ignore="true" placeholder="sk-ant-api03-..."/>
         </div>
       </div>
 
@@ -4303,21 +4303,42 @@ function clearDirty(){
   if(btn)    btn.style.background = 'linear-gradient(180deg,#2a8a2a,#1a6a1a)';
 }
 
+// v102.23: silent auto-flush. Previously this showed a confirm() dialog
+// asking "save before leaving?" — but everything should save automatically,
+// and the prompt was a friction point when switching between deals. Now:
+// if the deal is dirty, fire masterSave() and chain the callback off it.
+// The callback runs regardless of save success/failure so navigation is
+// never blocked. If the save fails, the user still navigates, but the
+// in-memory _pendingEdits stay populated so a retry on the next edit will
+// re-attempt them. showSaveConfirm on failure surfaces the error.
 function checkDirtyBeforeNavigate(callback){
   if(!_dealDirty){ callback(); return; }
-  const addr = currentDeal?.['Address'] || 'this deal';
-  if(confirm(`You have unsaved changes on "${addr}".\n\nSave before leaving?`)){
-    masterSave().then(()=>{ callback(); }).catch(()=>{ callback(); });
-  } else {
-    clearDirty();       // also clears _pendingEdits
-    callback();
-  }
+  // Fire-and-wait: flush pending edits, then proceed. masterSave already
+  // handles both immediate PATCH and the _isNew staging path.
+  masterSave({ silent: true })
+    .then(() => { callback(); })
+    .catch((e) => {
+      console.warn('[auto-flush on navigate] save failed:', e?.message||e);
+      // Don't block navigation — user shouldn't get stuck because of a
+      // transient network error. Clear dirty so we don't loop trying to
+      // save on the next nav; _pendingEdits already cleared by masterSave.
+      clearDirty();
+      callback();
+    });
 }
 
-async function masterSave(){
-  if(!currentDeal?.id){ showSaveConfirm('No deal loaded'); return; }
+async function masterSave(opts){
+  // v102.23: opts.silent = true suppresses the alert() on save failure,
+  // used by checkDirtyBeforeNavigate's auto-flush path so nav is never
+  // blocked by an error dialog. The error is still logged to console and
+  // a toast is shown so the user isn't in the dark.
+  const silent = !!(opts && opts.silent);
+  if(!currentDeal?.id){ if(!silent) showSaveConfirm('No deal loaded'); return; }
   const cfg = getConfig();
-  if(!cfg.isConnected && !cfg.key){ alert('Connect your database first (Settings).'); return; }
+  if(!cfg.isConnected && !cfg.key){
+    if(!silent) alert('Connect your database first (Settings).');
+    return;
+  }
 
   // Capture the deal being saved NOW — currentDeal may change during the async PATCH
   const dealToSave = currentDeal;
@@ -4329,7 +4350,7 @@ async function masterSave(){
   try{
     const fields = collectAllDealFields();
     if(!Object.keys(fields).length){
-      showSaveConfirm('Nothing to save');
+      if(!silent) showSaveConfirm('Nothing to save');
       if(btn){ btn.textContent = '💾 Save'; btn.disabled = false; }
       return;
     }
@@ -4357,7 +4378,13 @@ async function masterSave(){
     buildSidebar(document.getElementById('sideSearch')?.value||'');
   } catch(e){
     console.error('masterSave failed:', e);
-    alert('Save failed: '+e.message+'\n\nCheck browser console (F12) for details.');
+    if(!silent){
+      alert('Save failed: '+e.message+'\n\nCheck browser console (F12) for details.');
+    } else {
+      // Silent path: surface the failure via toast so the user still knows
+      showSaveConfirm('⚠ Auto-save failed');
+    }
+    throw e; // re-throw so the caller's .catch() runs
   } finally {
     if(btn){ btn.textContent = '💾 Save'; btn.disabled = false; }
   }
@@ -4399,8 +4426,11 @@ function collectAllDealFields(){
   const off = getNum('fin_offerPrice')||getNum('bi_offer');
   s(fields,'Asking Price', ask||null);
   s(fields,'Offer Price',  off||null);
-  fields['Top Priority']       = getChk('bi_priority');
-  fields['Discuss in Meeting'] = getChk('bi_meeting');
+  // v102.23: REMOVED dead writes for 'Top Priority' and 'Discuss in Meeting'.
+  // They were reading from bi_priority / bi_meeting checkbox IDs that no
+  // longer exist in the DOM, so getChk() was returning false on every save
+  // and silently overwriting the real values set by toggleStar() and the
+  // meeting toggle. Priority is now saved exclusively via toggleStar().
   const stage = getVal('bi_stage')||getVal('dealStageSelect');
   s(fields,'Pipeline Stage', stage||null);
   const noi = getNum('bi_noi');
@@ -5518,7 +5548,7 @@ function renderPropertyTab(d){
 
       </table>
       <div style="text-align:right;margin-top:6px;">
-        <button class="save-btn" onclick="masterSave()">Save</button>
+        <button class="save-btn" onclick="masterSave().catch(e=>console.warn('manual save error:',e))">Save</button>
       </div>
     </div>
 
@@ -15397,13 +15427,13 @@ function showSettingsPage(){
 
           <div style="margin-bottom:16px;">
             <label style="display:block;font-size:11px;font-weight:700;color:#475569;margin-bottom:4px;">📍 Google Places (address autocomplete)</label>
-            <input id="cfgGoogleKey" type="password" value="${googleKey.replace(/"/g,'&quot;')}" placeholder="AIza..." style="width:100%;padding:9px 12px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;font-family:monospace;box-sizing:border-box;"/>
+            <input id="cfgGoogleKey" name="gplaces_api_key" autocomplete="off" data-lpignore="true" data-1p-ignore="true" type="password" value="${googleKey.replace(/"/g,'&quot;')}" placeholder="AIza..." style="width:100%;padding:9px 12px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;font-family:monospace;box-sizing:border-box;"/>
             <div style="font-size:10px;color:#94a3b8;margin-top:4px;">Free up to ~65,000 lookups/month. <a href="https://console.cloud.google.com" target="_blank" style="color:#2563eb;">Get a key</a> → enable Places API + Maps JavaScript API.</div>
           </div>
 
           <div>
             <label style="display:block;font-size:11px;font-weight:700;color:#475569;margin-bottom:4px;">🤖 Anthropic (AI features — Claude Haiku 4.5)</label>
-            <input id="cfgAnthropicKey" type="password" value="${anthropic.replace(/"/g,'&quot;')}" placeholder="sk-ant-api03-..." style="width:100%;padding:9px 12px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;font-family:monospace;box-sizing:border-box;"/>
+            <input id="cfgAnthropicKey" name="anthropic_api_key" autocomplete="off" data-lpignore="true" data-1p-ignore="true" type="password" value="${anthropic.replace(/"/g,'&quot;')}" placeholder="sk-ant-api03-..." style="width:100%;padding:9px 12px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;font-family:monospace;box-sizing:border-box;"/>
             <div style="font-size:10px;color:#94a3b8;margin-top:4px;">Powers AI rent roll parsing + smart extraction. Stored locally. <a href="https://console.anthropic.com" target="_blank" style="color:#2563eb;">Get a key</a>.</div>
           </div>
         </section>
@@ -18209,19 +18239,19 @@ function _liSellerAssetFields(id){
     <div style="margin-bottom:8px;padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
       <label style="${_liLabelStyle()}">Occupancy</label>
       <div style="display:flex;gap:0;border:1px solid #cbd5e1;border-radius:6px;overflow:hidden;width:fit-content;margin-bottom:10px;">
-        <button type="button" id="li_s_mf_occmode_pct" onclick="_liMfOccMode('pct')" style="padding:5px 14px;font-size:11px;font-weight:600;border:none;cursor:pointer;background:#1a3a6e;color:#fff;">Percentage</button>
-        <button type="button" id="li_s_mf_occmode_units" onclick="_liMfOccMode('units')" style="padding:5px 14px;font-size:11px;font-weight:600;border:none;cursor:pointer;background:#fff;color:#475569;border-left:1px solid #cbd5e1;">Units Occupied</button>
+        <button type="button" id="li_s_multifamily_occmode_pct" onclick="_liMfOccMode('pct','multifamily')" style="padding:5px 14px;font-size:11px;font-weight:600;border:none;cursor:pointer;background:#1a3a6e;color:#fff;">Percentage</button>
+        <button type="button" id="li_s_multifamily_occmode_units" onclick="_liMfOccMode('units','multifamily')" style="padding:5px 14px;font-size:11px;font-weight:600;border:none;cursor:pointer;background:#fff;color:#475569;border-left:1px solid #cbd5e1;">Units Occupied</button>
       </div>
-      <div id="li_s_mf_occ_pct_wrap">
+      <div id="li_s_multifamily_occ_pct_wrap">
         <input id="li_s_multifamily_occ" type="text" inputmode="numeric" class="num-input" placeholder="e.g. 95" style="${_liInputStyle()}width:120px;display:inline-block;"/>
         <span style="margin-left:6px;color:#64748b;font-size:12px;">%</span>
       </div>
-      <div id="li_s_mf_occ_units_wrap" style="display:none;align-items:center;gap:8px;">
-        <input id="li_s_multifamily_occ_units" type="text" inputmode="numeric" class="num-input" placeholder="occupied" style="${_liInputStyle()}width:100px;display:inline-block;" oninput="_liMfOccCalcPct()"/>
+      <div id="li_s_multifamily_occ_units_wrap" style="display:none;align-items:center;gap:8px;">
+        <input id="li_s_multifamily_occ_units" type="text" inputmode="numeric" class="num-input" placeholder="occupied" style="${_liInputStyle()}width:100px;display:inline-block;" oninput="_liMfOccCalcPct('multifamily')"/>
         <span style="color:#64748b;font-size:13px;">of</span>
-        <input id="li_s_multifamily_occ_total" type="text" inputmode="numeric" class="num-input" placeholder="total units" style="${_liInputStyle()}width:100px;display:inline-block;" oninput="_liMfOccCalcPct()"/>
+        <input id="li_s_multifamily_occ_total" type="text" inputmode="numeric" class="num-input" placeholder="total units" style="${_liInputStyle()}width:100px;display:inline-block;" oninput="_liMfOccCalcPct('multifamily')"/>
         <span style="color:#64748b;font-size:12px;">units</span>
-        <span id="li_s_mf_occ_computed" style="margin-left:10px;color:#1a3a6e;font-size:12px;font-weight:600;"></span>
+        <span id="li_s_multifamily_occ_computed" style="margin-left:10px;color:#1a3a6e;font-size:12px;font-weight:600;"></span>
       </div>
     </div>
     <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;margin-top:12px;">
@@ -18231,8 +18261,8 @@ function _liSellerAssetFields(id){
       ${[['Studio/Eff','eff'],['1 Bedroom','1br'],['2 Bedroom','2br'],['3 Bedroom','3br'],['4 Bedroom','4br']].map(([lbl,key])=>`
       <div style="display:grid;grid-template-columns:110px 1fr 80px 110px;gap:8px;padding:6px 12px;border-bottom:1px solid #e2e8f0;align-items:center;">
         <div style="font-size:12px;font-weight:600;color:#374151;">${lbl}</div>
-        <div style="display:flex;align-items:center;gap:4px;position:relative;"><span style="color:#64748b;font-size:12px;">$</span><input id="li_s_multifamily_rent_${key}" type="text" inputmode="numeric" class="num-input" placeholder="0" style="border:1px solid #e2e8f0;border-radius:6px;padding:6px 8px;font-size:12px;width:100%;box-sizing:border-box;" oninput="_liMfUnitMixCalc()"/></div>
-        <div style="display:flex;align-items:center;gap:4px;"><input id="li_s_multifamily_cnt_${key}" type="text" inputmode="numeric" class="num-input" placeholder="0" style="border:1px solid #e2e8f0;border-radius:6px;padding:6px 8px;font-size:12px;width:100%;box-sizing:border-box;" oninput="_liMfUnitMixCalc()"/></div>
+        <div style="display:flex;align-items:center;gap:4px;position:relative;"><span style="color:#64748b;font-size:12px;">$</span><input id="li_s_multifamily_rent_${key}" type="text" inputmode="numeric" class="num-input" placeholder="0" style="border:1px solid #e2e8f0;border-radius:6px;padding:6px 8px;font-size:12px;width:100%;box-sizing:border-box;" oninput="_liMfUnitMixCalc('multifamily')"/></div>
+        <div style="display:flex;align-items:center;gap:4px;"><input id="li_s_multifamily_cnt_${key}" type="text" inputmode="numeric" class="num-input" placeholder="0" style="border:1px solid #e2e8f0;border-radius:6px;padding:6px 8px;font-size:12px;width:100%;box-sizing:border-box;" oninput="_liMfUnitMixCalc('multifamily')"/></div>
         <div id="li_s_multifamily_rowtot_${key}" style="text-align:right;font-size:12px;font-weight:600;color:#1a3a6e;">—</div>
       </div>`).join('')}
       <div style="display:grid;grid-template-columns:1fr 110px;gap:8px;padding:8px 12px;background:#f0f9f0;border-top:2px solid #86efac;">
@@ -18292,12 +18322,63 @@ function _liSellerAssetFields(id){
     ${ta('Development Potential / Notes','devnotes','e.g. Approved for 24 townhomes, environmental clear...')}`;
 
   if(id==='mixeduse') return `
+    <!-- Top row: high-level counts + total SF -->
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px;">
       ${gNum('# Residential Units','resunits','e.g. 4')}
       ${gNum('# Commercial Spaces','comspaces','e.g. 2')}
       ${gNum('Total Building SF','sf','e.g. 6,000')}
     </div>
-    ${ta('Tenant / Occupancy Notes','mixnotes','Describe current tenants, occupancy, lease status...')}`;
+    ${ta('Tenant / Occupancy Notes','mixnotes','Describe current tenants, occupancy, lease status...')}
+
+    <!-- v102.25: Full residential unit-mix block, same layout as Multifamily
+         but with the 'mixeduse_res' prefix so the helpers / state don't
+         collide if Multifamily is also selected on the same lead. -->
+    <div style="margin-top:18px;padding:14px;background:#f0f9ff;border:1px solid #bae6fd;border-radius:10px;">
+      <div style="font-size:12px;font-weight:700;color:#0369a1;text-transform:uppercase;letter-spacing:.06em;margin-bottom:12px;">🏠 Residential Side — Unit Breakdown</div>
+
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;margin-bottom:12px;">
+        ${gYear('Year Built','res_yearbuilt','e.g. 1985')}
+        <div><label style="${_liLabelStyle()}">Residential Class</label><select id="li_s_mixeduse_res_class" style="${_liInputStyle()}"><option>A</option><option>B</option><option>C</option></select></div>
+      </div>
+
+      <!-- Occupancy dual mode: % OR units occupied / total -->
+      <div style="margin-bottom:8px;padding:12px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;">
+        <label style="${_liLabelStyle()}">Residential Occupancy</label>
+        <div style="display:flex;gap:0;border:1px solid #cbd5e1;border-radius:6px;overflow:hidden;width:fit-content;margin-bottom:10px;">
+          <button type="button" id="li_s_mixeduse_res_occmode_pct" onclick="_liMfOccMode('pct','mixeduse_res')" style="padding:5px 14px;font-size:11px;font-weight:600;border:none;cursor:pointer;background:#1a3a6e;color:#fff;">Percentage</button>
+          <button type="button" id="li_s_mixeduse_res_occmode_units" onclick="_liMfOccMode('units','mixeduse_res')" style="padding:5px 14px;font-size:11px;font-weight:600;border:none;cursor:pointer;background:#fff;color:#475569;border-left:1px solid #cbd5e1;">Units Occupied</button>
+        </div>
+        <div id="li_s_mixeduse_res_occ_pct_wrap">
+          <input id="li_s_mixeduse_res_occ" type="text" inputmode="numeric" class="num-input" placeholder="e.g. 95" style="${_liInputStyle()}width:120px;display:inline-block;"/>
+          <span style="margin-left:6px;color:#64748b;font-size:12px;">%</span>
+        </div>
+        <div id="li_s_mixeduse_res_occ_units_wrap" style="display:none;align-items:center;gap:8px;">
+          <input id="li_s_mixeduse_res_occ_units" type="text" inputmode="numeric" class="num-input" placeholder="occupied" style="${_liInputStyle()}width:100px;display:inline-block;" oninput="_liMfOccCalcPct('mixeduse_res')"/>
+          <span style="color:#64748b;font-size:13px;">of</span>
+          <input id="li_s_mixeduse_res_occ_total" type="text" inputmode="numeric" class="num-input" placeholder="total units" style="${_liInputStyle()}width:100px;display:inline-block;" oninput="_liMfOccCalcPct('mixeduse_res')"/>
+          <span style="color:#64748b;font-size:12px;">units</span>
+          <span id="li_s_mixeduse_res_occ_computed" style="margin-left:10px;color:#1a3a6e;font-size:12px;font-weight:600;"></span>
+        </div>
+      </div>
+
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;margin-top:12px;">
+        <div style="background:#1a3a6e;color:#fff;font-size:11px;font-weight:700;padding:8px 12px;display:grid;grid-template-columns:110px 1fr 80px 110px;gap:8px;">
+          <div>Bedroom Type</div><div>Avg Rent / Mo</div><div># Units</div><div style="text-align:right;">Monthly Total</div>
+        </div>
+        ${[['Studio/Eff','eff'],['1 Bedroom','1br'],['2 Bedroom','2br'],['3 Bedroom','3br'],['4 Bedroom','4br']].map(([lbl,key])=>`
+        <div style="display:grid;grid-template-columns:110px 1fr 80px 110px;gap:8px;padding:6px 12px;border-bottom:1px solid #e2e8f0;align-items:center;">
+          <div style="font-size:12px;font-weight:600;color:#374151;">${lbl}</div>
+          <div style="display:flex;align-items:center;gap:4px;position:relative;"><span style="color:#64748b;font-size:12px;">$</span><input id="li_s_mixeduse_res_rent_${key}" type="text" inputmode="numeric" class="num-input" placeholder="0" style="border:1px solid #e2e8f0;border-radius:6px;padding:6px 8px;font-size:12px;width:100%;box-sizing:border-box;" oninput="_liMfUnitMixCalc('mixeduse_res')"/></div>
+          <div style="display:flex;align-items:center;gap:4px;"><input id="li_s_mixeduse_res_cnt_${key}" type="text" inputmode="numeric" class="num-input" placeholder="0" style="border:1px solid #e2e8f0;border-radius:6px;padding:6px 8px;font-size:12px;width:100%;box-sizing:border-box;" oninput="_liMfUnitMixCalc('mixeduse_res')"/></div>
+          <div id="li_s_mixeduse_res_rowtot_${key}" style="text-align:right;font-size:12px;font-weight:600;color:#1a3a6e;">—</div>
+        </div>`).join('')}
+        <div style="display:grid;grid-template-columns:1fr 110px;gap:8px;padding:8px 12px;background:#f0f9f0;border-top:2px solid #86efac;">
+          <div style="font-size:12px;font-weight:700;color:#1a5c1a;text-align:right;">Total Residential Gross Monthly Rental Income</div>
+          <div id="li_s_mixeduse_res_gri_total" style="text-align:right;font-size:13px;font-weight:700;color:#1a5c1a;">—</div>
+        </div>
+      </div>
+      ${_liTextarea('Additional Residential Unit Mix Notes','li_s_mixeduse_res_unitmix','e.g. All 2BR have private balconies, 1BR renovated in 2022...',2)}
+    </div>`;
 
   if(id==='automotive') return `
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px;">
@@ -18330,12 +18411,23 @@ function _liSellerAssetFields(id){
 let _liSellerFinState = { sellerFinancing: false, mfOccMode: 'pct' };
 
 // Toggle occupancy entry mode: percentage vs units-occupied-of-total
-function _liMfOccMode(mode){
-  _liSellerFinState.mfOccMode = mode;
-  const pctWrap   = document.getElementById('li_s_mf_occ_pct_wrap');
-  const unitsWrap = document.getElementById('li_s_mf_occ_units_wrap');
-  const btnPct    = document.getElementById('li_s_mf_occmode_pct');
-  const btnUnits  = document.getElementById('li_s_mf_occmode_units');
+// v102.25: prefix param makes these helpers reusable by the Mixed Use
+// subform's residential section. Default 'multifamily' preserves the
+// existing Multifamily intake flow. Mixed Use passes 'mixeduse_res'.
+// A per-prefix state bag tracks each occupancy toggle independently so
+// selecting BOTH Multifamily and Mixed Use doesn't cross-contaminate.
+const _liMfOccState = { multifamily: 'pct', mixeduse_res: 'pct' };
+
+function _liMfOccMode(mode, prefix){
+  prefix = prefix || 'multifamily';
+  _liMfOccState[prefix] = mode;
+  // Keep the legacy state field in sync for the multifamily case — the
+  // original submit path reads _liSellerFinState.mfOccMode.
+  if(prefix === 'multifamily') _liSellerFinState.mfOccMode = mode;
+  const pctWrap   = document.getElementById(`li_s_${prefix}_occ_pct_wrap`);
+  const unitsWrap = document.getElementById(`li_s_${prefix}_occ_units_wrap`);
+  const btnPct    = document.getElementById(`li_s_${prefix}_occmode_pct`);
+  const btnUnits  = document.getElementById(`li_s_${prefix}_occmode_units`);
   if(pctWrap)   pctWrap.style.display   = mode==='pct'   ? 'block' : 'none';
   if(unitsWrap) unitsWrap.style.display = mode==='units' ? 'flex'  : 'none';
   if(btnPct){
@@ -18349,10 +18441,11 @@ function _liMfOccMode(mode){
 }
 
 // When user enters "X occupied of Y total", show the computed percentage live
-function _liMfOccCalcPct(){
-  const occ = parseFloat(_stripCommas(document.getElementById('li_s_multifamily_occ_units')?.value||'0'))||0;
-  const tot = parseFloat(_stripCommas(document.getElementById('li_s_multifamily_occ_total')?.value||'0'))||0;
-  const el  = document.getElementById('li_s_mf_occ_computed');
+function _liMfOccCalcPct(prefix){
+  prefix = prefix || 'multifamily';
+  const occ = parseFloat(_stripCommas(document.getElementById(`li_s_${prefix}_occ_units`)?.value||'0'))||0;
+  const tot = parseFloat(_stripCommas(document.getElementById(`li_s_${prefix}_occ_total`)?.value||'0'))||0;
+  const el  = document.getElementById(`li_s_${prefix}_occ_computed`);
   if(!el) return;
   if(tot > 0){
     const pct = Math.round((occ/tot)*1000)/10; // 1 decimal
@@ -18363,18 +18456,19 @@ function _liMfOccCalcPct(){
 }
 
 // Recompute each bedroom row total and the grand total GRI
-function _liMfUnitMixCalc(){
+function _liMfUnitMixCalc(prefix){
+  prefix = prefix || 'multifamily';
   const keys = ['eff','1br','2br','3br','4br'];
   let grand = 0;
   keys.forEach(key=>{
-    const rent = parseFloat(_stripCommas(document.getElementById(`li_s_multifamily_rent_${key}`)?.value||'0'))||0;
-    const cnt  = parseFloat(_stripCommas(document.getElementById(`li_s_multifamily_cnt_${key}`)?.value||'0'))||0;
+    const rent = parseFloat(_stripCommas(document.getElementById(`li_s_${prefix}_rent_${key}`)?.value||'0'))||0;
+    const cnt  = parseFloat(_stripCommas(document.getElementById(`li_s_${prefix}_cnt_${key}`)?.value||'0'))||0;
     const row  = rent * cnt;
     grand += row;
-    const cell = document.getElementById(`li_s_multifamily_rowtot_${key}`);
+    const cell = document.getElementById(`li_s_${prefix}_rowtot_${key}`);
     if(cell) cell.textContent = row > 0 ? '$' + Math.round(row).toLocaleString() : '—';
   });
-  const gt = document.getElementById('li_s_multifamily_gri_total');
+  const gt = document.getElementById(`li_s_${prefix}_gri_total`);
   if(gt) gt.textContent = grand > 0 ? '$' + Math.round(grand).toLocaleString() : '—';
 }
 
@@ -18522,6 +18616,48 @@ async function _liSubmitSeller(){
       if(g('resunits')) lines.push(`Residential Units: ${g('resunits')}`);
       if(g('comspaces')) lines.push(`Commercial Spaces: ${g('comspaces')}`);
       if(g('sf')) lines.push(`Total SF: ${g('sf')}`);
+      // v102.25: tenant/occupancy notes — previously dropped on submit
+      if(g('mixnotes')) lines.push(`Tenant / Occupancy Notes: ${g('mixnotes')}`);
+
+      // v102.25: Residential side (mirrors the Multifamily block with
+      // the 'mixeduse_res' prefix). Collected into assetNotes so the
+      // data lands in General Property Notes and flows through to the
+      // Text Message Maker's General Notes section.
+      // Note: unit count comes from the top-row 'resunits' field above,
+      // so we don't duplicate it here.
+      const muResYb = gn('li_s_mixeduse_res_yearbuilt');
+      if(muResYb) lines.push(`Residential Year Built: ${muResYb}`);
+      const muResClass = document.getElementById('li_s_mixeduse_res_class')?.value;
+      if(muResClass) lines.push(`Residential Class: ${muResClass}`);
+      // Occupancy: honor the per-prefix mode state
+      if(_liMfOccState.mixeduse_res === 'units'){
+        const occU = gn('li_s_mixeduse_res_occ_units');
+        const occT = gn('li_s_mixeduse_res_occ_total');
+        if(occU && occT){
+          const pct = Math.round((occU/occT)*1000)/10;
+          lines.push(`Residential Occupancy: ${occU} of ${occT} units (${pct}%)`);
+        }
+      } else {
+        const occPct = gn('li_s_mixeduse_res_occ');
+        if(occPct) lines.push(`Residential Occupancy: ${occPct}%`);
+      }
+      // Bedroom unit mix rent table
+      const muRentRows = [['Studio/Eff','eff'],['1BR','1br'],['2BR','2br'],['3BR','3br'],['4BR','4br']];
+      let muGriMo = 0;
+      muRentRows.forEach(([lbl,key])=>{
+        const rent = gn(`li_s_mixeduse_res_rent_${key}`);
+        const cnt  = gn(`li_s_mixeduse_res_cnt_${key}`);
+        if(rent || cnt){
+          const rowTot = (rent||0) * (cnt||0);
+          if(rowTot > 0) muGriMo += rowTot;
+          lines.push(`Residential ${lbl}: ${cnt||'?'}x units @ $${rent?rent.toLocaleString():'?'}/mo${rowTot?' = $'+rowTot.toLocaleString()+'/mo':''}`);
+        }
+      });
+      if(muGriMo > 0){
+        lines.push(`Total Residential Unit Mix GRI: $${muGriMo.toLocaleString()}/mo · $${(muGriMo*12).toLocaleString()}/yr`);
+      }
+      const muUm = document.getElementById('li_s_mixeduse_res_unitmix')?.value?.trim();
+      if(muUm) lines.push(`Residential Unit Mix Notes: ${muUm}`);
     } else if(id==='automotive'){
       if(g('bays')) lines.push(`Bays: ${g('bays')}`);
       if(g('lifts')) lines.push(`Lifts: ${g('lifts')}`);

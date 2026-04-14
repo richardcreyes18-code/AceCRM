@@ -18325,7 +18325,7 @@ function _liSellerAssetFields(id){
     <!-- Top row: high-level counts + total SF -->
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px;">
       ${gNum('# Residential Units','resunits','e.g. 4')}
-      ${gNum('# Commercial Spaces','comspaces','e.g. 2')}
+      ${_liNumField('# Commercial Spaces','li_s_mixeduse_comspaces','e.g. 2',null,'_liMuOnCountChange()')}
       ${gNum('Total Building SF','sf','e.g. 6,000')}
     </div>
     ${ta('Tenant / Occupancy Notes','mixnotes','Describe current tenants, occupancy, lease status...')}
@@ -18378,7 +18378,11 @@ function _liSellerAssetFields(id){
         </div>
       </div>
       ${_liTextarea('Additional Residential Unit Mix Notes','li_s_mixeduse_res_unitmix','e.g. All 2BR have private balconies, 1BR renovated in 2022...',2)}
-    </div>`;
+    </div>
+
+    <!-- v102.26: Commercial tenant forms host. Populated by _liMuRenderTenants
+         whenever '# Commercial Spaces' changes (onblur) or a tenant is removed. -->
+    <div id="li_mu_tenants_host"></div>`;
 
   if(id==='automotive') return `
     <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:12px;margin-bottom:12px;">
@@ -18417,6 +18421,145 @@ let _liSellerFinState = { sellerFinancing: false, mfOccMode: 'pct' };
 // A per-prefix state bag tracks each occupancy toggle independently so
 // selecting BOTH Multifamily and Mixed Use doesn't cross-contaminate.
 const _liMfOccState = { multifamily: 'pct', mixeduse_res: 'pct' };
+
+// ─── v102.26: MIXED-USE COMMERCIAL TENANTS ─────────────────────────
+// On the Mixed Use seller-intake subform, as the user types into the
+// '# Commercial Spaces' field we grow or shrink a list of slim tenant
+// forms. User-entered data is preserved across grows/shrinks by
+// snapshotting the DOM into this state array before each re-render.
+//
+// Storage shape matches what tmSaveTenant writes on existing deals:
+// flat array of {Tenant Name, Industry, Unit / Suite, Square Footage,
+// Monthly Rent, Lease Type, Lease End Date, Rent Per SF (Annual), id}
+// which is what loadTenantMixTab reads from mf_unit_rent_data JSONB.
+// So tenants entered at intake automatically appear on the new deal's
+// Tenant Mix tab after submit.
+let _liMuTenants = [];  // array of {name, unit, sf, rent, leaseEnd, leaseType} — intake-form shape
+const _LI_MU_LEASE_TYPES = ['NNN','Modified Gross','Gross','Absolute NNN','Percentage','Month-to-Month','Other'];
+
+// Snapshot whatever the user has typed into the tenant forms back into
+// _liMuTenants so we don't lose it on re-render.
+function _liMuSyncTenantsFromDOM(){
+  const rows = document.querySelectorAll('.li-mu-tenant-row');
+  const snap = [];
+  rows.forEach(row => {
+    const get = sel => row.querySelector(sel)?.value?.trim() || '';
+    snap.push({
+      name:      get('.li-mu-t-name'),
+      industry:  get('.li-mu-t-industry'),
+      unit:      get('.li-mu-t-unit'),
+      sf:        get('.li-mu-t-sf'),
+      rent:      get('.li-mu-t-rent'),
+      leaseEnd:  get('.li-mu-t-leaseend'),
+      leaseType: get('.li-mu-t-leasetype'),
+    });
+  });
+  _liMuTenants = snap;
+}
+
+// Grow/shrink the tenant array to match the desired length. Existing
+// entries are preserved by index; new ones are empty objects; trimmed
+// entries are discarded (silently — the user asked for fewer).
+function _liMuResizeTenants(n){
+  n = Math.max(0, Math.min(50, Math.round(n)||0));  // sanity clamp
+  _liMuSyncTenantsFromDOM();
+  if(_liMuTenants.length < n){
+    while(_liMuTenants.length < n){
+      _liMuTenants.push({name:'',industry:'',unit:'',sf:'',rent:'',leaseEnd:'',leaseType:''});
+    }
+  } else if(_liMuTenants.length > n){
+    _liMuTenants = _liMuTenants.slice(0, n);
+  }
+  _liMuRenderTenants();
+}
+
+// Called from the onblur of the # Commercial Spaces input. Parses the
+// current value and resizes.
+function _liMuOnCountChange(){
+  const raw = document.getElementById('li_s_mixeduse_comspaces')?.value || '';
+  const n = parseInt(String(raw).replace(/,/g,''), 10) || 0;
+  _liMuResizeTenants(n);
+}
+
+// Remove a single tenant by index. Decrements the count field so the
+// two stay in sync.
+function _liMuRemoveTenant(idx){
+  _liMuSyncTenantsFromDOM();
+  if(idx < 0 || idx >= _liMuTenants.length) return;
+  _liMuTenants.splice(idx, 1);
+  // Sync count field so the input mirrors the new length
+  const cnt = document.getElementById('li_s_mixeduse_comspaces');
+  if(cnt) cnt.value = _liMuTenants.length ? String(_liMuTenants.length) : '';
+  _liMuRenderTenants();
+}
+
+function _liMuRenderTenants(){
+  const host = document.getElementById('li_mu_tenants_host');
+  if(!host) return;
+  if(_liMuTenants.length === 0){
+    host.innerHTML = '';
+    return;
+  }
+  // Inline styles match the seller-intake form look
+  const lblS = _liLabelStyle();
+  const inpS = _liInputStyle();
+  const rows = _liMuTenants.map((t, i) => `
+    <div class="li-mu-tenant-row" style="background:#fff;border:1px solid #fde68a;border-left:4px solid #f59e0b;border-radius:10px;padding:14px 16px;margin-bottom:10px;">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
+        <div style="font-size:11px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:.06em;">🏪 Commercial Tenant ${i+1}</div>
+        <button type="button" onclick="_liMuRemoveTenant(${i})" title="Remove this tenant" style="background:#fef2f2;color:#dc2626;border:1px solid #fecaca;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;">× Remove</button>
+      </div>
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-bottom:8px;">
+        <div>
+          <label style="${lblS}">Tenant / Business Name</label>
+          <input type="text" class="li-mu-t-name" value="${(t.name||'').replace(/"/g,'&quot;')}" placeholder="e.g. Starbucks" style="${inpS}"/>
+        </div>
+        <div>
+          <label style="${lblS}">Industry</label>
+          <input type="text" class="li-mu-t-industry" value="${(t.industry||'').replace(/"/g,'&quot;')}" placeholder="e.g. Food & Beverage" style="${inpS}"/>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:8px;">
+        <div>
+          <label style="${lblS}">Unit / Suite</label>
+          <input type="text" class="li-mu-t-unit" value="${(t.unit||'').replace(/"/g,'&quot;')}" placeholder="e.g. Suite 101" style="${inpS}"/>
+        </div>
+        <div>
+          <label style="${lblS}">Square Footage</label>
+          <input type="text" inputmode="numeric" class="num-input li-mu-t-sf" value="${(t.sf||'').replace(/"/g,'&quot;')}" placeholder="e.g. 1,200" style="${inpS}"/>
+        </div>
+        <div>
+          <label style="${lblS}">Monthly Rent ($)</label>
+          <input type="text" inputmode="numeric" class="num-input li-mu-t-rent" value="${(t.rent||'').replace(/"/g,'&quot;')}" placeholder="e.g. 3,000" style="${inpS}"/>
+        </div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+        <div>
+          <label style="${lblS}">Lease Type</label>
+          <select class="li-mu-t-leasetype" style="${inpS}">
+            <option value="">— Select —</option>
+            ${_LI_MU_LEASE_TYPES.map(lt => `<option ${t.leaseType===lt?'selected':''}>${lt}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <label style="${lblS}">Lease End Date</label>
+          <input type="date" class="li-mu-t-leaseend" value="${(t.leaseEnd||'').replace(/"/g,'&quot;')}" style="${inpS}"/>
+        </div>
+      </div>
+    </div>
+  `).join('');
+  host.innerHTML = `
+    <div style="margin-top:14px;padding:14px;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;">
+      <div style="font-size:12px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">
+        🏪 Commercial Tenants — ${_liMuTenants.length} tenant${_liMuTenants.length===1?'':'s'}
+      </div>
+      ${rows}
+      <div style="font-size:10px;color:#92400e;margin-top:4px;">
+        Change the "# Commercial Spaces" field above to add or remove tenant forms.
+      </div>
+    </div>
+  `;
+}
 
 function _liMfOccMode(mode, prefix){
   prefix = prefix || 'multifamily';
@@ -18525,6 +18668,16 @@ async function _liSubmitSeller(){
   if(!gv('li_s_name')){ errEl.textContent='Name is required.'; errEl.style.display='block'; return; }
   if(!gv('li_s_phone')){ errEl.textContent='Phone number is required.'; errEl.style.display='block'; return; }
   if(!gv('li_s_address')){ errEl.textContent='Property address is required.'; errEl.style.display='block'; return; }
+
+  // v102.26: Multifamily and Mixed Use can't both be selected on the same
+  // lead. They write to the same mf_unit_rent_data column with incompatible
+  // shapes, and the business logic is: a deal is one or the other, not both.
+  const _preKeys = [...new Set(_li.assetKeys||[])];
+  if(_preKeys.includes('multifamily') && _preKeys.includes('mixeduse')){
+    errEl.textContent = 'A lead can\'t be both Multifamily and Mixed Use. Please pick one — if the building has commercial spaces, use Mixed Use; if it\'s purely residential, use Multifamily.';
+    errEl.style.display = 'block';
+    return;
+  }
   errEl.style.display='none';
 
   const cfg=getConfig();
@@ -18536,6 +18689,7 @@ async function _liSubmitSeller(){
   // AND collect structured data for writing to real ace_properties columns
   let assetNotes = '';
   let _liMfData = null; // structured MF data if multifamily is selected
+  let _liMuTenantsToWrite = null; // v102.26: commercial tenants array for Mixed Use
   const selectedAssetTypes = _li.assetTypes||[];
   const selectedKeys = [...new Set(_li.assetKeys||[])];
   selectedKeys.forEach(id=>{
@@ -18658,6 +18812,44 @@ async function _liSubmitSeller(){
       }
       const muUm = document.getElementById('li_s_mixeduse_res_unitmix')?.value?.trim();
       if(muUm) lines.push(`Residential Unit Mix Notes: ${muUm}`);
+
+      // v102.26: Commercial tenants. Sync from DOM to _liMuTenants, filter
+      // empty rows, shape each into the format loadTenantMixTab expects
+      // so they appear on the new deal's Tenant Mix tab after submit.
+      _liMuSyncTenantsFromDOM();
+      const _muTenantsShaped = _liMuTenants
+        .filter(t => (t.name && t.name.trim()) || (t.unit && t.unit.trim()))
+        .map((t, i) => {
+          const sfN   = t.sf   ? parseFloat(String(t.sf).replace(/,/g,'')) || null : null;
+          const rentN = t.rent ? parseFloat(String(t.rent).replace(/,/g,'')) || null : null;
+          const psf = (sfN && rentN) ? parseFloat(((rentN*12)/sfN).toFixed(4)) : null;
+          const row = {
+            id: 'tm_intake_' + Date.now() + '_' + i,
+            'Tenant Name':     t.name || '',
+            'Unit / Suite':    t.unit || '',
+          };
+          if(t.industry) row['Industry'] = t.industry;
+          if(sfN)         row['Square Footage']        = sfN;
+          if(rentN)       row['Monthly Rent']          = rentN;
+          if(psf)         row['Rent Per SF (Annual)']  = psf;
+          if(t.leaseType) row['Lease Type']            = t.leaseType;
+          if(t.leaseEnd)  row['Lease End Date']        = t.leaseEnd;
+          return row;
+        });
+      if(_muTenantsShaped.length > 0){
+        _liMuTenantsToWrite = _muTenantsShaped;
+        lines.push(`Commercial Tenants (${_muTenantsShaped.length}):`);
+        _muTenantsShaped.forEach(t => {
+          const parts = [];
+          parts.push(t['Tenant Name'] || '(no name)');
+          if(t['Unit / Suite']) parts.push(`Unit ${t['Unit / Suite']}`);
+          if(t['Square Footage']) parts.push(`${t['Square Footage'].toLocaleString()} SF`);
+          if(t['Monthly Rent']) parts.push(`$${t['Monthly Rent'].toLocaleString()}/mo`);
+          if(t['Lease Type']) parts.push(t['Lease Type']);
+          if(t['Lease End Date']) parts.push(`ends ${t['Lease End Date']}`);
+          lines.push('  • ' + parts.join(' · '));
+        });
+      }
     } else if(id==='automotive'){
       if(g('bays')) lines.push(`Bays: ${g('bays')}`);
       if(g('lifts')) lines.push(`Lifts: ${g('lifts')}`);
@@ -18766,6 +18958,16 @@ async function _liSubmitSeller(){
         dealFields['MF Unit Rent Data'] = JSON.stringify(rentJson);
       }
       if(_liMfData.unitMixNotes) dealFields['Unit Mix'] = _liMfData.unitMixNotes;
+    }
+
+    // v102.26: Mixed Use commercial tenants — write as JSONB array to
+    // MF Unit Rent Data so they appear on the new deal's Tenant Mix tab.
+    // Safe to unconditionally set here because the mutual-exclusion guard
+    // at the top of this function rules out Multifamily + Mixed Use on
+    // the same lead, so _liMfData and _liMuTenantsToWrite are never both
+    // truthy in one submission.
+    if(_liMuTenantsToWrite && _liMuTenantsToWrite.length > 0){
+      dealFields['MF Unit Rent Data'] = JSON.stringify(_liMuTenantsToWrite);
     }
 
     // Why Selling: dedicated column on ace_properties (shown in Property Details → Seller Info → Why Selling)
@@ -19428,9 +19630,10 @@ function _liField(label, id, type, placeholder){
 }
 // Numeric field with comma auto-formatting (uses existing delegated num-input listener).
 // Use this in lead intake forms for prices, square footage, unit counts, rent, etc.
-function _liNumField(label, id, placeholder, extraOninput){
+function _liNumField(label, id, placeholder, extraOninput, extraOnblur){
   const oninput = extraOninput ? ` oninput="${extraOninput}"` : '';
-  return `<div><label style="${_liLabelStyle()}">${label}</label><input id="${id}" type="text" inputmode="numeric" class="num-input" placeholder="${placeholder}" style="${_liInputStyle()}"${oninput} /></div>`;
+  const onblur  = extraOnblur  ? ` onblur="${extraOnblur}"`   : '';
+  return `<div><label style="${_liLabelStyle()}">${label}</label><input id="${id}" type="text" inputmode="numeric" class="num-input" placeholder="${placeholder}" style="${_liInputStyle()}"${oninput}${onblur} /></div>`;
 }
 // Plain integer field — no commas. Use for year built, year renovated, etc.
 function _liYearField(label, id, placeholder){

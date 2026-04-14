@@ -9241,16 +9241,344 @@ async function saveAllPropertyDetails(){
 }
 
 // ─── TAB: AI COMMUNICATION ────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════
+// TEXT MESSAGE MAKER (v102.26)
+// ═══════════════════════════════════════════════════════════════════════
+// Generates a plain-text deal briefing the user can copy into SMS/Slack/
+// email to share with teammates. Reads live from the current deal object
+// (no DB call, no stored column) so it always reflects the latest edits.
+// Ported conceptually from the user's Airtable "text message maker"
+// formula but expanded to cover every field on the Seller Lead Intake
+// form (v102.14 schema).
+//
+// Checkbox toggles let the user include/exclude each section before
+// copying. Selection state lives in _tmmInclude — persists across tab
+// switches within a session, resets on page reload.
+
+// Default include state — all sections ON. Keys match the SECTION_DEFS
+// below so adding a new section = two small edits (the def + this key).
+const _tmmInclude = {
+  contact:    true,
+  property:   true,
+  assetType:  true,
+  general:    true,
+  financials: true,
+  motivation: true,
+  askingWords:true,
+  whySelling: true,
+  assetSpecific: true,
+  sellerFin:  true,
+};
+
+// Format a number as "$1.5M", "$250K", "$5,200" — same logic as _bmFmt
+// but more granular in the sub-thousand range.
+function _tmmMoney(n){
+  const v = Number(n);
+  if(!v || isNaN(v)) return '';
+  if(v >= 1e6) return '$' + (v/1e6).toFixed(2).replace(/\.?0+$/,'') + 'M';
+  if(v >= 1e3) return '$' + (v/1e3).toFixed(1).replace(/\.?0+$/,'') + 'K';
+  return '$' + v.toLocaleString();
+}
+
+// Format square footage as "5,200 SF" or "8.95 KSF" — kilo-format matches
+// the Airtable template's "KSqFt" convention but uses clearer SI units.
+function _tmmSF(n){
+  const v = Number(n);
+  if(!v || isNaN(v)) return '';
+  if(v >= 1000) return (v/1000).toFixed(2).replace(/\.?0+$/,'') + ' KSF';
+  return Number(v).toLocaleString() + ' SF';
+}
+
+// Collect asset-type-specific fields into a multi-line block. Returns
+// an empty string if none of the fields this asset type cares about
+// are populated. Uses whichever fields are present on the deal.
+function _tmmAssetSpecificBlock(d){
+  const type = (d['CRM Asset Classification'] || d['Simple Text Property Type'] || '').toLowerCase();
+  const lines = [];
+  const add = (label, val) => { if(val !== null && val !== undefined && val !== '' && val !== 0) lines.push(label + ': ' + val); };
+
+  // Universal asset details (apply to any type)
+  if(d['No. of Units']   || d['Number of Units']) add('Units',        d['No. of Units'] || d['Number of Units']);
+  if(d['Year Built'])     add('Year Built',    d['Year Built']);
+  if(d['Year Renovated']) add('Year Renovated', d['Year Renovated']);
+  if(d['No. of Stories']) add('Stories',       d['No. of Stories']);
+  if(d['Occupancy (%)'] != null && d['Occupancy (%)'] !== '') add('Occupancy', d['Occupancy (%)'] + '%');
+  if(d['Property Class']) add('Class',         d['Property Class']);
+
+  // Multifamily
+  if(type.includes('multi') || type.includes('mf')){
+    const mix = [];
+    if(d['Units Efficiency'])  mix.push(d['Units Efficiency'] + ' Eff');
+    if(d['Units 1 Bedroom'])   mix.push(d['Units 1 Bedroom'] + ' 1BR');
+    if(d['Units 2 Bedroom'])   mix.push(d['Units 2 Bedroom'] + ' 2BR');
+    if(d['Units 3 Bedroom'])   mix.push(d['Units 3 Bedroom'] + ' 3BR');
+    if(d['Units 4 Bedroom'])   mix.push(d['Units 4 Bedroom'] + ' 4BR');
+    if(mix.length) lines.push('Unit Mix: ' + mix.join(', '));
+    if(d['Unit Mix'] && !mix.length) lines.push('Unit Mix: ' + d['Unit Mix']);
+  }
+
+  // Warehouse / Industrial
+  if(type.includes('warehouse') || type.includes('industrial')){
+    if(d['Ceiling Height']) add('Ceiling', d['Ceiling Height'] + "'");
+  }
+
+  // Retail / Shopping Center
+  if(type.includes('retail') || type.includes('shopping')){
+    if(d['Retail Lease Type'])   add('Lease Type', d['Retail Lease Type']);
+    if(d['Shopping Lease Type']) add('Lease Type', d['Shopping Lease Type']);
+  }
+
+  // Automotive
+  if(type.includes('automotive')){
+    if(d['Automotive Gas Type'] && d['Automotive Gas Type'] !== 'No') add('Gas Station', d['Automotive Gas Type']);
+    if(d['Automotive Wash Type'] && d['Automotive Wash Type'] !== 'No') add('Car Wash', d['Automotive Wash Type']);
+  }
+
+  // Land — lot size
+  if(d['Total Lot Size']){
+    const unit = d['Lot Size Unit'] || 'sf';
+    add('Lot Size', Number(d['Total Lot Size']).toLocaleString() + ' ' + unit);
+  }
+
+  // Parking
+  if(d['No. of Parking Spaces']) add('Parking', d['No. of Parking Spaces'] + ' spaces');
+
+  return lines.length ? lines.join('\n') : '';
+}
+
+// Build the full text message from the deal object.
+// opt = { contact, property, assetType, general, financials, ... } booleans
+// controlling which sections are included. All default to true if omitted.
+function _tmmBuildText(d, opt){
+  if(!d) return 'No deal loaded.';
+  opt = Object.assign({}, _tmmInclude, opt || {});
+  const out = [];
+
+  // ── CONTACT ────────────────────────────────────────────────────
+  if(opt.contact){
+    const name  = d['_sellerName']  || d['_ownerName'] || '';
+    const phone = d['_sellerPhone'] || '';
+    const email = d['_sellerEmail'] || '';
+    if(name)  out.push('Name: '  + name);
+    if(phone) out.push('Phone: ' + phone);
+    if(email) out.push('Email: ' + email);
+  }
+
+  // ── PROPERTY / ADDRESS ─────────────────────────────────────────
+  if(opt.property){
+    if(d['Address']) out.push('Address: ' + d['Address']);
+    if(d['Simple County']) out.push('County: ' + d['Simple County']);
+  }
+
+  // ── TYPE / SF / UNITS ──────────────────────────────────────────
+  if(opt.assetType){
+    const typeRaw = d['CRM Asset Classification'] || d['Simple Text Property Type'] || '';
+    if(typeRaw){
+      const parts = ['Type: ' + typeRaw];
+      const sf = Number(d['Square Footage'] || d['Total Building SF'] || 0);
+      if(sf) parts.push(_tmmSF(sf));
+      const units = Number(d['No. of Units'] || d['Number of Units'] || 0);
+      if(units) parts.push(units + ' Units');
+      out.push(parts.join(' | '));
+    }
+  }
+
+  // ── GENERAL NOTES ──────────────────────────────────────────────
+  if(opt.general){
+    const gn = d['General Property Notes'] || d['General Notes'] || '';
+    if(gn && String(gn).trim()){
+      out.push('');
+      out.push('General Notes:');
+      out.push(String(gn).trim());
+    }
+  }
+
+  // ── ASSET-SPECIFIC DETAILS (mf unit mix, warehouse ceilings, etc.) ──
+  if(opt.assetSpecific){
+    const block = _tmmAssetSpecificBlock(d);
+    if(block){
+      out.push('');
+      out.push('Property Details:');
+      out.push(block);
+    }
+  }
+
+  // ── FINANCIALS ─────────────────────────────────────────────────
+  if(opt.financials){
+    const fin = [];
+    const griMo = Number(d['Gross Revenue Monthly'] || 0);
+    const griYr = Number(d['Gross Revenue Yearly']  || 0);
+    const expMo = Number(d['Expenses Monthly']      || 0);
+    const expYr = Number(d['Expenses Yearly']       || 0);
+    const noi   = Number(d['NOI'] || 0);
+    const cap   = Number(d['Cap Rate (CRM)'] || 0);
+    if(griMo) fin.push('Gross Monthly Revenue: ' + _tmmMoney(griMo));
+    if(griYr) fin.push('Gross Yearly Revenue: '  + _tmmMoney(griYr));
+    if(expMo) fin.push('Monthly Expenses: '      + _tmmMoney(expMo));
+    if(expYr) fin.push('Yearly Expenses: '       + _tmmMoney(expYr));
+    if(noi)   fin.push('NOI: '                   + _tmmMoney(noi));
+    if(cap)   fin.push('Cap Rate: '              + cap.toFixed(2) + '%');
+    const fnotes = d['Financial Property Notes'] || d['Financial Notes'] || '';
+    if(fin.length || (fnotes && String(fnotes).trim())){
+      out.push('');
+      out.push('Financials:');
+      fin.forEach(l => out.push(l));
+      if(fnotes && String(fnotes).trim()) out.push(String(fnotes).trim());
+    }
+  }
+
+  // ── SELLER FINANCING ───────────────────────────────────────────
+  // Extracted from the Financial Property Notes block (the intake form
+  // appends a "--- SELLER FINANCING ---" section there). If we find that
+  // marker, pull its text into its own section so it can be toggled off
+  // independently.
+  if(opt.sellerFin){
+    const fnotes = d['Financial Property Notes'] || '';
+    const sfMatch = String(fnotes).match(/---\s*SELLER FINANCING\s*---\s*([\s\S]*?)(?:\n---|$)/i);
+    if(sfMatch && sfMatch[1]){
+      out.push('');
+      out.push('Seller Financing:');
+      out.push(sfMatch[1].trim());
+    }
+  }
+
+  // ── MOTIVATION / WHY SELLING ───────────────────────────────────
+  if(opt.whySelling){
+    const why = d['Why Selling'] || '';
+    const ml  = d['Seller Motivation Level'] || '';
+    if(why || ml){
+      out.push('');
+      out.push('Why Selling:');
+      if(ml)  out.push('Motivation Level: ' + ml);
+      if(why) out.push(String(why).trim());
+    }
+  }
+
+  // ── ASKING PRICE ──────────────────────────────────────────────
+  if(opt.askingWords){
+    const price = Number(d['Asking Price'] || 0);
+    const priceWords = d['Asking Price Explanation'] || d['Asking Price Words'] || '';
+    if(price || priceWords){
+      out.push('');
+      if(price) out.push('Asking Price: ' + _tmmMoney(price));
+      if(priceWords && String(priceWords).trim()) out.push(String(priceWords).trim());
+    }
+  }
+
+  // Strip leading blank lines and collapse runs of 3+ newlines to 2
+  return out.join('\n').replace(/^\n+/, '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// Rebuild the textarea from the current deal and current _tmmInclude state.
+// Called on tab render, on checkbox toggle, and after loadSellerContact
+// completes (so owner name/phone/email show up).
+function _tmmUpdate(){
+  const ta = document.getElementById('tmmTextarea');
+  if(!ta || !currentDeal) return;
+  ta.value = _tmmBuildText(currentDeal);
+}
+
+// Toggle a section's include state and regenerate.
+function _tmmToggle(key){
+  _tmmInclude[key] = !_tmmInclude[key];
+  _tmmUpdate();
+}
+
+// Copy the textarea to clipboard and flash a confirmation.
+function _tmmCopy(){
+  const ta = document.getElementById('tmmTextarea');
+  if(!ta) return;
+  ta.select();
+  try {
+    navigator.clipboard.writeText(ta.value).then(()=>{
+      const msg = document.getElementById('tmmCopyMsg');
+      if(msg){
+        msg.textContent = '✓ Copied!';
+        msg.style.display = 'inline';
+        setTimeout(()=>{ msg.style.display = 'none'; }, 1800);
+      }
+    }).catch(()=>{
+      // Fallback for older browsers: execCommand copy
+      document.execCommand('copy');
+      const msg = document.getElementById('tmmCopyMsg');
+      if(msg){ msg.textContent = '✓ Copied (fallback)'; msg.style.display = 'inline'; setTimeout(()=>{ msg.style.display = 'none'; }, 1800); }
+    });
+  } catch(e){
+    alert('Copy failed. Select the text manually and copy.');
+  }
+}
+
+// Reset all toggles to ON
+function _tmmResetToggles(){
+  Object.keys(_tmmInclude).forEach(k => { _tmmInclude[k] = true; });
+  document.querySelectorAll('.tmm-toggle').forEach(cb => { cb.checked = true; });
+  _tmmUpdate();
+}
+
+// Section definitions for the checkbox row. [key, label] pairs.
+const _TMM_SECTIONS = [
+  ['contact',       '👤 Contact'],
+  ['property',      '📍 Address'],
+  ['assetType',     '🏗️ Type / SF / Units'],
+  ['general',       '📝 General Notes'],
+  ['assetSpecific', '🔧 Property Details'],
+  ['financials',    '💰 Financials'],
+  ['sellerFin',     '🏦 Seller Financing'],
+  ['whySelling',    '🎯 Why Selling'],
+  ['askingWords',   '🏷️ Asking Price'],
+];
+
 function renderAICommTab(d){
+  // v102.26: Build checkbox row for the Text Message Maker
+  const toggleRow = _TMM_SECTIONS.map(([key, label]) => `
+    <label style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;font-size:12px;cursor:pointer;font-family:'Inter',system-ui,sans-serif;color:#475569;font-weight:500;">
+      <input type="checkbox" class="tmm-toggle" ${_tmmInclude[key] ? 'checked' : ''} onchange="_tmmToggle('${key}')"/>
+      ${label}
+    </label>`).join('');
+
+  // Pre-build the initial text so the textarea isn't empty on first render.
+  // The contact info may not be loaded yet — _tmmUpdate() is called again
+  // from loadAICommTab after loadSellerContact resolves.
+  const initialText = _tmmBuildText(d);
+
   return `
     <div class="section-hdr"><span class="icon">✦</span> AI Communication</div>
 
-    <!-- ACE CHAT TEXT SUMMARY -->
+    <!-- ─── v102.26: TEXT MESSAGE MAKER ─────────────────────────────── -->
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:20px;margin-bottom:20px;font-family:'Inter',system-ui,sans-serif;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+        <div style="font-size:15px;font-weight:700;color:#0f172a;">💬 Text Message Maker</div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span id="tmmCopyMsg" style="font-size:12px;color:#16a34a;font-weight:600;display:none;"></span>
+          <button onclick="_tmmCopy()" style="background:#0f172a;color:#fff;border:none;padding:8px 18px;font-size:12px;font-weight:600;border-radius:8px;cursor:pointer;font-family:inherit;">
+            📋 Copy to Clipboard
+          </button>
+        </div>
+      </div>
+      <div style="font-size:12px;color:#64748b;margin-bottom:14px;">
+        Auto-generated briefing you can paste into a text, email, or Slack message. Toggle sections below to include or exclude them.
+      </div>
+
+      <textarea id="tmmTextarea" readonly
+        style="width:100%;min-height:260px;padding:14px 16px;border:1px solid #e2e8f0;border-radius:10px;font-size:13px;font-family:ui-monospace,Menlo,Monaco,Consolas,monospace;background:#f8fafc;color:#0f172a;resize:vertical;line-height:1.55;box-sizing:border-box;">${initialText.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</textarea>
+
+      <div style="margin-top:14px;">
+        <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:8px;">Include in Message</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;">
+          ${toggleRow}
+          <button onclick="_tmmResetToggles()" style="background:#fff;border:1px solid #e2e8f0;padding:6px 14px;border-radius:8px;font-size:12px;cursor:pointer;color:#475569;font-weight:500;font-family:inherit;margin-left:auto;">
+            Reset
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── LEGACY: Ace Chat Text Summary (stored in ace_chat_summary col) ── -->
     <div class="info-box">
-      <div class="info-box-title">Ace Chat Text Summary</div>
-      <div style="font-size:11px;color:#555;margin-bottom:8px;">Auto-generated property briefing from your Airtable data.</div>
-      <textarea id="aiSummaryText" style="width:100%;height:160px;font-size:11px;font-family:Tahoma,Arial,sans-serif;border:1px inset #808080;padding:8px;resize:vertical;background:#fafafa;"
-        readonly>${d['Ace Chat Text Summary']||'No summary available — enter property details and financials first.'}</textarea>
+      <div class="info-box-title">Legacy AI Summary <span style="font-size:10px;color:#94a3b8;font-weight:400;">(from Airtable automation)</span></div>
+      <div style="font-size:11px;color:#555;margin-bottom:8px;">Read-only. Generated by a legacy Airtable AI workflow — not refreshed in the new CRM.</div>
+      <textarea id="aiSummaryText" style="width:100%;height:120px;font-size:11px;font-family:Tahoma,Arial,sans-serif;border:1px inset #808080;padding:8px;resize:vertical;background:#fafafa;"
+        readonly>${d['Ace Chat Text Summary']||'No legacy summary available.'}</textarea>
     </div>
 
     <!-- EMAIL TEMPLATE -->
@@ -9308,6 +9636,15 @@ async function loadAICommTab(recordId){
     if(summaryEl) summaryEl.value = summary;
     if(templateEl && templateVal) templateEl.value = templateVal;
     if(currentDeal){ currentDeal['Ace Chat Text Summary'] = summary; }
+
+    // v102.26: Also load the seller contact so the Text Message Maker can
+    // include Name / Phone / Email. loadSellerContact caches these on
+    // currentDeal as _sellerName / _sellerPhone / _sellerEmail. After it
+    // resolves, refresh the Text Message Maker textarea in place.
+    try {
+      await loadSellerContact(recordId);
+    } catch(e){ /* non-fatal — TMM just won't have contact info */ }
+    if(typeof _tmmUpdate === 'function') _tmmUpdate();
   }catch(e){}
 }
 

@@ -2987,10 +2987,24 @@ const _nav = {
 
   // Capture filter state + scroll for the page we're about to leave.
   // Called by pushPage / pushDeal on the CURRENT state before replacing it.
+  //
+  // v102.20a: Previously read the current page from .nav-btn.active, but
+  // some open handlers (dealBoardOpen, _dbOpenFromMap) swap .active BEFORE
+  // calling openDeal, so by the time we capture, the DOM lies about which
+  // page we're on. Fix: trust window.history.state.page as the source of
+  // truth (it's what we pushed when we rendered the page), and only fall
+  // back to the DOM when there's no stored state yet.
   captureCurrent(){
-    const active = document.querySelector('.nav-btn.active');
-    if(!active) return null;
-    const page = active.getAttribute('data-page') || _nav._pageFromLabel(active.textContent.trim());
+    let page = null;
+    try {
+      const st = window.history.state;
+      if(st && st.kind === 'page' && st.page) page = st.page;
+    } catch(e){}
+    if(!page){
+      const active = document.querySelector('.nav-btn.active');
+      if(!active) return null;
+      page = active.getAttribute('data-page') || _nav._pageFromLabel(active.textContent.trim());
+    }
     if(!page) return null;
     const scroll = _nav._currentScroll();
     const filters = _nav._captureFilters(page);

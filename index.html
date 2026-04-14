@@ -4985,7 +4985,20 @@ function renderSummaryTab(d){
   const ask = _fmtMoney(d['Asking Price']);
   const noi = _fmtMoney(d['NOI']);
   const offer = _fmtMoney(d['Offer Price']);
-  const cap = d['Cap Rate (Asking Price)'] ? String(d['Cap Rate (Asking Price)']) + '%' : '—';
+  // v102.27: read Cap Rate (CRM) first — this is the live field the
+  // Financial Analysis tab writes on save (stored as a decimal, e.g.
+  // 0.0823). Fall back to the legacy Airtable formula field, then to
+  // a live NOI/Asking calc. Same logic as _bmCapRate.
+  let cap = '—';
+  if(d['Cap Rate (CRM)'] != null && d['Cap Rate (CRM)'] !== ''){
+    const v = Number(d['Cap Rate (CRM)']);
+    if(!isNaN(v) && v > 0) cap = (v < 1 ? v * 100 : v).toFixed(2) + '%';
+  } else if(d['Cap Rate (Asking Price)']){
+    cap = String(d['Cap Rate (Asking Price)']) + '%';
+  } else {
+    const noiN = Number(d['NOI']||0), askN = Number(d['Asking Price']||0);
+    if(noiN && askN) cap = ((noiN/askN)*100).toFixed(2) + '%';
+  }
   const commSplit = d['Commission Split (%)'] || d['Commission Split'] || 3;
   const commAmt = d['Asking Price'] ? _fmtMoney(Number(d['Asking Price']) * (Number(commSplit)/100)) : '—';
 

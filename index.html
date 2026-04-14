@@ -783,6 +783,54 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   </div>
 </div>
 
+<!-- ── v102.28 CREATE PORTFOLIO MODAL ───────────────────────────── -->
+<div id="createPortfolioModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9700;align-items:center;justify-content:center;padding:20px;" onclick="if(event.target===this)closeCreatePortfolioModal()">
+  <div style="background:#fff;border-radius:12px;width:560px;max-width:94vw;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.4);overflow:hidden;">
+    <div style="padding:18px 22px;border-bottom:1px solid #e2e8f0;background:#fffbeb;display:flex;justify-content:space-between;align-items:center;">
+      <div style="font-size:16px;font-weight:700;color:#92400e;">📁 Create Portfolio</div>
+      <button onclick="closeCreatePortfolioModal()" style="background:none;border:none;color:#b45309;font-size:22px;cursor:pointer;line-height:1;">✕</button>
+    </div>
+    <div style="padding:20px 22px;overflow-y:auto;flex:1;">
+      <div style="margin-bottom:14px;">
+        <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Portfolio Name *</label>
+        <input id="cpName" type="text" placeholder="e.g. South River 5-Property Portfolio"
+          style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:14px;box-sizing:border-box;" />
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Package Price (optional)</label>
+          <input id="cpPackagePrice" type="text" inputmode="numeric" class="num-input" placeholder="e.g. 3,100,000"
+            style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:14px;box-sizing:border-box;" />
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Pipeline Stage</label>
+          <select id="cpStage" style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:14px;box-sizing:border-box;background:#fff;">
+            <option value="">— Select —</option>
+          </select>
+        </div>
+      </div>
+      <div style="margin-bottom:14px;">
+        <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Description</label>
+        <textarea id="cpDescription" rows="2" placeholder="Short description of this portfolio..."
+          style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:13px;box-sizing:border-box;resize:vertical;font-family:inherit;"></textarea>
+      </div>
+      <div style="margin-bottom:6px;">
+        <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Notes</label>
+        <textarea id="cpNotes" rows="3" placeholder="Any internal notes about this portfolio..."
+          style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:13px;box-sizing:border-box;resize:vertical;font-family:inherit;"></textarea>
+      </div>
+      <div style="font-size:11px;color:#64748b;margin-top:10px;line-height:1.5;">
+        You can add properties to this portfolio after creating it. Portfolios are non-destructive — you can add or remove deals at any time without affecting their data.
+      </div>
+      <div id="cpError" style="display:none;background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;padding:8px 12px;border-radius:6px;font-size:12px;margin-top:10px;"></div>
+    </div>
+    <div style="padding:14px 22px;border-top:1px solid #e2e8f0;background:#f8fafc;display:flex;justify-content:flex-end;gap:8px;">
+      <button onclick="closeCreatePortfolioModal()" style="background:#fff;color:#475569;border:1px solid #cbd5e1;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Cancel</button>
+      <button id="cpSubmitBtn" onclick="submitCreatePortfolio()" style="background:#b45309;color:#fff;border:none;padding:8px 20px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">Create Portfolio</button>
+    </div>
+  </div>
+</div>
+
 <!-- ── DEAL SNAPSHOT POPUP ─────────────────────────────────────── -->
 <div id="dealSnapshotModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9600;align-items:flex-start;justify-content:center;padding:40px 20px;overflow-y:auto;" onclick="if(event.target===this)closeDealSnapshot()">
   <div style="background:#fff;border-radius:12px;width:580px;max-width:94vw;box-shadow:0 20px 60px rgba(0,0,0,0.4);max-height:calc(100vh - 80px);display:flex;flex-direction:column;overflow:hidden;">
@@ -3459,6 +3507,19 @@ const _nav = {
             _openDealDirect(d);
           } else {
             // Deal not loaded (shouldn't normally happen) — fall back to dashboard
+            _setNavDirect(null, 'dashboard');
+          }
+        } else if(st.kind === 'portfolio'){
+          // v102.28: portfolio detail view. Same pattern as deal — find the
+          // cached portfolio, render; fall back to portfolios list if missing.
+          const p = (typeof allPortfolios !== 'undefined')
+            ? allPortfolios.find(x => x.id === st.id) : null;
+          if(p && typeof _renderPortfolioDetail === 'function'){
+            _currentPortfolioId = st.id;
+            _renderPortfolioDetail(p);
+          } else if(typeof showPortfoliosPage === 'function'){
+            showPortfoliosPage();
+          } else {
             _setNavDirect(null, 'dashboard');
           }
         } else if(st.kind === 'page'){
@@ -11042,17 +11103,206 @@ function _locPostRender(){
 // ═══════════════════════════════════════════════════════════════════════
 
 // ═══════════════════════════════════════════════════════════════════════
-// v102.28 — PORTFOLIOS PAGE (plumbing only; Turn A stub)
+// v102.28 — PORTFOLIOS MODULE (Turn B: create + list + detail view)
 // ═══════════════════════════════════════════════════════════════════════
-// Turn A renders an empty state. Turn B (next) adds the Create / Group
-// Existing modals and the real portfolio list. Clicking a portfolio in
-// Turn B will open a detail view; Turn C adds the 📁 icon on Deal Board
-// rows; Turns D-F add combined Financial Analysis, Tenant/Unit Mix, and
-// Offers tabs respectively.
+// Turn B adds: create modal, portfolio list page with search, portfolio
+// detail page with Level 1/2 aggregates, history-router integration.
+// Turn B-second-half will add: Group Existing Deals modal, edit/delete
+// actions. Turn C adds the 📁 icon tag on Deal Board rows.
+
+// ── CACHE OF WHICH PORTFOLIO WE'RE VIEWING ─────────────────────────────
+let _currentPortfolioId = null;
+
+// ── CRUD HELPERS ───────────────────────────────────────────────────────
+// Creates a new portfolio row. fields uses Airtable-style display keys
+// (matches SB_PORTFOLIO_MAP). Returns the created row with its new id.
+async function _portfolioCreate(fields){
+  if(!isSupabase()) throw new Error('Supabase required');
+  const sbData = _atToSb(fields, SB_PORTFOLIO_MAP);
+  // Always set created_by_user_id if we have a current user
+  if(typeof _currentUser !== 'undefined' && _currentUser && _currentUser.id){
+    sbData.created_by_user_id = _currentUser.id;
+  }
+  const row = await _sbPost(SB_TABLES.portfolios, sbData);
+  // _sbPost returns either {} or an array depending on Prefer header.
+  // Refresh the cache so the new portfolio shows up in the list.
+  await _loadAllPortfolios();
+  return row;
+}
+
+// ── LEVEL 1/2 AGGREGATION ──────────────────────────────────────────────
+// Returns all deals that belong to a given portfolio, ordered by
+// portfolio_sort_order then created_at.
+function _portfolioChildren(portfolioId){
+  if(!portfolioId || !allDeals) return [];
+  return allDeals
+    .filter(d => d['Portfolio ID'] === portfolioId)
+    .sort((a,b) => {
+      const sa = Number(a['Portfolio Sort Order']||0);
+      const sb = Number(b['Portfolio Sort Order']||0);
+      if(sa !== sb) return sa - sb;
+      return (a['Date Added']||'').localeCompare(b['Date Added']||'');
+    });
+}
+
+// Computes Level 1 + Level 2 aggregates for a set of child deals.
+// Returns: {totalAsking, totalNOI, totalSF, totalUnits, blendedCap,
+//           pricePerSF, pricePerUnit, avgCap}
+function _portfolioAggregates(children){
+  const agg = {
+    totalAsking: 0, totalNOI: 0, totalSF: 0, totalUnits: 0,
+    blendedCap: null, pricePerSF: null, pricePerUnit: null, avgCap: null,
+    count: children.length
+  };
+  let capSum = 0, capCount = 0;
+  children.forEach(d => {
+    const ask = Number(d['Asking Price']||0);
+    const noi = Number(d['NOI']||0);
+    const sf  = Number(d['Total Building SF']||d['Square Footage']||d['Net Rentable SF']||0);
+    const u   = Number(d['No. of Units']||d['Number of Units']||0);
+    if(ask) agg.totalAsking += ask;
+    if(noi) agg.totalNOI    += noi;
+    if(sf)  agg.totalSF     += sf;
+    if(u)   agg.totalUnits  += u;
+    // Individual cap rate for avgCap — uses Cap Rate (CRM) with the
+    // <1-means-decimal convention, same as _bmCapRate in the buyer-match
+    // module. Only averages non-null rates.
+    const rate = d['Cap Rate (CRM)'];
+    if(rate != null && rate !== ''){
+      const v = Number(rate);
+      if(!isNaN(v) && v > 0){ capSum += (v < 1 ? v*100 : v); capCount++; }
+    }
+  });
+  if(agg.totalNOI > 0 && agg.totalAsking > 0){
+    agg.blendedCap = (agg.totalNOI / agg.totalAsking) * 100;
+  }
+  if(agg.totalSF > 0 && agg.totalAsking > 0){
+    agg.pricePerSF = agg.totalAsking / agg.totalSF;
+  }
+  if(agg.totalUnits > 0 && agg.totalAsking > 0){
+    agg.pricePerUnit = agg.totalAsking / agg.totalUnits;
+  }
+  if(capCount > 0) agg.avgCap = capSum / capCount;
+  return agg;
+}
+
+// ── MODAL HANDLERS ─────────────────────────────────────────────────────
+function openCreatePortfolioModal(){
+  const modal = document.getElementById('createPortfolioModal');
+  if(!modal) return;
+  // Reset form
+  const name = document.getElementById('cpName');
+  const price = document.getElementById('cpPackagePrice');
+  const stage = document.getElementById('cpStage');
+  const desc = document.getElementById('cpDescription');
+  const notes = document.getElementById('cpNotes');
+  const err = document.getElementById('cpError');
+  if(name)  name.value = '';
+  if(price) price.value = '';
+  if(desc)  desc.value = '';
+  if(notes) notes.value = '';
+  if(err){ err.style.display = 'none'; err.textContent = ''; }
+  // Populate pipeline stage dropdown dynamically so it always matches
+  // the authoritative stages list.
+  if(stage){
+    stage.innerHTML = '<option value="">— Select —</option>' +
+      NEW_PIPELINE_STAGES.map(s => `<option value="${s}">${s}</option>`).join('');
+  }
+  modal.style.display = 'flex';
+  setTimeout(() => name?.focus(), 50);
+}
+
+function closeCreatePortfolioModal(){
+  const modal = document.getElementById('createPortfolioModal');
+  if(modal) modal.style.display = 'none';
+}
+
+async function submitCreatePortfolio(){
+  const name = document.getElementById('cpName')?.value?.trim() || '';
+  const rawPrice = document.getElementById('cpPackagePrice')?.value?.trim() || '';
+  const stage = document.getElementById('cpStage')?.value || '';
+  const desc = document.getElementById('cpDescription')?.value?.trim() || '';
+  const notes = document.getElementById('cpNotes')?.value?.trim() || '';
+  const err = document.getElementById('cpError');
+  const btn = document.getElementById('cpSubmitBtn');
+
+  const showErr = (msg) => { if(err){ err.textContent = msg; err.style.display='block'; } };
+  const hideErr = () => { if(err){ err.style.display = 'none'; } };
+
+  // Validate
+  if(!name){ showErr('Portfolio name is required.'); return; }
+  hideErr();
+
+  // Parse package price (allow commas)
+  let packagePrice = null;
+  if(rawPrice){
+    const n = parseFloat(rawPrice.replace(/,/g,''));
+    if(isNaN(n) || n < 0){ showErr('Package price must be a valid number.'); return; }
+    packagePrice = n;
+  }
+
+  const fields = { 'Name': name };
+  if(packagePrice != null) fields['Package Price']  = packagePrice;
+  if(stage)                fields['Pipeline Stage'] = stage;
+  if(desc)                 fields['Description']    = desc;
+  if(notes)                fields['Portfolio Notes']= notes;
+
+  if(btn){ btn.disabled = true; btn.textContent = 'Creating...'; }
+  try {
+    await _portfolioCreate(fields);
+    closeCreatePortfolioModal();
+    // Refresh the list view and navigate there if we're not already
+    showPortfoliosPage();
+  } catch(e) {
+    showErr('Failed to create: ' + (e.message || 'unknown error'));
+    if(btn){ btn.disabled = false; btn.textContent = 'Create Portfolio'; }
+    return;
+  }
+  if(btn){ btn.disabled = false; btn.textContent = 'Create Portfolio'; }
+}
+
+// ── PORTFOLIO LIST PAGE ───────────────────────────────────────────────
 function showPortfoliosPage(){
+  _currentPortfolioId = null;
   const main = document.getElementById('mainArea');
   if(!main) return;
-  const count = (allPortfolios || []).length;
+  const portfolios = allPortfolios || [];
+  const count = portfolios.length;
+
+  // Helper to format currency concisely
+  const fmt$ = n => {
+    if(!n || isNaN(n)) return '—';
+    const v = Number(n);
+    if(v >= 1e6) return '$' + (v/1e6).toFixed(2) + 'M';
+    if(v >= 1e3) return '$' + Math.round(v/1e3) + 'K';
+    return '$' + v.toLocaleString();
+  };
+
+  // Build row HTML for each portfolio with basic Level 1 aggregate preview
+  const rowsHtml = portfolios.map(p => {
+    const children = _portfolioChildren(p.id);
+    const agg = _portfolioAggregates(children);
+    const stage = p['Pipeline Stage'] || '';
+    const stageColor = NEW_PIPELINE_COLORS[stage] || '#64748b';
+    const pkgPrice = p['Package Price'];
+    return `
+      <div class="pf-row" data-pf-id="${p.id}" onclick="openPortfolioDetail('${p.id}')"
+        style="display:grid;grid-template-columns:minmax(0,1fr) 90px 100px 100px 120px;gap:12px;align-items:center;padding:14px 18px;background:#fff;border:1px solid #e2e8f0;border-radius:10px;margin-bottom:8px;cursor:pointer;transition:all 0.15s;"
+        onmouseover="this.style.borderColor='#f59e0b';this.style.transform='translateX(2px)';"
+        onmouseout="this.style.borderColor='#e2e8f0';this.style.transform='translateX(0)';">
+        <div style="min-width:0;">
+          <div style="font-size:14px;font-weight:700;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">📁 ${(p['Name']||'Untitled').replace(/</g,'&lt;')}</div>
+          <div style="font-size:11px;color:#64748b;margin-top:3px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${(p['Description']||'No description').replace(/</g,'&lt;')}</div>
+        </div>
+        <div style="font-size:12px;color:#475569;text-align:center;">${agg.count} ${agg.count===1?'deal':'deals'}</div>
+        <div style="font-size:12px;font-weight:700;color:#b45309;text-align:right;">${pkgPrice ? fmt$(pkgPrice) : '—'}</div>
+        <div style="font-size:11px;color:#64748b;text-align:right;">${agg.totalAsking ? 'sum ' + fmt$(agg.totalAsking) : '—'}</div>
+        <div style="text-align:right;">
+          ${stage ? `<span style="font-size:10px;font-weight:600;padding:3px 10px;border-radius:99px;background:${stageColor}22;color:${stageColor};border:1px solid ${stageColor}55;">${stage}</span>` : '<span style="font-size:10px;color:#94a3b8;">No stage</span>'}
+        </div>
+      </div>`;
+  }).join('');
+
   main.innerHTML = `
     <div style="padding:24px 28px;max-width:1200px;margin:0 auto;font-family:Tahoma,Arial,sans-serif;">
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:22px;flex-wrap:wrap;gap:12px;">
@@ -11060,24 +11310,189 @@ function showPortfoliosPage(){
           <div style="font-size:22px;font-weight:800;color:#0f172a;letter-spacing:-0.01em;">📁 Portfolios</div>
           <div style="font-size:12px;color:#64748b;margin-top:4px;">Group multiple properties under one shared listing or owner.</div>
         </div>
-        <button disabled title="Coming in Turn B"
-          style="background:#e2e8f0;color:#94a3b8;border:1px solid #cbd5e1;padding:9px 16px;font-size:13px;font-weight:600;border-radius:8px;cursor:not-allowed;">
+        <button onclick="openCreatePortfolioModal()"
+          style="background:#b45309;color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:700;border-radius:8px;cursor:pointer;box-shadow:0 1px 3px rgba(180,83,9,0.3);">
           + New Portfolio
         </button>
       </div>
-      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:56px 28px;text-align:center;">
-        <div style="font-size:48px;margin-bottom:10px;opacity:0.5;">📁</div>
-        <div style="font-size:16px;font-weight:700;color:#0f172a;margin-bottom:6px;">${count === 0 ? 'No portfolios yet' : `${count} portfolio${count === 1 ? '' : 's'} loaded`}</div>
-        <div style="font-size:12px;color:#64748b;line-height:1.6;max-width:440px;margin:0 auto;">
-          ${count === 0
-            ? 'Portfolios let you group multiple properties that share an owner or are sold as a package. Creation and grouping tools arrive in the next update.'
-            : 'The portfolio list and detail views arrive in the next update. Data is ready to display.'}
+      <div style="margin-bottom:14px;">
+        <input id="pfSearch" type="text" placeholder="Search portfolios by name or description..."
+          oninput="_pfFilterList()"
+          style="width:100%;padding:10px 14px;border-radius:8px;border:1px solid #cbd5e1;font-size:13px;box-sizing:border-box;" />
+      </div>
+      ${count === 0 ? `
+        <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:56px 28px;text-align:center;">
+          <div style="font-size:48px;margin-bottom:10px;opacity:0.5;">📁</div>
+          <div style="font-size:16px;font-weight:700;color:#0f172a;margin-bottom:6px;">No portfolios yet</div>
+          <div style="font-size:12px;color:#64748b;line-height:1.6;max-width:440px;margin:0 auto 16px;">
+            Portfolios let you group multiple properties that share an owner or are sold as a package. Click <strong>+ New Portfolio</strong> to create your first one.
+          </div>
+        </div>
+      ` : `
+        <div style="display:grid;grid-template-columns:minmax(0,1fr) 90px 100px 100px 120px;gap:12px;padding:8px 18px;font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:0.05em;">
+          <div>Portfolio</div>
+          <div style="text-align:center;"># Deals</div>
+          <div style="text-align:right;">Package</div>
+          <div style="text-align:right;">Sum Asking</div>
+          <div style="text-align:right;">Stage</div>
+        </div>
+        <div id="pfRowsHost">${rowsHtml}</div>
+      `}
+    </div>`;
+}
+
+// Search filter for the portfolio list — client-side filter on the DOM
+// rows we already rendered. No re-fetch needed.
+function _pfFilterList(){
+  const q = (document.getElementById('pfSearch')?.value || '').trim().toLowerCase();
+  const host = document.getElementById('pfRowsHost');
+  if(!host) return;
+  const rows = host.querySelectorAll('.pf-row');
+  rows.forEach(row => {
+    if(!q){ row.style.display = ''; return; }
+    const text = row.textContent.toLowerCase();
+    row.style.display = text.indexOf(q) !== -1 ? '' : 'none';
+  });
+}
+
+// ── PORTFOLIO DETAIL PAGE ─────────────────────────────────────────────
+function openPortfolioDetail(portfolioId){
+  const p = (allPortfolios || []).find(x => x.id === portfolioId);
+  if(!p){
+    alert('Portfolio not found. It may have been deleted.');
+    return;
+  }
+  // Push history so back button works
+  if(!_nav._suppress){
+    try {
+      window.history.pushState({ kind:'portfolio', id: portfolioId }, '', '#/portfolio/' + portfolioId);
+    } catch(e){}
+  }
+  _currentPortfolioId = portfolioId;
+  _renderPortfolioDetail(p);
+}
+
+function _renderPortfolioDetail(p){
+  const main = document.getElementById('mainArea');
+  if(!main) return;
+  const children = _portfolioChildren(p.id);
+  const agg = _portfolioAggregates(children);
+  const stage = p['Pipeline Stage'] || '';
+  const stageColor = NEW_PIPELINE_COLORS[stage] || '#64748b';
+  const pkgPrice = p['Package Price'];
+  const sumVsPkg = (pkgPrice && agg.totalAsking) ? (agg.totalAsking - Number(pkgPrice)) : null;
+
+  const fmt$ = n => {
+    if(!n || isNaN(n)) return '—';
+    const v = Number(n);
+    if(v >= 1e6) return '$' + (v/1e6).toFixed(2) + 'M';
+    if(v >= 1e3) return '$' + Math.round(v/1e3) + 'K';
+    return '$' + v.toLocaleString();
+  };
+  const fmtPct = n => (n != null && !isNaN(n)) ? n.toFixed(2) + '%' : '—';
+
+  // Child rows — click opens the normal deal view
+  const childRowsHtml = children.length === 0 ? `
+    <div style="background:#fff;border:1px dashed #cbd5e1;border-radius:10px;padding:40px 20px;text-align:center;">
+      <div style="font-size:36px;opacity:0.4;margin-bottom:8px;">🏠</div>
+      <div style="font-size:13px;font-weight:600;color:#475569;margin-bottom:4px;">No properties in this portfolio yet</div>
+      <div style="font-size:11px;color:#94a3b8;">Grouping existing deals into portfolios arrives in the next update.</div>
+    </div>
+  ` : children.map((d, i) => {
+    const ask = d['Asking Price'] ? fmt$(d['Asking Price']) : '—';
+    const cap = d['Cap Rate (CRM)'];
+    let capStr = '—';
+    if(cap != null && cap !== ''){
+      const v = Number(cap);
+      if(!isNaN(v) && v > 0) capStr = ((v < 1 ? v*100 : v)).toFixed(2) + '%';
+    }
+    const units = d['No. of Units'] || d['Number of Units'] || '';
+    const sf = d['Total Building SF'] || d['Square Footage'] || '';
+    const type = d['CRM Asset Classification'] || d['Simple Text Property Type'] || '—';
+    return `
+      <div onclick="_pfOpenChildDeal('${d.id}')"
+        style="display:grid;grid-template-columns:28px minmax(0,1fr) 90px 80px 90px 70px;gap:12px;align-items:center;padding:12px 16px;background:#fff;border:1px solid #e2e8f0;border-radius:10px;margin-bottom:8px;cursor:pointer;transition:all 0.15s;"
+        onmouseover="this.style.borderColor='#b45309';"
+        onmouseout="this.style.borderColor='#e2e8f0';">
+        <div style="width:24px;height:24px;border-radius:50%;background:#fef3c7;color:#92400e;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;">${i+1}</div>
+        <div style="min-width:0;">
+          <div style="font-size:13px;font-weight:700;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${(d['Address']||'Unnamed').replace(/</g,'&lt;')}</div>
+          <div style="font-size:11px;color:#64748b;margin-top:2px;">${type}${units?' · '+units+' units':''}${sf?' · '+Number(sf).toLocaleString()+' SF':''}</div>
+        </div>
+        <div style="font-size:12px;font-weight:700;color:#0f172a;text-align:right;">${ask}</div>
+        <div style="font-size:11px;color:#64748b;text-align:right;">${capStr}</div>
+        <div style="font-size:11px;color:#64748b;text-align:right;">${d['Pipeline Stage']||'—'}</div>
+        <div style="font-size:11px;color:#b45309;text-align:right;font-weight:600;">Open →</div>
+      </div>`;
+  }).join('');
+
+  main.innerHTML = `
+    <div style="padding:24px 28px;max-width:1200px;margin:0 auto;font-family:Tahoma,Arial,sans-serif;">
+      <div style="margin-bottom:18px;">
+        <button onclick="showPortfoliosPage()" style="background:none;border:none;color:#64748b;font-size:12px;cursor:pointer;padding:0;">← Back to Portfolios</button>
+      </div>
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:24px 28px;margin-bottom:16px;">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:14px;padding-bottom:16px;border-bottom:1px solid #e2e8f0;flex-wrap:wrap;">
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:10px;font-weight:700;color:#b45309;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:4px;">📁 Portfolio · ${agg.count} ${agg.count===1?'property':'properties'}</div>
+            <div style="font-size:24px;font-weight:800;color:#0f172a;line-height:1.2;">${(p['Name']||'Untitled').replace(/</g,'&lt;')}</div>
+            ${p['Description'] ? `<div style="font-size:13px;color:#64748b;margin-top:6px;">${p['Description'].replace(/</g,'&lt;')}</div>` : ''}
+          </div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
+            ${stage ? `<span style="font-size:11px;font-weight:700;padding:5px 12px;border-radius:99px;background:${stageColor}22;color:${stageColor};border:1px solid ${stageColor}55;">${stage}</span>` : ''}
+            <button disabled title="Edit and delete arrive in the next update"
+              style="background:#f1f5f9;color:#94a3b8;border:1px solid #cbd5e1;padding:6px 14px;font-size:11px;font-weight:600;border-radius:6px;cursor:not-allowed;">
+              Edit
+            </button>
+          </div>
+        </div>
+
+        <div style="display:grid;grid-template-columns:repeat(4, minmax(0,1fr));gap:12px;margin-top:16px;">
+          <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:14px 16px;">
+            <div style="font-size:10px;color:#92400e;text-transform:uppercase;letter-spacing:0.04em;font-weight:700;">Package Price</div>
+            <div style="font-size:22px;font-weight:800;color:#b45309;margin-top:4px;">${pkgPrice ? fmt$(pkgPrice) : '—'}</div>
+            ${pkgPrice ? '<div style="font-size:10px;color:#92400e;margin-top:2px;">buy all together</div>' : '<div style="font-size:10px;color:#94a3b8;margin-top:2px;">not set</div>'}
+          </div>
+          <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px 16px;">
+            <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.04em;font-weight:700;">Sum of Individual</div>
+            <div style="font-size:22px;font-weight:800;color:#0f172a;margin-top:4px;">${fmt$(agg.totalAsking)}</div>
+            ${sumVsPkg != null ? `<div style="font-size:10px;color:${sumVsPkg>0?'#16a34a':'#dc2626'};margin-top:2px;">${sumVsPkg>0?'+':''}${fmt$(Math.abs(sumVsPkg))} ${sumVsPkg>0?'discount':'premium'}</div>` : '<div style="font-size:10px;color:#94a3b8;margin-top:2px;">sum of children</div>'}
+          </div>
+          <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px 16px;">
+            <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.04em;font-weight:700;">Blended Cap</div>
+            <div style="font-size:22px;font-weight:800;color:#0f172a;margin-top:4px;">${fmtPct(agg.blendedCap)}</div>
+            <div style="font-size:10px;color:#94a3b8;margin-top:2px;">NOI ÷ total asking</div>
+          </div>
+          <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px 16px;">
+            <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.04em;font-weight:700;">Total Units / SF</div>
+            <div style="font-size:22px;font-weight:800;color:#0f172a;margin-top:4px;">${agg.totalUnits || '—'}</div>
+            <div style="font-size:10px;color:#94a3b8;margin-top:2px;">${agg.totalSF ? agg.totalSF.toLocaleString() + ' SF total' : '—'}</div>
+          </div>
+        </div>
+
+        <div style="margin-top:18px;padding:10px 14px;background:#f8fafc;border-radius:8px;font-size:11px;color:#64748b;line-height:1.5;">
+          <strong style="color:#475569;">Level 1/2 aggregates shown.</strong> Combined Financial Analysis (NOI breakdown, cash flow, DSCR), combined Tenant/Unit Mix, and portfolio-level offers arrive in Turns D–F.
         </div>
       </div>
-      <div style="font-size:11px;color:#94a3b8;margin-top:14px;text-align:center;">
-        Turn A · plumbing only · <code style="background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:10px;color:#475569;">${count} rows in allPortfolios cache</code>
+
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+        <div style="font-size:14px;font-weight:700;color:#0f172a;">Properties in this portfolio</div>
+        <button disabled title="Adding properties arrives in the next update"
+          style="background:#f1f5f9;color:#94a3b8;border:1px solid #cbd5e1;padding:6px 14px;font-size:11px;font-weight:600;border-radius:6px;cursor:not-allowed;">
+          + Add property
+        </button>
       </div>
+      ${childRowsHtml}
     </div>`;
+}
+
+// Open a child deal from the portfolio detail view. Uses the normal
+// openDeal flow — portfolios are just a view, children are still
+// regular deals.
+function _pfOpenChildDeal(dealId){
+  const d = (allDeals || []).find(x => x.id === dealId);
+  if(!d){ alert('Deal not found.'); return; }
+  if(typeof openDeal === 'function') openDeal(d);
 }
 
 function showDealBoard(){

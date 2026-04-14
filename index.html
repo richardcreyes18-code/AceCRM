@@ -996,6 +996,7 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   <button class="nav-btn" data-page="home" onclick="setNav(this,'home')">Deals</button>
   <button class="nav-btn" data-page="pipeline" onclick="setNav(this,'pipeline')">Pipeline</button>
   <button class="nav-btn" data-page="dealboard" onclick="setNav(this,'dealboard')" style="font-weight:bold;">Deal Board</button>
+  <button class="nav-btn" data-page="portfolios" onclick="setNav(this,'portfolios')" style="color:#b45309;">📁 Portfolios</button>
   <button class="nav-btn" data-page="map" onclick="setNav(this,'map')" style="color:#059669;">🗺 Map</button>
   <button class="nav-btn" data-page="contacts" onclick="setNav(this,'contacts')">Contacts</button>
   <button class="nav-btn" data-page="buyercriteria" onclick="setNav(this,'buyercriteria')">Buyer Criteria</button>
@@ -1143,7 +1144,11 @@ const SB_TABLES = {
   // in the v102.12 migration after v102.9 rewired lead intake to write
   // directly to the real tables.
   documents:     'ace_documents',
-  tenantMix:     'ace_properties'  // tenant mix lives in the property record
+  tenantMix:     'ace_properties',  // tenant mix lives in the property record
+  // v102.28: portfolios feature — two new tables added in the add_portfolios
+  // migration. Deals reference a portfolio via ace_properties.portfolio_id.
+  portfolios:        'ace_portfolios',
+  portfolioOffers:   'ace_portfolio_offers'
 };
 
 // ─── SUPABASE ↔ AIRTABLE FIELD MAPS ───────────────────────────
@@ -1280,7 +1285,27 @@ const SB_PROP_MAP = {
   fub_assigned_to:'Assigned Agent',
   ai_clarifying_notes:'AI Clarifying Notes',
   ai_parsed_at:'AI Parsed At',
-  import_source:'Import Source'
+  import_source:'Import Source',
+  // v102.28: portfolio grouping — nullable FK, zero default means "standalone".
+  // portfolio_sort_order controls display order within a portfolio's detail view.
+  portfolio_id:'Portfolio ID',
+  portfolio_sort_order:'Portfolio Sort Order'
+};
+
+// v102.28: Portfolios (ace_portfolios <-> allPortfolios entries). Mirrors the
+// structure of SB_PROP_MAP so the same _atToSb / _sbToAt helpers work — just
+// pass SB_PORTFOLIO_MAP as the second argument.
+const SB_PORTFOLIO_MAP = {
+  id:'id', name:'Name', description:'Description',
+  package_price:'Package Price', package_asking_notes:'Package Asking Notes',
+  status:'Status', pipeline_stage:'Pipeline Stage',
+  is_archived:'Is Archived', top_priority:'Top Priority',
+  assigned_agent:'Assigned Agent', owner_user_id:'Owner User ID',
+  next_steps:'Next Steps', portfolio_notes:'Portfolio Notes',
+  target_seller_net:'Target Seller Net',
+  date_listed:'Date Listed', close_probability:'Close Probability',
+  created_at:'Created Time', created_by_user_id:'Created By User ID',
+  updated_at:'Updated Time'
 };
 
 // Contacts map (ace_contacts <-> allBuyerContacts)
@@ -1739,6 +1764,9 @@ async function testSupabaseWrite(){
 function isSupabase() { return true; }
 
 let allDeals = [];
+// v102.28: portfolios cache. Loaded once at startup in syncData(), refreshed
+// via _loadAllPortfolios() after create/update/delete actions.
+let allPortfolios = [];
 let currentDeal = null;
 let currentTab = 'property';
 let calMonth = new Date();
@@ -1986,6 +2014,11 @@ async function syncData(){
     if(isSupabase()){
       if(typeof _splashStep==='function') _splashStep('Loading owner contacts', 6, 8);
       try{ await _bulkLoadOwnerContacts(); }catch(e){ console.warn('bulk owner load failed:', e.message); }
+      // v102.28: load portfolios silently as part of step 6. Expected to be
+      // fast (few rows) and non-critical — a failure here shouldn't block
+      // the rest of the app, so no splash update and errors are swallowed
+      // by the loader itself.
+      await _loadAllPortfolios();
     }
 
     if(typeof _splashStep==='function') _splashStep('Building sidebar', 7, 8);
@@ -3191,6 +3224,7 @@ function _setNavDirect(btn, page){
   if(btn) btn.classList.add('active');
   if(page==='pipeline') showPipelineView();
   else if(page==='dealboard') showDealBoard();
+  else if(page==='portfolios') showPortfoliosPage();
   else if(page==='map') showMapPage();
   else if(page==='fieldmap') showFieldMap();
   else if(page==='contacts') showContactsPage();
@@ -3257,7 +3291,8 @@ const _nav = {
       'Dashboard':'dashboard', 'Deal Board':'dealboard', 'Pipeline':'pipeline',
       'Map':'map', 'Contacts':'contacts', 'Buyer Criteria':'buyercriteria',
       'Tasks':'tasks-nav', 'Company':'company', 'Settings':'settings',
-      'Lead Intake':'leadintake', 'Field Map':'fieldmap'
+      'Lead Intake':'leadintake', 'Field Map':'fieldmap',
+      'Portfolios':'portfolios'
     };
     for(const k in map){ if(label.indexOf(k) !== -1) return map[k]; }
     return '';
@@ -11006,6 +11041,45 @@ function _locPostRender(){
 // End LOC-001
 // ═══════════════════════════════════════════════════════════════════════
 
+// ═══════════════════════════════════════════════════════════════════════
+// v102.28 — PORTFOLIOS PAGE (plumbing only; Turn A stub)
+// ═══════════════════════════════════════════════════════════════════════
+// Turn A renders an empty state. Turn B (next) adds the Create / Group
+// Existing modals and the real portfolio list. Clicking a portfolio in
+// Turn B will open a detail view; Turn C adds the 📁 icon on Deal Board
+// rows; Turns D-F add combined Financial Analysis, Tenant/Unit Mix, and
+// Offers tabs respectively.
+function showPortfoliosPage(){
+  const main = document.getElementById('mainArea');
+  if(!main) return;
+  const count = (allPortfolios || []).length;
+  main.innerHTML = `
+    <div style="padding:24px 28px;max-width:1200px;margin:0 auto;font-family:Tahoma,Arial,sans-serif;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:22px;flex-wrap:wrap;gap:12px;">
+        <div>
+          <div style="font-size:22px;font-weight:800;color:#0f172a;letter-spacing:-0.01em;">📁 Portfolios</div>
+          <div style="font-size:12px;color:#64748b;margin-top:4px;">Group multiple properties under one shared listing or owner.</div>
+        </div>
+        <button disabled title="Coming in Turn B"
+          style="background:#e2e8f0;color:#94a3b8;border:1px solid #cbd5e1;padding:9px 16px;font-size:13px;font-weight:600;border-radius:8px;cursor:not-allowed;">
+          + New Portfolio
+        </button>
+      </div>
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:56px 28px;text-align:center;">
+        <div style="font-size:48px;margin-bottom:10px;opacity:0.5;">📁</div>
+        <div style="font-size:16px;font-weight:700;color:#0f172a;margin-bottom:6px;">${count === 0 ? 'No portfolios yet' : `${count} portfolio${count === 1 ? '' : 's'} loaded`}</div>
+        <div style="font-size:12px;color:#64748b;line-height:1.6;max-width:440px;margin:0 auto;">
+          ${count === 0
+            ? 'Portfolios let you group multiple properties that share an owner or are sold as a package. Creation and grouping tools arrive in the next update.'
+            : 'The portfolio list and detail views arrive in the next update. Data is ready to display.'}
+        </div>
+      </div>
+      <div style="font-size:11px;color:#94a3b8;margin-top:14px;text-align:center;">
+        Turn A · plumbing only · <code style="background:#f1f5f9;padding:2px 6px;border-radius:4px;font-size:10px;color:#475569;">${count} rows in allPortfolios cache</code>
+      </div>
+    </div>`;
+}
+
 function showDealBoard(){
   const STAGE_ORDER = ['New Lead','Need INFO','Needs Offer','Pitch Out','Limbo','Negotiating','Needs a 1031','Won','Closed','Overpriced','Nurture'];
   const STAGE_COLORS = {
@@ -12072,6 +12146,28 @@ let _ownerFetchInProgress = false;
 // Bulk-load ALL owner contact info (name, phone, email, company, notes) for every deal
 // that has an owner_contact_id. Called once after the property load to pre-populate
 // the Deal Board Owner column and the Seller Information form on every deal card.
+// v102.28: load all portfolios from ace_portfolios into the allPortfolios
+// cache. Non-fatal on failure — portfolios is a new optional feature, a
+// fetch error shouldn't block the rest of the app. Call after creating,
+// updating, or deleting a portfolio to refresh the cache.
+async function _loadAllPortfolios(){
+  if(!isSupabase()) return;
+  try {
+    const rows = await _sbGet(SB_TABLES.portfolios,
+      'select=*&is_archived=eq.false&order=created_at.desc&limit=500');
+    allPortfolios = (rows || []).map(r => {
+      const p = _sbToAt(r, SB_PORTFOLIO_MAP);
+      p.id = r.id;
+      // Same fallback pattern as allDeals — use date_listed or created_at
+      if(!p['Created Time'] && r.created_at) p['Created Time'] = r.created_at;
+      return p;
+    });
+  } catch(e) {
+    console.warn('[_loadAllPortfolios] failed:', e.message);
+    allPortfolios = [];
+  }
+}
+
 async function _bulkLoadOwnerContacts(){
   // Collect unique contact IDs across all deals
   const contactToDealIdxs = new Map();

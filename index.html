@@ -9498,7 +9498,8 @@ function _dbMultiToggle(kind){
   const menuId = `db_${kind}_menu`;
   const wrapId = `db_${kind}_wrap`;
   // Close all other multi-select menus
-  ['stage','region','county','type','source'].forEach(k => {
+  // v102.24: region/county removed — they're in LOC-001 now, not checkbox menus
+  ['stage','type','source'].forEach(k => {
     if(k !== kind){
       const m = document.getElementById(`db_${k}_menu`);
       if(m) m.style.display = 'none';
@@ -9545,7 +9546,16 @@ function _dbMultiChanged(kind){
 
 // Returns array of selected values OR null if "all selected" (meaning no filter applied).
 // The null return lets filter predicates short-circuit: `if(sel && !sel.includes(x)) reject`.
+//
+// v102.24: Location-family kinds (state, region, county, city) are now sourced
+// from _locFilters (the LOC-001 component state) instead of from checkbox DOM.
+// Empty selection = null (no filter). Non-empty = array of picks. The rest
+// (stage, type, source) still read from the legacy checkbox multi-selects.
 function _dbMultiGetSelected(kind){
+  if(kind === 'state' || kind === 'region' || kind === 'county' || kind === 'city'){
+    const arr = _locFilters[kind] || [];
+    return arr.length ? arr.slice() : null;
+  }
   const cbs = [...document.querySelectorAll(`.db_${kind}_cb`)];
   if(cbs.length === 0) return null;
   const checked = cbs.filter(c => c.checked).map(c => c.value);
@@ -9568,7 +9578,11 @@ function dbClearAllFilters(){
   if(search) search.value = '';
   const priority = document.getElementById('db_priority');
   if(priority) priority.checked = false;
-  ['stage','region','county','type','source'].forEach(kind => {
+  // v102.24: region and county no longer live in checkbox DOM — they're in
+  // the LOC-001 store. Clear them via _locClearAll(), then handle the
+  // remaining checkbox-backed filters.
+  _locClearAll();
+  ['stage','type','source'].forEach(kind => {
     document.querySelectorAll(`.db_${kind}_cb`).forEach(cb => { cb.checked = true; });
     _dbMultiChanged(kind);
     // Also clear any search box inside the menu
@@ -9593,6 +9607,373 @@ function showMapPage(){
     try { dbSetView('map'); } catch(e) { console.warn('Map switch failed:', e); }
   }, 0);
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// LOC-001 — Location Selector (Compact) for Deal Board header
+// ═══════════════════════════════════════════════════════════════════════
+// v102.24: Ported from the approved component gallery (components_1.html).
+// LOC-001 is the compact horizontal variant — State + Region + County + City
+// inline in a single row with dividers, multi-select with searchable tag-pill
+// dropdowns. Replaces the old db_region and db_county checkbox multi-selects
+// on the Deal Board header. The State and City filters are NEW — previously
+// the Deal Board only had Region and County. State is inferred from the
+// address's state code; City is parsed from the address's second-to-last
+// comma segment (the segment before the state).
+//
+// State:
+//   _locFilters.state[]   — selected US state codes (e.g., ['NJ', 'NY'])
+//   _locFilters.region[]  — selected region names (e.g., ['North NJ', 'Central NJ'])
+//   _locFilters.county[]  — selected county names (e.g., ['Bergen', 'Essex'])
+//   _locFilters.city[]    — selected city names (e.g., ['Newark', 'Jersey City'])
+//
+// Data sources (populated from allDeals at render time):
+//   state:  _stateFromAddress(d.Address) distinct, sorted
+//   region: hardcoded NJ macro-regions + whatever states are present
+//   county: distinct d['Simple County'] values
+//   city:   parsed from d.Address (segment before state code)
+//
+// Filter predicate integration:
+//   _dbMultiGetSelected('state'|'region'|'county'|'city') returns either:
+//     - null if no filter applied (empty selection = "all")
+//     - array of selected values otherwise
+//   These plug into the existing renderDealBoard() filter chain, which
+//   already handles 'region' and 'county'. State and city are new and get
+//   their own predicates added to renderDealBoard's filter().
+
+// LOC-001 selection state. Default NJ selected (matches component gallery spec).
+const _locFilters = { state: ['NJ'], region: [], county: [], city: [] };
+
+// Keyboard navigation cursor per field (index of currently-highlighted option).
+const _locKb = { state: -1, region: -1, county: -1, city: -1 };
+
+// Inject the LOC-001 scoped CSS once on first use. All class names are
+// prefixed "loc-" so they don't collide with the rest of the CRM's styling.
+function _locInjectCSS(){
+  if(document.getElementById('loc-001-css')) return;
+  const style = document.createElement('style');
+  style.id = 'loc-001-css';
+  style.textContent = `
+    .loc-compact-bar{
+      display:flex;gap:6px;align-items:center;flex-wrap:wrap;
+      background:#f8fafc;padding:8px 10px;border-radius:8px;
+      border:1px solid #e2e8f0;font-family:'Inter',system-ui,sans-serif;
+    }
+    .loc-field{position:relative;display:flex;align-items:center;gap:6px;}
+    .loc-label{
+      font-size:11px;font-weight:500;text-transform:uppercase;
+      letter-spacing:.07em;color:#475569;white-space:nowrap;
+    }
+    .loc-ti{
+      display:flex;flex-wrap:nowrap;align-items:center;gap:4px;
+      border:1.5px solid #cbd5e1;border-radius:5px;background:#fff;
+      cursor:text;transition:border-color .15s;
+      min-height:30px;padding:3px 24px 3px 6px;max-width:200px;
+      overflow:hidden;position:relative;
+    }
+    .loc-ti:focus-within{border-color:#0f172a;}
+    .loc-tag{
+      display:inline-flex;align-items:center;
+      background:#0f172a;color:#fff;border-radius:3px;
+      font-weight:500;white-space:nowrap;overflow:hidden;font-size:11px;
+    }
+    .loc-tag-text{padding:2px 5px;}
+    .loc-tag-x{
+      display:flex;align-items:center;padding:0 5px;height:100%;
+      background:#e57373;cursor:pointer;color:#fff;
+    }
+    .loc-tag-x:hover{background:#c62828;}
+    .loc-si{
+      border:none;outline:none;background:transparent;
+      color:#0f172a;flex:1;min-width:40px;
+      font-size:12px;padding:1px 0;font-family:inherit;
+    }
+    .loc-si::placeholder{color:#94a3b8;}
+    .loc-chevron{
+      position:absolute;right:7px;top:50%;transform:translateY(-50%);
+      color:#94a3b8;font-size:10px;pointer-events:none;
+    }
+    .loc-dd{
+      position:absolute;top:calc(100% + 3px);left:0;min-width:180px;
+      background:#fff;border:1px solid #cbd5e1;border-radius:5px;
+      z-index:10000;max-height:260px;overflow-y:auto;
+      box-shadow:0 4px 14px rgba(0,0,0,.12);
+    }
+    .loc-opt{
+      padding:8px 11px;cursor:pointer;font-size:12px;color:#0f172a;
+      display:flex;align-items:center;justify-content:space-between;gap:8px;
+      font-family:inherit;
+    }
+    .loc-opt:hover,.loc-opt.kb{background:#f8fafc;}
+    .loc-ck{font-size:12px;color:#2563eb;opacity:0;flex-shrink:0;}
+    .loc-opt.sel .loc-ck{opacity:1;}
+    .loc-no-res{padding:8px 11px;font-size:11px;color:#94a3b8;}
+    .loc-divider{width:1px;height:22px;background:#cbd5e1;margin:0 2px;}
+  `;
+  document.head.appendChild(style);
+}
+
+// Helper placeholders used when no tags are selected.
+const _LOC_PLACEHOLDER = {
+  state:  'Search...',
+  region: 'Search...',
+  county: 'Search...',
+  city:   'Search...',
+};
+
+// Build the four data source arrays from whatever is currently in allDeals.
+// Called at render time, so the option lists always reflect the live data.
+function _locBuildDataSources(){
+  const states = new Set();
+  const counties = new Set();
+  const cities = new Set();
+  for(const d of (allDeals||[])){
+    const st = _stateFromAddress(d['Address']||'');
+    if(st) states.add(st);
+    const c = (d['Simple County']||'').replace(/\s*county\s*/i,'').trim();
+    if(c) counties.add(c);
+    const city = _locCityFromAddress(d['Address']||'');
+    if(city) cities.add(city);
+  }
+  // Region list is a hardcoded NJ-centric macro set + any present states
+  // as single-state regions. Same list as the old db_region filter, but we
+  // trim out states that aren't present in the data.
+  const baseRegions = ['All NJ','North NJ','Central NJ','South NJ','Tri-State'];
+  const stateRegions = [...states].filter(s => s !== 'NJ').sort();
+  return {
+    state:  [...states].sort(),
+    region: baseRegions.concat(stateRegions),
+    county: [...counties].sort(),
+    city:   [...cities].sort(),
+  };
+}
+
+// Parse the city name from a Google-geocoded address.
+// Expected format: "123 Main St, City Name, NJ 01234, USA" or similar.
+// Strategy: split by comma, trim, find the segment RIGHT before the one
+// that looks like "<STATE> <ZIP>" (or just the 2-letter state code).
+// Returns '' if the parse fails so the caller can skip it.
+function _locCityFromAddress(addr){
+  if(!addr) return '';
+  const parts = addr.split(',').map(s => s.trim()).filter(Boolean);
+  if(parts.length < 2) return '';
+  // Find the state-ish segment (matches "NJ", "New Jersey", "NJ 07067", etc.)
+  const stateRe = /^(?:[A-Z]{2}|Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|New\s*Hampshire|New\s*Jersey|New\s*Mexico|New\s*York|North\s*Carolina|North\s*Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode\s*Island|South\s*Carolina|South\s*Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|West\s*Virginia|Wisconsin|Wyoming)(?:\s+\d{5}(?:-\d{4})?)?$/i;
+  let stateIdx = -1;
+  for(let i = parts.length - 1; i >= 0; i--){
+    if(stateRe.test(parts[i])){ stateIdx = i; break; }
+  }
+  // City is the segment immediately before the state segment.
+  if(stateIdx > 0){
+    const city = parts[stateIdx - 1];
+    // Guard against obvious junk (test lead addresses, etc.)
+    if(city.length < 2 || /^(test|testing)/i.test(city)) return '';
+    return city;
+  }
+  return '';
+}
+
+// Render all four LOC-001 tag inputs inside their current state. Called after
+// any selection change to keep the DOM in sync with _locFilters.
+function _locRenderTags(key){
+  const ti  = document.getElementById('loc-ti-'+key);
+  const inp = document.getElementById('loc-si-'+key);
+  if(!ti || !inp) return;
+  // Remove existing tag DOM nodes (keep the <input>)
+  ti.querySelectorAll('.loc-tag').forEach(t => t.remove());
+  _locFilters[key].forEach(v => {
+    const tag = document.createElement('span');
+    tag.className = 'loc-tag';
+    const safe = String(v).replace(/"/g,'&quot;').replace(/</g,'&lt;');
+    tag.innerHTML = '<span class="loc-tag-text">'+safe+'</span>'
+      + '<span class="loc-tag-x" data-key="'+key+'" data-val="'+safe+'">&times;</span>';
+    ti.insertBefore(tag, inp);
+  });
+  inp.placeholder = _locFilters[key].length ? '' : _LOC_PLACEHOLDER[key];
+}
+
+// Build the dropdown menu <div> for a given field, filtered by the current
+// typeahead query. Called when the input is focused or edited.
+function _locBuildDD(key, query){
+  const dd = document.getElementById('loc-dd-'+key);
+  if(!dd) return;
+  const data = _locBuildDataSources()[key] || [];
+  const q = (query||'').toLowerCase();
+  const items = data.filter(v => String(v).toLowerCase().includes(q));
+  _locKb[key] = -1;
+  if(!items.length){
+    dd.innerHTML = '<div class="loc-no-res">No results</div>';
+    return;
+  }
+  dd.innerHTML = items.map(v => {
+    const isSel = _locFilters[key].includes(v);
+    const safe = String(v).replace(/"/g,'&quot;').replace(/</g,'&lt;');
+    return '<div class="loc-opt '+(isSel?'sel':'')+'" data-key="'+key+'" data-val="'+safe+'">'
+      + '<span>'+safe+'</span>'
+      + '<span class="loc-ck">&#x2713;</span>'
+      + '</div>';
+  }).join('');
+}
+
+// Close every LOC-001 dropdown except one (pass null to close all).
+function _locCloseAllDDs(exceptKey){
+  ['state','region','county','city'].forEach(k => {
+    if(k === exceptKey) return;
+    const dd = document.getElementById('loc-dd-'+k);
+    if(dd) dd.style.display = 'none';
+  });
+}
+
+// Toggle a value in a field's selection. Triggers a Deal Board re-render
+// plus map pin refresh so the filter takes effect immediately.
+function _locPick(key, val){
+  const cur = _locFilters[key];
+  const i = cur.indexOf(val);
+  if(i > -1) cur.splice(i, 1);
+  else cur.push(val);
+  _locRenderTags(key);
+  // Re-render the Deal Board list + map with the new selection
+  if(typeof renderDealBoard === 'function') renderDealBoard();
+  if(typeof dbRefreshMapPins === 'function') dbRefreshMapPins();
+}
+
+// Wire up input listeners for one field: focus opens DD, typing filters,
+// arrow keys navigate, Enter picks highlighted, Escape closes, Backspace
+// on empty input removes the last tag.
+function _locWireField(key){
+  const inp = document.getElementById('loc-si-'+key);
+  const dd  = document.getElementById('loc-dd-'+key);
+  const ti  = document.getElementById('loc-ti-'+key);
+  if(!inp || !dd || !ti) return;
+
+  // Clicking anywhere inside the tag-input focuses the text input
+  ti.addEventListener('click', e => {
+    if(!e.target.closest('.loc-tag-x')) inp.focus();
+  });
+
+  inp.addEventListener('focus', () => {
+    _locCloseAllDDs(key);
+    _locBuildDD(key, inp.value);
+    dd.style.display = 'block';
+  });
+
+  inp.addEventListener('input', () => {
+    _locBuildDD(key, inp.value);
+    dd.style.display = 'block';
+  });
+
+  inp.addEventListener('keydown', e => {
+    const opts = [...dd.querySelectorAll('.loc-opt')];
+    if(e.key === 'ArrowDown'){
+      _locKb[key] = Math.min(_locKb[key] + 1, opts.length - 1);
+      opts.forEach(o => o.classList.remove('kb'));
+      if(opts[_locKb[key]]) opts[_locKb[key]].classList.add('kb');
+      e.preventDefault();
+    } else if(e.key === 'ArrowUp'){
+      _locKb[key] = Math.max(_locKb[key] - 1, 0);
+      opts.forEach(o => o.classList.remove('kb'));
+      if(opts[_locKb[key]]) opts[_locKb[key]].classList.add('kb');
+      e.preventDefault();
+    } else if(e.key === 'Enter'){
+      const target = _locKb[key] >= 0 ? opts[_locKb[key]] : opts[0];
+      if(target){
+        _locPick(key, target.dataset.val);
+        inp.value = '';
+        _locBuildDD(key, '');
+      }
+      e.preventDefault();
+    } else if(e.key === 'Escape'){
+      dd.style.display = 'none';
+    } else if(e.key === 'Backspace' && inp.value === '' && _locFilters[key].length){
+      _locFilters[key].pop();
+      _locRenderTags(key);
+      if(typeof renderDealBoard === 'function') renderDealBoard();
+      if(typeof dbRefreshMapPins === 'function') dbRefreshMapPins();
+    }
+  });
+
+  // Dropdown option click — use mousedown so it fires before the input's blur
+  dd.addEventListener('mousedown', e => {
+    const opt = e.target.closest('.loc-opt');
+    if(opt && opt.dataset.key === key){
+      _locPick(key, opt.dataset.val);
+      inp.value = '';
+      _locBuildDD(key, '');
+      inp.focus();
+      e.preventDefault();
+    }
+  });
+}
+
+// Clear every LOC-001 selection (called by the Deal Board's Clear Filters button).
+function _locClearAll(){
+  _locFilters.state  = [];
+  _locFilters.region = [];
+  _locFilters.county = [];
+  _locFilters.city   = [];
+  ['state','region','county','city'].forEach(k => {
+    _locRenderTags(k);
+    const dd = document.getElementById('loc-dd-'+k);
+    if(dd) dd.style.display = 'none';
+    const inp = document.getElementById('loc-si-'+k);
+    if(inp) inp.value = '';
+  });
+}
+
+// Build the LOC-001 compact-bar HTML. Called from showDealBoard's innerHTML.
+function _locCompactBarHTML(){
+  _locInjectCSS();
+  const fieldHTML = (key, label) => `
+    <div class="loc-field" id="loc-field-${key}">
+      <span class="loc-label">${label}</span>
+      <div class="loc-ti" id="loc-ti-${key}">
+        <input class="loc-si" id="loc-si-${key}" placeholder="${_LOC_PLACEHOLDER[key]}" autocomplete="off"/>
+      </div>
+      <span class="loc-chevron">&#x25BE;</span>
+      <div class="loc-dd" id="loc-dd-${key}" style="display:none;"></div>
+    </div>`;
+  return `
+    <div class="loc-compact-bar" id="loc-compact-bar">
+      ${fieldHTML('state',  'State')}
+      <div class="loc-divider"></div>
+      ${fieldHTML('region', 'Region')}
+      <div class="loc-divider"></div>
+      ${fieldHTML('county', 'County')}
+      <div class="loc-divider"></div>
+      ${fieldHTML('city',   'City')}
+    </div>`;
+}
+
+// Post-render setup. Must be called after the LOC-001 HTML lands in the DOM
+// so the field elements exist. Wires all four fields, renders current tags,
+// and installs the global mousedown-outside handler that closes dropdowns.
+function _locPostRender(){
+  ['state','region','county','city'].forEach(k => {
+    _locWireField(k);
+    _locRenderTags(k);
+  });
+  // Close any open dropdown when the user clicks outside the component
+  if(!window._locOutsideHandlerInstalled){
+    document.addEventListener('mousedown', e => {
+      const bar = document.getElementById('loc-compact-bar');
+      if(!bar) return; // Deal Board not currently visible
+      if(!bar.contains(e.target)){
+        _locCloseAllDDs(null);
+      }
+    });
+    // Tag-X removal is delegated so dynamically-added tags work
+    document.addEventListener('click', e => {
+      const x = e.target.closest('.loc-tag-x');
+      if(x){
+        _locPick(x.dataset.key, x.dataset.val);
+      }
+    });
+    window._locOutsideHandlerInstalled = true;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// End LOC-001
+// ═══════════════════════════════════════════════════════════════════════
 
 function showDealBoard(){
   const STAGE_ORDER = ['New Lead','Need INFO','Needs Offer','Pitch Out','Limbo','Negotiating','Needs a 1031','Won','Closed','Overpriced','Nurture'];
@@ -9634,13 +10015,11 @@ function showDealBoard(){
         <!-- STAGE MULTI-SELECT -->
         ${_dbMultiBtn('stage', 'All Stages', stages, false)}
 
-        <!-- REGION MULTI-SELECT -->
-        ${_dbMultiBtn('region', 'All Regions', [
-          'All NJ','North NJ','Central NJ','South NJ','Tri-State','PA','NY','CT','FL','TX','CA'
-        ], false)}
-
-        <!-- COUNTY MULTI-SELECT -->
-        ${_dbMultiBtn('county', 'All Counties', counties, true)}
+        <!-- v102.24: LOC-001 Location Selector (State + Region + County + City)
+             replaces the old db_region and db_county button-style multi-selects.
+             Filter selections live in _locFilters and are read via _dbMultiGetSelected
+             which now routes location keys to the LOC store. -->
+        ${_locCompactBarHTML()}
 
         <!-- ASSET TYPE MULTI-SELECT -->
         ${_dbMultiBtn('type', 'All Asset Types', types, false)}
@@ -9756,6 +10135,8 @@ function showDealBoard(){
 
   renderDealBoard();
   window._dbCurrentView = 'list';
+  // v102.24: Wire up LOC-001 fields now that the DOM elements exist.
+  _locPostRender();
 }
 
 let _dbCurrentView = 'list';
@@ -10120,15 +10501,18 @@ async function initDealMap(){
   const search = (document.getElementById('db_search')?.value||'').toLowerCase();
   const mapPriority = document.getElementById('db_priority')?.checked||false;
   const selStages   = _dbMultiGetSelected('stage');
+  const selStates   = _dbMultiGetSelected('state');    // v102.24: LOC-001
   const selRegions  = _dbMultiGetSelected('region');
   const selCounties = _dbMultiGetSelected('county');
+  const selCities   = _dbMultiGetSelected('city');     // v102.24: LOC-001
   const selTypes    = _dbMultiGetSelected('type');
 
   let deals = allDeals.filter(d => {
     if(d['Is Archived']) return false;
     const stage = getStage(d);
     const dtype = _dealAssetType(d);
-    const county = d['Simple County']||'';
+    // v102.24: strip "County" suffix so comparisons align with LOC-001 option values
+    const county = (d['Simple County']||'').replace(/\s*county\s*/i,'').trim();
     const addr = (d['Address']||'').toLowerCase();
     const notes = (d['Next Steps']||'').toLowerCase();
     const matchSearch = !search || addr.includes(search) || county.toLowerCase().includes(search) || notes.includes(search) || dtype.toLowerCase().includes(search);
@@ -10136,8 +10520,11 @@ async function initDealMap(){
     const matchType   = !selTypes    || selTypes.includes(dtype);
     const matchCounty = !selCounties || selCounties.includes(county);
     const matchRegion = !selRegions  || selRegions.some(r => _dealMatchesRegion(d, r));
+    // v102.24: State + City predicates to match renderDealBoard
+    const matchState  = !selStates   || selStates.includes(_stateFromAddress(d['Address']||''));
+    const matchCity   = !selCities   || selCities.includes(_locCityFromAddress(d['Address']||''));
     const matchPri    = !mapPriority || d['Top Priority'];
-    return matchSearch && matchStage && matchType && matchRegion && matchCounty && matchPri;
+    return matchSearch && matchStage && matchState && matchType && matchRegion && matchCounty && matchCity && matchPri;
   });
 
   // ── Helper: place a single pin on the map ────────────────────
@@ -10468,8 +10855,10 @@ function renderDealBoard(){
 
   // Multi-select reads: null means "no filter" (all checked or no boxes rendered)
   const selStages   = _dbMultiGetSelected('stage');
+  const selStates   = _dbMultiGetSelected('state');    // v102.24: LOC-001
   const selRegions  = _dbMultiGetSelected('region');
   const selCounties = _dbMultiGetSelected('county');
+  const selCities   = _dbMultiGetSelected('city');     // v102.24: LOC-001
   const selTypes    = _dbMultiGetSelected('type');
   const selSources  = _dbMultiGetSelected('source');
 
@@ -10490,7 +10879,7 @@ function renderDealBoard(){
   // Filter
   let deals = allDeals.filter(d=>{
     const s = getStage(d);
-    const c = d['Simple County']||'';
+    const c = (d['Simple County']||'').replace(/\s*county\s*/i,'').trim();
     const t = _dealAssetType(d);
     const addr = (d['Address']||'').toLowerCase();
     const countyLow = c.toLowerCase();
@@ -10502,8 +10891,12 @@ function renderDealBoard(){
     const matchSource  = !selSources  || selSources.includes(d['Import Source']||'(none)');
     // Region is OR-matched: deal matches if ANY selected region matches it
     const matchRegion  = !selRegions  || selRegions.some(r => _dealMatchesRegion(d, r));
+    // v102.24: State is derived from the address; City is parsed from the
+    // second-to-last address segment. Both are OR-matched like region.
+    const matchState   = !selStates   || selStates.includes(_stateFromAddress(d['Address']||''));
+    const matchCity    = !selCities   || selCities.includes(_locCityFromAddress(d['Address']||''));
     const matchPrio    = !priority || d['Top Priority'];
-    return matchSearch && matchStage && matchCounty && matchType && matchSource && matchRegion && matchPrio;
+    return matchSearch && matchStage && matchState && matchCounty && matchCity && matchType && matchSource && matchRegion && matchPrio;
   });
 
   // Sort

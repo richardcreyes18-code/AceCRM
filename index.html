@@ -9443,6 +9443,10 @@ const DB_MULTI_LABELS = {
 // allLabel: default label shown when all boxes are checked
 // values: array of option strings
 // withSearch: whether to render the search input (true for county)
+// v102.25: Restyled to use db-fbar-* classes so Stages/Asset Types/Sources
+// buttons match the LOC-001 aesthetic. Outer button is now a light-bg pill
+// matching the LOC-001 field inputs, and the dropdown menu has softer
+// borders and Inter typography.
 function _dbMultiBtn(kind, allLabel, values, withSearch){
   const cbClass   = `db_${kind}_cb`;
   const rowClass  = `db_${kind}_row`;
@@ -9451,40 +9455,29 @@ function _dbMultiBtn(kind, allLabel, values, withSearch){
   const wrapId    = `db_${kind}_wrap`;
   const searchId  = `db_${kind}_search`;
   const searchBox = withSearch ? `
-    <input id="${searchId}" type="text" placeholder="Search ${DB_MULTI_LABELS[kind].plural.toLowerCase()}..."
-      oninput="_dbMultiFilterSearch('${kind}', this.value)"
-      style="width:100%;padding:6px 10px;border:1px solid #cbd5e1;border-radius:4px;font-size:11px;box-sizing:border-box;margin-bottom:6px;"/>` : '';
+    <input id="${searchId}" type="text" class="db-fbar-menu-search"
+      placeholder="Search ${DB_MULTI_LABELS[kind].plural.toLowerCase()}..."
+      oninput="_dbMultiFilterSearch('${kind}', this.value)"/>` : '';
 
   return `
     <div style="position:relative;display:inline-block;" id="${wrapId}">
-      <button onclick="_dbMultiToggle('${kind}')" style="
-        background:#fff;border:1px solid #aaa;border-radius:2px;padding:4px 10px;
-        font-size:11px;cursor:pointer;min-width:140px;text-align:left;
-        display:flex;align-items:center;justify-content:space-between;gap:6px;">
-        <span id="${labelId}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${allLabel}</span>
-        <span style="font-size:9px;opacity:0.6;flex-shrink:0;">▼</span>
+      <button onclick="_dbMultiToggle('${kind}')" class="db-fbar-btn">
+        <span id="${labelId}" class="db-fbar-btn-label">${allLabel}</span>
+        <span class="db-fbar-btn-chev">&#x25BE;</span>
       </button>
-      <div id="${menuId}" style="
-        display:none;position:absolute;top:calc(100% + 2px);left:0;z-index:9999;
-        background:#fff;border:1px solid #aaa;border-radius:4px;
-        box-shadow:2px 4px 16px rgba(0,0,0,0.28);
-        min-width:${withSearch?'280px':'200px'};
-        max-height:calc(100vh - 120px);overflow-y:auto;padding:0;">
-        <div style="padding:8px 12px;border-bottom:1px solid #eee;position:sticky;top:0;background:#fff;z-index:1;">
+      <div id="${menuId}" class="db-fbar-menu" style="min-width:${withSearch?'280px':'200px'};">
+        <div class="db-fbar-menu-hdr">
           ${searchBox}
-          <div style="display:flex;gap:12px;">
-            <a href="#" onclick="_dbMultiSelectAll('${kind}',true);return false;"
-              style="font-size:11px;color:#1a3a6e;text-decoration:none;font-weight:600;">✓ All</a>
-            <a href="#" onclick="_dbMultiSelectAll('${kind}',false);return false;"
-              style="font-size:11px;color:#1a3a6e;text-decoration:none;font-weight:600;">✕ None</a>
-            <span style="margin-left:auto;font-size:10px;color:#64748b;">${values.length} ${DB_MULTI_LABELS[kind].plural.toLowerCase()}</span>
+          <div class="db-fbar-menu-actions">
+            <a class="db-fbar-menu-action" onclick="_dbMultiSelectAll('${kind}',true);return false;">&#10003; All</a>
+            <a class="db-fbar-menu-action" onclick="_dbMultiSelectAll('${kind}',false);return false;">&#10005; None</a>
+            <span class="db-fbar-menu-count">${values.length} ${DB_MULTI_LABELS[kind].plural.toLowerCase()}</span>
           </div>
         </div>
         <div>
           ${values.map(v => `
-            <label class="${rowClass}" data-val="${String(v).toLowerCase().replace(/"/g,'&quot;')}"
-              style="display:flex;align-items:center;gap:8px;padding:6px 14px;cursor:pointer;font-size:12px;white-space:nowrap;"
-              onmouseenter="this.style.background='#f0f4ff'" onmouseleave="this.style.background=''">
+            <label class="${rowClass} db-fbar-menu-row"
+              data-val="${String(v).toLowerCase().replace(/"/g,'&quot;')}">
               <input type="checkbox" class="${cbClass}" value="${String(v).replace(/"/g,'&quot;')}" checked
                 onchange="_dbMultiChanged('${kind}');renderDealBoard();dbRefreshMapPins()"/> ${v}
             </label>`).join('')}
@@ -9507,7 +9500,12 @@ function _dbMultiToggle(kind){
   });
   const menu = document.getElementById(menuId);
   if(!menu) return;
-  const isOpen = menu.style.display !== 'none';
+  // v102.25: use computed style to detect open state. The .db-fbar-menu CSS
+  // class sets display:none by default, but menu.style.display (inline) is
+  // empty on first click — so `!== 'none'` would incorrectly return true.
+  // Compute the effective display instead.
+  const computed = window.getComputedStyle(menu).display;
+  const isOpen = computed !== 'none';
   menu.style.display = isOpen ? 'none' : 'block';
   if(!isOpen){
     setTimeout(() => {
@@ -9648,11 +9646,118 @@ const _locKb = { state: -1, region: -1, county: -1, city: -1 };
 
 // Inject the LOC-001 scoped CSS once on first use. All class names are
 // prefixed "loc-" so they don't collide with the rest of the CRM's styling.
+// v102.25: Extended with "db-fbar-*" classes for the broader Deal Board
+// filter bar restyling — search input, multi-select buttons, priority
+// checkbox, clear filters, view toggle all share the LOC-001 aesthetic.
 function _locInjectCSS(){
   if(document.getElementById('loc-001-css')) return;
   const style = document.createElement('style');
   style.id = 'loc-001-css';
   style.textContent = `
+    /* ─── Deal Board filter bar wrapper (v102.25) ─── */
+    .db-fbar-wrap{
+      background:#fff;border-bottom:1px solid #e2e8f0;
+      padding:14px 20px;display:flex;align-items:center;gap:10px;
+      flex-wrap:wrap;font-family:'Inter',system-ui,sans-serif;
+      position:relative;z-index:9000;
+    }
+    .db-fbar-title{
+      font-size:16px;font-weight:700;color:#0f172a;
+      margin-right:4px;white-space:nowrap;
+      display:flex;align-items:center;gap:6px;
+    }
+    .db-fbar-search{
+      width:220px;font-size:12px;font-family:inherit;
+      padding:8px 12px;
+      border:1px solid #e2e8f0;border-radius:8px;
+      background:#f8fafc;color:#0f172a;outline:none;
+      transition:border-color .15s,background .15s;
+    }
+    .db-fbar-search:focus{border-color:#0f172a;background:#fff;}
+    .db-fbar-search::placeholder{color:#94a3b8;}
+    .db-fbar-btn{
+      background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;
+      padding:8px 12px;font-size:12px;font-family:inherit;
+      color:#0f172a;cursor:pointer;min-width:140px;text-align:left;
+      display:flex;align-items:center;justify-content:space-between;gap:8px;
+      font-weight:500;transition:border-color .15s;
+    }
+    .db-fbar-btn:hover{border-color:#cbd5e1;}
+    .db-fbar-btn-label{
+      overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+      color:#475569;font-weight:500;
+    }
+    .db-fbar-btn-chev{font-size:10px;color:#94a3b8;flex-shrink:0;}
+    .db-fbar-menu{
+      display:none;position:absolute;top:calc(100% + 3px);left:0;z-index:10000;
+      background:#fff;border:1px solid #e2e8f0;border-radius:8px;
+      box-shadow:0 4px 14px rgba(0,0,0,.10);
+      min-width:200px;max-height:calc(100vh - 120px);
+      overflow-y:auto;padding:0;font-family:'Inter',system-ui,sans-serif;
+    }
+    .db-fbar-menu-hdr{
+      padding:10px 12px;border-bottom:1px solid #f1f5f9;
+      position:sticky;top:0;background:#fff;z-index:1;
+    }
+    .db-fbar-menu-search{
+      width:100%;padding:7px 10px;border:1px solid #e2e8f0;
+      border-radius:6px;font-size:12px;box-sizing:border-box;
+      margin-bottom:8px;font-family:inherit;background:#f8fafc;
+      color:#0f172a;outline:none;
+    }
+    .db-fbar-menu-search:focus{border-color:#0f172a;background:#fff;}
+    .db-fbar-menu-actions{
+      display:flex;gap:14px;align-items:center;font-size:11px;
+    }
+    .db-fbar-menu-action{
+      color:#2563eb;text-decoration:none;font-weight:600;cursor:pointer;
+    }
+    .db-fbar-menu-action:hover{color:#1d4ed8;}
+    .db-fbar-menu-count{
+      margin-left:auto;font-size:10px;color:#94a3b8;font-weight:500;
+    }
+    .db-fbar-menu-row{
+      display:flex;align-items:center;gap:10px;padding:8px 14px;
+      cursor:pointer;font-size:12px;color:#0f172a;
+      white-space:nowrap;transition:background .1s;
+    }
+    .db-fbar-menu-row:hover{background:#f8fafc;}
+    .db-fbar-check{
+      display:flex;align-items:center;gap:6px;font-size:12px;
+      color:#475569;cursor:pointer;padding:8px 12px;
+      background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;
+      font-family:inherit;font-weight:500;
+    }
+    .db-fbar-check input{cursor:pointer;margin:0;}
+    .db-fbar-clear{
+      background:#fff;color:#b91c1c;border:1px solid #fecaca;
+      padding:8px 14px;border-radius:8px;font-size:12px;
+      font-weight:600;cursor:pointer;font-family:inherit;
+      white-space:nowrap;transition:background .15s;
+    }
+    .db-fbar-clear:hover{background:#fef2f2;border-color:#fca5a5;}
+    .db-fbar-count{
+      color:#64748b;font-size:12px;margin-left:auto;
+      font-family:inherit;font-weight:500;
+    }
+    .db-fbar-viewtoggle{
+      display:flex;gap:0;border:1px solid #e2e8f0;border-radius:8px;
+      overflow:hidden;background:#f8fafc;
+    }
+    .db-fbar-viewtoggle button{
+      padding:8px 14px;font-size:12px;font-weight:600;
+      cursor:pointer;background:transparent;color:#475569;border:none;
+      font-family:inherit;transition:background .15s;
+    }
+    .db-fbar-viewtoggle button.active{
+      background:#0f172a;color:#fff;
+    }
+    .db-fbar-viewtoggle button:not(.active):hover{background:#f1f5f9;}
+    .db-fbar-viewtoggle button + button{border-left:1px solid #e2e8f0;}
+    .db-fbar-viewtoggle button.active + button,
+    .db-fbar-viewtoggle button + button.active{border-left-color:#0f172a;}
+
+    /* ─── LOC-001 component (existing) ─── */
     .loc-compact-bar{
       display:flex;gap:6px;align-items:center;flex-wrap:wrap;
       background:#f8fafc;padding:8px 10px;border-radius:8px;
@@ -9722,10 +9827,21 @@ const _LOC_PLACEHOLDER = {
 
 // Build the four data source arrays from whatever is currently in allDeals.
 // Called at render time, so the option lists always reflect the live data.
+//
+// v102.25: City source changed from "parse from addresses" to the curated
+// _NJ_MUNICIPALITIES constant (the same list used by the Buyer Criteria
+// "Preferred Cities / Towns" autocomplete). This gives ~300 NJ towns even
+// if you don't currently have a deal in that town. Cities parsed from
+// actual deal addresses are merged in afterward so out-of-state towns
+// (Philadelphia, Brooklyn, etc.) still appear when you have deals there.
 function _locBuildDataSources(){
   const states = new Set();
   const counties = new Set();
   const cities = new Set();
+  // Seed the city set with the full curated NJ municipality list.
+  if(typeof _NJ_MUNICIPALITIES !== 'undefined' && Array.isArray(_NJ_MUNICIPALITIES)){
+    _NJ_MUNICIPALITIES.forEach(c => cities.add(c));
+  }
   for(const d of (allDeals||[])){
     const st = _stateFromAddress(d['Address']||'');
     if(st) states.add(st);
@@ -10003,14 +10119,15 @@ function showDealBoard(){
   loadOwnerNames();
 
   document.getElementById('mainArea').innerHTML = `
-    <div style="padding:0;height:100%;display:flex;flex-direction:column;">
+    <div style="padding:0;height:100%;display:flex;flex-direction:column;background:#f8fafc;">
 
-      <!-- HEADER BAR -->
-      <div style="background:linear-gradient(180deg,#1a3a6e,#0e2244);padding:10px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;position:relative;z-index:9000;">
-        <div style="color:#fff;font-size:15px;font-weight:bold;margin-right:8px;">📋 Deal Board</div>
+      <!-- HEADER BAR — v102.25: light aesthetic matching LOC-001 -->
+      <div class="db-fbar-wrap">
+        <div class="db-fbar-title">📋 Deal Board</div>
 
-        <input id="db_search" class="form-input" placeholder="Search address, county, notes..." 
-          style="width:200px;font-size:11px;" oninput="renderDealBoard();dbRefreshMapPins()"/>
+        <input id="db_search" class="db-fbar-search"
+          placeholder="Search address, county, notes..."
+          oninput="renderDealBoard();dbRefreshMapPins()"/>
 
         <!-- STAGE MULTI-SELECT -->
         ${_dbMultiBtn('stage', 'All Stages', stages, false)}
@@ -10027,32 +10144,21 @@ function showDealBoard(){
         <!-- IMPORT SOURCE MULTI-SELECT -->
         ${_dbMultiBtn('source', 'All Sources', sources, false)}
 
-        <label style="color:#ccc;font-size:11px;display:flex;align-items:center;gap:4px;">
-          <input type="checkbox" id="db_priority" onchange="renderDealBoard();dbRefreshMapPins()"/> ⭐ Priority Only
+        <label class="db-fbar-check">
+          <input type="checkbox" id="db_priority" onchange="renderDealBoard();dbRefreshMapPins()"/>
+          &#9733; Priority Only
         </label>
 
-        <button onclick="dbClearAllFilters()" style="
-          background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;
-          padding:5px 12px;border-radius:4px;font-size:11px;font-weight:700;
-          cursor:pointer;white-space:nowrap;"
-          onmouseenter="this.style.background='#fee2e2'" onmouseleave="this.style.background='#fef2f2'">
-          ✕ Clear Filters
+        <button onclick="dbClearAllFilters()" class="db-fbar-clear">
+          &#10005; Clear Filters
         </button>
 
-        <span id="db_count" style="color:#aad4ff;font-size:11px;margin-left:auto;"></span>
+        <span id="db_count" class="db-fbar-count"></span>
 
         <!-- VIEW TOGGLE -->
-        <div style="display:flex;gap:0;border:1px solid #4a6a9e;border-radius:3px;overflow:hidden;">
-          <button id="db_view_list" onclick="dbSetView('list')" style="
-            padding:5px 12px;font-size:11px;font-weight:bold;cursor:pointer;
-            background:#fff;color:#1a3a6e;border:none;border-right:1px solid #4a6a9e;">
-            📋 List
-          </button>
-          <button id="db_view_map" onclick="dbSetView('map')" style="
-            padding:5px 12px;font-size:11px;font-weight:bold;cursor:pointer;
-            background:rgba(255,255,255,0.15);color:#fff;border:none;">
-            🗺 Map
-          </button>
+        <div class="db-fbar-viewtoggle">
+          <button id="db_view_list" class="active" onclick="dbSetView('list')">&#128203; List</button>
+          <button id="db_view_map" onclick="dbSetView('map')">&#128506; Map</button>
         </div>
       </div>
 
@@ -10425,14 +10531,15 @@ function dbSetView(view){
   if(view === 'list'){
     if(tableView) tableView.style.display = 'block';
     if(mapView)   mapView.style.display   = 'none';
-    if(btnList){ btnList.style.background='#fff'; btnList.style.color='#1a3a6e'; }
-    if(btnMap){  btnMap.style.background='rgba(255,255,255,0.15)'; btnMap.style.color='#fff'; }
+    // v102.25: toggle .active class for the new light view-toggle styling
+    if(btnList) btnList.classList.add('active');
+    if(btnMap)  btnMap.classList.remove('active');
     renderDealBoard();
   } else {
     if(tableView) tableView.style.display = 'none';
     if(mapView)   mapView.style.display   = 'flex';
-    if(btnList){ btnList.style.background='rgba(255,255,255,0.15)'; btnList.style.color='#fff'; }
-    if(btnMap){  btnMap.style.background='#fff'; btnMap.style.color='#1a3a6e'; }
+    if(btnList) btnList.classList.remove('active');
+    if(btnMap)  btnMap.classList.add('active');
     initDealMap();
   }
 }

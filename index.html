@@ -831,6 +831,80 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   </div>
 </div>
 
+<!-- ── v102.28 ADD DEALS TO PORTFOLIO MODAL ─────────────────────── -->
+<div id="addDealsPortfolioModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9700;align-items:center;justify-content:center;padding:20px;" onclick="if(event.target===this)closeAddDealsModal()">
+  <div style="background:#fff;border-radius:12px;width:680px;max-width:94vw;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.4);overflow:hidden;">
+    <div style="padding:18px 22px;border-bottom:1px solid #e2e8f0;background:#fffbeb;display:flex;justify-content:space-between;align-items:center;">
+      <div>
+        <div style="font-size:16px;font-weight:700;color:#92400e;">📁 Add Properties to Portfolio</div>
+        <div id="addDealsSubtitle" style="font-size:11px;color:#b45309;margin-top:2px;">Select deals to include in this portfolio.</div>
+      </div>
+      <button onclick="closeAddDealsModal()" style="background:none;border:none;color:#b45309;font-size:22px;cursor:pointer;line-height:1;">✕</button>
+    </div>
+    <div style="padding:16px 22px;border-bottom:1px solid #e2e8f0;background:#f8fafc;">
+      <input id="addDealsSearch" type="text" placeholder="Search by address, county, or stage..."
+        oninput="_addDealsFilter()"
+        style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:13px;box-sizing:border-box;" />
+    </div>
+    <div id="addDealsList" style="flex:1;overflow-y:auto;padding:12px 22px;min-height:260px;"></div>
+    <div id="addDealsError" style="display:none;padding:8px 22px;background:#fef2f2;color:#991b1b;font-size:12px;border-top:1px solid #fecaca;"></div>
+    <div style="padding:14px 22px;border-top:1px solid #e2e8f0;background:#f8fafc;display:flex;justify-content:space-between;align-items:center;gap:8px;">
+      <div id="addDealsCount" style="font-size:12px;color:#64748b;font-weight:600;">0 selected</div>
+      <div style="display:flex;gap:8px;">
+        <button onclick="closeAddDealsModal()" style="background:#fff;color:#475569;border:1px solid #cbd5e1;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Cancel</button>
+        <button id="addDealsSubmitBtn" onclick="submitAddDeals()" style="background:#b45309;color:#fff;border:none;padding:8px 20px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">Add to Portfolio</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- ── v102.28 EDIT PORTFOLIO MODAL ──────────────────────────────── -->
+<div id="editPortfolioModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9700;align-items:center;justify-content:center;padding:20px;" onclick="if(event.target===this)closeEditPortfolioModal()">
+  <div style="background:#fff;border-radius:12px;width:560px;max-width:94vw;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.4);overflow:hidden;">
+    <div style="padding:18px 22px;border-bottom:1px solid #e2e8f0;background:#fffbeb;display:flex;justify-content:space-between;align-items:center;">
+      <div style="font-size:16px;font-weight:700;color:#92400e;">✏️ Edit Portfolio</div>
+      <button onclick="closeEditPortfolioModal()" style="background:none;border:none;color:#b45309;font-size:22px;cursor:pointer;line-height:1;">✕</button>
+    </div>
+    <div style="padding:20px 22px;overflow-y:auto;flex:1;">
+      <div style="margin-bottom:14px;">
+        <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Portfolio Name *</label>
+        <input id="epName" type="text" style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:14px;box-sizing:border-box;" />
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Package Price</label>
+          <input id="epPackagePrice" type="text" inputmode="numeric" class="num-input" style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:14px;box-sizing:border-box;" />
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Pipeline Stage</label>
+          <select id="epStage" style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:14px;box-sizing:border-box;background:#fff;"></select>
+        </div>
+      </div>
+      <div style="margin-bottom:14px;">
+        <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Description</label>
+        <textarea id="epDescription" rows="2" style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:13px;box-sizing:border-box;resize:vertical;font-family:inherit;"></textarea>
+      </div>
+      <div>
+        <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Notes</label>
+        <textarea id="epNotes" rows="3" style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:13px;box-sizing:border-box;resize:vertical;font-family:inherit;"></textarea>
+      </div>
+      <div id="epError" style="display:none;background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;padding:8px 12px;border-radius:6px;font-size:12px;margin-top:10px;"></div>
+    </div>
+    <div style="padding:14px 22px;border-top:1px solid #e2e8f0;background:#f8fafc;display:flex;justify-content:flex-end;gap:8px;">
+      <button onclick="closeEditPortfolioModal()" style="background:#fff;color:#475569;border:1px solid #cbd5e1;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Cancel</button>
+      <button id="epSubmitBtn" onclick="submitEditPortfolio()" style="background:#b45309;color:#fff;border:none;padding:8px 20px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">Save Changes</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── v102.28 Turn C: PORTFOLIO HOVER CARD (single shared instance) ─── -->
+<div id="pfHoverCard" style="display:none;position:fixed;z-index:9500;background:#fff;border:1px solid #fde68a;border-radius:10px;box-shadow:0 8px 24px rgba(180,83,9,0.18);padding:12px 14px;min-width:220px;max-width:320px;font-family:Tahoma,Arial,sans-serif;pointer-events:auto;" onmouseenter="_pfCancelHide()" onmouseleave="_pfHideHover()">
+  <div id="pfHoverName" style="font-size:13px;font-weight:700;color:#0f172a;margin-bottom:4px;line-height:1.3;"></div>
+  <div id="pfHoverComposition" style="font-size:11px;color:#92400e;margin-bottom:6px;"></div>
+  <div id="pfHoverCount" style="font-size:11px;color:#64748b;"></div>
+  <div style="margin-top:8px;padding-top:8px;border-top:1px solid #f3e8ff;font-size:10px;color:#b45309;font-weight:600;">Click the 📁 to open →</div>
+</div>
+
 <!-- ── DEAL SNAPSHOT POPUP ─────────────────────────────────────── -->
 <div id="dealSnapshotModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9600;align-items:flex-start;justify-content:center;padding:40px 20px;overflow-y:auto;" onclick="if(event.target===this)closeDealSnapshot()">
   <div style="background:#fff;border-radius:12px;width:580px;max-width:94vw;box-shadow:0 20px 60px rgba(0,0,0,0.4);max-height:calc(100vh - 80px);display:flex;flex-direction:column;overflow:hidden;">
@@ -4152,6 +4226,7 @@ function renderDealPage(){
           ${ownerName ? `<div id="headerOwnerName" style="font-size:13px;color:var(--text2);margin-bottom:6px;">👤 <strong style="color:var(--text);${ownerContactId?'cursor:pointer;text-decoration:underline;text-decoration-color:#c0d0e8;text-underline-offset:3px;':''}" ${ownerContactId?`onclick="openContactModal('${ownerContactId}')" title="Open contact view"`:''}>${ownerName}</strong>${ownerPhone?`<span style="margin-left:10px;color:var(--text3);font-weight:normal;font-size:12px;">📞 <a href="tel:${ownerPhone.replace(/[^0-9+]/g,'')}" style="color:var(--text2);text-decoration:none;">${ownerPhone}</a></span>`:''}</div>` : `<div id="headerOwnerName" style="font-size:13px;color:var(--text2);margin-bottom:6px;"></div>`}
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
             ${stageBadge(stage)}
+            ${_pfIconHtml(d)}
             ${d['Deal Tag'] ? `<span style="border-radius:99px;padding:2px 10px;font-size:11px;font-weight:600;background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;">${d['Deal Tag']}</span>` : ''}
             <span id="headerAssetTypeBadge" onclick="openEditAssetTypeModal()" title="Click to edit asset type" style="font-size:12px;color:var(--text2);cursor:pointer;padding:2px 8px;border:1px dashed #c0cce0;border-radius:99px;background:#fafbff;" onmouseenter="this.style.background='#eef2fb'" onmouseleave="this.style.background='#fafbff'">${(()=>{const v=d['CRM Asset Classification']||d['Simple Text Property Type']||'';return v?'🏷️ <strong>'+v.split('|').map(t=>t.trim()).join(', ')+'</strong>':'🏷️ <em style="color:#888;">Set asset type</em>';})()}</span>
             ${d['Simple County'] ? `<span id="headerCountyBadge" style="font-size:12px;color:var(--text3);">📍 ${d['Simple County']}, NJ</span>` : `<span id="headerCountyBadge" style="font-size:12px;color:var(--text3);"></span>`}
@@ -11410,19 +11485,25 @@ function _renderPortfolioDetail(p){
     const sf = d['Total Building SF'] || d['Square Footage'] || '';
     const type = d['CRM Asset Classification'] || d['Simple Text Property Type'] || '—';
     return `
-      <div onclick="_pfOpenChildDeal('${d.id}')"
-        style="display:grid;grid-template-columns:28px minmax(0,1fr) 90px 80px 90px 70px;gap:12px;align-items:center;padding:12px 16px;background:#fff;border:1px solid #e2e8f0;border-radius:10px;margin-bottom:8px;cursor:pointer;transition:all 0.15s;"
+      <div style="display:grid;grid-template-columns:28px minmax(0,1fr) 90px 80px 90px 90px;gap:12px;align-items:center;padding:12px 16px;background:#fff;border:1px solid #e2e8f0;border-radius:10px;margin-bottom:8px;transition:all 0.15s;"
         onmouseover="this.style.borderColor='#b45309';"
         onmouseout="this.style.borderColor='#e2e8f0';">
         <div style="width:24px;height:24px;border-radius:50%;background:#fef3c7;color:#92400e;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;">${i+1}</div>
-        <div style="min-width:0;">
+        <div style="min-width:0;cursor:pointer;" onclick="_pfOpenChildDeal('${d.id}')">
           <div style="font-size:13px;font-weight:700;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${(d['Address']||'Unnamed').replace(/</g,'&lt;')}</div>
           <div style="font-size:11px;color:#64748b;margin-top:2px;">${type}${units?' · '+units+' units':''}${sf?' · '+Number(sf).toLocaleString()+' SF':''}</div>
         </div>
-        <div style="font-size:12px;font-weight:700;color:#0f172a;text-align:right;">${ask}</div>
-        <div style="font-size:11px;color:#64748b;text-align:right;">${capStr}</div>
-        <div style="font-size:11px;color:#64748b;text-align:right;">${d['Pipeline Stage']||'—'}</div>
-        <div style="font-size:11px;color:#b45309;text-align:right;font-weight:600;">Open →</div>
+        <div style="font-size:12px;font-weight:700;color:#0f172a;text-align:right;cursor:pointer;" onclick="_pfOpenChildDeal('${d.id}')">${ask}</div>
+        <div style="font-size:11px;color:#64748b;text-align:right;cursor:pointer;" onclick="_pfOpenChildDeal('${d.id}')">${capStr}</div>
+        <div style="font-size:11px;color:#64748b;text-align:right;cursor:pointer;" onclick="_pfOpenChildDeal('${d.id}')">${d['Pipeline Stage']||'—'}</div>
+        <div style="display:flex;gap:4px;justify-content:flex-end;align-items:center;">
+          <button onclick="event.stopPropagation(); _pfOpenChildDeal('${d.id}')"
+            title="Open this deal"
+            style="background:none;border:none;color:#b45309;font-size:11px;font-weight:600;cursor:pointer;padding:4px 6px;">Open →</button>
+          <button onclick="event.stopPropagation(); _portfolioRemoveChild('${d.id}')"
+            title="Remove from portfolio"
+            style="background:#fef2f2;border:1px solid #fecaca;color:#dc2626;font-size:10px;font-weight:700;cursor:pointer;padding:3px 7px;border-radius:4px;">×</button>
+        </div>
       </div>`;
   }).join('');
 
@@ -11440,9 +11521,9 @@ function _renderPortfolioDetail(p){
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
             ${stage ? `<span style="font-size:11px;font-weight:700;padding:5px 12px;border-radius:99px;background:${stageColor}22;color:${stageColor};border:1px solid ${stageColor}55;">${stage}</span>` : ''}
-            <button disabled title="Edit and delete arrive in the next update"
-              style="background:#f1f5f9;color:#94a3b8;border:1px solid #cbd5e1;padding:6px 14px;font-size:11px;font-weight:600;border-radius:6px;cursor:not-allowed;">
-              Edit
+            <button onclick="openEditPortfolioModal('${p.id}')"
+              style="background:#fff;color:#b45309;border:1px solid #fde68a;padding:6px 14px;font-size:11px;font-weight:600;border-radius:6px;cursor:pointer;">
+              ✏️ Edit
             </button>
           </div>
         </div>
@@ -11477,8 +11558,8 @@ function _renderPortfolioDetail(p){
 
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
         <div style="font-size:14px;font-weight:700;color:#0f172a;">Properties in this portfolio</div>
-        <button disabled title="Adding properties arrives in the next update"
-          style="background:#f1f5f9;color:#94a3b8;border:1px solid #cbd5e1;padding:6px 14px;font-size:11px;font-weight:600;border-radius:6px;cursor:not-allowed;">
+        <button onclick="openAddDealsModal('${p.id}')"
+          style="background:#b45309;color:#fff;border:none;padding:6px 14px;font-size:11px;font-weight:700;border-radius:6px;cursor:pointer;">
           + Add property
         </button>
       </div>
@@ -11493,6 +11574,391 @@ function _pfOpenChildDeal(dealId){
   const d = (allDeals || []).find(x => x.id === dealId);
   if(!d){ alert('Deal not found.'); return; }
   if(typeof openDeal === 'function') openDeal(d);
+}
+
+// ── UPDATE + ASSIGN HELPERS (Turn B-second-half) ──────────────────
+// Updates a portfolio row. fields uses Airtable-style display keys.
+async function _portfolioUpdate(portfolioId, fields){
+  if(!isSupabase()) throw new Error('Supabase required');
+  if(!portfolioId) throw new Error('portfolioId required');
+  const sbData = _atToSb(fields, SB_PORTFOLIO_MAP);
+  if(Object.keys(sbData).length === 0) return;
+  sbData.updated_at = new Date().toISOString();
+  await _sbPatch(SB_TABLES.portfolios, portfolioId, sbData);
+  // Update the local cache entry so UI reflects immediately without a full refetch
+  const idx = (allPortfolios || []).findIndex(p => p.id === portfolioId);
+  if(idx > -1){
+    Object.assign(allPortfolios[idx], fields);
+  }
+}
+
+// Assigns a single deal to a portfolio (or null to unassign).
+// Updates both the DB and the in-memory allDeals cache.
+async function _portfolioAssignDeal(dealId, portfolioId){
+  if(!isSupabase()) throw new Error('Supabase required');
+  if(!dealId) throw new Error('dealId required');
+  // portfolioId may be null to unassign
+  await _sbPatch(SB_TABLES.properties, dealId, { portfolio_id: portfolioId });
+  // Update the in-memory deal so subsequent renders see the change
+  const d = (allDeals || []).find(x => x.id === dealId);
+  if(d) d['Portfolio ID'] = portfolioId;
+}
+
+// Bulk assign — loops _portfolioAssignDeal sequentially. For the handful
+// of deals a single portfolio holds this is fine; if we ever need to
+// assign 100+ at once we'd switch to a single PATCH with IN-filter.
+async function _portfolioAssignDeals(dealIds, portfolioId){
+  for(const id of dealIds){
+    await _portfolioAssignDeal(id, portfolioId);
+  }
+}
+
+// ── ADD DEALS TO PORTFOLIO MODAL ──────────────────────────────────
+// State: which portfolio we're adding to (set at open time).
+let _addDealsTargetPortfolioId = null;
+// State: which deal IDs are currently checked in the modal.
+let _addDealsSelected = new Set();
+
+function openAddDealsModal(portfolioId){
+  const p = (allPortfolios || []).find(x => x.id === portfolioId);
+  if(!p){ alert('Portfolio not found.'); return; }
+  _addDealsTargetPortfolioId = portfolioId;
+  _addDealsSelected = new Set();
+  const modal = document.getElementById('addDealsPortfolioModal');
+  const subtitle = document.getElementById('addDealsSubtitle');
+  const search = document.getElementById('addDealsSearch');
+  const err = document.getElementById('addDealsError');
+  if(subtitle) subtitle.textContent = 'Adding to: ' + (p['Name'] || 'Untitled');
+  if(search) search.value = '';
+  if(err){ err.style.display = 'none'; err.textContent = ''; }
+  _renderAddDealsList();
+  _updateAddDealsCount();
+  if(modal) modal.style.display = 'flex';
+  setTimeout(() => search?.focus(), 50);
+}
+
+function closeAddDealsModal(){
+  const modal = document.getElementById('addDealsPortfolioModal');
+  if(modal) modal.style.display = 'none';
+  _addDealsTargetPortfolioId = null;
+  _addDealsSelected = new Set();
+}
+
+// Renders the checkbox list of eligible deals. Eligible = deals not
+// already in ANY portfolio (to prevent accidental re-homing), OR deals
+// already in THIS portfolio (shown checked as context).
+function _renderAddDealsList(){
+  const host = document.getElementById('addDealsList');
+  if(!host) return;
+  const targetId = _addDealsTargetPortfolioId;
+  const eligible = (allDeals || []).filter(d => {
+    const pid = d['Portfolio ID'];
+    return !pid || pid === targetId;
+  });
+  // Sort: not-yet-assigned first, then by address
+  eligible.sort((a, b) => {
+    const aInThis = a['Portfolio ID'] === targetId ? 0 : 1;
+    const bInThis = b['Portfolio ID'] === targetId ? 0 : 1;
+    if(aInThis !== bInThis) return bInThis - aInThis; // unassigned first
+    return (a['Address']||'').localeCompare(b['Address']||'');
+  });
+
+  if(eligible.length === 0){
+    host.innerHTML = `
+      <div style="text-align:center;padding:40px 20px;color:#94a3b8;font-size:12px;">
+        No eligible deals found. All deals are already in another portfolio.
+      </div>`;
+    return;
+  }
+
+  const fmt$ = n => {
+    if(!n || isNaN(n)) return '—';
+    const v = Number(n);
+    if(v >= 1e6) return '$' + (v/1e6).toFixed(2) + 'M';
+    if(v >= 1e3) return '$' + Math.round(v/1e3) + 'K';
+    return '$' + v.toLocaleString();
+  };
+
+  host.innerHTML = eligible.map(d => {
+    const alreadyInThis = d['Portfolio ID'] === targetId;
+    const checked = alreadyInThis || _addDealsSelected.has(d.id);
+    if(alreadyInThis) _addDealsSelected.add(d.id); // ensure it's tracked
+    const type = d['CRM Asset Classification'] || d['Simple Text Property Type'] || '';
+    const stage = d['Pipeline Stage'] || '';
+    const ask = d['Asking Price'] ? fmt$(d['Asking Price']) : '—';
+    const county = d['Simple County'] || '';
+    return `
+      <label class="add-deals-row" data-search-text="${((d['Address']||'') + ' ' + county + ' ' + stage + ' ' + type).toLowerCase().replace(/"/g,'&quot;')}"
+        style="display:grid;grid-template-columns:24px minmax(0,1fr) 80px 100px;gap:10px;align-items:center;padding:10px 12px;background:${checked ? '#fffbeb' : '#fff'};border:1px solid ${checked ? '#fde68a' : '#e2e8f0'};border-radius:8px;margin-bottom:6px;cursor:pointer;">
+        <input type="checkbox" ${checked ? 'checked' : ''} ${alreadyInThis ? 'data-already-in="1"' : ''}
+          data-deal-id="${d.id}"
+          onchange="_toggleAddDealsSelection('${d.id}', this.checked, this.closest('label'))" />
+        <div style="min-width:0;">
+          <div style="font-size:13px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+            ${(d['Address']||'Unnamed').replace(/</g,'&lt;')}
+            ${alreadyInThis ? '<span style="color:#b45309;font-size:10px;margin-left:6px;">(already in)</span>' : ''}
+          </div>
+          <div style="font-size:10px;color:#64748b;margin-top:2px;">${type}${county ? ' · '+county : ''}${stage ? ' · '+stage : ''}</div>
+        </div>
+        <div style="font-size:12px;font-weight:600;color:#0f172a;text-align:right;">${ask}</div>
+        <div style="font-size:10px;color:#94a3b8;text-align:right;">${d['Date Added'] ? d['Date Added'].slice(0,10) : ''}</div>
+      </label>`;
+  }).join('');
+}
+
+function _toggleAddDealsSelection(dealId, checked, rowEl){
+  if(checked){ _addDealsSelected.add(dealId); }
+  else { _addDealsSelected.delete(dealId); }
+  if(rowEl){
+    rowEl.style.background = checked ? '#fffbeb' : '#fff';
+    rowEl.style.borderColor = checked ? '#fde68a' : '#e2e8f0';
+  }
+  _updateAddDealsCount();
+}
+
+function _updateAddDealsCount(){
+  const el = document.getElementById('addDealsCount');
+  if(!el) return;
+  const n = _addDealsSelected.size;
+  el.textContent = n + (n === 1 ? ' selected' : ' selected');
+}
+
+function _addDealsFilter(){
+  const q = (document.getElementById('addDealsSearch')?.value || '').trim().toLowerCase();
+  const rows = document.querySelectorAll('#addDealsList .add-deals-row');
+  rows.forEach(row => {
+    if(!q){ row.style.display = ''; return; }
+    const text = row.getAttribute('data-search-text') || '';
+    row.style.display = text.indexOf(q) !== -1 ? '' : 'none';
+  });
+}
+
+async function submitAddDeals(){
+  const portfolioId = _addDealsTargetPortfolioId;
+  if(!portfolioId) return;
+  const err = document.getElementById('addDealsError');
+  const btn = document.getElementById('addDealsSubmitBtn');
+  const showErr = (msg) => { if(err){ err.textContent = msg; err.style.display='block'; } };
+  // Compute the DIFF: deals that should be assigned now but aren't yet
+  const toAssign = [...(_addDealsSelected || [])].filter(id => {
+    const d = (allDeals || []).find(x => x.id === id);
+    return d && d['Portfolio ID'] !== portfolioId;
+  });
+  if(toAssign.length === 0){
+    closeAddDealsModal();
+    return;
+  }
+  if(btn){ btn.disabled = true; btn.textContent = 'Saving...'; }
+  try {
+    await _portfolioAssignDeals(toAssign, portfolioId);
+    closeAddDealsModal();
+    // Re-render the detail view if we're on it
+    if(_currentPortfolioId === portfolioId){
+      const p = (allPortfolios || []).find(x => x.id === portfolioId);
+      if(p) _renderPortfolioDetail(p);
+    } else {
+      showPortfoliosPage();
+    }
+  } catch(e) {
+    showErr('Failed to save: ' + (e.message || 'unknown error'));
+    if(btn){ btn.disabled = false; btn.textContent = 'Add to Portfolio'; }
+  }
+}
+
+// ── EDIT PORTFOLIO MODAL ──────────────────────────────────────────
+let _editPortfolioTargetId = null;
+
+function openEditPortfolioModal(portfolioId){
+  const p = (allPortfolios || []).find(x => x.id === portfolioId);
+  if(!p){ alert('Portfolio not found.'); return; }
+  _editPortfolioTargetId = portfolioId;
+  const modal = document.getElementById('editPortfolioModal');
+  const name = document.getElementById('epName');
+  const price = document.getElementById('epPackagePrice');
+  const stage = document.getElementById('epStage');
+  const desc = document.getElementById('epDescription');
+  const notes = document.getElementById('epNotes');
+  const err = document.getElementById('epError');
+  if(name) name.value = p['Name'] || '';
+  if(price) price.value = p['Package Price'] != null ? String(p['Package Price']) : '';
+  if(desc) desc.value = p['Description'] || '';
+  if(notes) notes.value = p['Portfolio Notes'] || '';
+  if(err){ err.style.display = 'none'; err.textContent = ''; }
+  if(stage){
+    stage.innerHTML = '<option value="">— Select —</option>' +
+      NEW_PIPELINE_STAGES.map(s => `<option value="${s}" ${p['Pipeline Stage']===s?'selected':''}>${s}</option>`).join('');
+  }
+  if(modal) modal.style.display = 'flex';
+  setTimeout(() => name?.focus(), 50);
+}
+
+function closeEditPortfolioModal(){
+  const modal = document.getElementById('editPortfolioModal');
+  if(modal) modal.style.display = 'none';
+  _editPortfolioTargetId = null;
+}
+
+async function submitEditPortfolio(){
+  const id = _editPortfolioTargetId;
+  if(!id) return;
+  const name = document.getElementById('epName')?.value?.trim() || '';
+  const rawPrice = document.getElementById('epPackagePrice')?.value?.trim() || '';
+  const stage = document.getElementById('epStage')?.value || '';
+  const desc = document.getElementById('epDescription')?.value?.trim() || '';
+  const notes = document.getElementById('epNotes')?.value?.trim() || '';
+  const err = document.getElementById('epError');
+  const btn = document.getElementById('epSubmitBtn');
+  const showErr = (msg) => { if(err){ err.textContent = msg; err.style.display='block'; } };
+
+  if(!name){ showErr('Portfolio name is required.'); return; }
+  let packagePrice = null;
+  if(rawPrice){
+    const n = parseFloat(rawPrice.replace(/,/g,''));
+    if(isNaN(n) || n < 0){ showErr('Package price must be a valid number.'); return; }
+    packagePrice = n;
+  }
+
+  // Send all fields, including clearing ones that were emptied
+  const fields = {
+    'Name': name,
+    'Package Price':   packagePrice,           // null clears the field
+    'Pipeline Stage':  stage || null,
+    'Description':     desc || null,
+    'Portfolio Notes': notes || null
+  };
+
+  if(btn){ btn.disabled = true; btn.textContent = 'Saving...'; }
+  try {
+    await _portfolioUpdate(id, fields);
+    closeEditPortfolioModal();
+    // Re-render current view
+    if(_currentPortfolioId === id){
+      const p = (allPortfolios || []).find(x => x.id === id);
+      if(p) _renderPortfolioDetail(p);
+    } else {
+      showPortfoliosPage();
+    }
+  } catch(e) {
+    showErr('Failed to save: ' + (e.message || 'unknown error'));
+    if(btn){ btn.disabled = false; btn.textContent = 'Save Changes'; }
+  }
+}
+
+// ── REMOVE CHILD FROM PORTFOLIO ───────────────────────────────────
+async function _portfolioRemoveChild(dealId){
+  if(!confirm('Remove this property from the portfolio?\n\nThe deal itself will not be deleted — it just won\'t be part of this portfolio anymore.')) return;
+  try {
+    await _portfolioAssignDeal(dealId, null);
+    // Re-render the detail view if we're on it
+    const p = (allPortfolios || []).find(x => x.id === _currentPortfolioId);
+    if(p) _renderPortfolioDetail(p);
+  } catch(e) {
+    alert('Failed to remove: ' + (e.message || 'unknown error'));
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// v102.28 Turn C: 📁 ICON + HOVER CARD
+// ═══════════════════════════════════════════════════════════════════════
+// Small folder icon that appears next to deal addresses whenever a deal
+// belongs to a portfolio. Hover (desktop) shows a tooltip with portfolio
+// name, asset composition, and count. Click opens the portfolio detail.
+// A single shared hover card element (#pfHoverCard) is reused for every
+// icon on the page — cheap even on a Deal Board rendering 5,700 rows.
+
+// Returns the inline HTML for the 📁 icon, or empty string if the deal
+// isn't in a portfolio. Safe to drop into any template literal.
+function _pfIconHtml(deal){
+  if(!deal) return '';
+  const pid = deal['Portfolio ID'];
+  if(!pid) return '';
+  // Also verify the portfolio still exists in the cache (it could have
+  // been archived since the last sync). If not, hide the icon silently.
+  const p = (allPortfolios || []).find(x => x.id === pid);
+  if(!p) return '';
+  return `<span class="pf-icon" data-pf-id="${pid}"
+    onclick="event.stopPropagation(); openPortfolioDetail('${pid}')"
+    onmouseenter="_pfShowHover('${pid}', this)"
+    onmouseleave="_pfHideHover()"
+    title="Part of a portfolio — click to open"
+    style="display:inline-block;cursor:pointer;font-size:13px;padding:0 4px;opacity:0.85;vertical-align:middle;transition:opacity 0.15s,transform 0.15s;"
+    onmouseover="this.style.opacity='1';this.style.transform='scale(1.15)'"
+    onmouseout="this.style.opacity='0.85';this.style.transform='scale(1)'"
+  >📁</span>`;
+}
+
+// Timeout handle for delayed hide — lets user move mouse from icon onto
+// the card without it flickering away.
+let _pfHoverHideTimer = null;
+
+function _pfShowHover(portfolioId, anchorEl){
+  const card = document.getElementById('pfHoverCard');
+  if(!card || !anchorEl) return;
+  _pfCancelHide();
+  const p = (allPortfolios || []).find(x => x.id === portfolioId);
+  if(!p) return;
+  const children = _portfolioChildren(portfolioId);
+  // Compose the asset-type breakdown. Group by CRM Asset Classification
+  // (falls back to Simple Text Property Type). Shows e.g. "3 Retail,
+  // 2 Multifamily" for mixed portfolios, or "5 Multifamily" for uniform.
+  const buckets = {};
+  children.forEach(d => {
+    const t = (d['CRM Asset Classification'] || d['Simple Text Property Type'] || 'Other').split('|')[0].split(':')[0].trim() || 'Other';
+    buckets[t] = (buckets[t] || 0) + 1;
+  });
+  const composition = Object.entries(buckets)
+    .sort((a,b) => b[1] - a[1])
+    .map(([t, n]) => `${n} ${t}`)
+    .join(' · ');
+
+  const nameEl = document.getElementById('pfHoverName');
+  const compEl = document.getElementById('pfHoverComposition');
+  const countEl = document.getElementById('pfHoverCount');
+  if(nameEl) nameEl.textContent = p['Name'] || 'Untitled Portfolio';
+  if(compEl) compEl.textContent = composition || 'No properties yet';
+  if(countEl) countEl.textContent = children.length === 1
+    ? '1 property'
+    : children.length + ' properties';
+
+  // Position the card near the anchor. Prefer below the icon; flip to
+  // above if there's not enough room. Clamp horizontally to viewport.
+  card.style.display = 'block';
+  // Temporarily hide from layout to measure it
+  card.style.visibility = 'hidden';
+  const rect = anchorEl.getBoundingClientRect();
+  const cardRect = card.getBoundingClientRect();
+  const vw = window.innerWidth;
+  const vh = window.innerHeight;
+  const GAP = 8;
+  let top = rect.bottom + GAP;
+  if(top + cardRect.height > vh - 12){
+    // Flip above
+    top = rect.top - cardRect.height - GAP;
+    if(top < 12) top = 12;
+  }
+  let left = rect.left + (rect.width / 2) - (cardRect.width / 2);
+  if(left < 12) left = 12;
+  if(left + cardRect.width > vw - 12) left = vw - cardRect.width - 12;
+  card.style.top  = Math.round(top)  + 'px';
+  card.style.left = Math.round(left) + 'px';
+  card.style.visibility = 'visible';
+}
+
+function _pfHideHover(){
+  _pfCancelHide();
+  // Small delay so the user can move onto the card
+  _pfHoverHideTimer = setTimeout(() => {
+    const card = document.getElementById('pfHoverCard');
+    if(card) card.style.display = 'none';
+    _pfHoverHideTimer = null;
+  }, 180);
+}
+
+function _pfCancelHide(){
+  if(_pfHoverHideTimer){
+    clearTimeout(_pfHoverHideTimer);
+    _pfHoverHideTimer = null;
+  }
 }
 
 function showDealBoard(){
@@ -12483,7 +12949,7 @@ function renderDealBoard(){
           onmouseleave="this.style.color='${prio?'#f5c400':'transparent'}';this.style.transform='scale(1)'">⭐</button>
       </td>
       <td style="padding:6px 8px;border-right:1px solid #e8ecf4;font-weight:bold;color:#1a3a6e;max-width:180px;">
-        <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${addr}">${addr}</div>
+        <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${addr}">${_pfIconHtml(d)}${addr}</div>
       </td>
       <td style="padding:6px 8px;border-right:1px solid #e8ecf4;text-align:center;">
         ${agentDisplay && agentDisplay !== '—' ? `<span title="${agentFull||agentDisplay}" style="background:#1a3a6e;color:#fff;font-size:10px;font-weight:600;padding:2px 8px;border-radius:99px;white-space:nowrap;">${agentDisplay}</span>` : `<span style="color:#aaa;font-size:11px;">—</span>`}

@@ -992,17 +992,17 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
       <span style="color:#2060b0;">A</span>ce <span style="color:#2060b0;">A</span>cquisitions
     </span>
   </div>
-  <button class="nav-btn active" onclick="setNav(this,'dashboard')">📊 Dashboard</button>
-  <button class="nav-btn" onclick="setNav(this,'home')">Deals</button>
-  <button class="nav-btn" onclick="setNav(this,'pipeline')">Pipeline</button>
-  <button class="nav-btn" onclick="setNav(this,'dealboard')" style="font-weight:bold;">Deal Board</button>
-  <button class="nav-btn" onclick="setNav(this,'map')" style="color:#059669;">🗺 Map</button>
-  <button class="nav-btn" onclick="setNav(this,'contacts')">Contacts</button>
-  <button class="nav-btn" onclick="setNav(this,'buyercriteria')">Buyer Criteria</button>
-  <button class="nav-btn" onclick="setNav(this,'company')">🏢 Company</button>
-  <button class="nav-btn" onclick="setNav(this,'tasks-nav')" style="font-weight:600;color:#a78bfa;">☑ Tasks</button>
-  <button class="nav-btn" id="navSettingsBtn" onclick="setNav(this,'settings')" style="display:none;">⚙ Settings</button>
-  <button class="nav-btn" onclick="setNav(this,'fieldmap')" style="color:#2060b0;">⇄ Field Map</button>
+  <button class="nav-btn active" data-page="dashboard" onclick="setNav(this,'dashboard')">📊 Dashboard</button>
+  <button class="nav-btn" data-page="home" onclick="setNav(this,'home')">Deals</button>
+  <button class="nav-btn" data-page="pipeline" onclick="setNav(this,'pipeline')">Pipeline</button>
+  <button class="nav-btn" data-page="dealboard" onclick="setNav(this,'dealboard')" style="font-weight:bold;">Deal Board</button>
+  <button class="nav-btn" data-page="map" onclick="setNav(this,'map')" style="color:#059669;">🗺 Map</button>
+  <button class="nav-btn" data-page="contacts" onclick="setNav(this,'contacts')">Contacts</button>
+  <button class="nav-btn" data-page="buyercriteria" onclick="setNav(this,'buyercriteria')">Buyer Criteria</button>
+  <button class="nav-btn" data-page="company" onclick="setNav(this,'company')">🏢 Company</button>
+  <button class="nav-btn" data-page="tasks-nav" onclick="setNav(this,'tasks-nav')" style="font-weight:600;color:#a78bfa;">☑ Tasks</button>
+  <button class="nav-btn" id="navSettingsBtn" data-page="settings" onclick="setNav(this,'settings')" style="display:none;">⚙ Settings</button>
+  <button class="nav-btn" data-page="fieldmap" onclick="setNav(this,'fieldmap')" style="color:#2060b0;">⇄ Field Map</button>
   <div class="nav-spacer"></div>
   <span class="nav-user" id="navUser">Welcome, Ricky</span>
   <!-- v102.7: online/offline indicator. Green when Supabase is reachable,
@@ -1271,7 +1271,12 @@ const SB_PROP_MAP = {
   property_name:'Property Name', complex_name:'Complex Name', municipality:'Municipality',
   x_price_per_foot:'What is the price at X Price per foot',
   x_cap_rate_pct:'What is price at X Cap Rate?',
-  created_at:'Date Added',
+  // v102.18: removed `created_at:'Date Added'` duplicate mapping. It was
+  // a latent bug — _atToSb's reverse map only keeps one entry per Airtable
+  // label, so writes to 'Date Added' were targeting the auto-managed
+  // created_at column instead of the nullable date_added column. The
+  // loader at line ~1917 now explicitly falls back: deal['Date Added']
+  // = row.date_added || row.created_at.
   fub_assigned_to:'Assigned Agent',
   ai_clarifying_notes:'AI Clarifying Notes',
   ai_parsed_at:'AI Parsed At',
@@ -1339,7 +1344,9 @@ const SB_BC_MAP = {
   automotive_min_bays:'Automotive Min Bays',
   shopping_min_sf:'Shopping Min SF',
   shopping_max_sf:'Shopping Max SF',
-  shopping_min_tenants:'Shopping Min Tenants'
+  shopping_min_tenants:'Shopping Min Tenants',
+  // v102.17: agent attribution for dashboard scoping
+  fub_assigned_to:'Assigned Agent'
 };
 
 // Tasks map (ace_tasks)
@@ -1915,6 +1922,16 @@ async function syncData(){
           const deal = _sbToAt(row, SB_PROP_MAP);
           deal.id = row.id;
           if(row.owner_contact_id) deal['Owner'] = [row.owner_contact_id];
+          // v102.18: Date Added fallback chain. SB_PROP_MAP no longer has the
+          // duplicate created_at:'Date Added' entry that used to provide this
+          // implicitly (and which broke the write side because the reverse
+          // map collapsed the two snake_case columns into one). Now we do it
+          // explicitly: use date_added if set, else fall back to created_at.
+          // This keeps all 5,700+ legacy deals (which have null date_added)
+          // displaying their creation date correctly.
+          if(!deal['Date Added'] && row.created_at){
+            deal['Date Added'] = row.created_at;
+          }
           records.push(deal);
         });
       };
@@ -2175,6 +2192,18 @@ function showDashboard(){
       </div>`;
   };
 
+  // v102.17: Buyer Leads count card — count-only, no goal coloring.
+  // Renders with "—" placeholder; the async _dashLoadBuyerLeadCounts() call
+  // below populates the actual numbers shortly after the dashboard appears.
+  const buyerCountCard = (label, elId) => `
+    <div style="
+      flex:1;min-width:180px;background:#f0f9ff;border:2px solid #bae6fd;
+      border-radius:12px;padding:18px 20px;">
+      <div style="font-size:11px;font-weight:700;color:#0369a1;text-transform:uppercase;letter-spacing:.06em;">${label}</div>
+      <div id="${elId}" style="font-size:34px;font-weight:800;color:#0369a1;line-height:1.1;margin:6px 0 4px;">—</div>
+      <div style="font-size:11px;color:#0369a1;font-weight:600;">Buyer leads entered</div>
+    </div>`;
+
   // Build a simple value/count tile for pipeline stats
   const statTile = (label, value, sublabel, color) => `
     <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px 18px;box-shadow:0 1px 2px rgba(0,0,0,0.03);">
@@ -2210,11 +2239,21 @@ function showDashboard(){
 
       <!-- LEAD STATS -->
       <div style="margin-bottom:28px;">
-        <div style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;">New Leads</div>
+        <div style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;">New Seller Leads</div>
         <div style="display:flex;gap:14px;flex-wrap:wrap;">
           ${leadCard('Today', todayLeads, 'today')}
           ${leadCard('This Week', weekLeads, 'week')}
           ${leadCard('This Month', monthLeads, 'month')}
+        </div>
+      </div>
+
+      <!-- v102.17: BUYER LEADS — count-only, no goals -->
+      <div style="margin-bottom:28px;">
+        <div style="font-size:12px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.08em;margin-bottom:10px;">New Buyer Leads</div>
+        <div style="display:flex;gap:14px;flex-wrap:wrap;">
+          ${buyerCountCard('Today',     'dashBuyerToday')}
+          ${buyerCountCard('This Week', 'dashBuyerWeek')}
+          ${buyerCountCard('This Month','dashBuyerMonth')}
         </div>
       </div>
 
@@ -2320,6 +2359,89 @@ function showDashboard(){
 
   // Lazy-load tasks async so the main dashboard renders immediately
   _dashLoadTasks();
+  // v102.17: lazy-load buyer lead counts scoped to current agent
+  _dashLoadBuyerLeadCounts();
+
+  // v102.19: install one-time listener for crm:lead-created so the dashboard
+  // auto-refreshes when a new seller or buyer lead is submitted from anywhere
+  // in the app. The flag prevents double-binding across multiple showDashboard
+  // calls. The listener checks _dashIsVisible() before re-rendering so it's a
+  // no-op when the user is on a different tab — the next visit will pick up
+  // fresh data via the normal showDashboard flow anyway.
+  if(!window._dashLeadListenerInstalled){
+    window.addEventListener('crm:lead-created', () => {
+      if(_dashIsVisible()){
+        showDashboard();
+      }
+    });
+    window._dashLeadListenerInstalled = true;
+  }
+}
+
+// v102.19: Returns true if the dashboard is currently the visible tab.
+// Used by the crm:lead-created listener to decide whether to re-render.
+function _dashIsVisible(){
+  // The dashboard renders into #mainArea. We detect it by looking for the
+  // characteristic "📊 Dashboard" header that showDashboard always emits.
+  const main = document.getElementById('mainArea');
+  if(!main) return false;
+  return main.innerHTML.includes('📊 Dashboard') && main.innerHTML.includes('New Seller Leads');
+}
+
+// v102.17: Fetch buyer lead counts for the current agent in three date windows.
+// Uses lightweight Postgrest count queries (HEAD + Prefer: count=exact) instead
+// of pulling the full rows. Called after the dashboard renders. If the user
+// isn't signed in or has no fub_name, all three counts are left as "—".
+async function _dashLoadBuyerLeadCounts(){
+  const todayEl = document.getElementById('dashBuyerToday');
+  const weekEl  = document.getElementById('dashBuyerWeek');
+  const monthEl = document.getElementById('dashBuyerMonth');
+  if(!todayEl || !weekEl || !monthEl) return; // dashboard left the screen
+  const agentName = (typeof _currentUser !== 'undefined' && _currentUser && _currentUser.fub_name) || null;
+  if(!agentName){
+    todayEl.textContent = '0';
+    weekEl.textContent  = '0';
+    monthEl.textContent = '0';
+    return;
+  }
+  try {
+    const { today, weekStart, monthStart } = _dashWindowStarts();
+    const iso = d => new Date(d.getTime() - d.getTimezoneOffset()*60000).toISOString();
+    const cfg = getConfig();
+    if(!isSupabase() || !cfg.url || !cfg.key) return;
+    const agentEnc = encodeURIComponent(agentName);
+    const fetchCount = async (sinceIso) => {
+      const url = `${cfg.url}/rest/v1/${SB_TABLES.buyerCriteria}?fub_assigned_to=eq.${agentEnc}&created_at=gte.${encodeURIComponent(sinceIso)}&select=id`;
+      const res = await fetch(url, {
+        method: 'HEAD',
+        headers: {
+          apikey: cfg.key,
+          Authorization: `Bearer ${cfg.key}`,
+          'Prefer': 'count=exact',
+          'Range-Unit': 'items',
+          'Range': '0-0'
+        }
+      });
+      if(!res.ok) return 0;
+      const range = res.headers.get('content-range') || '';
+      // content-range is "0-0/N" or "*/N"
+      const m = range.match(/\/(\d+)$/);
+      return m ? Number(m[1]) : 0;
+    };
+    const [tCnt, wCnt, mCnt] = await Promise.all([
+      fetchCount(iso(today)),
+      fetchCount(iso(weekStart)),
+      fetchCount(iso(monthStart))
+    ]);
+    if(todayEl) todayEl.textContent = String(tCnt);
+    if(weekEl)  weekEl.textContent  = String(wCnt);
+    if(monthEl) monthEl.textContent = String(mCnt);
+  } catch(e){
+    console.warn('[dashboard] buyer lead count fetch failed:', e.message);
+    if(todayEl) todayEl.textContent = '?';
+    if(weekEl)  weekEl.textContent  = '?';
+    if(monthEl) monthEl.textContent = '?';
+  }
 }
 
 async function _dashLoadTasks(){
@@ -2805,14 +2927,257 @@ function startBulkGeocode(onlyMissing){
   runBulkGeocode({ onlyMissing });
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// v102.22 — AGENT PICKER
+// ═══════════════════════════════════════════════════════════════════════
+// Click the agent pill in a deal header (or Summary page) → floating
+// popup lists every member of ace_company_directory grouped by role.
+// Selecting one writes 'Assigned Agent' (→ fub_assigned_to column) on
+// ace_properties, updates currentDeal in memory, re-renders header +
+// current tab. 'Unassigned' option at top clears the agent.
+//
+// Directory is cached in memory for 5 minutes, shared with the Company
+// page (_companyDirectory) so we don't double-fetch.
+// ─────────────────────────────────────────────────────────────────────────
+
+// Load the directory for the picker. Reuses _companyDirectory cache
+// from the Company page if present. Returns array sorted by sort_order.
+async function _loadAgentDirectory(){
+  // _companyDirectory is declared at line ~15097; check it's populated and fresh
+  if(typeof _companyDirectory !== 'undefined' && _companyDirectory.length
+     && typeof _companyDirLastLoadMs !== 'undefined'
+     && (Date.now() - _companyDirLastLoadMs) < 300000){
+    return _companyDirectory;
+  }
+  try {
+    const rows = await _sbGet('ace_company_directory', 'select=*&order=sort_order.asc');
+    if(typeof _companyDirectory !== 'undefined'){
+      _companyDirectory.length = 0;
+      (rows||[]).forEach(r => _companyDirectory.push(r));
+      if(typeof _companyDirLastLoadMs !== 'undefined') _companyDirLastLoadMs = Date.now();
+    }
+    return rows || [];
+  } catch(e) {
+    console.warn('[agent picker] directory load failed:', e.message);
+    return [];
+  }
+}
+
+// Compact display name: "First L." — same pattern the header uses today,
+// but works for any name (not just the hardcoded HDR_NAME_MAP).
+function _agentDisplayName(fullName){
+  if(!fullName) return '';
+  const parts = fullName.trim().split(/\s+/);
+  if(parts.length === 1) return parts[0];
+  return parts[0] + ' ' + parts[parts.length-1][0].toUpperCase() + '.';
+}
+
+// Render the pill HTML for a given agent name. Used in both the deal header
+// and the Summary KPI cell. Always renders something — dashed gray pill
+// when unassigned so the user can still click to pick someone.
+function _renderAgentPill(dealId, agentFull, size){
+  // size: 'sm' (header, 11px) | 'md' (summary KPI, 13px)
+  const s = size === 'md' ? {
+    fs:'13px', pad:'4px 12px', emoji:''
+  } : {
+    fs:'11px', pad:'2px 9px', emoji:'👤 '
+  };
+  if(agentFull){
+    const disp = _agentDisplayName(agentFull);
+    return `<span class="agent-pill" data-deal-id="${dealId}"
+      onclick="event.stopPropagation(); openAgentPicker(this, '${dealId}')"
+      title="${agentFull.replace(/"/g,'&quot;')} — click to change"
+      style="background:#1a3a6e;color:#fff;font-size:${s.fs};font-weight:600;padding:${s.pad};border-radius:99px;white-space:nowrap;cursor:pointer;display:inline-block;"
+      onmouseenter="this.style.background='#2c4f8a'"
+      onmouseleave="this.style.background='#1a3a6e'">${s.emoji}${disp}</span>`;
+  }
+  return `<span class="agent-pill" data-deal-id="${dealId}"
+    onclick="event.stopPropagation(); openAgentPicker(this, '${dealId}')"
+    title="Click to assign an agent"
+    style="background:#f8fafc;color:#64748b;font-size:${s.fs};font-weight:600;padding:${s.pad};border-radius:99px;white-space:nowrap;cursor:pointer;border:1px dashed #cbd5e1;display:inline-block;"
+    onmouseenter="this.style.background='#eef2fb';this.style.borderColor='#93c5fd';this.style.color='#1a3a6e'"
+    onmouseleave="this.style.background='#f8fafc';this.style.borderColor='#cbd5e1';this.style.color='#64748b'">${s.emoji}Unassigned</span>`;
+}
+
+let _agentPickerCurrent = null; // the popup element currently open, if any
+
+async function openAgentPicker(anchorEl, dealId){
+  // Close any existing picker first
+  closeAgentPicker();
+
+  const deal = allDeals.find(d => d.id === dealId);
+  if(!deal){ console.warn('[agent picker] deal not found:', dealId); return; }
+  const currentAgent = deal['Assigned Agent'] || '';
+
+  // Create the popup shell with a loading state — it renders immediately
+  // so the user gets feedback while we fetch the directory.
+  const popup = document.createElement('div');
+  popup.id = 'agentPickerPopup';
+  popup.style.cssText = 'position:fixed;z-index:99999;background:#fff;border:1px solid #e2e8f0;border-radius:10px;box-shadow:0 10px 30px rgba(0,0,0,0.15);min-width:260px;max-width:320px;max-height:70vh;overflow-y:auto;font-family:inherit;';
+  popup.innerHTML = `
+    <div style="padding:12px 14px;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;justify-content:space-between;gap:8px;">
+      <div style="font-size:11px;font-weight:700;color:#1a3a6e;text-transform:uppercase;letter-spacing:.05em;">Assign Agent</div>
+      <span onclick="closeAgentPicker()" style="cursor:pointer;color:#94a3b8;font-size:16px;line-height:1;padding:0 4px;">×</span>
+    </div>
+    <div id="agentPickerBody" style="padding:6px 0;">
+      <div style="padding:20px;text-align:center;color:#94a3b8;font-size:12px;">Loading team...</div>
+    </div>`;
+  document.body.appendChild(popup);
+  _agentPickerCurrent = popup;
+
+  // Position the popup below the anchor. getBoundingClientRect gives viewport coords
+  // which is what position:fixed wants.
+  const rect = anchorEl.getBoundingClientRect();
+  popup.style.top  = (rect.bottom + 6) + 'px';
+  popup.style.left = rect.left + 'px';
+  // After we render the body, we may need to flip/clamp if it overflows viewport
+  requestAnimationFrame(() => _clampAgentPicker(popup, rect));
+
+  // Click-outside dismissal — attached on next tick so the click that opened
+  // the popup doesn't immediately close it.
+  setTimeout(() => {
+    const onDocClick = (e) => {
+      if(!popup.contains(e.target) && !anchorEl.contains(e.target)){
+        closeAgentPicker();
+        document.removeEventListener('click', onDocClick);
+      }
+    };
+    document.addEventListener('click', onDocClick);
+    popup._docClickHandler = onDocClick;
+  }, 50);
+
+  // Fetch directory and paint
+  const dir = await _loadAgentDirectory();
+  // Guard: user may have closed the popup before fetch returned
+  if(_agentPickerCurrent !== popup) return;
+
+  const body = popup.querySelector('#agentPickerBody');
+  if(!body) return;
+
+  if(dir.length === 0){
+    body.innerHTML = '<div style="padding:20px;text-align:center;color:#94a3b8;font-size:12px;">Team directory is empty.<br>Add members in the Company tab.</div>';
+    return;
+  }
+
+  // Group by role, role order from the Company page paint
+  const roleOrder = ['Agent','Transaction Coordinator','Marketing','Admin','Other'];
+  const roleColors = {
+    'Agent':'#1e40af','Transaction Coordinator':'#7c3aed',
+    'Marketing':'#db2777','Admin':'#059669','Other':'#64748b'
+  };
+  const groups = {};
+  dir.forEach(r => {
+    const role = r.role || 'Other';
+    if(!groups[role]) groups[role] = [];
+    groups[role].push(r);
+  });
+  const sortedRoles = Object.keys(groups).sort((a,b) => {
+    const ai = roleOrder.indexOf(a), bi = roleOrder.indexOf(b);
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi);
+  });
+
+  // "Unassigned" row at top
+  const isUnassigned = !currentAgent;
+  let html = `
+    <div onclick="pickAgent('${dealId}', null)"
+      style="display:flex;align-items:center;gap:10px;padding:9px 14px;cursor:pointer;font-size:13px;color:#64748b;border-bottom:1px solid #f1f5f9;${isUnassigned?'background:#f1f5f9;':''}"
+      onmouseenter="this.style.background='#f8fafc'"
+      onmouseleave="this.style.background='${isUnassigned?'#f1f5f9':'transparent'}'">
+      <span style="width:28px;height:28px;border-radius:50%;background:#f1f5f9;border:1px dashed #cbd5e1;display:inline-flex;align-items:center;justify-content:center;color:#94a3b8;font-size:14px;flex-shrink:0;">—</span>
+      <span style="flex:1;">Unassigned</span>
+      ${isUnassigned ? '<span style="color:#1a3a6e;font-size:14px;">✓</span>' : ''}
+    </div>
+  `;
+
+  for(const role of sortedRoles){
+    const color = roleColors[role] || '#64748b';
+    html += `<div style="padding:8px 14px 4px;font-size:9px;font-weight:700;color:${color};text-transform:uppercase;letter-spacing:.08em;">${role}s</div>`;
+    for(const p of groups[role]){
+      const name = (p.name||'').trim();
+      if(!name) continue;
+      const initials = name.split(/\s+/).map(s=>s[0]).filter(Boolean).slice(0,2).join('').toUpperCase();
+      const isActive = name === currentAgent;
+      // Escape quotes in name for the onclick attribute
+      const safeName = name.replace(/'/g,"\\'").replace(/"/g,'&quot;');
+      html += `
+        <div onclick="pickAgent('${dealId}', '${safeName}')"
+          style="display:flex;align-items:center;gap:10px;padding:8px 14px;cursor:pointer;font-size:13px;color:#0f172a;${isActive?'background:'+color+'15;':''}"
+          onmouseenter="this.style.background='${color}10'"
+          onmouseleave="this.style.background='${isActive?color+'15':'transparent'}'">
+          <span style="width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,${color},${color}cc);color:#fff;display:inline-flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;">${initials}</span>
+          <span style="flex:1;">${name.replace(/</g,'&lt;')}</span>
+          ${isActive ? `<span style="color:${color};font-size:14px;">✓</span>` : ''}
+        </div>`;
+    }
+  }
+
+  body.innerHTML = html;
+  // Re-clamp in case content changed height
+  requestAnimationFrame(() => _clampAgentPicker(popup, rect));
+}
+
+// Keep the popup inside the viewport — flip upward if bottom overflows,
+// and clamp left if right-edge overflows.
+function _clampAgentPicker(popup, anchorRect){
+  const pr = popup.getBoundingClientRect();
+  const vw = window.innerWidth, vh = window.innerHeight;
+  // Vertical flip: if bottom overflows, put the popup ABOVE the anchor
+  if(pr.bottom > vh - 8){
+    const flipped = anchorRect.top - pr.height - 6;
+    popup.style.top = Math.max(8, flipped) + 'px';
+  }
+  // Horizontal clamp
+  if(pr.right > vw - 8){
+    popup.style.left = Math.max(8, vw - pr.width - 8) + 'px';
+  }
+}
+
+function closeAgentPicker(){
+  if(_agentPickerCurrent){
+    if(_agentPickerCurrent._docClickHandler){
+      document.removeEventListener('click', _agentPickerCurrent._docClickHandler);
+    }
+    _agentPickerCurrent.remove();
+    _agentPickerCurrent = null;
+  }
+}
+
+async function pickAgent(dealId, agentName){
+  closeAgentPicker();
+  const deal = allDeals.find(d => d.id === dealId);
+  if(!deal) return;
+  // airtableUpdate routes through _atToSb which maps 'Assigned Agent' → fub_assigned_to
+  const newVal = agentName || null;
+  const ok = await airtableUpdate(dealId, { 'Assigned Agent': newVal });
+  if(!ok){ alert('Failed to save agent. Check your connection.'); return; }
+  // Update in-memory deal (airtableUpdate does this too, but only via allDeals
+  // indexOf — make sure currentDeal reflects the change if it's the open one)
+  deal['Assigned Agent'] = newVal;
+  if(currentDeal && currentDeal.id === dealId){
+    currentDeal['Assigned Agent'] = newVal;
+    // Re-render the deal header so the pill updates
+    if(typeof renderDealPage === 'function') renderDealPage();
+    // If the user is currently on the Summary tab, re-render it too so the
+    // KPI Agent cell reflects the change
+    if(currentTab === 'summary'){
+      const tabContentEl = document.getElementById('tabContent');
+      if(tabContentEl) tabContentEl.innerHTML = renderSummaryTab(currentDeal);
+    }
+  }
+  showSaveConfirm(agentName ? `Agent set to ${agentName} ✓` : 'Agent cleared ✓');
+}
+
 // ─── NAV ──────────────────────────────────────────────────────
 function setNav(btn, page){
   // If navigating away from a deal with unsaved changes, prompt first
   if(_dealDirty && currentDeal && page !== 'home'){
-    checkDirtyBeforeNavigate(()=>{ _setNavDirect(btn, page); });
+    checkDirtyBeforeNavigate(()=>{ _nav.refreshCurrent(); _nav.goPage(btn, page); });
     return;
   }
-  _setNavDirect(btn, page);
+  // v102.20: snapshot current page's filters+scroll into the current history
+  // entry, then push a new entry for the destination page.
+  _nav.refreshCurrent();
+  _nav.goPage(btn, page);
 }
 
 function _setNavDirect(btn, page){
@@ -2838,6 +3203,291 @@ function _setNavDirect(btn, page){
   else if(page==='home'&&allDeals.length>0) openDeal(currentDeal||allDeals[0]);
   else if(page==='home') showHomeEmpty();
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// v102.20 — HISTORY ROUTER (browser back button support)
+// ═══════════════════════════════════════════════════════════════════════
+// Integrates with window.history so the browser Back/Forward buttons move
+// between top-level pages and deal detail views instead of exiting the app.
+//
+// Design:
+//  - Each top-level page push = one history entry with {page, filters, scroll}
+//  - Opening a deal = one history entry with {deal: id}
+//  - popstate handler reads state, calls the matching renderer, and restores
+//    filters + scroll on the destination page.
+//  - `_nav._suppress` flag prevents popstate-triggered re-renders from pushing
+//    brand new history entries (which would break forward-nav).
+//  - Respects the dirty guard: popstate prompts "save before leaving" just
+//    like sidebar nav does. If user cancels, we push the deal state back on
+//    so the URL stays in sync with what's on screen.
+// ─────────────────────────────────────────────────────────────────────────
+const _nav = {
+  _suppress: false,
+  _inited: false,
+
+  // Capture filter state + scroll for the page we're about to leave.
+  // Called by pushPage / pushDeal on the CURRENT state before replacing it.
+  //
+  // v102.20a: Previously read the current page from .nav-btn.active, but
+  // some open handlers (dealBoardOpen, _dbOpenFromMap) swap .active BEFORE
+  // calling openDeal, so by the time we capture, the DOM lies about which
+  // page we're on. Fix: trust window.history.state.page as the source of
+  // truth (it's what we pushed when we rendered the page), and only fall
+  // back to the DOM when there's no stored state yet.
+  captureCurrent(){
+    let page = null;
+    try {
+      const st = window.history.state;
+      if(st && st.kind === 'page' && st.page) page = st.page;
+    } catch(e){}
+    if(!page){
+      const active = document.querySelector('.nav-btn.active');
+      if(!active) return null;
+      page = active.getAttribute('data-page') || _nav._pageFromLabel(active.textContent.trim());
+    }
+    if(!page) return null;
+    const scroll = _nav._currentScroll();
+    const filters = _nav._captureFilters(page);
+    return { page, filters, scroll };
+  },
+
+  // Guess page key from nav button label (fallback if data-page missing).
+  _pageFromLabel(label){
+    const map = {
+      'Dashboard':'dashboard', 'Deal Board':'dealboard', 'Pipeline':'pipeline',
+      'Map':'map', 'Contacts':'contacts', 'Buyer Criteria':'buyercriteria',
+      'Tasks':'tasks-nav', 'Company':'company', 'Settings':'settings',
+      'Lead Intake':'leadintake', 'Field Map':'fieldmap'
+    };
+    for(const k in map){ if(label.indexOf(k) !== -1) return map[k]; }
+    return '';
+  },
+
+  // Return the current scroll position of whichever element scrolls on this page.
+  // The CRM uses #mainArea as the scroll container on most pages.
+  _currentScroll(){
+    const ma = document.getElementById('mainArea');
+    return {
+      main: ma ? ma.scrollTop : 0,
+      window: window.scrollY || 0
+    };
+  },
+
+  // Snapshot filter state per page. Only dealboard has significant ephemeral
+  // filter state to capture — pipeline persists its own filters to localStorage,
+  // contacts/buyer criteria have search inputs we can grab.
+  _captureFilters(page){
+    const f = {};
+    if(page === 'dealboard' || page === 'map'){
+      // Search box
+      const s = document.getElementById('db_search');
+      if(s) f.search = s.value || '';
+      // Priority toggle
+      const p = document.getElementById('db_priority');
+      if(p) f.priority = !!p.checked;
+      // Checkbox multi-selects: stage / type / source
+      ['stage','type','source'].forEach(kind => {
+        const cbs = [...document.querySelectorAll('.db_'+kind+'_cb')];
+        if(cbs.length){
+          const checked = cbs.filter(c => c.checked).map(c => c.value);
+          // Only save if it's actually filtered (not all checked)
+          if(checked.length !== cbs.length) f[kind] = checked;
+        }
+      });
+      // LOC-001 location filters (state/region/county/city)
+      if(typeof _locFilters !== 'undefined'){
+        f.loc = {
+          state:  (_locFilters.state || []).slice(),
+          region: (_locFilters.region || []).slice(),
+          county: (_locFilters.county || []).slice(),
+          city:   (_locFilters.city || []).slice(),
+        };
+      }
+      // View mode (list vs map) — read from the view toggle button
+      const mapBtn  = document.getElementById('db_view_map');
+      if(mapBtn && mapBtn.classList.contains('active')) f.view = 'map';
+    }
+    else if(page === 'contacts'){
+      const s = document.getElementById('contactSearch');
+      if(s) f.search = s.value || '';
+    }
+    else if(page === 'buyercriteria'){
+      const s = document.getElementById('bcSearch');
+      if(s) f.search = s.value || '';
+    }
+    return f;
+  },
+
+  // Apply a saved filter snapshot back onto a freshly-rendered page.
+  // Called from popstate AFTER the page renderer has run.
+  _applyFilters(page, f){
+    if(!f) return;
+    if(page === 'dealboard' || page === 'map'){
+      const s = document.getElementById('db_search');
+      if(s && f.search) s.value = f.search;
+      const p = document.getElementById('db_priority');
+      if(p) p.checked = !!f.priority;
+      // Restore checkbox multi-selects
+      ['stage','type','source'].forEach(kind => {
+        if(!f[kind]) return; // no filter was applied
+        const savedSet = new Set(f[kind]);
+        document.querySelectorAll('.db_'+kind+'_cb').forEach(cb => {
+          cb.checked = savedSet.has(cb.value);
+        });
+        if(typeof _dbMultiChanged === 'function') _dbMultiChanged(kind);
+      });
+      // Restore LOC-001 filters
+      if(f.loc && typeof _locFilters !== 'undefined'){
+        _locFilters.state  = (f.loc.state  || []).slice();
+        _locFilters.region = (f.loc.region || []).slice();
+        _locFilters.county = (f.loc.county || []).slice();
+        _locFilters.city   = (f.loc.city   || []).slice();
+        // Re-render LOC bar chips — _locPostRender re-runs _locRenderTags for all keys
+        if(typeof _locPostRender === 'function'){
+          try { _locPostRender(); } catch(e){}
+        }
+      }
+      // Re-run the filter (renderDealBoard reads DOM checkbox state + _locFilters)
+      if(typeof renderDealBoard === 'function') renderDealBoard();
+      if(typeof dbRefreshMapPins === 'function') dbRefreshMapPins();
+      // View mode
+      if(f.view === 'map' && typeof dbSetView === 'function'){
+        setTimeout(()=>{ try{ dbSetView('map'); }catch(e){} }, 0);
+      }
+    }
+    else if(page === 'contacts'){
+      const s = document.getElementById('contactSearch');
+      if(s && f.search){ s.value = f.search; s.dispatchEvent(new Event('input')); }
+    }
+    else if(page === 'buyercriteria'){
+      const s = document.getElementById('bcSearch');
+      if(s && f.search){ s.value = f.search; s.dispatchEvent(new Event('input')); }
+    }
+  },
+
+  // Restore scroll position on the CURRENT page. Uses a couple of
+  // rAF ticks to wait for layout/async content to settle.
+  _restoreScroll(scroll){
+    if(!scroll) return;
+    const doIt = () => {
+      const ma = document.getElementById('mainArea');
+      if(ma && scroll.main) ma.scrollTop = scroll.main;
+      if(scroll.window) window.scrollTo(0, scroll.window);
+    };
+    requestAnimationFrame(() => requestAnimationFrame(doIt));
+    // Second attempt after 150ms for pages with async-loaded content
+    setTimeout(doIt, 150);
+  },
+
+  // PUBLIC: Navigate to a top-level page AND push history.
+  // Called from the sidebar nav click handler.
+  goPage(btn, page){
+    // If this is a real user nav (not a popstate replay), push history.
+    if(!_nav._suppress){
+      try {
+        window.history.pushState({ kind:'page', page }, '', '#/'+page);
+      } catch(e){}
+    }
+    _setNavDirect(btn, page);
+  },
+
+  // PUBLIC: Open a deal AND push history.
+  goDeal(d){
+    if(!d) return;
+    if(!_nav._suppress){
+      try {
+        window.history.pushState({ kind:'deal', id: d.id }, '', '#/deal/'+d.id);
+      } catch(e){}
+    }
+    _openDealDirect(d);
+  },
+
+  // popstate handler — browser Back/Forward pressed.
+  onPop(e){
+    const st = e.state;
+    if(!st){
+      // No state = we're at the initial entry. Go to dashboard.
+      _nav._suppress = true;
+      try { _setNavDirect(null, 'dashboard'); } finally { _nav._suppress = false; }
+      return;
+    }
+
+    // Dirty guard: if user is leaving a deal with unsaved edits, prompt.
+    // If they cancel, re-push the current deal state to keep URL in sync.
+    const handle = () => {
+      _nav._suppress = true;
+      try {
+        if(st.kind === 'deal'){
+          const d = (typeof allDeals !== 'undefined')
+            ? allDeals.find(x => x.id === st.id) : null;
+          if(d){
+            _openDealDirect(d);
+          } else {
+            // Deal not loaded (shouldn't normally happen) — fall back to dashboard
+            _setNavDirect(null, 'dashboard');
+          }
+        } else if(st.kind === 'page'){
+          // Find the matching sidebar button so it gets the active class
+          const btn = document.querySelector('.nav-btn[data-page="'+st.page+'"]')
+                   || _nav._findNavBtnByPage(st.page);
+          _setNavDirect(btn, st.page);
+          // Restore filters + scroll AFTER the page renders
+          if(st.filters) _nav._applyFilters(st.page, st.filters);
+          if(st.scroll)  _nav._restoreScroll(st.scroll);
+        }
+      } finally {
+        _nav._suppress = false;
+      }
+    };
+
+    if(_dealDirty && currentDeal){
+      checkDirtyBeforeNavigate(handle);
+    } else {
+      handle();
+    }
+  },
+
+  // Fallback: find nav button by matching its label text to a page key.
+  _findNavBtnByPage(page){
+    const label = {
+      dashboard:'Dashboard', dealboard:'Deal Board', pipeline:'Pipeline',
+      map:'Map', contacts:'Contacts', buyercriteria:'Buyer Criteria',
+      'tasks-nav':'Tasks', company:'Company', settings:'Settings',
+      leadintake:'Lead Intake', fieldmap:'Field Map'
+    }[page];
+    if(!label) return null;
+    const btns = [...document.querySelectorAll('.nav-btn')];
+    return btns.find(b => b.textContent.trim().indexOf(label) !== -1) || null;
+  },
+
+  // Called once on app startup (after login) to wire popstate and plant
+  // an initial history entry so the first Back press has somewhere to go.
+  init(){
+    if(_nav._inited) return;
+    _nav._inited = true;
+    window.addEventListener('popstate', _nav.onPop);
+    // Replace (not push) the initial entry so there's no phantom blank history.
+    try {
+      window.history.replaceState({ kind:'page', page:'dashboard' }, '', '#/dashboard');
+    } catch(e){}
+  },
+
+  // Called BEFORE pushing a new state, to update the CURRENT history entry
+  // with the page's current filter+scroll snapshot. That way when the user
+  // hits Back, they come back to where they actually were, not a stale snapshot.
+  refreshCurrent(){
+    try {
+      const st = window.history.state;
+      if(!st || st.kind !== 'page') return;
+      const snap = _nav.captureCurrent();
+      if(!snap) return;
+      window.history.replaceState(
+        { kind:'page', page: st.page, filters: snap.filters, scroll: snap.scroll },
+        '', location.hash || ('#/'+st.page)
+      );
+    } catch(e){}
+  }
+};
 
 // ─── HELPERS ──────────────────────────────────────────────────
 
@@ -2928,10 +3578,13 @@ function openDeal(d){
   // Dismiss any floating browser autocomplete
   if(document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
   if(_dealDirty && currentDeal && currentDeal.id !== d.id){
-    checkDirtyBeforeNavigate(()=>{ _openDealDirect(d); });
+    checkDirtyBeforeNavigate(()=>{ _nav.refreshCurrent(); _nav.goDeal(d); });
     return;
   }
-  _openDealDirect(d);
+  // v102.20: snapshot the page we're leaving (so Back restores filters+scroll)
+  // then push a new history entry for this deal.
+  _nav.refreshCurrent();
+  _nav.goDeal(d);
 }
 
 // ── Recently Viewed Order ─────────────────────────────────────────
@@ -3406,24 +4059,7 @@ function renderDealPage(){
             ${d['Deal Tag'] ? `<span style="border-radius:99px;padding:2px 10px;font-size:11px;font-weight:600;background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;">${d['Deal Tag']}</span>` : ''}
             <span id="headerAssetTypeBadge" onclick="openEditAssetTypeModal()" title="Click to edit asset type" style="font-size:12px;color:var(--text2);cursor:pointer;padding:2px 8px;border:1px dashed #c0cce0;border-radius:99px;background:#fafbff;" onmouseenter="this.style.background='#eef2fb'" onmouseleave="this.style.background='#fafbff'">${(()=>{const v=d['CRM Asset Classification']||d['Simple Text Property Type']||'';return v?'🏷️ <strong>'+v.split('|').map(t=>t.trim()).join(', ')+'</strong>':'🏷️ <em style="color:#888;">Set asset type</em>';})()}</span>
             ${d['Simple County'] ? `<span id="headerCountyBadge" style="font-size:12px;color:var(--text3);">📍 ${d['Simple County']}, NJ</span>` : `<span id="headerCountyBadge" style="font-size:12px;color:var(--text3);"></span>`}
-            ${(()=>{
-              // Show agent — use full name from Assigned Agent field, or parse initials from address
-              const agentFull = d['Assigned Agent']||'';
-              // Map full names to initials for compact display
-              const HDR_NAME_MAP = {
-                'Timothy Emrich':'Tim E.','Joseph Domenech':'Joe D.','Aidan Alverson':'Aidan A.',
-                'Richard Reyes':'Richard R.','Daniel Keenan':'Dan K.','Joseph Spinella':'Joe S.',
-                'Greg Sly':'Greg S.','Will Hartgers':'Will H.','Everett James':'Everett J.'
-              };
-              const HDR_INITIALS_MAP = {
-                'TE':'Tim E.','JD':'Joe D.','AA':'Aidan A.','RR':'Richard R.','DK':'Dan K.',
-                'JS':'Joe S.','GS':'Greg S.','WH':'Will H.','EJ':'Everett J.','TS':'Tim S.'
-              };
-              const addrInitials = (d['Address']||'').match(/[-–]\s*([A-Z]{2,3})\s*$/)?.[1]||'';
-              const displayName = HDR_NAME_MAP[agentFull] || HDR_INITIALS_MAP[addrInitials]
-                || (agentFull ? agentFull.split(' ')[0]+' '+(agentFull.split(' ')[1]?.[0]||'')+'.':'') || '';
-              return displayName ? `<span title="${agentFull||displayName}" style="background:#1a3a6e;color:#fff;font-size:11px;font-weight:600;padding:2px 9px;border-radius:99px;white-space:nowrap;">👤 ${displayName}</span>` : '';
-            })()}
+            ${_renderAgentPill(d.id, d['Assigned Agent']||'', 'sm')}
             ${d['Top Priority'] ? `<span style="background:#fef3c7;color:#92400e;font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;">⭐ Priority</span>` : ''}
             ${d['Is Archived'] ? `<span style="background:#fef2f2;color:#dc2626;font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;">📦 Archived</span>` : ''}
           </div>
@@ -4139,7 +4775,14 @@ function switchTab(name, btn){
   document.getElementById('tabContent').innerHTML = content[name]||'<p>Coming soon</p>';
   _rendering = false;
 
-  // Scroll back to top of mainArea now that new content is in the DOM
+  // v102.22: Reset scroll position to the top of the tab when switching tabs.
+  // Previously only #mainArea was reset, but the actual scrolling element is
+  // #tabContent (it has overflow-y:auto). If the user was scrolled to the
+  // bottom of Property Details and clicked Financial Analysis, the new tab
+  // would render at the old scroll position — confusing UX. Now we reset
+  // #tabContent to 0 AND #mainArea as a defensive belt-and-suspenders.
+  const _tc = document.getElementById('tabContent');
+  if(_tc) _tc.scrollTop = 0;
   const _ma = document.getElementById('mainArea');
   if(_ma) _ma.scrollTop = 0;
 
@@ -4357,7 +5000,7 @@ function renderSummaryTab(d){
           </div>
           <div style="text-align:center;">
             <div style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.06em;font-weight:700;">Agent</div>
-            <div style="font-size:15px;font-weight:700;color:#0f172a;margin-top:2px;">${agent}</div>
+            <div style="margin-top:4px;">${_renderAgentPill(d.id, d['Assigned Agent']||'', 'md')}</div>
           </div>
         </div>
       </div>
@@ -4492,9 +5135,30 @@ function renderSummaryTab(d){
   const pipelineCard = _sCard('Pipeline & Activity', '📊', pipelineContent, '#7c3aed');
 
   // ── Assemble full summary layout ───────────────────────────
+  // v102.21: Current Next Steps card (read-only) between KPI row and the
+  // Property Details / Financial Analysis two-column grid.
+  const ns = _parseNextSteps(d['Next Steps']);
+  const nsCard = ns.current ? `
+    <div style="background:#fff;border:1px solid #bbf7d0;border-left:4px solid #408040;border-radius:10px;padding:14px 18px;margin-bottom:14px;box-shadow:0 1px 2px rgba(0,0,0,0.03);">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;">
+        <div style="font-size:11px;font-weight:700;color:#408040;text-transform:uppercase;letter-spacing:.06em;">
+          ▸ Current Next Steps${ns.current.date ? ` <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">· ${ns.current.date}</span>` : ''}${ns.history.length ? ` <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">· ${ns.history.length} in history</span>` : ''}
+        </div>
+        <a onclick="switchTab('notes', document.querySelector('.tab-btn[onclick*=notes]'))" style="font-size:11px;color:#2563eb;cursor:pointer;text-decoration:underline;white-space:nowrap;">Edit in Notes tab →</a>
+      </div>
+      <div style="font-size:13px;color:#0f172a;white-space:pre-wrap;line-height:1.55;">${ns.current.body.replace(/</g,'&lt;')}</div>
+    </div>
+  ` : `
+    <div style="background:#f8fafc;border:1px dashed #cbd5e1;border-radius:10px;padding:12px 18px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:12px;">
+      <div style="font-size:12px;color:#94a3b8;font-style:italic;">No next steps recorded yet.</div>
+      <a onclick="switchTab('notes', document.querySelector('.tab-btn[onclick*=notes]'))" style="font-size:11px;color:#2563eb;cursor:pointer;text-decoration:underline;white-space:nowrap;">Add in Notes tab →</a>
+    </div>
+  `;
+
   return `
     <div style="padding:18px 20px;">
       ${headerCard}
+      ${nsCard}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
         ${propCard}
         ${finCard}
@@ -9112,16 +9776,344 @@ async function saveAllPropertyDetails(){
 }
 
 // ─── TAB: AI COMMUNICATION ────────────────────────────────────
+// ═══════════════════════════════════════════════════════════════════════
+// TEXT MESSAGE MAKER (v102.26)
+// ═══════════════════════════════════════════════════════════════════════
+// Generates a plain-text deal briefing the user can copy into SMS/Slack/
+// email to share with teammates. Reads live from the current deal object
+// (no DB call, no stored column) so it always reflects the latest edits.
+// Ported conceptually from the user's Airtable "text message maker"
+// formula but expanded to cover every field on the Seller Lead Intake
+// form (v102.14 schema).
+//
+// Checkbox toggles let the user include/exclude each section before
+// copying. Selection state lives in _tmmInclude — persists across tab
+// switches within a session, resets on page reload.
+
+// Default include state — all sections ON. Keys match the SECTION_DEFS
+// below so adding a new section = two small edits (the def + this key).
+const _tmmInclude = {
+  contact:    true,
+  property:   true,
+  assetType:  true,
+  general:    true,
+  financials: true,
+  motivation: true,
+  askingWords:true,
+  whySelling: true,
+  assetSpecific: true,
+  sellerFin:  true,
+};
+
+// Format a number as "$1.5M", "$250K", "$5,200" — same logic as _bmFmt
+// but more granular in the sub-thousand range.
+function _tmmMoney(n){
+  const v = Number(n);
+  if(!v || isNaN(v)) return '';
+  if(v >= 1e6) return '$' + (v/1e6).toFixed(2).replace(/\.?0+$/,'') + 'M';
+  if(v >= 1e3) return '$' + (v/1e3).toFixed(1).replace(/\.?0+$/,'') + 'K';
+  return '$' + v.toLocaleString();
+}
+
+// Format square footage as "5,200 SF" or "8.95 KSF" — kilo-format matches
+// the Airtable template's "KSqFt" convention but uses clearer SI units.
+function _tmmSF(n){
+  const v = Number(n);
+  if(!v || isNaN(v)) return '';
+  if(v >= 1000) return (v/1000).toFixed(2).replace(/\.?0+$/,'') + ' KSF';
+  return Number(v).toLocaleString() + ' SF';
+}
+
+// Collect asset-type-specific fields into a multi-line block. Returns
+// an empty string if none of the fields this asset type cares about
+// are populated. Uses whichever fields are present on the deal.
+function _tmmAssetSpecificBlock(d){
+  const type = (d['CRM Asset Classification'] || d['Simple Text Property Type'] || '').toLowerCase();
+  const lines = [];
+  const add = (label, val) => { if(val !== null && val !== undefined && val !== '' && val !== 0) lines.push(label + ': ' + val); };
+
+  // Universal asset details (apply to any type)
+  if(d['No. of Units']   || d['Number of Units']) add('Units',        d['No. of Units'] || d['Number of Units']);
+  if(d['Year Built'])     add('Year Built',    d['Year Built']);
+  if(d['Year Renovated']) add('Year Renovated', d['Year Renovated']);
+  if(d['No. of Stories']) add('Stories',       d['No. of Stories']);
+  if(d['Occupancy (%)'] != null && d['Occupancy (%)'] !== '') add('Occupancy', d['Occupancy (%)'] + '%');
+  if(d['Property Class']) add('Class',         d['Property Class']);
+
+  // Multifamily
+  if(type.includes('multi') || type.includes('mf')){
+    const mix = [];
+    if(d['Units Efficiency'])  mix.push(d['Units Efficiency'] + ' Eff');
+    if(d['Units 1 Bedroom'])   mix.push(d['Units 1 Bedroom'] + ' 1BR');
+    if(d['Units 2 Bedroom'])   mix.push(d['Units 2 Bedroom'] + ' 2BR');
+    if(d['Units 3 Bedroom'])   mix.push(d['Units 3 Bedroom'] + ' 3BR');
+    if(d['Units 4 Bedroom'])   mix.push(d['Units 4 Bedroom'] + ' 4BR');
+    if(mix.length) lines.push('Unit Mix: ' + mix.join(', '));
+    if(d['Unit Mix'] && !mix.length) lines.push('Unit Mix: ' + d['Unit Mix']);
+  }
+
+  // Warehouse / Industrial
+  if(type.includes('warehouse') || type.includes('industrial')){
+    if(d['Ceiling Height']) add('Ceiling', d['Ceiling Height'] + "'");
+  }
+
+  // Retail / Shopping Center
+  if(type.includes('retail') || type.includes('shopping')){
+    if(d['Retail Lease Type'])   add('Lease Type', d['Retail Lease Type']);
+    if(d['Shopping Lease Type']) add('Lease Type', d['Shopping Lease Type']);
+  }
+
+  // Automotive
+  if(type.includes('automotive')){
+    if(d['Automotive Gas Type'] && d['Automotive Gas Type'] !== 'No') add('Gas Station', d['Automotive Gas Type']);
+    if(d['Automotive Wash Type'] && d['Automotive Wash Type'] !== 'No') add('Car Wash', d['Automotive Wash Type']);
+  }
+
+  // Land — lot size
+  if(d['Total Lot Size']){
+    const unit = d['Lot Size Unit'] || 'sf';
+    add('Lot Size', Number(d['Total Lot Size']).toLocaleString() + ' ' + unit);
+  }
+
+  // Parking
+  if(d['No. of Parking Spaces']) add('Parking', d['No. of Parking Spaces'] + ' spaces');
+
+  return lines.length ? lines.join('\n') : '';
+}
+
+// Build the full text message from the deal object.
+// opt = { contact, property, assetType, general, financials, ... } booleans
+// controlling which sections are included. All default to true if omitted.
+function _tmmBuildText(d, opt){
+  if(!d) return 'No deal loaded.';
+  opt = Object.assign({}, _tmmInclude, opt || {});
+  const out = [];
+
+  // ── CONTACT ────────────────────────────────────────────────────
+  if(opt.contact){
+    const name  = d['_sellerName']  || d['_ownerName'] || '';
+    const phone = d['_sellerPhone'] || '';
+    const email = d['_sellerEmail'] || '';
+    if(name)  out.push('Name: '  + name);
+    if(phone) out.push('Phone: ' + phone);
+    if(email) out.push('Email: ' + email);
+  }
+
+  // ── PROPERTY / ADDRESS ─────────────────────────────────────────
+  if(opt.property){
+    if(d['Address']) out.push('Address: ' + d['Address']);
+    if(d['Simple County']) out.push('County: ' + d['Simple County']);
+  }
+
+  // ── TYPE / SF / UNITS ──────────────────────────────────────────
+  if(opt.assetType){
+    const typeRaw = d['CRM Asset Classification'] || d['Simple Text Property Type'] || '';
+    if(typeRaw){
+      const parts = ['Type: ' + typeRaw];
+      const sf = Number(d['Square Footage'] || d['Total Building SF'] || 0);
+      if(sf) parts.push(_tmmSF(sf));
+      const units = Number(d['No. of Units'] || d['Number of Units'] || 0);
+      if(units) parts.push(units + ' Units');
+      out.push(parts.join(' | '));
+    }
+  }
+
+  // ── GENERAL NOTES ──────────────────────────────────────────────
+  if(opt.general){
+    const gn = d['General Property Notes'] || d['General Notes'] || '';
+    if(gn && String(gn).trim()){
+      out.push('');
+      out.push('General Notes:');
+      out.push(String(gn).trim());
+    }
+  }
+
+  // ── ASSET-SPECIFIC DETAILS (mf unit mix, warehouse ceilings, etc.) ──
+  if(opt.assetSpecific){
+    const block = _tmmAssetSpecificBlock(d);
+    if(block){
+      out.push('');
+      out.push('Property Details:');
+      out.push(block);
+    }
+  }
+
+  // ── FINANCIALS ─────────────────────────────────────────────────
+  if(opt.financials){
+    const fin = [];
+    const griMo = Number(d['Gross Revenue Monthly'] || 0);
+    const griYr = Number(d['Gross Revenue Yearly']  || 0);
+    const expMo = Number(d['Expenses Monthly']      || 0);
+    const expYr = Number(d['Expenses Yearly']       || 0);
+    const noi   = Number(d['NOI'] || 0);
+    const cap   = Number(d['Cap Rate (CRM)'] || 0);
+    if(griMo) fin.push('Gross Monthly Revenue: ' + _tmmMoney(griMo));
+    if(griYr) fin.push('Gross Yearly Revenue: '  + _tmmMoney(griYr));
+    if(expMo) fin.push('Monthly Expenses: '      + _tmmMoney(expMo));
+    if(expYr) fin.push('Yearly Expenses: '       + _tmmMoney(expYr));
+    if(noi)   fin.push('NOI: '                   + _tmmMoney(noi));
+    if(cap)   fin.push('Cap Rate: '              + cap.toFixed(2) + '%');
+    const fnotes = d['Financial Property Notes'] || d['Financial Notes'] || '';
+    if(fin.length || (fnotes && String(fnotes).trim())){
+      out.push('');
+      out.push('Financials:');
+      fin.forEach(l => out.push(l));
+      if(fnotes && String(fnotes).trim()) out.push(String(fnotes).trim());
+    }
+  }
+
+  // ── SELLER FINANCING ───────────────────────────────────────────
+  // Extracted from the Financial Property Notes block (the intake form
+  // appends a "--- SELLER FINANCING ---" section there). If we find that
+  // marker, pull its text into its own section so it can be toggled off
+  // independently.
+  if(opt.sellerFin){
+    const fnotes = d['Financial Property Notes'] || '';
+    const sfMatch = String(fnotes).match(/---\s*SELLER FINANCING\s*---\s*([\s\S]*?)(?:\n---|$)/i);
+    if(sfMatch && sfMatch[1]){
+      out.push('');
+      out.push('Seller Financing:');
+      out.push(sfMatch[1].trim());
+    }
+  }
+
+  // ── MOTIVATION / WHY SELLING ───────────────────────────────────
+  if(opt.whySelling){
+    const why = d['Why Selling'] || '';
+    const ml  = d['Seller Motivation Level'] || '';
+    if(why || ml){
+      out.push('');
+      out.push('Why Selling:');
+      if(ml)  out.push('Motivation Level: ' + ml);
+      if(why) out.push(String(why).trim());
+    }
+  }
+
+  // ── ASKING PRICE ──────────────────────────────────────────────
+  if(opt.askingWords){
+    const price = Number(d['Asking Price'] || 0);
+    const priceWords = d['Asking Price Explanation'] || d['Asking Price Words'] || '';
+    if(price || priceWords){
+      out.push('');
+      if(price) out.push('Asking Price: ' + _tmmMoney(price));
+      if(priceWords && String(priceWords).trim()) out.push(String(priceWords).trim());
+    }
+  }
+
+  // Strip leading blank lines and collapse runs of 3+ newlines to 2
+  return out.join('\n').replace(/^\n+/, '').replace(/\n{3,}/g, '\n\n').trim();
+}
+
+// Rebuild the textarea from the current deal and current _tmmInclude state.
+// Called on tab render, on checkbox toggle, and after loadSellerContact
+// completes (so owner name/phone/email show up).
+function _tmmUpdate(){
+  const ta = document.getElementById('tmmTextarea');
+  if(!ta || !currentDeal) return;
+  ta.value = _tmmBuildText(currentDeal);
+}
+
+// Toggle a section's include state and regenerate.
+function _tmmToggle(key){
+  _tmmInclude[key] = !_tmmInclude[key];
+  _tmmUpdate();
+}
+
+// Copy the textarea to clipboard and flash a confirmation.
+function _tmmCopy(){
+  const ta = document.getElementById('tmmTextarea');
+  if(!ta) return;
+  ta.select();
+  try {
+    navigator.clipboard.writeText(ta.value).then(()=>{
+      const msg = document.getElementById('tmmCopyMsg');
+      if(msg){
+        msg.textContent = '✓ Copied!';
+        msg.style.display = 'inline';
+        setTimeout(()=>{ msg.style.display = 'none'; }, 1800);
+      }
+    }).catch(()=>{
+      // Fallback for older browsers: execCommand copy
+      document.execCommand('copy');
+      const msg = document.getElementById('tmmCopyMsg');
+      if(msg){ msg.textContent = '✓ Copied (fallback)'; msg.style.display = 'inline'; setTimeout(()=>{ msg.style.display = 'none'; }, 1800); }
+    });
+  } catch(e){
+    alert('Copy failed. Select the text manually and copy.');
+  }
+}
+
+// Reset all toggles to ON
+function _tmmResetToggles(){
+  Object.keys(_tmmInclude).forEach(k => { _tmmInclude[k] = true; });
+  document.querySelectorAll('.tmm-toggle').forEach(cb => { cb.checked = true; });
+  _tmmUpdate();
+}
+
+// Section definitions for the checkbox row. [key, label] pairs.
+const _TMM_SECTIONS = [
+  ['contact',       '👤 Contact'],
+  ['property',      '📍 Address'],
+  ['assetType',     '🏗️ Type / SF / Units'],
+  ['general',       '📝 General Notes'],
+  ['assetSpecific', '🔧 Property Details'],
+  ['financials',    '💰 Financials'],
+  ['sellerFin',     '🏦 Seller Financing'],
+  ['whySelling',    '🎯 Why Selling'],
+  ['askingWords',   '🏷️ Asking Price'],
+];
+
 function renderAICommTab(d){
+  // v102.26: Build checkbox row for the Text Message Maker
+  const toggleRow = _TMM_SECTIONS.map(([key, label]) => `
+    <label style="display:inline-flex;align-items:center;gap:6px;padding:6px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;font-size:12px;cursor:pointer;font-family:'Inter',system-ui,sans-serif;color:#475569;font-weight:500;">
+      <input type="checkbox" class="tmm-toggle" ${_tmmInclude[key] ? 'checked' : ''} onchange="_tmmToggle('${key}')"/>
+      ${label}
+    </label>`).join('');
+
+  // Pre-build the initial text so the textarea isn't empty on first render.
+  // The contact info may not be loaded yet — _tmmUpdate() is called again
+  // from loadAICommTab after loadSellerContact resolves.
+  const initialText = _tmmBuildText(d);
+
   return `
     <div class="section-hdr"><span class="icon">✦</span> AI Communication</div>
 
-    <!-- ACE CHAT TEXT SUMMARY -->
+    <!-- ─── v102.26: TEXT MESSAGE MAKER ─────────────────────────────── -->
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:20px;margin-bottom:20px;font-family:'Inter',system-ui,sans-serif;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+        <div style="font-size:15px;font-weight:700;color:#0f172a;">💬 Text Message Maker</div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <span id="tmmCopyMsg" style="font-size:12px;color:#16a34a;font-weight:600;display:none;"></span>
+          <button onclick="_tmmCopy()" style="background:#0f172a;color:#fff;border:none;padding:8px 18px;font-size:12px;font-weight:600;border-radius:8px;cursor:pointer;font-family:inherit;">
+            📋 Copy to Clipboard
+          </button>
+        </div>
+      </div>
+      <div style="font-size:12px;color:#64748b;margin-bottom:14px;">
+        Auto-generated briefing you can paste into a text, email, or Slack message. Toggle sections below to include or exclude them.
+      </div>
+
+      <textarea id="tmmTextarea" readonly
+        style="width:100%;min-height:260px;padding:14px 16px;border:1px solid #e2e8f0;border-radius:10px;font-size:13px;font-family:ui-monospace,Menlo,Monaco,Consolas,monospace;background:#f8fafc;color:#0f172a;resize:vertical;line-height:1.55;box-sizing:border-box;">${initialText.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</textarea>
+
+      <div style="margin-top:14px;">
+        <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:8px;">Include in Message</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;">
+          ${toggleRow}
+          <button onclick="_tmmResetToggles()" style="background:#fff;border:1px solid #e2e8f0;padding:6px 14px;border-radius:8px;font-size:12px;cursor:pointer;color:#475569;font-weight:500;font-family:inherit;margin-left:auto;">
+            Reset
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <!-- ─── LEGACY: Ace Chat Text Summary (stored in ace_chat_summary col) ── -->
     <div class="info-box">
-      <div class="info-box-title">Ace Chat Text Summary</div>
-      <div style="font-size:11px;color:#555;margin-bottom:8px;">Auto-generated property briefing from your Airtable data.</div>
-      <textarea id="aiSummaryText" style="width:100%;height:160px;font-size:11px;font-family:Tahoma,Arial,sans-serif;border:1px inset #808080;padding:8px;resize:vertical;background:#fafafa;"
-        readonly>${d['Ace Chat Text Summary']||'No summary available — enter property details and financials first.'}</textarea>
+      <div class="info-box-title">Legacy AI Summary <span style="font-size:10px;color:#94a3b8;font-weight:400;">(from Airtable automation)</span></div>
+      <div style="font-size:11px;color:#555;margin-bottom:8px;">Read-only. Generated by a legacy Airtable AI workflow — not refreshed in the new CRM.</div>
+      <textarea id="aiSummaryText" style="width:100%;height:120px;font-size:11px;font-family:Tahoma,Arial,sans-serif;border:1px inset #808080;padding:8px;resize:vertical;background:#fafafa;"
+        readonly>${d['Ace Chat Text Summary']||'No legacy summary available.'}</textarea>
     </div>
 
     <!-- EMAIL TEMPLATE -->
@@ -9179,6 +10171,15 @@ async function loadAICommTab(recordId){
     if(summaryEl) summaryEl.value = summary;
     if(templateEl && templateVal) templateEl.value = templateVal;
     if(currentDeal){ currentDeal['Ace Chat Text Summary'] = summary; }
+
+    // v102.26: Also load the seller contact so the Text Message Maker can
+    // include Name / Phone / Email. loadSellerContact caches these on
+    // currentDeal as _sellerName / _sellerPhone / _sellerEmail. After it
+    // resolves, refresh the Text Message Maker textarea in place.
+    try {
+      await loadSellerContact(recordId);
+    } catch(e){ /* non-fatal — TMM just won't have contact info */ }
+    if(typeof _tmmUpdate === 'function') _tmmUpdate();
   }catch(e){}
 }
 
@@ -9314,6 +10315,10 @@ const DB_MULTI_LABELS = {
 // allLabel: default label shown when all boxes are checked
 // values: array of option strings
 // withSearch: whether to render the search input (true for county)
+// v102.25: Restyled to use db-fbar-* classes so Stages/Asset Types/Sources
+// buttons match the LOC-001 aesthetic. Outer button is now a light-bg pill
+// matching the LOC-001 field inputs, and the dropdown menu has softer
+// borders and Inter typography.
 function _dbMultiBtn(kind, allLabel, values, withSearch){
   const cbClass   = `db_${kind}_cb`;
   const rowClass  = `db_${kind}_row`;
@@ -9322,40 +10327,29 @@ function _dbMultiBtn(kind, allLabel, values, withSearch){
   const wrapId    = `db_${kind}_wrap`;
   const searchId  = `db_${kind}_search`;
   const searchBox = withSearch ? `
-    <input id="${searchId}" type="text" placeholder="Search ${DB_MULTI_LABELS[kind].plural.toLowerCase()}..."
-      oninput="_dbMultiFilterSearch('${kind}', this.value)"
-      style="width:100%;padding:6px 10px;border:1px solid #cbd5e1;border-radius:4px;font-size:11px;box-sizing:border-box;margin-bottom:6px;"/>` : '';
+    <input id="${searchId}" type="text" class="db-fbar-menu-search"
+      placeholder="Search ${DB_MULTI_LABELS[kind].plural.toLowerCase()}..."
+      oninput="_dbMultiFilterSearch('${kind}', this.value)"/>` : '';
 
   return `
     <div style="position:relative;display:inline-block;" id="${wrapId}">
-      <button onclick="_dbMultiToggle('${kind}')" style="
-        background:#fff;border:1px solid #aaa;border-radius:2px;padding:4px 10px;
-        font-size:11px;cursor:pointer;min-width:140px;text-align:left;
-        display:flex;align-items:center;justify-content:space-between;gap:6px;">
-        <span id="${labelId}" style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${allLabel}</span>
-        <span style="font-size:9px;opacity:0.6;flex-shrink:0;">▼</span>
+      <button onclick="_dbMultiToggle('${kind}')" class="db-fbar-btn">
+        <span id="${labelId}" class="db-fbar-btn-label">${allLabel}</span>
+        <span class="db-fbar-btn-chev">&#x25BE;</span>
       </button>
-      <div id="${menuId}" style="
-        display:none;position:absolute;top:calc(100% + 2px);left:0;z-index:9999;
-        background:#fff;border:1px solid #aaa;border-radius:4px;
-        box-shadow:2px 4px 16px rgba(0,0,0,0.28);
-        min-width:${withSearch?'280px':'200px'};
-        max-height:calc(100vh - 120px);overflow-y:auto;padding:0;">
-        <div style="padding:8px 12px;border-bottom:1px solid #eee;position:sticky;top:0;background:#fff;z-index:1;">
+      <div id="${menuId}" class="db-fbar-menu" style="min-width:${withSearch?'280px':'200px'};">
+        <div class="db-fbar-menu-hdr">
           ${searchBox}
-          <div style="display:flex;gap:12px;">
-            <a href="#" onclick="_dbMultiSelectAll('${kind}',true);return false;"
-              style="font-size:11px;color:#1a3a6e;text-decoration:none;font-weight:600;">✓ All</a>
-            <a href="#" onclick="_dbMultiSelectAll('${kind}',false);return false;"
-              style="font-size:11px;color:#1a3a6e;text-decoration:none;font-weight:600;">✕ None</a>
-            <span style="margin-left:auto;font-size:10px;color:#64748b;">${values.length} ${DB_MULTI_LABELS[kind].plural.toLowerCase()}</span>
+          <div class="db-fbar-menu-actions">
+            <a class="db-fbar-menu-action" onclick="_dbMultiSelectAll('${kind}',true);return false;">&#10003; All</a>
+            <a class="db-fbar-menu-action" onclick="_dbMultiSelectAll('${kind}',false);return false;">&#10005; None</a>
+            <span class="db-fbar-menu-count">${values.length} ${DB_MULTI_LABELS[kind].plural.toLowerCase()}</span>
           </div>
         </div>
         <div>
           ${values.map(v => `
-            <label class="${rowClass}" data-val="${String(v).toLowerCase().replace(/"/g,'&quot;')}"
-              style="display:flex;align-items:center;gap:8px;padding:6px 14px;cursor:pointer;font-size:12px;white-space:nowrap;"
-              onmouseenter="this.style.background='#f0f4ff'" onmouseleave="this.style.background=''">
+            <label class="${rowClass} db-fbar-menu-row"
+              data-val="${String(v).toLowerCase().replace(/"/g,'&quot;')}">
               <input type="checkbox" class="${cbClass}" value="${String(v).replace(/"/g,'&quot;')}" checked
                 onchange="_dbMultiChanged('${kind}');renderDealBoard();dbRefreshMapPins()"/> ${v}
             </label>`).join('')}
@@ -9369,7 +10363,8 @@ function _dbMultiToggle(kind){
   const menuId = `db_${kind}_menu`;
   const wrapId = `db_${kind}_wrap`;
   // Close all other multi-select menus
-  ['stage','region','county','type','source'].forEach(k => {
+  // v102.24: region/county removed — they're in LOC-001 now, not checkbox menus
+  ['stage','type','source'].forEach(k => {
     if(k !== kind){
       const m = document.getElementById(`db_${k}_menu`);
       if(m) m.style.display = 'none';
@@ -9377,7 +10372,12 @@ function _dbMultiToggle(kind){
   });
   const menu = document.getElementById(menuId);
   if(!menu) return;
-  const isOpen = menu.style.display !== 'none';
+  // v102.25: use computed style to detect open state. The .db-fbar-menu CSS
+  // class sets display:none by default, but menu.style.display (inline) is
+  // empty on first click — so `!== 'none'` would incorrectly return true.
+  // Compute the effective display instead.
+  const computed = window.getComputedStyle(menu).display;
+  const isOpen = computed !== 'none';
   menu.style.display = isOpen ? 'none' : 'block';
   if(!isOpen){
     setTimeout(() => {
@@ -9416,7 +10416,16 @@ function _dbMultiChanged(kind){
 
 // Returns array of selected values OR null if "all selected" (meaning no filter applied).
 // The null return lets filter predicates short-circuit: `if(sel && !sel.includes(x)) reject`.
+//
+// v102.24: Location-family kinds (state, region, county, city) are now sourced
+// from _locFilters (the LOC-001 component state) instead of from checkbox DOM.
+// Empty selection = null (no filter). Non-empty = array of picks. The rest
+// (stage, type, source) still read from the legacy checkbox multi-selects.
 function _dbMultiGetSelected(kind){
+  if(kind === 'state' || kind === 'region' || kind === 'county' || kind === 'city'){
+    const arr = _locFilters[kind] || [];
+    return arr.length ? arr.slice() : null;
+  }
   const cbs = [...document.querySelectorAll(`.db_${kind}_cb`)];
   if(cbs.length === 0) return null;
   const checked = cbs.filter(c => c.checked).map(c => c.value);
@@ -9439,7 +10448,11 @@ function dbClearAllFilters(){
   if(search) search.value = '';
   const priority = document.getElementById('db_priority');
   if(priority) priority.checked = false;
-  ['stage','region','county','type','source'].forEach(kind => {
+  // v102.24: region and county no longer live in checkbox DOM — they're in
+  // the LOC-001 store. Clear them via _locClearAll(), then handle the
+  // remaining checkbox-backed filters.
+  _locClearAll();
+  ['stage','type','source'].forEach(kind => {
     document.querySelectorAll(`.db_${kind}_cb`).forEach(cb => { cb.checked = true; });
     _dbMultiChanged(kind);
     // Also clear any search box inside the menu
@@ -9464,6 +10477,491 @@ function showMapPage(){
     try { dbSetView('map'); } catch(e) { console.warn('Map switch failed:', e); }
   }, 0);
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// LOC-001 — Location Selector (Compact) for Deal Board header
+// ═══════════════════════════════════════════════════════════════════════
+// v102.24: Ported from the approved component gallery (components_1.html).
+// LOC-001 is the compact horizontal variant — State + Region + County + City
+// inline in a single row with dividers, multi-select with searchable tag-pill
+// dropdowns. Replaces the old db_region and db_county checkbox multi-selects
+// on the Deal Board header. The State and City filters are NEW — previously
+// the Deal Board only had Region and County. State is inferred from the
+// address's state code; City is parsed from the address's second-to-last
+// comma segment (the segment before the state).
+//
+// State:
+//   _locFilters.state[]   — selected US state codes (e.g., ['NJ', 'NY'])
+//   _locFilters.region[]  — selected region names (e.g., ['North NJ', 'Central NJ'])
+//   _locFilters.county[]  — selected county names (e.g., ['Bergen', 'Essex'])
+//   _locFilters.city[]    — selected city names (e.g., ['Newark', 'Jersey City'])
+//
+// Data sources (populated from allDeals at render time):
+//   state:  _stateFromAddress(d.Address) distinct, sorted
+//   region: hardcoded NJ macro-regions + whatever states are present
+//   county: distinct d['Simple County'] values
+//   city:   parsed from d.Address (segment before state code)
+//
+// Filter predicate integration:
+//   _dbMultiGetSelected('state'|'region'|'county'|'city') returns either:
+//     - null if no filter applied (empty selection = "all")
+//     - array of selected values otherwise
+//   These plug into the existing renderDealBoard() filter chain, which
+//   already handles 'region' and 'county'. State and city are new and get
+//   their own predicates added to renderDealBoard's filter().
+
+// LOC-001 selection state. Default NJ selected (matches component gallery spec).
+const _locFilters = { state: ['NJ'], region: [], county: [], city: [] };
+
+// Keyboard navigation cursor per field (index of currently-highlighted option).
+const _locKb = { state: -1, region: -1, county: -1, city: -1 };
+
+// Inject the LOC-001 scoped CSS once on first use. All class names are
+// prefixed "loc-" so they don't collide with the rest of the CRM's styling.
+// v102.25: Extended with "db-fbar-*" classes for the broader Deal Board
+// filter bar restyling — search input, multi-select buttons, priority
+// checkbox, clear filters, view toggle all share the LOC-001 aesthetic.
+function _locInjectCSS(){
+  if(document.getElementById('loc-001-css')) return;
+  const style = document.createElement('style');
+  style.id = 'loc-001-css';
+  style.textContent = `
+    /* ─── Deal Board filter bar wrapper (v102.25) ─── */
+    .db-fbar-wrap{
+      background:#fff;border-bottom:1px solid #e2e8f0;
+      padding:14px 20px;display:flex;align-items:center;gap:10px;
+      flex-wrap:wrap;font-family:'Inter',system-ui,sans-serif;
+      position:relative;z-index:9000;
+    }
+    .db-fbar-title{
+      font-size:16px;font-weight:700;color:#0f172a;
+      margin-right:4px;white-space:nowrap;
+      display:flex;align-items:center;gap:6px;
+    }
+    .db-fbar-search{
+      width:220px;font-size:12px;font-family:inherit;
+      padding:8px 12px;
+      border:1px solid #e2e8f0;border-radius:8px;
+      background:#f8fafc;color:#0f172a;outline:none;
+      transition:border-color .15s,background .15s;
+    }
+    .db-fbar-search:focus{border-color:#0f172a;background:#fff;}
+    .db-fbar-search::placeholder{color:#94a3b8;}
+    .db-fbar-btn{
+      background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;
+      padding:8px 12px;font-size:12px;font-family:inherit;
+      color:#0f172a;cursor:pointer;min-width:140px;text-align:left;
+      display:flex;align-items:center;justify-content:space-between;gap:8px;
+      font-weight:500;transition:border-color .15s;
+    }
+    .db-fbar-btn:hover{border-color:#cbd5e1;}
+    .db-fbar-btn-label{
+      overflow:hidden;text-overflow:ellipsis;white-space:nowrap;
+      color:#475569;font-weight:500;
+    }
+    .db-fbar-btn-chev{font-size:10px;color:#94a3b8;flex-shrink:0;}
+    .db-fbar-menu{
+      display:none;position:absolute;top:calc(100% + 3px);left:0;z-index:10000;
+      background:#fff;border:1px solid #e2e8f0;border-radius:8px;
+      box-shadow:0 4px 14px rgba(0,0,0,.10);
+      min-width:200px;max-height:calc(100vh - 120px);
+      overflow-y:auto;padding:0;font-family:'Inter',system-ui,sans-serif;
+    }
+    .db-fbar-menu-hdr{
+      padding:10px 12px;border-bottom:1px solid #f1f5f9;
+      position:sticky;top:0;background:#fff;z-index:1;
+    }
+    .db-fbar-menu-search{
+      width:100%;padding:7px 10px;border:1px solid #e2e8f0;
+      border-radius:6px;font-size:12px;box-sizing:border-box;
+      margin-bottom:8px;font-family:inherit;background:#f8fafc;
+      color:#0f172a;outline:none;
+    }
+    .db-fbar-menu-search:focus{border-color:#0f172a;background:#fff;}
+    .db-fbar-menu-actions{
+      display:flex;gap:14px;align-items:center;font-size:11px;
+    }
+    .db-fbar-menu-action{
+      color:#2563eb;text-decoration:none;font-weight:600;cursor:pointer;
+    }
+    .db-fbar-menu-action:hover{color:#1d4ed8;}
+    .db-fbar-menu-count{
+      margin-left:auto;font-size:10px;color:#94a3b8;font-weight:500;
+    }
+    .db-fbar-menu-row{
+      display:flex;align-items:center;gap:10px;padding:8px 14px;
+      cursor:pointer;font-size:12px;color:#0f172a;
+      white-space:nowrap;transition:background .1s;
+    }
+    .db-fbar-menu-row:hover{background:#f8fafc;}
+    .db-fbar-check{
+      display:flex;align-items:center;gap:6px;font-size:12px;
+      color:#475569;cursor:pointer;padding:8px 12px;
+      background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;
+      font-family:inherit;font-weight:500;
+    }
+    .db-fbar-check input{cursor:pointer;margin:0;}
+    .db-fbar-clear{
+      background:#fff;color:#b91c1c;border:1px solid #fecaca;
+      padding:8px 14px;border-radius:8px;font-size:12px;
+      font-weight:600;cursor:pointer;font-family:inherit;
+      white-space:nowrap;transition:background .15s;
+    }
+    .db-fbar-clear:hover{background:#fef2f2;border-color:#fca5a5;}
+    .db-fbar-count{
+      color:#64748b;font-size:12px;margin-left:auto;
+      font-family:inherit;font-weight:500;
+    }
+    .db-fbar-viewtoggle{
+      display:flex;gap:0;border:1px solid #e2e8f0;border-radius:8px;
+      overflow:hidden;background:#f8fafc;
+    }
+    .db-fbar-viewtoggle button{
+      padding:8px 14px;font-size:12px;font-weight:600;
+      cursor:pointer;background:transparent;color:#475569;border:none;
+      font-family:inherit;transition:background .15s;
+    }
+    .db-fbar-viewtoggle button.active{
+      background:#0f172a;color:#fff;
+    }
+    .db-fbar-viewtoggle button:not(.active):hover{background:#f1f5f9;}
+    .db-fbar-viewtoggle button + button{border-left:1px solid #e2e8f0;}
+    .db-fbar-viewtoggle button.active + button,
+    .db-fbar-viewtoggle button + button.active{border-left-color:#0f172a;}
+
+    /* ─── LOC-001 component (existing) ─── */
+    .loc-compact-bar{
+      display:flex;gap:6px;align-items:center;flex-wrap:wrap;
+      background:#f8fafc;padding:8px 10px;border-radius:8px;
+      border:1px solid #e2e8f0;font-family:'Inter',system-ui,sans-serif;
+    }
+    .loc-field{position:relative;display:flex;align-items:center;gap:6px;}
+    .loc-label{
+      font-size:11px;font-weight:500;text-transform:uppercase;
+      letter-spacing:.07em;color:#475569;white-space:nowrap;
+    }
+    .loc-ti{
+      display:flex;flex-wrap:nowrap;align-items:center;gap:4px;
+      border:1.5px solid #cbd5e1;border-radius:5px;background:#fff;
+      cursor:text;transition:border-color .15s;
+      min-height:30px;padding:3px 24px 3px 6px;max-width:200px;
+      overflow:hidden;position:relative;
+    }
+    .loc-ti:focus-within{border-color:#0f172a;}
+    .loc-tag{
+      display:inline-flex;align-items:center;
+      background:#0f172a;color:#fff;border-radius:3px;
+      font-weight:500;white-space:nowrap;overflow:hidden;font-size:11px;
+    }
+    .loc-tag-text{padding:2px 5px;}
+    .loc-tag-x{
+      display:flex;align-items:center;padding:0 5px;height:100%;
+      background:#e57373;cursor:pointer;color:#fff;
+    }
+    .loc-tag-x:hover{background:#c62828;}
+    .loc-si{
+      border:none;outline:none;background:transparent;
+      color:#0f172a;flex:1;min-width:40px;
+      font-size:12px;padding:1px 0;font-family:inherit;
+    }
+    .loc-si::placeholder{color:#94a3b8;}
+    .loc-chevron{
+      position:absolute;right:7px;top:50%;transform:translateY(-50%);
+      color:#94a3b8;font-size:10px;pointer-events:none;
+    }
+    .loc-dd{
+      position:absolute;top:calc(100% + 3px);left:0;min-width:180px;
+      background:#fff;border:1px solid #cbd5e1;border-radius:5px;
+      z-index:10000;max-height:260px;overflow-y:auto;
+      box-shadow:0 4px 14px rgba(0,0,0,.12);
+    }
+    .loc-opt{
+      padding:8px 11px;cursor:pointer;font-size:12px;color:#0f172a;
+      display:flex;align-items:center;justify-content:space-between;gap:8px;
+      font-family:inherit;
+    }
+    .loc-opt:hover,.loc-opt.kb{background:#f8fafc;}
+    .loc-ck{font-size:12px;color:#2563eb;opacity:0;flex-shrink:0;}
+    .loc-opt.sel .loc-ck{opacity:1;}
+    .loc-no-res{padding:8px 11px;font-size:11px;color:#94a3b8;}
+    .loc-divider{width:1px;height:22px;background:#cbd5e1;margin:0 2px;}
+  `;
+  document.head.appendChild(style);
+}
+
+// Helper placeholders used when no tags are selected.
+const _LOC_PLACEHOLDER = {
+  state:  'Search...',
+  region: 'Search...',
+  county: 'Search...',
+  city:   'Search...',
+};
+
+// Build the four data source arrays from whatever is currently in allDeals.
+// Called at render time, so the option lists always reflect the live data.
+//
+// v102.25: City source changed from "parse from addresses" to the curated
+// _NJ_MUNICIPALITIES constant (the same list used by the Buyer Criteria
+// "Preferred Cities / Towns" autocomplete). This gives ~300 NJ towns even
+// if you don't currently have a deal in that town. Cities parsed from
+// actual deal addresses are merged in afterward so out-of-state towns
+// (Philadelphia, Brooklyn, etc.) still appear when you have deals there.
+function _locBuildDataSources(){
+  const states = new Set();
+  const counties = new Set();
+  const cities = new Set();
+  // Seed the city set with the full curated NJ municipality list.
+  if(typeof _NJ_MUNICIPALITIES !== 'undefined' && Array.isArray(_NJ_MUNICIPALITIES)){
+    _NJ_MUNICIPALITIES.forEach(c => cities.add(c));
+  }
+  for(const d of (allDeals||[])){
+    const st = _stateFromAddress(d['Address']||'');
+    if(st) states.add(st);
+    const c = (d['Simple County']||'').replace(/\s*county\s*/i,'').trim();
+    if(c) counties.add(c);
+    const city = _locCityFromAddress(d['Address']||'');
+    if(city) cities.add(city);
+  }
+  // Region list is a hardcoded NJ-centric macro set + any present states
+  // as single-state regions. Same list as the old db_region filter, but we
+  // trim out states that aren't present in the data.
+  const baseRegions = ['All NJ','North NJ','Central NJ','South NJ','Tri-State'];
+  const stateRegions = [...states].filter(s => s !== 'NJ').sort();
+  return {
+    state:  [...states].sort(),
+    region: baseRegions.concat(stateRegions),
+    county: [...counties].sort(),
+    city:   [...cities].sort(),
+  };
+}
+
+// Parse the city name from a Google-geocoded address.
+// Expected format: "123 Main St, City Name, NJ 01234, USA" or similar.
+// Strategy: split by comma, trim, find the segment RIGHT before the one
+// that looks like "<STATE> <ZIP>" (or just the 2-letter state code).
+// Returns '' if the parse fails so the caller can skip it.
+function _locCityFromAddress(addr){
+  if(!addr) return '';
+  const parts = addr.split(',').map(s => s.trim()).filter(Boolean);
+  if(parts.length < 2) return '';
+  // Find the state-ish segment (matches "NJ", "New Jersey", "NJ 07067", etc.)
+  const stateRe = /^(?:[A-Z]{2}|Alabama|Alaska|Arizona|Arkansas|California|Colorado|Connecticut|Delaware|Florida|Georgia|Hawaii|Idaho|Illinois|Indiana|Iowa|Kansas|Kentucky|Louisiana|Maine|Maryland|Massachusetts|Michigan|Minnesota|Mississippi|Missouri|Montana|Nebraska|Nevada|New\s*Hampshire|New\s*Jersey|New\s*Mexico|New\s*York|North\s*Carolina|North\s*Dakota|Ohio|Oklahoma|Oregon|Pennsylvania|Rhode\s*Island|South\s*Carolina|South\s*Dakota|Tennessee|Texas|Utah|Vermont|Virginia|Washington|West\s*Virginia|Wisconsin|Wyoming)(?:\s+\d{5}(?:-\d{4})?)?$/i;
+  let stateIdx = -1;
+  for(let i = parts.length - 1; i >= 0; i--){
+    if(stateRe.test(parts[i])){ stateIdx = i; break; }
+  }
+  // City is the segment immediately before the state segment.
+  if(stateIdx > 0){
+    const city = parts[stateIdx - 1];
+    // Guard against obvious junk (test lead addresses, etc.)
+    if(city.length < 2 || /^(test|testing)/i.test(city)) return '';
+    return city;
+  }
+  return '';
+}
+
+// Render all four LOC-001 tag inputs inside their current state. Called after
+// any selection change to keep the DOM in sync with _locFilters.
+function _locRenderTags(key){
+  const ti  = document.getElementById('loc-ti-'+key);
+  const inp = document.getElementById('loc-si-'+key);
+  if(!ti || !inp) return;
+  // Remove existing tag DOM nodes (keep the <input>)
+  ti.querySelectorAll('.loc-tag').forEach(t => t.remove());
+  _locFilters[key].forEach(v => {
+    const tag = document.createElement('span');
+    tag.className = 'loc-tag';
+    const safe = String(v).replace(/"/g,'&quot;').replace(/</g,'&lt;');
+    tag.innerHTML = '<span class="loc-tag-text">'+safe+'</span>'
+      + '<span class="loc-tag-x" data-key="'+key+'" data-val="'+safe+'">&times;</span>';
+    ti.insertBefore(tag, inp);
+  });
+  inp.placeholder = _locFilters[key].length ? '' : _LOC_PLACEHOLDER[key];
+}
+
+// Build the dropdown menu <div> for a given field, filtered by the current
+// typeahead query. Called when the input is focused or edited.
+function _locBuildDD(key, query){
+  const dd = document.getElementById('loc-dd-'+key);
+  if(!dd) return;
+  const data = _locBuildDataSources()[key] || [];
+  const q = (query||'').toLowerCase();
+  const items = data.filter(v => String(v).toLowerCase().includes(q));
+  _locKb[key] = -1;
+  if(!items.length){
+    dd.innerHTML = '<div class="loc-no-res">No results</div>';
+    return;
+  }
+  dd.innerHTML = items.map(v => {
+    const isSel = _locFilters[key].includes(v);
+    const safe = String(v).replace(/"/g,'&quot;').replace(/</g,'&lt;');
+    return '<div class="loc-opt '+(isSel?'sel':'')+'" data-key="'+key+'" data-val="'+safe+'">'
+      + '<span>'+safe+'</span>'
+      + '<span class="loc-ck">&#x2713;</span>'
+      + '</div>';
+  }).join('');
+}
+
+// Close every LOC-001 dropdown except one (pass null to close all).
+function _locCloseAllDDs(exceptKey){
+  ['state','region','county','city'].forEach(k => {
+    if(k === exceptKey) return;
+    const dd = document.getElementById('loc-dd-'+k);
+    if(dd) dd.style.display = 'none';
+  });
+}
+
+// Toggle a value in a field's selection. Triggers a Deal Board re-render
+// plus map pin refresh so the filter takes effect immediately.
+function _locPick(key, val){
+  const cur = _locFilters[key];
+  const i = cur.indexOf(val);
+  if(i > -1) cur.splice(i, 1);
+  else cur.push(val);
+  _locRenderTags(key);
+  // Re-render the Deal Board list + map with the new selection
+  if(typeof renderDealBoard === 'function') renderDealBoard();
+  if(typeof dbRefreshMapPins === 'function') dbRefreshMapPins();
+}
+
+// Wire up input listeners for one field: focus opens DD, typing filters,
+// arrow keys navigate, Enter picks highlighted, Escape closes, Backspace
+// on empty input removes the last tag.
+function _locWireField(key){
+  const inp = document.getElementById('loc-si-'+key);
+  const dd  = document.getElementById('loc-dd-'+key);
+  const ti  = document.getElementById('loc-ti-'+key);
+  if(!inp || !dd || !ti) return;
+
+  // Clicking anywhere inside the tag-input focuses the text input
+  ti.addEventListener('click', e => {
+    if(!e.target.closest('.loc-tag-x')) inp.focus();
+  });
+
+  inp.addEventListener('focus', () => {
+    _locCloseAllDDs(key);
+    _locBuildDD(key, inp.value);
+    dd.style.display = 'block';
+  });
+
+  inp.addEventListener('input', () => {
+    _locBuildDD(key, inp.value);
+    dd.style.display = 'block';
+  });
+
+  inp.addEventListener('keydown', e => {
+    const opts = [...dd.querySelectorAll('.loc-opt')];
+    if(e.key === 'ArrowDown'){
+      _locKb[key] = Math.min(_locKb[key] + 1, opts.length - 1);
+      opts.forEach(o => o.classList.remove('kb'));
+      if(opts[_locKb[key]]) opts[_locKb[key]].classList.add('kb');
+      e.preventDefault();
+    } else if(e.key === 'ArrowUp'){
+      _locKb[key] = Math.max(_locKb[key] - 1, 0);
+      opts.forEach(o => o.classList.remove('kb'));
+      if(opts[_locKb[key]]) opts[_locKb[key]].classList.add('kb');
+      e.preventDefault();
+    } else if(e.key === 'Enter'){
+      const target = _locKb[key] >= 0 ? opts[_locKb[key]] : opts[0];
+      if(target){
+        _locPick(key, target.dataset.val);
+        inp.value = '';
+        _locBuildDD(key, '');
+      }
+      e.preventDefault();
+    } else if(e.key === 'Escape'){
+      dd.style.display = 'none';
+    } else if(e.key === 'Backspace' && inp.value === '' && _locFilters[key].length){
+      _locFilters[key].pop();
+      _locRenderTags(key);
+      if(typeof renderDealBoard === 'function') renderDealBoard();
+      if(typeof dbRefreshMapPins === 'function') dbRefreshMapPins();
+    }
+  });
+
+  // Dropdown option click — use mousedown so it fires before the input's blur
+  dd.addEventListener('mousedown', e => {
+    const opt = e.target.closest('.loc-opt');
+    if(opt && opt.dataset.key === key){
+      _locPick(key, opt.dataset.val);
+      inp.value = '';
+      _locBuildDD(key, '');
+      inp.focus();
+      e.preventDefault();
+    }
+  });
+}
+
+// Clear every LOC-001 selection (called by the Deal Board's Clear Filters button).
+function _locClearAll(){
+  _locFilters.state  = [];
+  _locFilters.region = [];
+  _locFilters.county = [];
+  _locFilters.city   = [];
+  ['state','region','county','city'].forEach(k => {
+    _locRenderTags(k);
+    const dd = document.getElementById('loc-dd-'+k);
+    if(dd) dd.style.display = 'none';
+    const inp = document.getElementById('loc-si-'+k);
+    if(inp) inp.value = '';
+  });
+}
+
+// Build the LOC-001 compact-bar HTML. Called from showDealBoard's innerHTML.
+function _locCompactBarHTML(){
+  _locInjectCSS();
+  const fieldHTML = (key, label) => `
+    <div class="loc-field" id="loc-field-${key}">
+      <span class="loc-label">${label}</span>
+      <div class="loc-ti" id="loc-ti-${key}">
+        <input class="loc-si" id="loc-si-${key}" placeholder="${_LOC_PLACEHOLDER[key]}" autocomplete="off"/>
+      </div>
+      <span class="loc-chevron">&#x25BE;</span>
+      <div class="loc-dd" id="loc-dd-${key}" style="display:none;"></div>
+    </div>`;
+  return `
+    <div class="loc-compact-bar" id="loc-compact-bar">
+      ${fieldHTML('state',  'State')}
+      <div class="loc-divider"></div>
+      ${fieldHTML('region', 'Region')}
+      <div class="loc-divider"></div>
+      ${fieldHTML('county', 'County')}
+      <div class="loc-divider"></div>
+      ${fieldHTML('city',   'City')}
+    </div>`;
+}
+
+// Post-render setup. Must be called after the LOC-001 HTML lands in the DOM
+// so the field elements exist. Wires all four fields, renders current tags,
+// and installs the global mousedown-outside handler that closes dropdowns.
+function _locPostRender(){
+  ['state','region','county','city'].forEach(k => {
+    _locWireField(k);
+    _locRenderTags(k);
+  });
+  // Close any open dropdown when the user clicks outside the component
+  if(!window._locOutsideHandlerInstalled){
+    document.addEventListener('mousedown', e => {
+      const bar = document.getElementById('loc-compact-bar');
+      if(!bar) return; // Deal Board not currently visible
+      if(!bar.contains(e.target)){
+        _locCloseAllDDs(null);
+      }
+    });
+    // Tag-X removal is delegated so dynamically-added tags work
+    document.addEventListener('click', e => {
+      const x = e.target.closest('.loc-tag-x');
+      if(x){
+        _locPick(x.dataset.key, x.dataset.val);
+      }
+    });
+    window._locOutsideHandlerInstalled = true;
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// End LOC-001
+// ═══════════════════════════════════════════════════════════════════════
 
 function showDealBoard(){
   const STAGE_ORDER = ['New Lead','Need INFO','Needs Offer','Pitch Out','Limbo','Negotiating','Needs a 1031','Won','Closed','Overpriced','Nurture'];
@@ -9493,25 +10991,24 @@ function showDealBoard(){
   loadOwnerNames();
 
   document.getElementById('mainArea').innerHTML = `
-    <div style="padding:0;height:100%;display:flex;flex-direction:column;">
+    <div style="padding:0;height:100%;display:flex;flex-direction:column;background:#f8fafc;">
 
-      <!-- HEADER BAR -->
-      <div style="background:linear-gradient(180deg,#1a3a6e,#0e2244);padding:10px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;position:relative;z-index:9000;">
-        <div style="color:#fff;font-size:15px;font-weight:bold;margin-right:8px;">📋 Deal Board</div>
+      <!-- HEADER BAR — v102.25: light aesthetic matching LOC-001 -->
+      <div class="db-fbar-wrap">
+        <div class="db-fbar-title">📋 Deal Board</div>
 
-        <input id="db_search" class="form-input" placeholder="Search address, county, notes..." 
-          style="width:200px;font-size:11px;" oninput="renderDealBoard();dbRefreshMapPins()"/>
+        <input id="db_search" class="db-fbar-search"
+          placeholder="Search address, county, notes..."
+          oninput="renderDealBoard();dbRefreshMapPins()"/>
 
         <!-- STAGE MULTI-SELECT -->
         ${_dbMultiBtn('stage', 'All Stages', stages, false)}
 
-        <!-- REGION MULTI-SELECT -->
-        ${_dbMultiBtn('region', 'All Regions', [
-          'All NJ','North NJ','Central NJ','South NJ','Tri-State','PA','NY','CT','FL','TX','CA'
-        ], false)}
-
-        <!-- COUNTY MULTI-SELECT -->
-        ${_dbMultiBtn('county', 'All Counties', counties, true)}
+        <!-- v102.24: LOC-001 Location Selector (State + Region + County + City)
+             replaces the old db_region and db_county button-style multi-selects.
+             Filter selections live in _locFilters and are read via _dbMultiGetSelected
+             which now routes location keys to the LOC store. -->
+        ${_locCompactBarHTML()}
 
         <!-- ASSET TYPE MULTI-SELECT -->
         ${_dbMultiBtn('type', 'All Asset Types', types, false)}
@@ -9519,32 +11016,21 @@ function showDealBoard(){
         <!-- IMPORT SOURCE MULTI-SELECT -->
         ${_dbMultiBtn('source', 'All Sources', sources, false)}
 
-        <label style="color:#ccc;font-size:11px;display:flex;align-items:center;gap:4px;">
-          <input type="checkbox" id="db_priority" onchange="renderDealBoard();dbRefreshMapPins()"/> ⭐ Priority Only
+        <label class="db-fbar-check">
+          <input type="checkbox" id="db_priority" onchange="renderDealBoard();dbRefreshMapPins()"/>
+          &#9733; Priority Only
         </label>
 
-        <button onclick="dbClearAllFilters()" style="
-          background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;
-          padding:5px 12px;border-radius:4px;font-size:11px;font-weight:700;
-          cursor:pointer;white-space:nowrap;"
-          onmouseenter="this.style.background='#fee2e2'" onmouseleave="this.style.background='#fef2f2'">
-          ✕ Clear Filters
+        <button onclick="dbClearAllFilters()" class="db-fbar-clear">
+          &#10005; Clear Filters
         </button>
 
-        <span id="db_count" style="color:#aad4ff;font-size:11px;margin-left:auto;"></span>
+        <span id="db_count" class="db-fbar-count"></span>
 
         <!-- VIEW TOGGLE -->
-        <div style="display:flex;gap:0;border:1px solid #4a6a9e;border-radius:3px;overflow:hidden;">
-          <button id="db_view_list" onclick="dbSetView('list')" style="
-            padding:5px 12px;font-size:11px;font-weight:bold;cursor:pointer;
-            background:#fff;color:#1a3a6e;border:none;border-right:1px solid #4a6a9e;">
-            📋 List
-          </button>
-          <button id="db_view_map" onclick="dbSetView('map')" style="
-            padding:5px 12px;font-size:11px;font-weight:bold;cursor:pointer;
-            background:rgba(255,255,255,0.15);color:#fff;border:none;">
-            🗺 Map
-          </button>
+        <div class="db-fbar-viewtoggle">
+          <button id="db_view_list" class="active" onclick="dbSetView('list')">&#128203; List</button>
+          <button id="db_view_map" onclick="dbSetView('map')">&#128506; Map</button>
         </div>
       </div>
 
@@ -9627,6 +11113,8 @@ function showDealBoard(){
 
   renderDealBoard();
   window._dbCurrentView = 'list';
+  // v102.24: Wire up LOC-001 fields now that the DOM elements exist.
+  _locPostRender();
 }
 
 let _dbCurrentView = 'list';
@@ -9915,14 +11403,15 @@ function dbSetView(view){
   if(view === 'list'){
     if(tableView) tableView.style.display = 'block';
     if(mapView)   mapView.style.display   = 'none';
-    if(btnList){ btnList.style.background='#fff'; btnList.style.color='#1a3a6e'; }
-    if(btnMap){  btnMap.style.background='rgba(255,255,255,0.15)'; btnMap.style.color='#fff'; }
+    // v102.25: toggle .active class for the new light view-toggle styling
+    if(btnList) btnList.classList.add('active');
+    if(btnMap)  btnMap.classList.remove('active');
     renderDealBoard();
   } else {
     if(tableView) tableView.style.display = 'none';
     if(mapView)   mapView.style.display   = 'flex';
-    if(btnList){ btnList.style.background='rgba(255,255,255,0.15)'; btnList.style.color='#fff'; }
-    if(btnMap){  btnMap.style.background='#fff'; btnMap.style.color='#1a3a6e'; }
+    if(btnList) btnList.classList.remove('active');
+    if(btnMap)  btnMap.classList.add('active');
     initDealMap();
   }
 }
@@ -9991,15 +11480,18 @@ async function initDealMap(){
   const search = (document.getElementById('db_search')?.value||'').toLowerCase();
   const mapPriority = document.getElementById('db_priority')?.checked||false;
   const selStages   = _dbMultiGetSelected('stage');
+  const selStates   = _dbMultiGetSelected('state');    // v102.24: LOC-001
   const selRegions  = _dbMultiGetSelected('region');
   const selCounties = _dbMultiGetSelected('county');
+  const selCities   = _dbMultiGetSelected('city');     // v102.24: LOC-001
   const selTypes    = _dbMultiGetSelected('type');
 
   let deals = allDeals.filter(d => {
     if(d['Is Archived']) return false;
     const stage = getStage(d);
     const dtype = _dealAssetType(d);
-    const county = d['Simple County']||'';
+    // v102.24: strip "County" suffix so comparisons align with LOC-001 option values
+    const county = (d['Simple County']||'').replace(/\s*county\s*/i,'').trim();
     const addr = (d['Address']||'').toLowerCase();
     const notes = (d['Next Steps']||'').toLowerCase();
     const matchSearch = !search || addr.includes(search) || county.toLowerCase().includes(search) || notes.includes(search) || dtype.toLowerCase().includes(search);
@@ -10007,8 +11499,11 @@ async function initDealMap(){
     const matchType   = !selTypes    || selTypes.includes(dtype);
     const matchCounty = !selCounties || selCounties.includes(county);
     const matchRegion = !selRegions  || selRegions.some(r => _dealMatchesRegion(d, r));
+    // v102.24: State + City predicates to match renderDealBoard
+    const matchState  = !selStates   || selStates.includes(_stateFromAddress(d['Address']||''));
+    const matchCity   = !selCities   || selCities.includes(_locCityFromAddress(d['Address']||''));
     const matchPri    = !mapPriority || d['Top Priority'];
-    return matchSearch && matchStage && matchType && matchRegion && matchCounty && matchPri;
+    return matchSearch && matchStage && matchState && matchType && matchRegion && matchCounty && matchCity && matchPri;
   });
 
   // ── Helper: place a single pin on the map ────────────────────
@@ -10339,8 +11834,10 @@ function renderDealBoard(){
 
   // Multi-select reads: null means "no filter" (all checked or no boxes rendered)
   const selStages   = _dbMultiGetSelected('stage');
+  const selStates   = _dbMultiGetSelected('state');    // v102.24: LOC-001
   const selRegions  = _dbMultiGetSelected('region');
   const selCounties = _dbMultiGetSelected('county');
+  const selCities   = _dbMultiGetSelected('city');     // v102.24: LOC-001
   const selTypes    = _dbMultiGetSelected('type');
   const selSources  = _dbMultiGetSelected('source');
 
@@ -10361,7 +11858,7 @@ function renderDealBoard(){
   // Filter
   let deals = allDeals.filter(d=>{
     const s = getStage(d);
-    const c = d['Simple County']||'';
+    const c = (d['Simple County']||'').replace(/\s*county\s*/i,'').trim();
     const t = _dealAssetType(d);
     const addr = (d['Address']||'').toLowerCase();
     const countyLow = c.toLowerCase();
@@ -10373,8 +11870,12 @@ function renderDealBoard(){
     const matchSource  = !selSources  || selSources.includes(d['Import Source']||'(none)');
     // Region is OR-matched: deal matches if ANY selected region matches it
     const matchRegion  = !selRegions  || selRegions.some(r => _dealMatchesRegion(d, r));
+    // v102.24: State is derived from the address; City is parsed from the
+    // second-to-last address segment. Both are OR-matched like region.
+    const matchState   = !selStates   || selStates.includes(_stateFromAddress(d['Address']||''));
+    const matchCity    = !selCities   || selCities.includes(_locCityFromAddress(d['Address']||''));
     const matchPrio    = !priority || d['Top Priority'];
-    return matchSearch && matchStage && matchCounty && matchType && matchSource && matchRegion && matchPrio;
+    return matchSearch && matchStage && matchState && matchCounty && matchCity && matchType && matchSource && matchRegion && matchPrio;
   });
 
   // Sort
@@ -11182,6 +12683,138 @@ function openContactModal(recordId, returnTo){
 //   'contacts' (default) — goes back to the Contacts list page
 //   'batch'              — resumes batch review on the current buyer criteria record
 //   function             — calls the provided function on Back click
+// ═══════════════════════════════════════════════════════════════════════
+// PREFILL CONTEXT for Lead Intake (v102.27)
+// ═══════════════════════════════════════════════════════════════════════
+// When set, the Seller / Buyer intake forms pre-populate their contact
+// fields from this object and skip contact creation on submit — using
+// the existing contactId directly. Cleared after use.
+//
+// Shape:
+//   { mode: 'seller'|'buyer',
+//     contactId:    <uuid>,
+//     contactName:  <string>,
+//     contactPhone: <string>,
+//     contactEmail: <string>,
+//     contactCompany: <string>,
+//     contactNotes: <string>,
+//     returnTo: 'contact-detail'   (optional — where to go after submit) }
+let _liPrefillContext = null;
+
+// Entry point from the contact detail page's Properties tab.
+// Captures the current contact's info into _liPrefillContext, then
+// navigates to the seller intake form which will pick it up.
+function _contactAddProperty(contactId){
+  const existing = allContacts.find(r => r.id === contactId);
+  if(!existing){
+    alert('Contact not found. Try refreshing the Contacts page.');
+    return;
+  }
+  const f = existing.fields || {};
+  _liPrefillContext = {
+    mode: 'seller',
+    contactId: contactId,
+    contactName:   f['Name']                 || '',
+    contactPhone:  f['Phone Number']         || '',
+    contactEmail:  f['Email']                || '',
+    contactCompany: f['Company']             || '',
+    contactNotes:  f['Contact Notes']        || '',
+    returnTo: 'contact-detail'
+  };
+  // Jump straight into the seller form — skip the lead-intake landing page
+  // since the user has already chosen what to do ("add property").
+  _li = { mode: 'seller', assets: [], assetTypes: [], assetKeys: [], counties: [] };
+  _liRenderSellerForm();
+}
+
+// Entry point from the contact detail page's Buyer Criteria tab.
+// Same pattern as _contactAddProperty but routes to the buyer form.
+function _contactAddBuyerCriteria(contactId){
+  const existing = allContacts.find(r => r.id === contactId);
+  if(!existing){
+    alert('Contact not found. Try refreshing the Contacts page.');
+    return;
+  }
+  const f = existing.fields || {};
+  _liPrefillContext = {
+    mode: 'buyer',
+    contactId: contactId,
+    contactName:   f['Name']                 || '',
+    contactPhone:  f['Phone Number']         || '',
+    contactEmail:  f['Email']                || '',
+    contactCompany: f['Company']             || '',
+    contactNotes:  f['Contact Notes']        || '',
+    returnTo: 'contact-detail'
+  };
+  _li = { mode: 'buyer', assets: [], assetTypes: [], assetKeys: [], counties: [] };
+  _liRenderBuyerForm();
+}
+
+// After submission from a prefill flow, navigate back to the contact
+// detail page and clear the prefill context.
+function _liPrefillReturnToContact(){
+  const ctx = _liPrefillContext;
+  if(!ctx || !ctx.contactId){ _liPrefillContext = null; return false; }
+  const contactId = ctx.contactId;
+  _liPrefillContext = null;
+  // showContactDetailPage reads from allContacts, which was just refreshed
+  // by syncData() in the submit handler — so the new property / buyer
+  // criteria count will be up to date when we return.
+  showContactDetailPage(contactId, 'contacts');
+  return true;
+}
+
+// Apply prefilled values to the currently-rendered intake form inputs.
+// Called from _liRenderSellerForm / _liRenderBuyerForm AFTER the form
+// HTML lands in the DOM. Also shows the yellow warning banner.
+function _liApplyPrefill(formPrefix){
+  const ctx = _liPrefillContext;
+  if(!ctx) return;
+  const set = (id, val) => {
+    const el = document.getElementById(id);
+    if(el) el.value = val || '';
+  };
+  set(`li_${formPrefix}_name`,    ctx.contactName);
+  set(`li_${formPrefix}_phone`,   ctx.contactPhone);
+  set(`li_${formPrefix}_email`,   ctx.contactEmail);
+  set(`li_${formPrefix}_company`, ctx.contactCompany);
+  set(`li_${formPrefix}_cnotes`,  ctx.contactNotes);
+  // Update submit button label so it's clear this is an "add to existing
+  // contact" action, not a new-lead action.
+  const submitBtn = document.getElementById(`li_${formPrefix}_submit`);
+  if(submitBtn){
+    const name = (ctx.contactName || 'contact').trim();
+    submitBtn.textContent = formPrefix === 's'
+      ? `+ Add Property for ${name}`
+      : `+ Add Buyer Criteria for ${name}`;
+  }
+}
+
+// HTML fragment for the prefill banner shown at the top of an intake form
+// when _liPrefillContext is active. Returns empty string in normal mode.
+function _liPrefillBannerHTML(){
+  const ctx = _liPrefillContext;
+  if(!ctx) return '';
+  const kind = ctx.mode === 'seller' ? 'Property' : 'Buyer Criteria';
+  const name = ctx.contactName || 'this contact';
+  const phone = ctx.contactPhone ? ` · ${ctx.contactPhone}` : '';
+  return `
+    <div style="background:#fef3c7;border:1px solid #fde68a;border-radius:10px;padding:14px 18px;margin-bottom:20px;font-family:'Inter',system-ui,sans-serif;">
+      <div style="display:flex;align-items:flex-start;gap:10px;">
+        <div style="font-size:18px;flex-shrink:0;">📎</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13px;font-weight:700;color:#78350f;margin-bottom:3px;">
+            Adding ${kind} for existing contact: ${name}${phone}
+          </div>
+          <div style="font-size:12px;color:#92400e;line-height:1.5;">
+            This ${kind.toLowerCase()} will be linked to the existing contact.
+            Contact-field edits here won't update the contact record — to edit contact details, use the contact's detail page directly.
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
 function showContactDetailPage(recordId, returnTo){
   const existing = allContacts.find(r=>r.id===recordId);
   if(!existing){
@@ -11206,98 +12839,118 @@ function showContactDetailPage(recordId, returnTo){
   }
 
   const initials = (f.Name||'?').split(' ').map(s=>s[0]).filter(Boolean).slice(0,2).join('').toUpperCase() || '?';
-  const typeBadges = (f.Type||[]).map(t=>`<span style="font-size:11px;padding:3px 10px;border-radius:10px;margin-right:4px;font-weight:600;${TYPE_COLORS[t]||TYPE_COLORS.Other}">${t}</span>`).join('') || '<span style="font-size:11px;color:#94a3b8;">No type set</span>';
+  // v102.20: FUB-style subtle type badges for the header
+  const primaryType = (f.Type||[])[0] || '';
+  const typeBadges = (f.Type||[]).map(t=>`<span style="font-size:11px;padding:4px 12px;border-radius:12px;margin-right:4px;font-weight:600;${TYPE_COLORS[t]||TYPE_COLORS.Other}">${t}</span>`).join('') || '';
 
   const mainArea = document.getElementById('mainArea');
   if(!mainArea) return;
+  // v102.20: FUB-style redesign. Clean white header, lightened left rail,
+  // flatter right panel. All IDs and onclick handlers preserved — this is
+  // pure visual restyling, no functional changes.
   mainArea.innerHTML = `
-    <div style="display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;font-family:'Inter',system-ui,sans-serif;background:#f1f5f9;overflow:hidden;">
-      <!-- STICKY HEADER -->
-      <div style="background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 100%);color:#fff;padding:14px 22px;display:flex;align-items:center;gap:14px;box-shadow:0 2px 8px rgba(0,0,0,0.15);flex-shrink:0;">
-        <button onclick="${backHandler}" style="background:#fff;color:#1a3a6e;border:none;padding:7px 14px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;">${backLabel}</button>
-        <div style="width:48px;height:48px;border-radius:50%;background:linear-gradient(135deg,#fbbf24,#f59e0b);display:flex;align-items:center;justify-content:center;font-size:19px;font-weight:700;color:#0f172a;flex-shrink:0;margin-left:6px;">${initials}</div>
+    <div style="display:flex;flex-direction:column;flex:1;min-height:0;min-width:0;font-family:'Inter',system-ui,sans-serif;background:#f8fafc;overflow:hidden;">
+
+      <!-- ─── HEADER: clean white bar with avatar + name + actions ───────── -->
+      <div style="background:#fff;border-bottom:1px solid #e2e8f0;padding:18px 28px;display:flex;align-items:center;gap:16px;flex-shrink:0;">
+        <button onclick="${backHandler}" style="background:#f1f5f9;color:#334155;border:1px solid #e2e8f0;padding:8px 14px;font-size:12px;font-weight:600;border-radius:8px;cursor:pointer;">${backLabel}</button>
+        <div style="width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#d97706);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;color:#fff;flex-shrink:0;margin-left:8px;">${initials}</div>
         <div style="flex:1;min-width:0;">
-          <div id="cdp_headerName" style="font-size:19px;font-weight:700;line-height:1.2;">${f.Name||'Unnamed Contact'}</div>
-          <div id="cdp_headerSub" style="font-size:12px;color:#93c5fd;margin-top:2px;">${f.Company||'<em style="color:#64748b;">No company</em>'}${f['Phone Number']?` · 📞 ${f['Phone Number']}`:''}${f.Email?` · ✉️ ${f.Email}`:''}</div>
+          <div id="cdp_headerName" style="font-size:22px;font-weight:800;color:#0f172a;line-height:1.2;">${f.Name||'Unnamed Contact'}</div>
+          <div id="cdp_headerSub" style="font-size:13px;color:#64748b;margin-top:4px;">
+            ${f.Company ? `<span>${f.Company}</span>` : '<em style="color:#94a3b8;">No company</em>'}
+            ${f['Phone Number'] ? ` · 📞 <span style="color:#0369a1;">${f['Phone Number']}</span>` : ''}
+            ${f.Email ? ` · ✉ <span style="color:#0369a1;">${f.Email}</span>` : ''}
+          </div>
         </div>
         <div id="cdp_headerBadges" style="display:flex;gap:6px;align-items:center;">${typeBadges}</div>
         <button id="cdp_relBtn" onclick="toggleContactRelationshipFromDetail('${recordId}')" title="${_isMyRelationship(recordId)?'In your relationships — click to remove':'Add to your personal relationships list'}" style="${_cdpRelBtnStyle(_isMyRelationship(recordId))}">${_cdpRelBtnLabel(_isMyRelationship(recordId))}</button>
-        <div id="cmSaveMsg" style="font-size:11px;color:#90ff90;min-width:80px;text-align:right;"></div>
-        <button onclick="saveContactFromModal('${recordId}')" style="background:linear-gradient(180deg,#22c55e,#16a34a);color:#fff;border:none;padding:8px 22px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;box-shadow:0 1px 3px rgba(0,0,0,0.2);">✓ Save Changes</button>
+        <div id="cmSaveMsg" style="font-size:11px;color:#16a34a;min-width:80px;text-align:right;font-weight:600;"></div>
+        <button onclick="saveContactFromModal('${recordId}')" style="background:#16a34a;color:#fff;border:none;padding:10px 22px;font-size:13px;font-weight:700;border-radius:8px;cursor:pointer;">✓ Save Changes</button>
       </div>
 
-      <!-- TWO-COLUMN BODY -->
+      <!-- ─── TWO-COLUMN BODY ────────────────────────────────────────────── -->
       <div style="flex:1;display:flex;min-height:0;min-width:0;overflow:hidden;">
-        <!-- LEFT RAIL: INFO FORM -->
-        <div style="width:360px;min-width:360px;background:#fff;border-right:1px solid #e2e8f0;overflow-y:auto;padding:22px;">
-          <div style="font-size:13px;font-weight:700;color:#1a3a6e;margin-bottom:14px;text-transform:uppercase;letter-spacing:0.5px;">📋 Contact Info</div>
 
-          <div style="display:flex;flex-direction:column;gap:14px;">
+        <!-- LEFT RAIL: Contact info — clean white, no section header boxes ── -->
+        <div style="width:340px;min-width:340px;background:#fff;border-right:1px solid #e2e8f0;overflow-y:auto;padding:24px;">
+
+          <div style="display:flex;flex-direction:column;gap:18px;">
             <div>
-              <label style="display:block;font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Full Name *</label>
-              <input class="form-input" id="cm_name" value="${(f.Name||'').replace(/"/g,'&quot;')}" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;box-sizing:border-box;"/>
+              <label style="display:block;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">Full Name *</label>
+              <input class="form-input" id="cm_name" value="${(f.Name||'').replace(/"/g,'&quot;')}" style="width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;box-sizing:border-box;background:#fff;"/>
             </div>
 
             <div>
-              <label style="display:block;font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Type</label>
-              <div style="display:flex;flex-wrap:wrap;gap:6px;">
-                ${types.map(t=>`<label style="display:flex;align-items:center;gap:4px;font-size:11px;cursor:pointer;padding:4px 10px;border:1px solid #cbd5e1;border-radius:6px;background:#f8fafc;"><input type="checkbox" name="cm_type" value="${t}" ${(f.Type||[]).includes(t)?'checked':''}/> ${t}</label>`).join('')}
+              <label style="display:block;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:8px;">Type</label>
+              <div style="display:flex;flex-wrap:wrap;gap:8px;">
+                ${types.map(t=>`<label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;padding:6px 12px;border:1px solid #e2e8f0;border-radius:8px;background:#fff;font-weight:500;color:#334155;"><input type="checkbox" name="cm_type" value="${t}" ${(f.Type||[]).includes(t)?'checked':''} style="cursor:pointer;"/> ${t}</label>`).join('')}
               </div>
             </div>
 
             <div>
-              <label style="display:block;font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">📞 Phone</label>
-              <input class="form-input" id="cm_phone" value="${(f['Phone Number']||'').replace(/"/g,'&quot;')}" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;box-sizing:border-box;"/>
+              <label style="display:block;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">📞 Phone</label>
+              <input class="form-input" id="cm_phone" value="${(f['Phone Number']||'').replace(/"/g,'&quot;')}" style="width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;box-sizing:border-box;background:#fff;"/>
             </div>
 
             <div>
-              <label style="display:block;font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">📞 Secondary Phone</label>
-              <input class="form-input" id="cm_phone2" value="${(f['Secondary Phone Number']||'').replace(/"/g,'&quot;')}" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;box-sizing:border-box;"/>
+              <label style="display:block;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">📞 Secondary Phone</label>
+              <input class="form-input" id="cm_phone2" value="${(f['Secondary Phone Number']||'').replace(/"/g,'&quot;')}" style="width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;box-sizing:border-box;background:#fff;"/>
             </div>
 
             <div>
-              <label style="display:block;font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">✉️ Email</label>
-              <input class="form-input" id="cm_email" value="${(f.Email||'').replace(/"/g,'&quot;')}" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;box-sizing:border-box;"/>
+              <label style="display:block;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">✉ Email</label>
+              <input class="form-input" id="cm_email" value="${(f.Email||'').replace(/"/g,'&quot;')}" style="width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;box-sizing:border-box;background:#fff;"/>
             </div>
 
             <div>
-              <label style="display:block;font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">🏛 Company</label>
-              <input class="form-input" id="cm_company" value="${(f.Company||'').replace(/"/g,'&quot;')}" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;box-sizing:border-box;"/>
+              <label style="display:block;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">🏛 Company</label>
+              <input class="form-input" id="cm_company" value="${(f.Company||'').replace(/"/g,'&quot;')}" style="width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;box-sizing:border-box;background:#fff;"/>
             </div>
 
             <div>
-              <label style="display:block;font-size:10px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">📝 Contact Notes</label>
-              <textarea class="form-input" id="cm_notes" style="width:100%;height:120px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;resize:vertical;font-family:inherit;box-sizing:border-box;">${f['Contact Notes']||''}</textarea>
+              <label style="display:block;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">📝 Contact Notes</label>
+              <textarea class="form-input" id="cm_notes" style="width:100%;min-height:140px;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:13px;resize:vertical;font-family:inherit;box-sizing:border-box;background:#fff;line-height:1.5;">${f['Contact Notes']||''}</textarea>
             </div>
 
-            ${f['Date Added']?`<div style="font-size:10px;color:#94a3b8;padding-top:6px;border-top:1px solid #f1f5f9;">Added: ${f['Date Added']}</div>`:''}
+            ${f['Date Added']?`<div style="font-size:11px;color:#94a3b8;padding-top:8px;border-top:1px solid #f1f5f9;">Added: ${f['Date Added']}</div>`:''}
           </div>
         </div>
 
-        <!-- RIGHT AREA: TABS + CONTENT -->
-        <div style="flex:1;min-width:0;min-height:0;overflow:hidden;display:flex;flex-direction:column;background:#f1f5f9;">
-          <!-- TABS -->
-          <div style="display:flex;background:#fff;border-bottom:1px solid #e2e8f0;padding:0 22px;gap:2px;flex-shrink:0;">
-            <button id="ctab_comm" onclick="_contactTabSwitch('comm')" style="background:#f8fafc;border:1px solid #e2e8f0;border-bottom:2px solid #2563eb;padding:12px 22px;font-size:13px;font-weight:600;color:#1a3a6e;cursor:pointer;border-radius:6px 6px 0 0;margin-bottom:-1px;">📞 Communication <span id="ctabCommCount" style="background:#e2e8f0;color:#475569;font-size:10px;padding:1px 6px;border-radius:8px;margin-left:4px;">…</span></button>
-            <button id="ctab_props" onclick="_contactTabSwitch('props')" style="background:transparent;border:1px solid transparent;padding:12px 22px;font-size:13px;font-weight:500;color:#64748b;cursor:pointer;border-radius:6px 6px 0 0;">🏢 Properties <span id="ctabPropsCount" style="background:#e2e8f0;color:#475569;font-size:10px;padding:1px 6px;border-radius:8px;margin-left:4px;">…</span></button>
-            <button id="ctab_buyer" onclick="_contactTabSwitch('buyer')" style="background:transparent;border:1px solid transparent;padding:12px 22px;font-size:13px;font-weight:500;color:#64748b;cursor:pointer;border-radius:6px 6px 0 0;">🎯 Buyer Criteria <span id="ctabBuyerCount" style="background:#e2e8f0;color:#475569;font-size:10px;padding:1px 6px;border-radius:8px;margin-left:4px;">…</span></button>
+        <!-- RIGHT AREA: Tabs + content — lighter panel, softer boundaries ─── -->
+        <div style="flex:1;min-width:0;min-height:0;overflow:hidden;display:flex;flex-direction:column;background:#f8fafc;">
+
+          <!-- Tabs — flat, underline-style active state (FUB look) -->
+          <div style="display:flex;background:#fff;border-bottom:1px solid #e2e8f0;padding:0 28px;gap:4px;flex-shrink:0;">
+            <button id="ctab_comm" onclick="_contactTabSwitch('comm')" style="background:transparent;border:none;border-bottom:3px solid #2563eb;padding:16px 20px;font-size:14px;font-weight:700;color:#1e40af;cursor:pointer;margin-bottom:-1px;">📞 Communication <span id="ctabCommCount" style="background:#dbeafe;color:#1e40af;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:700;">…</span></button>
+            <button id="ctab_props" onclick="_contactTabSwitch('props')" style="background:transparent;border:none;border-bottom:3px solid transparent;padding:16px 20px;font-size:14px;font-weight:600;color:#64748b;cursor:pointer;margin-bottom:-1px;">🏢 Properties <span id="ctabPropsCount" style="background:#f1f5f9;color:#64748b;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:700;">…</span></button>
+            <button id="ctab_buyer" onclick="_contactTabSwitch('buyer')" style="background:transparent;border:none;border-bottom:3px solid transparent;padding:16px 20px;font-size:14px;font-weight:600;color:#64748b;cursor:pointer;margin-bottom:-1px;">🎯 Buyer Criteria <span id="ctabBuyerCount" style="background:#f1f5f9;color:#64748b;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:700;">…</span></button>
           </div>
 
-          <!-- CONTENT PANES -->
-          <div style="flex:1;overflow-y:auto;padding:22px;min-width:0;min-height:0;">
-            <!-- COMMUNICATION (default visible) -->
+          <!-- Content panes -->
+          <div style="flex:1;overflow-y:auto;padding:24px 28px;min-width:0;min-height:0;">
             <div id="cpane_comm">
-              <div id="contactCommList" style="color:#64748b;font-size:12px;"><div style="text-align:center;padding:30px;">⏳ Loading communication history...</div></div>
+              <div id="contactCommList" style="color:#64748b;font-size:13px;"><div style="text-align:center;padding:40px;">⏳ Loading communication history...</div></div>
             </div>
 
-            <!-- PROPERTIES -->
             <div id="cpane_props" style="display:none;">
-              <div id="contactPropsList" style="color:#64748b;font-size:12px;"><div style="text-align:center;padding:30px;">⏳ Loading linked properties...</div></div>
+              <!-- v102.27: Quick-add Property button — prefills intake form with this contact's info -->
+              <div style="display:flex;justify-content:flex-end;margin-bottom:16px;">
+                <button onclick="_contactAddProperty('${recordId}')" style="background:#0f172a;color:#fff;border:none;padding:10px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;font-family:'Inter',system-ui,sans-serif;">
+                  + Add Property
+                </button>
+              </div>
+              <div id="contactPropsList" style="color:#64748b;font-size:13px;"><div style="text-align:center;padding:40px;">⏳ Loading linked properties...</div></div>
             </div>
 
-            <!-- BUYER CRITERIA -->
             <div id="cpane_buyer" style="display:none;">
-              <div id="contactBuyerList" style="color:#64748b;font-size:12px;"><div style="text-align:center;padding:30px;">⏳ Loading buyer criteria...</div></div>
+              <!-- v102.27: Quick-add Buyer Criteria button — prefills intake form with this contact's info -->
+              <div style="display:flex;justify-content:flex-end;margin-bottom:16px;">
+                <button onclick="_contactAddBuyerCriteria('${recordId}')" style="background:#0f172a;color:#fff;border:none;padding:10px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;font-family:'Inter',system-ui,sans-serif;">
+                  + Add Buyer Criteria
+                </button>
+              </div>
+              <div id="contactBuyerList" style="color:#64748b;font-size:13px;"><div style="text-align:center;padding:40px;">⏳ Loading buyer criteria...</div></div>
             </div>
           </div>
         </div>
@@ -11323,30 +12976,38 @@ function showContactDetailPage(recordId, returnTo){
 }
 
 // Tab switcher for the in-depth contact view.
-// In the full-page layout, the Info form lives in a fixed left rail (always visible),
-// so only props/buyer/comm are toggleable. In the legacy modal (add-new-contact)
-// we only show info, so the switcher is a no-op there.
+// v102.20: FUB-style underline tabs. Active tab has a 3px blue bottom border,
+// inactive tabs have a transparent bottom border. Count pills switch between
+// blue-filled (active) and grey (inactive).
 function _contactTabSwitch(tab){
   const tabs = ['props','buyer','comm','info'];
+  const pillIdMap = { props:'ctabPropsCount', buyer:'ctabBuyerCount', comm:'ctabCommCount' };
   tabs.forEach(t=>{
     const btn = document.getElementById('ctab_'+t);
     const pane = document.getElementById('cpane_'+t);
     if(!btn||!pane) return;
     if(t===tab){
-      btn.style.background = '#fff';
-      btn.style.borderBottom = '2px solid #2563eb';
-      btn.style.color = '#1a3a6e';
-      btn.style.fontWeight = '600';
-      btn.style.border = '1px solid #e2e8f0';
-      btn.style.borderBottom = '2px solid #2563eb';
+      btn.style.borderBottom = '3px solid #2563eb';
+      btn.style.color = '#1e40af';
+      btn.style.fontWeight = '700';
       pane.style.display = 'block';
+      // Active pill — blue background
+      const pill = document.getElementById(pillIdMap[t]);
+      if(pill){
+        pill.style.background = '#dbeafe';
+        pill.style.color = '#1e40af';
+      }
     } else {
-      btn.style.background = 'transparent';
-      btn.style.borderBottom = '';
+      btn.style.borderBottom = '3px solid transparent';
       btn.style.color = '#64748b';
-      btn.style.fontWeight = '500';
-      btn.style.border = '1px solid transparent';
+      btn.style.fontWeight = '600';
       pane.style.display = 'none';
+      // Inactive pill — grey
+      const pill = document.getElementById(pillIdMap[t]);
+      if(pill){
+        pill.style.background = '#f1f5f9';
+        pill.style.color = '#64748b';
+      }
     }
   });
 }
@@ -11592,25 +13253,25 @@ async function _contactLoadCommunication(contactId){
     const noteCount = notes.filter(n=>n.body&&n.body.length>=20).length;
 
     let html = `
-      <div style="display:flex;gap:8px;margin-bottom:14px;flex-wrap:wrap;">
-        <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:8px 12px;flex:1;min-width:120px;">
-          <div style="font-size:10px;color:#1e40af;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Calls</div>
-          <div style="font-size:18px;font-weight:700;color:#1e3a8a;">${callCount}</div>
-          <div style="font-size:10px;color:#64748b;">${substantiveCalls} substantive · ${callsWithNotes} with notes</div>
+      <div style="display:flex;gap:14px;margin-bottom:20px;flex-wrap:wrap;">
+        <div style="background:#fff;border:1px solid #e2e8f0;border-left:4px solid #2563eb;border-radius:10px;padding:14px 18px;flex:1;min-width:160px;">
+          <div style="font-size:11px;color:#1e40af;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:4px;">Calls</div>
+          <div style="font-size:28px;font-weight:800;color:#0f172a;line-height:1;margin-bottom:4px;">${callCount}</div>
+          <div style="font-size:11px;color:#64748b;">${substantiveCalls} substantive · ${callsWithNotes} with notes</div>
         </div>
-        <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:8px 12px;flex:1;min-width:120px;">
-          <div style="font-size:10px;color:#92400e;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">FUB Notes</div>
-          <div style="font-size:18px;font-weight:700;color:#78350f;">${noteCount}</div>
-          <div style="font-size:10px;color:#64748b;">synced from FUB</div>
+        <div style="background:#fffbeb;border:1px solid #fde68a;border-left:4px solid #d97706;border-radius:10px;padding:14px 18px;flex:1;min-width:160px;">
+          <div style="font-size:11px;color:#92400e;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:4px;">FUB Notes</div>
+          <div style="font-size:28px;font-weight:800;color:#0f172a;line-height:1;margin-bottom:4px;">${noteCount}</div>
+          <div style="font-size:11px;color:#64748b;">synced from FUB</div>
         </div>
-        <div style="background:#ecfdf5;border:1px solid #a7f3d0;border-radius:6px;padding:8px 12px;flex:1;min-width:120px;">
-          <div style="font-size:10px;color:#065f46;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">Our Outreach</div>
-          <div style="font-size:18px;font-weight:700;color:#064e3b;">${outreach.length}</div>
-          <div style="font-size:10px;color:#64748b;">logged from CRM</div>
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-left:4px solid #16a34a;border-radius:10px;padding:14px 18px;flex:1;min-width:160px;">
+          <div style="font-size:11px;color:#065f46;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:4px;">Our Outreach</div>
+          <div style="font-size:28px;font-weight:800;color:#0f172a;line-height:1;margin-bottom:4px;">${outreach.length}</div>
+          <div style="font-size:11px;color:#64748b;">logged from CRM</div>
         </div>
       </div>
-      ${fubContactId ? `<div style="font-size:10px;color:#94a3b8;margin-bottom:10px;">FUB Contact ID: ${fubContactId} · Showing most recent ${items.length} events</div>` : ''}
-      <div style="display:flex;flex-direction:column;gap:8px;">`;
+      ${fubContactId ? `<div style="font-size:11px;color:#94a3b8;margin-bottom:14px;">FUB Contact ID: ${fubContactId} · Showing most recent ${items.length} events</div>` : ''}
+      <div style="display:flex;flex-direction:column;gap:1px;background:#e2e8f0;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">`;
 
     for(const item of items){
       const meta = TYPE_META[item.type];
@@ -11619,46 +13280,46 @@ async function _contactLoadCommunication(contactId){
         const dirIcon = c.direction === 'inbound' ? '⬇ IN' : '⬆ OUT';
         const dirColor = c.direction === 'inbound' ? '#16a34a' : '#2563eb';
         html += `
-          <div style="background:${meta.bg};border:1px solid ${meta.border};border-radius:8px;padding:10px 14px;">
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
-              <div style="font-size:16px;">${meta.icon}</div>
-              <div style="font-size:10px;font-weight:700;color:${meta.color};letter-spacing:0.5px;">${meta.label}</div>
-              <div style="font-size:10px;font-weight:600;color:${dirColor};background:#fff;padding:1px 6px;border-radius:3px;border:1px solid ${dirColor};">${dirIcon}</div>
-              <div style="font-size:10px;color:#64748b;background:#fff;padding:1px 6px;border-radius:3px;">⏱ ${fmtDuration(c.duration)}</div>
-              ${c.outcome ? `<div style="font-size:10px;color:#64748b;background:#fff;padding:1px 6px;border-radius:3px;">${escapeHtml(c.outcome)}</div>` : ''}
-              <div style="margin-left:auto;font-size:10px;color:#64748b;">${fmtDate(c.date)}</div>
+          <div style="background:#fff;padding:12px 16px;">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:${c.note?'8px':'0'};">
+              <div style="font-size:14px;">${meta.icon}</div>
+              <div style="font-size:11px;font-weight:700;color:${meta.color};letter-spacing:0.5px;">CALL</div>
+              <div style="font-size:10px;font-weight:600;color:${dirColor};background:${c.direction==='inbound'?'#f0fdf4':'#eff6ff'};padding:2px 8px;border-radius:4px;border:1px solid ${dirColor};">${dirIcon}</div>
+              <div style="font-size:11px;color:#64748b;">⏱ ${fmtDuration(c.duration)}</div>
+              ${c.outcome ? `<div style="font-size:11px;color:#64748b;">${escapeHtml(c.outcome)}</div>` : ''}
+              <div style="margin-left:auto;font-size:11px;color:#94a3b8;">${fmtDate(c.date)}</div>
             </div>
-            ${c.note ? `<div style="font-size:12px;color:#1e293b;white-space:pre-wrap;background:#fff;padding:8px 10px;border-radius:5px;border:1px solid ${meta.border};margin-top:4px;line-height:1.5;">${escapeHtml(c.note)}</div>` : '<div style="font-size:10px;color:#94a3b8;font-style:italic;padding:2px 2px 0;">No agent note</div>'}
+            ${c.note ? `<div style="font-size:13px;color:#1e293b;white-space:pre-wrap;line-height:1.55;padding-left:22px;">${escapeHtml(c.note)}</div>` : '<div style="font-size:11px;color:#cbd5e1;font-style:italic;padding-left:22px;">No agent note</div>'}
           </div>`;
       } else if(item.type === 'note'){
         const n = item.data;
         const body = cleanNoteBody(n.body);
         const truncated = body.length > 600 ? body.substring(0,600)+'…' : body;
         html += `
-          <div style="background:${meta.bg};border:1px solid ${meta.border};border-radius:8px;padding:10px 14px;">
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
-              <div style="font-size:16px;">${meta.icon}</div>
-              <div style="font-size:10px;font-weight:700;color:${meta.color};letter-spacing:0.5px;">${meta.label}</div>
-              ${n.subject ? `<div style="font-size:10px;color:#64748b;background:#fff;padding:1px 6px;border-radius:3px;">${escapeHtml(n.subject)}</div>` : ''}
-              <div style="margin-left:auto;font-size:10px;color:#64748b;">${fmtDate(n.date)}</div>
+          <div style="background:#fffbeb;padding:12px 16px;">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+              <div style="font-size:14px;">${meta.icon}</div>
+              <div style="font-size:11px;font-weight:700;color:${meta.color};letter-spacing:0.5px;">FUB NOTE</div>
+              ${n.subject ? `<div style="font-size:11px;color:#64748b;">${escapeHtml(n.subject)}</div>` : ''}
+              <div style="margin-left:auto;font-size:11px;color:#94a3b8;">${fmtDate(n.date)}</div>
             </div>
-            <div style="font-size:12px;color:#1e293b;white-space:pre-wrap;background:#fff;padding:8px 10px;border-radius:5px;border:1px solid ${meta.border};margin-top:4px;line-height:1.5;">${escapeHtml(truncated)}</div>
+            <div style="font-size:13px;color:#1e293b;white-space:pre-wrap;line-height:1.55;padding-left:22px;">${escapeHtml(truncated)}</div>
           </div>`;
       } else if(item.type === 'outreach'){
         const o = item.data;
         const typeLabel = (o.activity_type||'').toUpperCase() || 'ACTIVITY';
         const statusLabel = (o.response_status||'no_response').replace(/_/g,' ');
         html += `
-          <div style="background:${meta.bg};border:1px solid ${meta.border};border-radius:8px;padding:10px 14px;">
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:6px;">
-              <div style="font-size:16px;">${meta.icon}</div>
-              <div style="font-size:10px;font-weight:700;color:${meta.color};letter-spacing:0.5px;">${meta.label}</div>
-              <div style="font-size:10px;font-weight:600;color:${meta.color};background:#fff;padding:1px 6px;border-radius:3px;border:1px solid ${meta.border};">${escapeHtml(typeLabel)}</div>
-              <div style="font-size:10px;color:#64748b;background:#fff;padding:1px 6px;border-radius:3px;">${escapeHtml(statusLabel)}</div>
-              ${o.agent_name ? `<div style="font-size:10px;color:#64748b;">by ${escapeHtml(o.agent_name)}</div>` : ''}
-              <div style="margin-left:auto;font-size:10px;color:#64748b;">${fmtDate(o.date)}</div>
+          <div style="background:#f0fdf4;padding:12px 16px;">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:${(o.interest_notes || o.response_notes)?'8px':'0'};">
+              <div style="font-size:14px;">${meta.icon}</div>
+              <div style="font-size:11px;font-weight:700;color:${meta.color};letter-spacing:0.5px;">OUR OUTREACH</div>
+              <div style="font-size:10px;font-weight:600;color:${meta.color};background:#fff;padding:2px 8px;border-radius:4px;border:1px solid ${meta.border};">${escapeHtml(typeLabel)}</div>
+              <div style="font-size:11px;color:#64748b;">${escapeHtml(statusLabel)}</div>
+              ${o.agent_name ? `<div style="font-size:11px;color:#64748b;">by ${escapeHtml(o.agent_name)}</div>` : ''}
+              <div style="margin-left:auto;font-size:11px;color:#94a3b8;">${fmtDate(o.date)}</div>
             </div>
-            ${(o.interest_notes || o.response_notes) ? `<div style="font-size:12px;color:#1e293b;white-space:pre-wrap;background:#fff;padding:8px 10px;border-radius:5px;border:1px solid ${meta.border};margin-top:4px;line-height:1.5;">${escapeHtml(o.interest_notes || o.response_notes)}</div>` : ''}
+            ${(o.interest_notes || o.response_notes) ? `<div style="font-size:13px;color:#1e293b;white-space:pre-wrap;line-height:1.55;padding-left:22px;">${escapeHtml(o.interest_notes || o.response_notes)}</div>` : ''}
           </div>`;
       }
     }
@@ -16285,16 +17946,25 @@ function _liSetMode(mode){
 // ── SELLER FORM ────────────────────────────────────────────────
 function _liRenderSellerForm(){
   const main = document.getElementById('mainArea');
+  // v102.27: If prefill context is set, we came from a contact detail page
+  // and should route the back button there instead of the lead intake hub.
+  const prefillCtx = _liPrefillContext;
+  const backHandler = prefillCtx && prefillCtx.contactId
+    ? `_liPrefillContext = null; showContactDetailPage('${prefillCtx.contactId}', 'contacts');`
+    : 'showLeadIntakePage()';
   main.innerHTML = `
     <div style="max-width:760px;margin:0 auto;padding:24px 20px 48px;">
       <!-- Header -->
       <div style="display:flex;align-items:center;gap:14px;margin-bottom:28px;">
-        <button onclick="showLeadIntakePage()" style="background:#f1f5f9;border:none;padding:8px 14px;border-radius:8px;font-size:13px;cursor:pointer;color:#475569;">← Back</button>
+        <button onclick="${backHandler}" style="background:#f1f5f9;border:none;padding:8px 14px;border-radius:8px;font-size:13px;cursor:pointer;color:#475569;">← Back</button>
         <div>
           <div style="font-size:22px;font-weight:800;color:#0f172a;">🏢 Seller Lead Intake</div>
           <div style="font-size:12px;color:#64748b;margin-top:2px;">All fields marked * are required to create the lead</div>
         </div>
       </div>
+
+      <!-- v102.27: Prefill banner (only shows when adding property from contact detail page) -->
+      ${_liPrefillBannerHTML()}
 
       <!-- CONTACT INFO -->
       ${_liSection('👤 Contact Information', `
@@ -16364,7 +18034,7 @@ function _liRenderSellerForm(){
 
       <button onclick="_liSubmitSeller()" id="li_s_submit"
         style="width:100%;background:linear-gradient(135deg,#0f172a,#1e3a8a);color:#fff;border:none;padding:16px;font-size:16px;font-weight:700;border-radius:10px;cursor:pointer;">
-        ✓ Submit Seller Lead to Airtable
+        ✓ Submit Seller Lead
       </button>
     </div>`;
 
@@ -16395,6 +18065,8 @@ function _liRenderSellerForm(){
       }
     });
   }
+  // v102.27: Apply prefill values if we arrived here from a contact detail page
+  _liApplyPrefill('s');
 }
 
 // ── Asset type selector (search + type/subtype panels, like deal card) ─
@@ -16896,6 +18568,11 @@ async function _liSubmitSeller(){
     const userGeneralNotes = gv('li_s_notes');
     const dealFields = {
       'Address': gv('li_s_address'), 'Pipeline Stage': 'New Lead',
+      // v102.18: explicitly set Date Added so the dashboard "New Leads"
+      // counter increments immediately on submission. Without this, the
+      // column was null and only created_at provided the fallback —
+      // which worked for legacy queries but is cleaner this way.
+      'Date Added': new Date().toISOString().slice(0,10),
       'General Property Notes': userGeneralNotes || '',
       'Simple County': gv('li_s_county')||'',
       'CRM Asset Classification': assetTypeText||'',
@@ -16989,30 +18666,46 @@ async function _liSubmitSeller(){
     const contactNotes = gv('li_s_cnotes');
 
     if(isSupabase()){
+      // v102.17: capture the current agent's fub_name so new leads count on
+      // the submitting agent's dashboard (Today / This Week / This Month).
+      // Falls back to null if no user is logged in or no fub_name is set —
+      // those edge cases just won't be agent-attributed, which matches the
+      // existing dashboard fallback behavior of "showing all deals".
+      const agentFub = (typeof _currentUser !== 'undefined' && _currentUser && _currentUser.fub_name) || null;
+
       // 1. Create (or reuse existing) contact in ace_contacts
       let contactId = null;
-      try{
-        // Check for existing contact by phone to avoid duplicates
-        const existing = contactPhone
-          ? await _sbGet(SB_TABLES.contacts, `phone_number=eq.${encodeURIComponent(contactPhone)}&select=id&limit=1`)
-          : [];
-        if(existing && existing.length > 0){
-          contactId = existing[0].id;
-        } else {
-          const contactRow = {
-            name: contactName,
-            phone_number: contactPhone || null,
-            email: contactEmail || null,
-            company: contactCo || null,
-            contact_notes: contactNotes || null,
-            type: ['Seller'],
-            date_added: new Date().toISOString().slice(0,10)
-          };
-          const createdContact = await _sbPost(SB_TABLES.contacts, contactRow);
-          contactId = createdContact?.id || null;
+      // v102.27: If we arrived via "+ Add Property" from a contact detail page,
+      // _liPrefillContext.contactId is already set — skip the create/lookup path
+      // entirely and use it directly. This avoids any risk of duplicate contact
+      // rows and makes the "adding to existing contact" semantics explicit.
+      if(_liPrefillContext && _liPrefillContext.contactId){
+        contactId = _liPrefillContext.contactId;
+      } else {
+        try{
+          // Check for existing contact by phone to avoid duplicates
+          const existing = contactPhone
+            ? await _sbGet(SB_TABLES.contacts, `phone_number=eq.${encodeURIComponent(contactPhone)}&select=id&limit=1`)
+            : [];
+          if(existing && existing.length > 0){
+            contactId = existing[0].id;
+          } else {
+            const contactRow = {
+              name: contactName,
+              phone_number: contactPhone || null,
+              email: contactEmail || null,
+              company: contactCo || null,
+              contact_notes: contactNotes || null,
+              type: ['Seller'],
+              date_added: new Date().toISOString().slice(0,10),
+              fub_assigned_to: agentFub  // v102.17: agent attribution
+            };
+            const createdContact = await _sbPost(SB_TABLES.contacts, contactRow);
+            contactId = createdContact?.id || null;
+          }
+        } catch(e){
+          console.warn('Contact create/lookup failed:', e.message);
         }
-      } catch(e){
-        console.warn('Contact create/lookup failed:', e.message);
       }
 
       // v102.9: Removed the legacy ace_submissions_seller write. The table
@@ -17024,6 +18717,9 @@ async function _liSubmitSeller(){
       // 3. Create deal in ace_properties, linking the contact as owner
       const propData = _atToSb(dealFields, SB_PROP_MAP);
       if(contactId) propData.owner_contact_id = contactId;
+      // v102.17: agent attribution — must be set BEFORE _sbPost so the new
+      // property shows up on the submitting agent's dashboard immediately.
+      if(agentFub) propData.fub_assigned_to = agentFub;
       const createdDeal = await _sbPost(SB_TABLES.properties, propData);
       // v102.6: No more localStorage seeding. Any GRI / expense data from
       // the intake form is already in dealFields → propData → Supabase.
@@ -17032,7 +18728,24 @@ async function _liSubmitSeller(){
     }
     // v102.12: Airtable fallback else branch removed. Ace CRM is
     // Supabase-only; there is no Airtable code path for new deals anymore.
-    syncData();
+    // v102.18: await syncData so allDeals contains the new lead before
+    // _liShowSuccess fires. Without await, the user can navigate to the
+    // dashboard before the refresh completes and see stale counts.
+    await syncData();
+    // v102.19: broadcast the lead-created event so any open dashboard
+    // (or other live counter) refreshes itself automatically. The dashboard
+    // listener at the bottom of showDashboard re-runs the render whenever
+    // this fires, so the "Today" counter increments without manual nav.
+    try {
+      window.dispatchEvent(new CustomEvent('crm:lead-created', { detail: { type: 'seller' } }));
+    } catch(e) { /* CustomEvent unsupported — extremely old browser, ignore */ }
+    // v102.27: If we came from a contact detail page, return to it so the
+    // user sees the new property in the Properties tab immediately. The
+    // normal success-page flow is skipped in prefill mode.
+    if(_liPrefillContext && _liPrefillContext.contactId){
+      _liPrefillReturnToContact();
+      return;
+    }
     _liShowSuccess('seller', gv('li_s_name'), gv('li_s_address'));
   }catch(e){
     if(btn){btn.disabled=false;btn.textContent='✓ Submit Seller Lead';}
@@ -17043,15 +18756,24 @@ async function _liSubmitSeller(){
 // ── BUYER FORM ─────────────────────────────────────────────────
 function _liRenderBuyerForm(){
   const main = document.getElementById('mainArea');
+  // v102.27: If prefill context is set, we came from a contact detail page
+  // and should route the back button there instead of the lead intake hub.
+  const prefillCtx = _liPrefillContext;
+  const backHandler = prefillCtx && prefillCtx.contactId
+    ? `_liPrefillContext = null; showContactDetailPage('${prefillCtx.contactId}', 'contacts');`
+    : 'showLeadIntakePage()';
   main.innerHTML = `
     <div style="max-width:760px;margin:0 auto;padding:24px 20px 48px;">
       <div style="display:flex;align-items:center;gap:14px;margin-bottom:28px;">
-        <button onclick="showLeadIntakePage()" style="background:#f1f5f9;border:none;padding:8px 14px;border-radius:8px;font-size:13px;cursor:pointer;color:#475569;">← Back</button>
+        <button onclick="${backHandler}" style="background:#f1f5f9;border:none;padding:8px 14px;border-radius:8px;font-size:13px;cursor:pointer;color:#475569;">← Back</button>
         <div>
           <div style="font-size:22px;font-weight:800;color:#0f172a;">🎯 Buyer Lead Intake</div>
           <div style="font-size:12px;color:#64748b;margin-top:2px;">Capture acquisition criteria, preferences, and investment profile</div>
         </div>
       </div>
+
+      <!-- v102.27: Prefill banner (only shows when adding buyer criteria from contact detail page) -->
+      ${_liPrefillBannerHTML()}
 
       ${_liSection('👤 Contact Information', `
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
@@ -17147,6 +18869,8 @@ function _liRenderBuyerForm(){
         ✓ Submit Buyer Lead
       </button>
     </div>`;
+  // v102.27: Apply prefill values if we arrived here from a contact detail page
+  _liApplyPrefill('b');
 }
 
 // v102.14: Deal Dependent toggle — hides/shows the price range inputs when
@@ -17403,25 +19127,38 @@ async function _liSubmitBuyer(){
       // preference fields (automotive, retail, land zoning, etc.) that were
       // previously collected in the UI but dropped on submit.
 
+      // v102.17: capture the current agent's fub_name so this buyer lead
+      // shows up on the submitting agent's dashboard Buyer Leads counter.
+      const agentFub = (typeof _currentUser !== 'undefined' && _currentUser && _currentUser.fub_name) || null;
+
       // 1. Create contact row
       const contactName  = gv('li_b_name');
       const contactPhone = gv('li_b_phone');
       const contactEmail = gv('li_b_email');
       let contactId = null;
-      try {
-        const contactRow = {
-          name: contactName,
-          phone_number: contactPhone,
-          email: contactEmail || null,
-          company: gv('li_b_company') || null,
-          contact_notes: gv('li_b_cnotes') || null,
-          type: ['Buyer'],
-          date_added: new Date().toISOString().slice(0,10)
-        };
-        const createdContact = await _sbPost(SB_TABLES.contacts, contactRow);
-        contactId = createdContact?.id || null;
-      } catch(e){
-        console.warn('Buyer contact create failed:', e.message);
+      // v102.27: If we arrived via "+ Add Buyer Criteria" from a contact detail
+      // page, use the existing contact ID directly instead of creating a new
+      // row. Critical because the buyer submit path has no phone-based dedup,
+      // so without this guard every click would create a duplicate contact.
+      if(_liPrefillContext && _liPrefillContext.contactId){
+        contactId = _liPrefillContext.contactId;
+      } else {
+        try {
+          const contactRow = {
+            name: contactName,
+            phone_number: contactPhone,
+            email: contactEmail || null,
+            company: gv('li_b_company') || null,
+            contact_notes: gv('li_b_cnotes') || null,
+            type: ['Buyer'],
+            date_added: new Date().toISOString().slice(0,10),
+            fub_assigned_to: agentFub  // v102.17: agent attribution
+          };
+          const createdContact = await _sbPost(SB_TABLES.contacts, contactRow);
+          contactId = createdContact?.id || null;
+        } catch(e){
+          console.warn('Buyer contact create failed:', e.message);
+        }
       }
 
       // 2. Build the ace_buyer_criteria row directly (no SB_BC_MAP indirection
@@ -17430,6 +19167,8 @@ async function _liSubmitBuyer(){
       const bcRow = {
         contact_id: contactId,
         date_added: new Date().toISOString().slice(0,10),
+        // v102.17: agent attribution for dashboard scoping
+        fub_assigned_to: agentFub,
         desired_property_types: assetLabels || null,
         preferred_states: (_li.counties && _li.counties.length) ? 'NJ' : null,
         preferred_counties: _li.counties && _li.counties.length ? _li.counties.join(', ') : null,
@@ -17508,6 +19247,21 @@ async function _liSubmitBuyer(){
       await _sbPost(SB_TABLES.buyerCriteria, bcRow);
     }
     // v102.12: Airtable fallback else branch removed. Ace CRM is Supabase-only.
+    // v102.18: invalidate the buyer criteria cache so the Buyer Criteria tab
+    // shows the new lead next time it's opened. Also calls syncData so any
+    // dashboard counts that depend on allDeals stay fresh.
+    if(typeof _bcLastLoadMs !== 'undefined') _bcLastLoadMs = 0;
+    try { await syncData(); } catch(e) { console.warn('syncData after buyer submit failed:', e.message); }
+    // v102.19: broadcast the lead-created event for live dashboard refresh.
+    try {
+      window.dispatchEvent(new CustomEvent('crm:lead-created', { detail: { type: 'buyer' } }));
+    } catch(e) {}
+    // v102.27: If we came from a contact detail page, return to it so the
+    // user sees the new buyer criteria in the Buyer Criteria tab immediately.
+    if(_liPrefillContext && _liPrefillContext.contactId){
+      _liPrefillReturnToContact();
+      return;
+    }
     _liShowSuccess('buyer', gv('li_b_name'), null);
   }catch(e){
     if(btn){btn.disabled=false;btn.textContent='✓ Submit Buyer Lead';}
@@ -17520,12 +19274,12 @@ function _liShowSuccess(type, name, address){
     <div style="max-width:560px;margin:60px auto;text-align:center;padding:20px;">
       <div style="font-size:64px;margin-bottom:16px;">✅</div>
       <div style="font-size:24px;font-weight:800;color:#0f172a;margin-bottom:8px;">Lead Submitted!</div>
-      <div style="font-size:14px;color:#64748b;margin-bottom:6px;"><strong>${name}</strong> has been added to Airtable as a ${type==='seller'?'Seller':'Buyer'} lead.</div>
+      <div style="font-size:14px;color:#64748b;margin-bottom:6px;"><strong>${name}</strong> has been added as a ${type==='seller'?'Seller':'Buyer'} lead.</div>
       ${address?`<div style="font-size:13px;color:#94a3b8;margin-bottom:24px;">${address}</div>`:'<div style="margin-bottom:24px;"></div>'}
       <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
         <button onclick="showLeadIntakePage()" style="background:#1a3a6e;color:#fff;border:none;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">+ Add Another Lead</button>
         ${type==='buyer'?`<button onclick="setNav(document.querySelector('.nav-btn[onclick*=buyercriteria]'),'buyercriteria')" style="background:#f1f5f9;color:#1a3a6e;border:none;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">View Buyer Criteria →</button>`
-        :`<button onclick="setNav(document.querySelectorAll('.nav-btn')[0],'home')" style="background:#f1f5f9;color:#1a3a6e;border:none;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">Back to Deals →</button>`}
+        :`<button onclick="setNav(document.querySelectorAll('.nav-btn')[1],'pipeline')" style="background:#f1f5f9;color:#1a3a6e;border:none;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">View Deals →</button>`}
       </div>
     </div>`;
 }
@@ -17665,28 +19419,87 @@ function _bmSearch(){
 }
 
 function _bmBuildEmail(){
+  // v102.23: Rewritten for a modern, clean plain-text look. No ASCII box-drawing,
+  // no pipe separators, no noisy "NOI: —" lines. Label/value pairs are tab-aligned
+  // so email clients render them in two visual columns, and stats with missing
+  // data are simply omitted instead of showing an em-dash placeholder.
   const selDeals=allDeals.filter(d=>_bm.selected.has(d.id));
-  const tl={warehouse:'INDUSTRIAL / WAREHOUSE',retail:'RETAIL',multifamily:'MULTIFAMILY'};
-  let b='Hi '+(_bm.buyerName.split(' ')[0]||_bm.buyerName)+',\n\nHope you\'re doing well. I\'ve gone through our active pipeline and put together a curated list of properties that align with your acquisition criteria. See the snapshot below — happy to send full packages or jump on a call for anything that looks interesting.\n\n';
-  ['warehouse','retail','multifamily'].forEach(t=>{
-    const ds=selDeals.filter(d=>_bmDealType(d)===t);
+  const SECTION_LABELS={multifamily:'MULTIFAMILY',warehouse:'INDUSTRIAL / WAREHOUSE',retail:'RETAIL'};
+  const SECTION_ORDER=['multifamily','warehouse','retail'];
+
+  // Local helper: format a single stat line as "label<TAB>value", indented 6 spaces
+  // under its property entry. Returns an empty string if the value is missing
+  // or an em-dash placeholder, so the caller can concatenate without guarding.
+  const statLine = (label, value) => {
+    if(value===null || value===undefined || value==='' || value==='—') return '';
+    return '      '+label+'\t'+value+'\n';
+  };
+
+  const firstName = _bm.buyerName.split(' ')[0] || _bm.buyerName;
+
+  let b = 'Hi '+firstName+',\n\n';
+  b += 'Hope you\'re doing well. I put together a curated list of properties '
+     + 'that align with your acquisition criteria. Details below — happy to '
+     + 'send full packages or jump on a call for anything that looks interesting.\n';
+
+  SECTION_ORDER.forEach(t => {
+    const ds = selDeals.filter(d => _bmDealType(d) === t);
     if(!ds.length) return;
-    b+='━━━ '+tl[t]+' ━━━━━━━━━━━━━━━━━━━━━━━━━━━━\n\n';
-    ds.forEach((d,i)=>{
-      const cr=_bmCapRate(d), sf=_bmSF(d), units=_bmUnits(d), ppsf=_bmPPSF(d), ppu=_bmPPU(d);
-      const noi=Number(d['NOI']||0);
-      b+=(i+1)+'.  '+(d['Address']||'—')+'\n';
-      b+='    Asking Price: '+_bmFmt(d['Asking Price'])+'   |   NOI: '+_bmFmt(noi)+'   |   Cap Rate: '+_bmPct(cr)+'\n';
-      if(t==='warehouse'&&sf) b+='    '+_bmFS(sf)+(ppsf?'   |   $'+Math.round(ppsf)+'/SF':'')+'\n';
-      if(t==='retail'&&sf) b+='    '+_bmFS(sf)+(ppsf?'   |   $'+Math.round(ppsf)+'/SF':'')+'\n';
-      if(t==='multifamily'&&units) b+='    '+units+' Units'+(ppu?'   |   '+_bmFmt(ppu)+'/Unit':'')+'\n';
-      b+='    '+(_bmCounty(d)||'—')+' County\n';
-      if(_bm.notes[d.id]) b+='    Notes: '+_bm.notes[d.id]+'\n';
-      b+='\n';
+
+    // Section header: blank lines above, all-caps label, blank line below.
+    // The whitespace + caps is the header — no ASCII rule needed.
+    b += '\n\n'+SECTION_LABELS[t]+'\n\n';
+
+    ds.forEach((d,i) => {
+      const cr    = _bmCapRate(d);
+      const sf    = _bmSF(d);
+      const units = _bmUnits(d);
+      const ppsf  = _bmPPSF(d);
+      const ppu   = _bmPPU(d);
+      const noi   = Number(d['NOI']||0);
+      const askingFmt = _bmFmt(d['Asking Price']);
+      const noiFmt    = _bmFmt(noi);
+      const capFmt    = _bmPct(cr);
+
+      // Address line: "1.  123 Main St, City, NJ 01234"
+      b += '  '+(i+1)+'.  '+(d['Address']||'—')+'\n\n';
+
+      // Stat block — each line only appears if the value is real.
+      b += statLine('Asking Price', askingFmt);
+      b += statLine('NOI',          noiFmt);
+      b += statLine('Cap Rate',     capFmt);
+
+      // Asset-specific secondary stats
+      if(t==='warehouse' || t==='retail'){
+        if(sf)  b += statLine('Building SF',  Number(sf).toLocaleString());
+        if(ppsf) b += statLine('Price / SF',   '$'+Math.round(ppsf));
+      }
+      if(t==='multifamily'){
+        if(units) b += statLine('Units',      String(units));
+        if(ppu)   b += statLine('Price / Unit', _bmFmt(ppu));
+      }
+
+      // County — always included since almost every deal has one
+      const county = _bmCounty(d);
+      if(county) b += statLine('County', county);
+
+      // Optional per-deal note the agent typed in the Review & Compose modal
+      if(_bm.notes[d.id]) b += statLine('Notes', _bm.notes[d.id]);
+
+      // Double newline between properties inside the same section
+      b += '\n';
     });
   });
-  b+='\nLet me know what you think — happy to send full packages on anything that looks interesting!\n\nBest,\nRicky\nAce Acquisitions · KW Commercial NJ\n848.420.9972';
-  _bm.emailText=b; _bm.showEmail=true; _renderBM();
+
+  b += '\nLet me know what stands out — happy to send full packages on any of these.\n\n'
+     + 'Best,\n'
+     + 'Ricky\n'
+     + 'Ace Acquisitions · KW Commercial NJ\n'
+     + '848.420.9972';
+
+  _bm.emailText = b;
+  _bm.showEmail = true;
+  _renderBM();
 }
 
 function _bmOpenGmail(){
@@ -21523,25 +23336,110 @@ function renderContactsTab(d){
 }
 
 // ─── TAB: NOTES ───────────────────────────────────────────────
+// v102.21: Parses a Next Steps blob into {current, history}. The save flow
+// prepends new entries on top with a [date] timestamp, so the first
+// [date] block is "current" and everything after is history.
+// Legacy entries without brackets are treated as a single "current" note.
+function _parseNextSteps(raw){
+  const text = (raw||'').trim();
+  if(!text) return { current:null, history:[] };
+
+  // Match blocks that start with [date text] — the timestamp format
+  // saveNoteEntry uses is like [Apr 14, 2026]. Date body can be anything
+  // short that isn't a bracket.
+  const re = /\[([^\]\n]{1,40})\]\s*/g;
+  const matches = [];
+  let m;
+  while((m = re.exec(text)) !== null){
+    matches.push({ date: m[1].trim(), start: m.index, bodyStart: m.index + m[0].length });
+  }
+
+  if(matches.length === 0){
+    // Legacy: no brackets at all — treat the whole thing as the current note
+    return { current:{ date:'', body:text }, history:[] };
+  }
+
+  // If there's content BEFORE the first bracket, it's orphaned legacy text.
+  // Fold it into history as an untagged entry so it doesn't get lost.
+  const entries = [];
+  if(matches[0].start > 0){
+    const prefix = text.slice(0, matches[0].start).trim();
+    if(prefix) entries.push({ date:'', body:prefix });
+  }
+  for(let i=0; i<matches.length; i++){
+    const bodyStart = matches[i].bodyStart;
+    const bodyEnd = (i+1 < matches.length) ? matches[i+1].start : text.length;
+    const body = text.slice(bodyStart, bodyEnd).trim();
+    if(body) entries.push({ date: matches[i].date, body });
+  }
+
+  if(entries.length === 0) return { current:null, history:[] };
+
+  // First entry is current (newest, because saves prepend), rest is history.
+  // Legacy note: if the orphan-prefix path above ran, its entry is FIRST and
+  // would become "current" — which is wrong, that text is the oldest. Detect
+  // by checking whether the first entry has no date AND there's a dated one
+  // right after it: swap so the dated one is current.
+  if(!entries[0].date && entries.length > 1 && entries[1].date){
+    const untagged = entries.shift();
+    // Untagged legacy entries go to the end of history (oldest)
+    entries.push(untagged);
+  }
+  return { current: entries[0], history: entries.slice(1) };
+}
+
 function renderNotesTab(d){
-  const entries=[
+  const ns = _parseNextSteps(d['Next Steps']);
+
+  // Non-Next-Steps notes render as before
+  const otherEntries = [
     {label:'Deal Notes', content:d['Deal Notes'], color:'#1a3a6e'},
-    {label:'General Property Notes', content:d['General Property Notes'], color:'#1a3a6e'},
-    {label:'Next Steps', content:d['Next Steps'], color:'#408040'}
-  ].filter(e=>e.content);
+    {label:'General Property Notes', content:d['General Property Notes'], color:'#1a3a6e'}
+  ].filter(e => e.content);
+
+  // Next Steps section (current + collapsible history)
+  const nsSection = (ns.current || ns.history.length) ? `
+    <div style="background:#fff;border:1px solid #bbf7d0;border-left:4px solid #408040;border-radius:8px;padding:14px 16px;margin-bottom:12px;">
+      <div style="font-size:11px;font-weight:700;color:#408040;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">
+        Current Next Steps${ns.current && ns.current.date ? ` <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">· ${ns.current.date}</span>` : ''}
+      </div>
+      <div style="font-size:13px;color:#0f172a;white-space:pre-wrap;line-height:1.5;">
+        ${ns.current ? ns.current.body.replace(/</g,'&lt;') : '<span style="color:#94a3b8;font-style:italic;">No current next steps.</span>'}
+      </div>
+      ${ns.history.length ? `
+        <div style="margin-top:12px;padding-top:10px;border-top:1px dashed #e2e8f0;">
+          <div onclick="_toggleNsHistory(this)" style="cursor:pointer;font-size:11px;font-weight:600;color:#64748b;display:flex;align-items:center;gap:6px;user-select:none;">
+            <span class="ns-hist-caret" style="display:inline-block;transition:transform .15s;">▶</span>
+            History (${ns.history.length})
+          </div>
+          <div class="ns-hist-body" style="display:none;margin-top:10px;">
+            ${ns.history.map(h => `
+              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px;margin-bottom:6px;">
+                ${h.date ? `<div style="font-size:10px;color:#94a3b8;font-weight:600;margin-bottom:3px;">${h.date}</div>` : ''}
+                <div style="font-size:12px;color:#475569;white-space:pre-wrap;line-height:1.5;">${h.body.replace(/</g,'&lt;')}</div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      ` : ''}
+    </div>
+  ` : '';
+
+  const otherSection = otherEntries.length > 0
+    ? otherEntries.map(e=>`
+        <div class="notes-entry">
+          <div class="notes-meta" style="color:${e.color};font-weight:bold;">${e.label}</div>
+          <div class="notes-body">${e.content}</div>
+        </div>`).join('')
+    : '';
+
+  const leftPane = nsSection + otherSection ||
+    '<div style="color:#888;font-size:11px;padding:10px 0;">No notes recorded for this deal.</div>';
 
   return `
     <div class="section-hdr"><span class="icon">📝</span> Notes</div>
     <div class="two-pane">
-      <div>
-        ${entries.length>0
-          ? entries.map(e=>`
-            <div class="notes-entry">
-              <div class="notes-meta" style="color:${e.color};font-weight:bold;">${e.label}</div>
-              <div class="notes-body">${e.content}</div>
-            </div>`).join('')
-          : '<div style="color:#888;font-size:11px;padding:10px 0;">No notes recorded for this deal.</div>'}
-      </div>
+      <div>${leftPane}</div>
       <div>
         <div class="info-box">
           <div class="info-box-title">Add Note</div>
@@ -21554,9 +23452,22 @@ function renderNotesTab(d){
             <textarea class="form-textarea" id="newNoteText" placeholder="Enter your note..." style="min-height:100px;"></textarea>
           </div>
           <button class="save-btn" onclick="saveNoteEntry()">Save Note to Airtable</button>
+          <div style="font-size:10px;color:#94a3b8;margin-top:6px;line-height:1.4;">
+            Next Steps: saving a new entry moves the current one into history.
+          </div>
         </div>
       </div>
     </div>`;
+}
+
+// v102.21: Toggle Next Steps history collapsible
+function _toggleNsHistory(headerEl){
+  const body = headerEl.parentElement.querySelector('.ns-hist-body');
+  const caret = headerEl.querySelector('.ns-hist-caret');
+  if(!body) return;
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : 'block';
+  if(caret) caret.style.transform = open ? 'rotate(0deg)' : 'rotate(90deg)';
 }
 
 // ─── TAB: CALENDAR ────────────────────────────────────────────
@@ -23660,7 +25571,16 @@ function saveNoteEntry(){
   const airtableField = fieldMap[type] || 'Deal Notes';
   const existing = currentDeal[airtableField]||'';
   const timestamp = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
-  const newVal = existing ? existing + '\n\n['+timestamp+'] ' + text : '['+timestamp+'] ' + text;
+  // v102.21: Next Steps PREPENDS so the newest entry is on top and
+  // everything else becomes history. Other note types still append.
+  let newVal;
+  if(airtableField === 'Next Steps'){
+    newVal = existing
+      ? '['+timestamp+'] ' + text + '\n\n' + existing
+      : '['+timestamp+'] ' + text;
+  } else {
+    newVal = existing ? existing + '\n\n['+timestamp+'] ' + text : '['+timestamp+'] ' + text;
+  }
   airtableUpdate(currentDeal.id,{[airtableField]: newVal}).then(ok=>{
     if(ok){
       currentDeal[airtableField] = newVal;
@@ -25027,6 +26947,9 @@ function hideLogin(){
   const nav = document.querySelector('.top-nav');
   if(appWrap) appWrap.style.visibility='visible';
   if(nav) nav.style.visibility='visible';
+  // v102.20: initialize history router once the app shell is visible.
+  // Idempotent — safe to call on both fresh login and session resume.
+  try { _nav.init(); } catch(e) { console.warn('[_nav.init]', e); }
 }
 
 async function doLogin(){

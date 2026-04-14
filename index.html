@@ -4303,21 +4303,42 @@ function clearDirty(){
   if(btn)    btn.style.background = 'linear-gradient(180deg,#2a8a2a,#1a6a1a)';
 }
 
+// v102.23: silent auto-flush. Previously this showed a confirm() dialog
+// asking "save before leaving?" — but everything should save automatically,
+// and the prompt was a friction point when switching between deals. Now:
+// if the deal is dirty, fire masterSave() and chain the callback off it.
+// The callback runs regardless of save success/failure so navigation is
+// never blocked. If the save fails, the user still navigates, but the
+// in-memory _pendingEdits stay populated so a retry on the next edit will
+// re-attempt them. showSaveConfirm on failure surfaces the error.
 function checkDirtyBeforeNavigate(callback){
   if(!_dealDirty){ callback(); return; }
-  const addr = currentDeal?.['Address'] || 'this deal';
-  if(confirm(`You have unsaved changes on "${addr}".\n\nSave before leaving?`)){
-    masterSave().then(()=>{ callback(); }).catch(()=>{ callback(); });
-  } else {
-    clearDirty();       // also clears _pendingEdits
-    callback();
-  }
+  // Fire-and-wait: flush pending edits, then proceed. masterSave already
+  // handles both immediate PATCH and the _isNew staging path.
+  masterSave({ silent: true })
+    .then(() => { callback(); })
+    .catch((e) => {
+      console.warn('[auto-flush on navigate] save failed:', e?.message||e);
+      // Don't block navigation — user shouldn't get stuck because of a
+      // transient network error. Clear dirty so we don't loop trying to
+      // save on the next nav; _pendingEdits already cleared by masterSave.
+      clearDirty();
+      callback();
+    });
 }
 
-async function masterSave(){
-  if(!currentDeal?.id){ showSaveConfirm('No deal loaded'); return; }
+async function masterSave(opts){
+  // v102.23: opts.silent = true suppresses the alert() on save failure,
+  // used by checkDirtyBeforeNavigate's auto-flush path so nav is never
+  // blocked by an error dialog. The error is still logged to console and
+  // a toast is shown so the user isn't in the dark.
+  const silent = !!(opts && opts.silent);
+  if(!currentDeal?.id){ if(!silent) showSaveConfirm('No deal loaded'); return; }
   const cfg = getConfig();
-  if(!cfg.isConnected && !cfg.key){ alert('Connect your database first (Settings).'); return; }
+  if(!cfg.isConnected && !cfg.key){
+    if(!silent) alert('Connect your database first (Settings).');
+    return;
+  }
 
   // Capture the deal being saved NOW — currentDeal may change during the async PATCH
   const dealToSave = currentDeal;
@@ -4329,7 +4350,7 @@ async function masterSave(){
   try{
     const fields = collectAllDealFields();
     if(!Object.keys(fields).length){
-      showSaveConfirm('Nothing to save');
+      if(!silent) showSaveConfirm('Nothing to save');
       if(btn){ btn.textContent = '💾 Save'; btn.disabled = false; }
       return;
     }
@@ -4357,7 +4378,13 @@ async function masterSave(){
     buildSidebar(document.getElementById('sideSearch')?.value||'');
   } catch(e){
     console.error('masterSave failed:', e);
-    alert('Save failed: '+e.message+'\n\nCheck browser console (F12) for details.');
+    if(!silent){
+      alert('Save failed: '+e.message+'\n\nCheck browser console (F12) for details.');
+    } else {
+      // Silent path: surface the failure via toast so the user still knows
+      showSaveConfirm('⚠ Auto-save failed');
+    }
+    throw e; // re-throw so the caller's .catch() runs
   } finally {
     if(btn){ btn.textContent = '💾 Save'; btn.disabled = false; }
   }
@@ -4399,8 +4426,11 @@ function collectAllDealFields(){
   const off = getNum('fin_offerPrice')||getNum('bi_offer');
   s(fields,'Asking Price', ask||null);
   s(fields,'Offer Price',  off||null);
-  fields['Top Priority']       = getChk('bi_priority');
-  fields['Discuss in Meeting'] = getChk('bi_meeting');
+  // v102.23: REMOVED dead writes for 'Top Priority' and 'Discuss in Meeting'.
+  // They were reading from bi_priority / bi_meeting checkbox IDs that no
+  // longer exist in the DOM, so getChk() was returning false on every save
+  // and silently overwriting the real values set by toggleStar() and the
+  // meeting toggle. Priority is now saved exclusively via toggleStar().
   const stage = getVal('bi_stage')||getVal('dealStageSelect');
   s(fields,'Pipeline Stage', stage||null);
   const noi = getNum('bi_noi');
@@ -5518,7 +5548,7 @@ function renderPropertyTab(d){
 
       </table>
       <div style="text-align:right;margin-top:6px;">
-        <button class="save-btn" onclick="masterSave()">Save</button>
+        <button class="save-btn" onclick="masterSave().catch(e=>console.warn('manual save error:',e))">Save</button>
       </div>
     </div>
 

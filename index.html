@@ -4912,9 +4912,30 @@ function renderSummaryTab(d){
   const pipelineCard = _sCard('Pipeline & Activity', '📊', pipelineContent, '#7c3aed');
 
   // ── Assemble full summary layout ───────────────────────────
+  // v102.21: Current Next Steps card (read-only) between KPI row and the
+  // Property Details / Financial Analysis two-column grid.
+  const ns = _parseNextSteps(d['Next Steps']);
+  const nsCard = ns.current ? `
+    <div style="background:#fff;border:1px solid #bbf7d0;border-left:4px solid #408040;border-radius:10px;padding:14px 18px;margin-bottom:14px;box-shadow:0 1px 2px rgba(0,0,0,0.03);">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;">
+        <div style="font-size:11px;font-weight:700;color:#408040;text-transform:uppercase;letter-spacing:.06em;">
+          ▸ Current Next Steps${ns.current.date ? ` <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">· ${ns.current.date}</span>` : ''}${ns.history.length ? ` <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">· ${ns.history.length} in history</span>` : ''}
+        </div>
+        <a onclick="switchTab('notes', document.querySelector('.tab-btn[onclick*=notes]'))" style="font-size:11px;color:#2563eb;cursor:pointer;text-decoration:underline;white-space:nowrap;">Edit in Notes tab →</a>
+      </div>
+      <div style="font-size:13px;color:#0f172a;white-space:pre-wrap;line-height:1.55;">${ns.current.body.replace(/</g,'&lt;')}</div>
+    </div>
+  ` : `
+    <div style="background:#f8fafc;border:1px dashed #cbd5e1;border-radius:10px;padding:12px 18px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:12px;">
+      <div style="font-size:12px;color:#94a3b8;font-style:italic;">No next steps recorded yet.</div>
+      <a onclick="switchTab('notes', document.querySelector('.tab-btn[onclick*=notes]'))" style="font-size:11px;color:#2563eb;cursor:pointer;text-decoration:underline;white-space:nowrap;">Add in Notes tab →</a>
+    </div>
+  `;
+
   return `
     <div style="padding:18px 20px;">
       ${headerCard}
+      ${nsCard}
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
         ${propCard}
         ${finCard}
@@ -23092,25 +23113,110 @@ function renderContactsTab(d){
 }
 
 // ─── TAB: NOTES ───────────────────────────────────────────────
+// v102.21: Parses a Next Steps blob into {current, history}. The save flow
+// prepends new entries on top with a [date] timestamp, so the first
+// [date] block is "current" and everything after is history.
+// Legacy entries without brackets are treated as a single "current" note.
+function _parseNextSteps(raw){
+  const text = (raw||'').trim();
+  if(!text) return { current:null, history:[] };
+
+  // Match blocks that start with [date text] — the timestamp format
+  // saveNoteEntry uses is like [Apr 14, 2026]. Date body can be anything
+  // short that isn't a bracket.
+  const re = /\[([^\]\n]{1,40})\]\s*/g;
+  const matches = [];
+  let m;
+  while((m = re.exec(text)) !== null){
+    matches.push({ date: m[1].trim(), start: m.index, bodyStart: m.index + m[0].length });
+  }
+
+  if(matches.length === 0){
+    // Legacy: no brackets at all — treat the whole thing as the current note
+    return { current:{ date:'', body:text }, history:[] };
+  }
+
+  // If there's content BEFORE the first bracket, it's orphaned legacy text.
+  // Fold it into history as an untagged entry so it doesn't get lost.
+  const entries = [];
+  if(matches[0].start > 0){
+    const prefix = text.slice(0, matches[0].start).trim();
+    if(prefix) entries.push({ date:'', body:prefix });
+  }
+  for(let i=0; i<matches.length; i++){
+    const bodyStart = matches[i].bodyStart;
+    const bodyEnd = (i+1 < matches.length) ? matches[i+1].start : text.length;
+    const body = text.slice(bodyStart, bodyEnd).trim();
+    if(body) entries.push({ date: matches[i].date, body });
+  }
+
+  if(entries.length === 0) return { current:null, history:[] };
+
+  // First entry is current (newest, because saves prepend), rest is history.
+  // Legacy note: if the orphan-prefix path above ran, its entry is FIRST and
+  // would become "current" — which is wrong, that text is the oldest. Detect
+  // by checking whether the first entry has no date AND there's a dated one
+  // right after it: swap so the dated one is current.
+  if(!entries[0].date && entries.length > 1 && entries[1].date){
+    const untagged = entries.shift();
+    // Untagged legacy entries go to the end of history (oldest)
+    entries.push(untagged);
+  }
+  return { current: entries[0], history: entries.slice(1) };
+}
+
 function renderNotesTab(d){
-  const entries=[
+  const ns = _parseNextSteps(d['Next Steps']);
+
+  // Non-Next-Steps notes render as before
+  const otherEntries = [
     {label:'Deal Notes', content:d['Deal Notes'], color:'#1a3a6e'},
-    {label:'General Property Notes', content:d['General Property Notes'], color:'#1a3a6e'},
-    {label:'Next Steps', content:d['Next Steps'], color:'#408040'}
-  ].filter(e=>e.content);
+    {label:'General Property Notes', content:d['General Property Notes'], color:'#1a3a6e'}
+  ].filter(e => e.content);
+
+  // Next Steps section (current + collapsible history)
+  const nsSection = (ns.current || ns.history.length) ? `
+    <div style="background:#fff;border:1px solid #bbf7d0;border-left:4px solid #408040;border-radius:8px;padding:14px 16px;margin-bottom:12px;">
+      <div style="font-size:11px;font-weight:700;color:#408040;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">
+        Current Next Steps${ns.current && ns.current.date ? ` <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">· ${ns.current.date}</span>` : ''}
+      </div>
+      <div style="font-size:13px;color:#0f172a;white-space:pre-wrap;line-height:1.5;">
+        ${ns.current ? ns.current.body.replace(/</g,'&lt;') : '<span style="color:#94a3b8;font-style:italic;">No current next steps.</span>'}
+      </div>
+      ${ns.history.length ? `
+        <div style="margin-top:12px;padding-top:10px;border-top:1px dashed #e2e8f0;">
+          <div onclick="_toggleNsHistory(this)" style="cursor:pointer;font-size:11px;font-weight:600;color:#64748b;display:flex;align-items:center;gap:6px;user-select:none;">
+            <span class="ns-hist-caret" style="display:inline-block;transition:transform .15s;">▶</span>
+            History (${ns.history.length})
+          </div>
+          <div class="ns-hist-body" style="display:none;margin-top:10px;">
+            ${ns.history.map(h => `
+              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px;margin-bottom:6px;">
+                ${h.date ? `<div style="font-size:10px;color:#94a3b8;font-weight:600;margin-bottom:3px;">${h.date}</div>` : ''}
+                <div style="font-size:12px;color:#475569;white-space:pre-wrap;line-height:1.5;">${h.body.replace(/</g,'&lt;')}</div>
+              </div>
+            `).join('')}
+          </div>
+        </div>
+      ` : ''}
+    </div>
+  ` : '';
+
+  const otherSection = otherEntries.length > 0
+    ? otherEntries.map(e=>`
+        <div class="notes-entry">
+          <div class="notes-meta" style="color:${e.color};font-weight:bold;">${e.label}</div>
+          <div class="notes-body">${e.content}</div>
+        </div>`).join('')
+    : '';
+
+  const leftPane = nsSection + otherSection ||
+    '<div style="color:#888;font-size:11px;padding:10px 0;">No notes recorded for this deal.</div>';
 
   return `
     <div class="section-hdr"><span class="icon">📝</span> Notes</div>
     <div class="two-pane">
-      <div>
-        ${entries.length>0
-          ? entries.map(e=>`
-            <div class="notes-entry">
-              <div class="notes-meta" style="color:${e.color};font-weight:bold;">${e.label}</div>
-              <div class="notes-body">${e.content}</div>
-            </div>`).join('')
-          : '<div style="color:#888;font-size:11px;padding:10px 0;">No notes recorded for this deal.</div>'}
-      </div>
+      <div>${leftPane}</div>
       <div>
         <div class="info-box">
           <div class="info-box-title">Add Note</div>
@@ -23123,9 +23229,22 @@ function renderNotesTab(d){
             <textarea class="form-textarea" id="newNoteText" placeholder="Enter your note..." style="min-height:100px;"></textarea>
           </div>
           <button class="save-btn" onclick="saveNoteEntry()">Save Note to Airtable</button>
+          <div style="font-size:10px;color:#94a3b8;margin-top:6px;line-height:1.4;">
+            Next Steps: saving a new entry moves the current one into history.
+          </div>
         </div>
       </div>
     </div>`;
+}
+
+// v102.21: Toggle Next Steps history collapsible
+function _toggleNsHistory(headerEl){
+  const body = headerEl.parentElement.querySelector('.ns-hist-body');
+  const caret = headerEl.querySelector('.ns-hist-caret');
+  if(!body) return;
+  const open = body.style.display !== 'none';
+  body.style.display = open ? 'none' : 'block';
+  if(caret) caret.style.transform = open ? 'rotate(0deg)' : 'rotate(90deg)';
 }
 
 // ─── TAB: CALENDAR ────────────────────────────────────────────
@@ -25229,7 +25348,16 @@ function saveNoteEntry(){
   const airtableField = fieldMap[type] || 'Deal Notes';
   const existing = currentDeal[airtableField]||'';
   const timestamp = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
-  const newVal = existing ? existing + '\n\n['+timestamp+'] ' + text : '['+timestamp+'] ' + text;
+  // v102.21: Next Steps PREPENDS so the newest entry is on top and
+  // everything else becomes history. Other note types still append.
+  let newVal;
+  if(airtableField === 'Next Steps'){
+    newVal = existing
+      ? '['+timestamp+'] ' + text + '\n\n' + existing
+      : '['+timestamp+'] ' + text;
+  } else {
+    newVal = existing ? existing + '\n\n['+timestamp+'] ' + text : '['+timestamp+'] ' + text;
+  }
   airtableUpdate(currentDeal.id,{[airtableField]: newVal}).then(ok=>{
     if(ok){
       currentDeal[airtableField] = newVal;

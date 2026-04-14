@@ -992,17 +992,17 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
       <span style="color:#2060b0;">A</span>ce <span style="color:#2060b0;">A</span>cquisitions
     </span>
   </div>
-  <button class="nav-btn active" onclick="setNav(this,'dashboard')">📊 Dashboard</button>
-  <button class="nav-btn" onclick="setNav(this,'home')">Deals</button>
-  <button class="nav-btn" onclick="setNav(this,'pipeline')">Pipeline</button>
-  <button class="nav-btn" onclick="setNav(this,'dealboard')" style="font-weight:bold;">Deal Board</button>
-  <button class="nav-btn" onclick="setNav(this,'map')" style="color:#059669;">🗺 Map</button>
-  <button class="nav-btn" onclick="setNav(this,'contacts')">Contacts</button>
-  <button class="nav-btn" onclick="setNav(this,'buyercriteria')">Buyer Criteria</button>
-  <button class="nav-btn" onclick="setNav(this,'company')">🏢 Company</button>
-  <button class="nav-btn" onclick="setNav(this,'tasks-nav')" style="font-weight:600;color:#a78bfa;">☑ Tasks</button>
-  <button class="nav-btn" id="navSettingsBtn" onclick="setNav(this,'settings')" style="display:none;">⚙ Settings</button>
-  <button class="nav-btn" onclick="setNav(this,'fieldmap')" style="color:#2060b0;">⇄ Field Map</button>
+  <button class="nav-btn active" data-page="dashboard" onclick="setNav(this,'dashboard')">📊 Dashboard</button>
+  <button class="nav-btn" data-page="home" onclick="setNav(this,'home')">Deals</button>
+  <button class="nav-btn" data-page="pipeline" onclick="setNav(this,'pipeline')">Pipeline</button>
+  <button class="nav-btn" data-page="dealboard" onclick="setNav(this,'dealboard')" style="font-weight:bold;">Deal Board</button>
+  <button class="nav-btn" data-page="map" onclick="setNav(this,'map')" style="color:#059669;">🗺 Map</button>
+  <button class="nav-btn" data-page="contacts" onclick="setNav(this,'contacts')">Contacts</button>
+  <button class="nav-btn" data-page="buyercriteria" onclick="setNav(this,'buyercriteria')">Buyer Criteria</button>
+  <button class="nav-btn" data-page="company" onclick="setNav(this,'company')">🏢 Company</button>
+  <button class="nav-btn" data-page="tasks-nav" onclick="setNav(this,'tasks-nav')" style="font-weight:600;color:#a78bfa;">☑ Tasks</button>
+  <button class="nav-btn" id="navSettingsBtn" data-page="settings" onclick="setNav(this,'settings')" style="display:none;">⚙ Settings</button>
+  <button class="nav-btn" data-page="fieldmap" onclick="setNav(this,'fieldmap')" style="color:#2060b0;">⇄ Field Map</button>
   <div class="nav-spacer"></div>
   <span class="nav-user" id="navUser">Welcome, Ricky</span>
   <!-- v102.7: online/offline indicator. Green when Supabase is reachable,
@@ -2931,10 +2931,13 @@ function startBulkGeocode(onlyMissing){
 function setNav(btn, page){
   // If navigating away from a deal with unsaved changes, prompt first
   if(_dealDirty && currentDeal && page !== 'home'){
-    checkDirtyBeforeNavigate(()=>{ _setNavDirect(btn, page); });
+    checkDirtyBeforeNavigate(()=>{ _nav.refreshCurrent(); _nav.goPage(btn, page); });
     return;
   }
-  _setNavDirect(btn, page);
+  // v102.20: snapshot current page's filters+scroll into the current history
+  // entry, then push a new entry for the destination page.
+  _nav.refreshCurrent();
+  _nav.goPage(btn, page);
 }
 
 function _setNavDirect(btn, page){
@@ -2960,6 +2963,277 @@ function _setNavDirect(btn, page){
   else if(page==='home'&&allDeals.length>0) openDeal(currentDeal||allDeals[0]);
   else if(page==='home') showHomeEmpty();
 }
+
+// ═══════════════════════════════════════════════════════════════════════
+// v102.20 — HISTORY ROUTER (browser back button support)
+// ═══════════════════════════════════════════════════════════════════════
+// Integrates with window.history so the browser Back/Forward buttons move
+// between top-level pages and deal detail views instead of exiting the app.
+//
+// Design:
+//  - Each top-level page push = one history entry with {page, filters, scroll}
+//  - Opening a deal = one history entry with {deal: id}
+//  - popstate handler reads state, calls the matching renderer, and restores
+//    filters + scroll on the destination page.
+//  - `_nav._suppress` flag prevents popstate-triggered re-renders from pushing
+//    brand new history entries (which would break forward-nav).
+//  - Respects the dirty guard: popstate prompts "save before leaving" just
+//    like sidebar nav does. If user cancels, we push the deal state back on
+//    so the URL stays in sync with what's on screen.
+// ─────────────────────────────────────────────────────────────────────────
+const _nav = {
+  _suppress: false,
+  _inited: false,
+
+  // Capture filter state + scroll for the page we're about to leave.
+  // Called by pushPage / pushDeal on the CURRENT state before replacing it.
+  captureCurrent(){
+    const active = document.querySelector('.nav-btn.active');
+    if(!active) return null;
+    const page = active.getAttribute('data-page') || _nav._pageFromLabel(active.textContent.trim());
+    if(!page) return null;
+    const scroll = _nav._currentScroll();
+    const filters = _nav._captureFilters(page);
+    return { page, filters, scroll };
+  },
+
+  // Guess page key from nav button label (fallback if data-page missing).
+  _pageFromLabel(label){
+    const map = {
+      'Dashboard':'dashboard', 'Deal Board':'dealboard', 'Pipeline':'pipeline',
+      'Map':'map', 'Contacts':'contacts', 'Buyer Criteria':'buyercriteria',
+      'Tasks':'tasks-nav', 'Company':'company', 'Settings':'settings',
+      'Lead Intake':'leadintake', 'Field Map':'fieldmap'
+    };
+    for(const k in map){ if(label.indexOf(k) !== -1) return map[k]; }
+    return '';
+  },
+
+  // Return the current scroll position of whichever element scrolls on this page.
+  // The CRM uses #mainArea as the scroll container on most pages.
+  _currentScroll(){
+    const ma = document.getElementById('mainArea');
+    return {
+      main: ma ? ma.scrollTop : 0,
+      window: window.scrollY || 0
+    };
+  },
+
+  // Snapshot filter state per page. Only dealboard has significant ephemeral
+  // filter state to capture — pipeline persists its own filters to localStorage,
+  // contacts/buyer criteria have search inputs we can grab.
+  _captureFilters(page){
+    const f = {};
+    if(page === 'dealboard' || page === 'map'){
+      // Search box
+      const s = document.getElementById('db_search');
+      if(s) f.search = s.value || '';
+      // Priority toggle
+      const p = document.getElementById('db_priority');
+      if(p) f.priority = !!p.checked;
+      // Checkbox multi-selects: stage / type / source
+      ['stage','type','source'].forEach(kind => {
+        const cbs = [...document.querySelectorAll('.db_'+kind+'_cb')];
+        if(cbs.length){
+          const checked = cbs.filter(c => c.checked).map(c => c.value);
+          // Only save if it's actually filtered (not all checked)
+          if(checked.length !== cbs.length) f[kind] = checked;
+        }
+      });
+      // LOC-001 location filters (state/region/county/city)
+      if(typeof _locFilters !== 'undefined'){
+        f.loc = {
+          state:  (_locFilters.state || []).slice(),
+          region: (_locFilters.region || []).slice(),
+          county: (_locFilters.county || []).slice(),
+          city:   (_locFilters.city || []).slice(),
+        };
+      }
+      // View mode (list vs map) — read from the view toggle button
+      const mapBtn  = document.getElementById('db_view_map');
+      if(mapBtn && mapBtn.classList.contains('active')) f.view = 'map';
+    }
+    else if(page === 'contacts'){
+      const s = document.getElementById('contactSearch');
+      if(s) f.search = s.value || '';
+    }
+    else if(page === 'buyercriteria'){
+      const s = document.getElementById('bcSearch');
+      if(s) f.search = s.value || '';
+    }
+    return f;
+  },
+
+  // Apply a saved filter snapshot back onto a freshly-rendered page.
+  // Called from popstate AFTER the page renderer has run.
+  _applyFilters(page, f){
+    if(!f) return;
+    if(page === 'dealboard' || page === 'map'){
+      const s = document.getElementById('db_search');
+      if(s && f.search) s.value = f.search;
+      const p = document.getElementById('db_priority');
+      if(p) p.checked = !!f.priority;
+      // Restore checkbox multi-selects
+      ['stage','type','source'].forEach(kind => {
+        if(!f[kind]) return; // no filter was applied
+        const savedSet = new Set(f[kind]);
+        document.querySelectorAll('.db_'+kind+'_cb').forEach(cb => {
+          cb.checked = savedSet.has(cb.value);
+        });
+        if(typeof _dbMultiChanged === 'function') _dbMultiChanged(kind);
+      });
+      // Restore LOC-001 filters
+      if(f.loc && typeof _locFilters !== 'undefined'){
+        _locFilters.state  = (f.loc.state  || []).slice();
+        _locFilters.region = (f.loc.region || []).slice();
+        _locFilters.county = (f.loc.county || []).slice();
+        _locFilters.city   = (f.loc.city   || []).slice();
+        // Re-render LOC bar chips — _locPostRender re-runs _locRenderTags for all keys
+        if(typeof _locPostRender === 'function'){
+          try { _locPostRender(); } catch(e){}
+        }
+      }
+      // Re-run the filter (renderDealBoard reads DOM checkbox state + _locFilters)
+      if(typeof renderDealBoard === 'function') renderDealBoard();
+      if(typeof dbRefreshMapPins === 'function') dbRefreshMapPins();
+      // View mode
+      if(f.view === 'map' && typeof dbSetView === 'function'){
+        setTimeout(()=>{ try{ dbSetView('map'); }catch(e){} }, 0);
+      }
+    }
+    else if(page === 'contacts'){
+      const s = document.getElementById('contactSearch');
+      if(s && f.search){ s.value = f.search; s.dispatchEvent(new Event('input')); }
+    }
+    else if(page === 'buyercriteria'){
+      const s = document.getElementById('bcSearch');
+      if(s && f.search){ s.value = f.search; s.dispatchEvent(new Event('input')); }
+    }
+  },
+
+  // Restore scroll position on the CURRENT page. Uses a couple of
+  // rAF ticks to wait for layout/async content to settle.
+  _restoreScroll(scroll){
+    if(!scroll) return;
+    const doIt = () => {
+      const ma = document.getElementById('mainArea');
+      if(ma && scroll.main) ma.scrollTop = scroll.main;
+      if(scroll.window) window.scrollTo(0, scroll.window);
+    };
+    requestAnimationFrame(() => requestAnimationFrame(doIt));
+    // Second attempt after 150ms for pages with async-loaded content
+    setTimeout(doIt, 150);
+  },
+
+  // PUBLIC: Navigate to a top-level page AND push history.
+  // Called from the sidebar nav click handler.
+  goPage(btn, page){
+    // If this is a real user nav (not a popstate replay), push history.
+    if(!_nav._suppress){
+      try {
+        window.history.pushState({ kind:'page', page }, '', '#/'+page);
+      } catch(e){}
+    }
+    _setNavDirect(btn, page);
+  },
+
+  // PUBLIC: Open a deal AND push history.
+  goDeal(d){
+    if(!d) return;
+    if(!_nav._suppress){
+      try {
+        window.history.pushState({ kind:'deal', id: d.id }, '', '#/deal/'+d.id);
+      } catch(e){}
+    }
+    _openDealDirect(d);
+  },
+
+  // popstate handler — browser Back/Forward pressed.
+  onPop(e){
+    const st = e.state;
+    if(!st){
+      // No state = we're at the initial entry. Go to dashboard.
+      _nav._suppress = true;
+      try { _setNavDirect(null, 'dashboard'); } finally { _nav._suppress = false; }
+      return;
+    }
+
+    // Dirty guard: if user is leaving a deal with unsaved edits, prompt.
+    // If they cancel, re-push the current deal state to keep URL in sync.
+    const handle = () => {
+      _nav._suppress = true;
+      try {
+        if(st.kind === 'deal'){
+          const d = (typeof allDeals !== 'undefined')
+            ? allDeals.find(x => x.id === st.id) : null;
+          if(d){
+            _openDealDirect(d);
+          } else {
+            // Deal not loaded (shouldn't normally happen) — fall back to dashboard
+            _setNavDirect(null, 'dashboard');
+          }
+        } else if(st.kind === 'page'){
+          // Find the matching sidebar button so it gets the active class
+          const btn = document.querySelector('.nav-btn[data-page="'+st.page+'"]')
+                   || _nav._findNavBtnByPage(st.page);
+          _setNavDirect(btn, st.page);
+          // Restore filters + scroll AFTER the page renders
+          if(st.filters) _nav._applyFilters(st.page, st.filters);
+          if(st.scroll)  _nav._restoreScroll(st.scroll);
+        }
+      } finally {
+        _nav._suppress = false;
+      }
+    };
+
+    if(_dealDirty && currentDeal){
+      checkDirtyBeforeNavigate(handle);
+    } else {
+      handle();
+    }
+  },
+
+  // Fallback: find nav button by matching its label text to a page key.
+  _findNavBtnByPage(page){
+    const label = {
+      dashboard:'Dashboard', dealboard:'Deal Board', pipeline:'Pipeline',
+      map:'Map', contacts:'Contacts', buyercriteria:'Buyer Criteria',
+      'tasks-nav':'Tasks', company:'Company', settings:'Settings',
+      leadintake:'Lead Intake', fieldmap:'Field Map'
+    }[page];
+    if(!label) return null;
+    const btns = [...document.querySelectorAll('.nav-btn')];
+    return btns.find(b => b.textContent.trim().indexOf(label) !== -1) || null;
+  },
+
+  // Called once on app startup (after login) to wire popstate and plant
+  // an initial history entry so the first Back press has somewhere to go.
+  init(){
+    if(_nav._inited) return;
+    _nav._inited = true;
+    window.addEventListener('popstate', _nav.onPop);
+    // Replace (not push) the initial entry so there's no phantom blank history.
+    try {
+      window.history.replaceState({ kind:'page', page:'dashboard' }, '', '#/dashboard');
+    } catch(e){}
+  },
+
+  // Called BEFORE pushing a new state, to update the CURRENT history entry
+  // with the page's current filter+scroll snapshot. That way when the user
+  // hits Back, they come back to where they actually were, not a stale snapshot.
+  refreshCurrent(){
+    try {
+      const st = window.history.state;
+      if(!st || st.kind !== 'page') return;
+      const snap = _nav.captureCurrent();
+      if(!snap) return;
+      window.history.replaceState(
+        { kind:'page', page: st.page, filters: snap.filters, scroll: snap.scroll },
+        '', location.hash || ('#/'+st.page)
+      );
+    } catch(e){}
+  }
+};
 
 // ─── HELPERS ──────────────────────────────────────────────────
 
@@ -3050,10 +3324,13 @@ function openDeal(d){
   // Dismiss any floating browser autocomplete
   if(document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
   if(_dealDirty && currentDeal && currentDeal.id !== d.id){
-    checkDirtyBeforeNavigate(()=>{ _openDealDirect(d); });
+    checkDirtyBeforeNavigate(()=>{ _nav.refreshCurrent(); _nav.goDeal(d); });
     return;
   }
-  _openDealDirect(d);
+  // v102.20: snapshot the page we're leaving (so Back restores filters+scroll)
+  // then push a new history entry for this deal.
+  _nav.refreshCurrent();
+  _nav.goDeal(d);
 }
 
 // ── Recently Viewed Order ─────────────────────────────────────────
@@ -26305,6 +26582,9 @@ function hideLogin(){
   const nav = document.querySelector('.top-nav');
   if(appWrap) appWrap.style.visibility='visible';
   if(nav) nav.style.visibility='visible';
+  // v102.20: initialize history router once the app shell is visible.
+  // Idempotent — safe to call on both fresh login and session resume.
+  try { _nav.init(); } catch(e) { console.warn('[_nav.init]', e); }
 }
 
 async function doLogin(){

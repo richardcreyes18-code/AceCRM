@@ -905,6 +905,106 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   <div style="margin-top:8px;padding-top:8px;border-top:1px solid #f3e8ff;font-size:10px;color:#b45309;font-weight:600;">Click the 📁 to open →</div>
 </div>
 
+<!-- ── v102.28 Turn F: PORTFOLIO OFFER MODAL (create + edit) ─────── -->
+<div id="portfolioOfferModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9700;align-items:center;justify-content:center;padding:20px;" onclick="if(event.target===this)closePortfolioOfferModal()">
+  <div style="background:#fff;border-radius:12px;width:680px;max-width:94vw;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.4);overflow:hidden;">
+    <div style="padding:18px 22px;border-bottom:1px solid #e2e8f0;background:#fffbeb;display:flex;justify-content:space-between;align-items:center;">
+      <div id="poModalTitle" style="font-size:16px;font-weight:700;color:#92400e;">💰 New Portfolio Offer</div>
+      <button onclick="closePortfolioOfferModal()" style="background:none;border:none;color:#b45309;font-size:22px;cursor:pointer;line-height:1;">✕</button>
+    </div>
+    <div style="padding:20px 22px;overflow-y:auto;flex:1;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Offer Type *</label>
+          <select id="poType" style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:14px;box-sizing:border-box;background:#fff;">
+            <option value="buyer_offer">Buyer Offer</option>
+            <option value="asking">Seller Asking</option>
+            <option value="ace_starter">Ace Starter</option>
+            <option value="seller_counter">Seller Counter</option>
+            <option value="ace_counter">Ace Counter</option>
+            <option value="accepted_by_seller">✓ Accepted by Seller</option>
+            <option value="accepted">✓ Final Buyer</option>
+            <option value="walked">Walked</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Offer Date</label>
+          <input id="poDate" type="date" style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:14px;box-sizing:border-box;" />
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1.3fr 1fr;gap:12px;margin-bottom:14px;">
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Party / Buyer Name *</label>
+          <input id="poPartyName" type="text" placeholder="e.g. 441 Capital LLC" style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:14px;box-sizing:border-box;" />
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Amount *</label>
+          <input id="poAmount" type="text" inputmode="numeric" class="num-input" placeholder="e.g. 2,900,000" style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:14px;box-sizing:border-box;" />
+        </div>
+      </div>
+
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:14px;">
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Financing Type</label>
+          <select id="poFinancing" style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:14px;box-sizing:border-box;background:#fff;">
+            <option value="">— Select —</option>
+            <option value="cash">Cash</option>
+            <option value="financing">Financing</option>
+            <option value="seller_financing">Seller Financing</option>
+            <option value="other">Other</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Presentation Status</label>
+          <select id="poPresentation" style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:14px;box-sizing:border-box;background:#fff;">
+            <option value="not_presented">Not Presented</option>
+            <option value="presented_verbal">Presented (Verbal)</option>
+            <option value="presented_loi">Presented (LOI)</option>
+          </select>
+        </div>
+      </div>
+
+      <div style="margin-bottom:14px;">
+        <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Terms</label>
+        <textarea id="poTerms" rows="2" placeholder="e.g. 60-day close, $100k earnest, subject to inspection..." style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:13px;box-sizing:border-box;resize:vertical;font-family:inherit;"></textarea>
+      </div>
+
+      <div style="margin-bottom:14px;">
+        <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Contingencies</label>
+        <input id="poContingencies" type="text" placeholder="e.g. Financing, Inspection, Title" style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:13px;box-sizing:border-box;" />
+      </div>
+
+      <div style="margin-bottom:14px;">
+        <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Notes</label>
+        <textarea id="poNotes" rows="2" placeholder="Internal notes about this offer..." style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:13px;box-sizing:border-box;resize:vertical;font-family:inherit;"></textarea>
+      </div>
+
+      <!-- Affected children selector -->
+      <div style="margin-bottom:6px;padding:14px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;">
+        <div style="font-size:12px;font-weight:700;color:#92400e;margin-bottom:4px;">Which properties does this offer apply to?</div>
+        <div style="font-size:11px;color:#b45309;margin-bottom:10px;line-height:1.5;">
+          Default: all properties in the portfolio (package offer).
+          Uncheck any the buyer is passing on — for example, "all except 22 Main St."
+        </div>
+        <div id="poAffectedList" style="display:flex;flex-direction:column;gap:6px;max-height:200px;overflow-y:auto;"></div>
+        <div id="poAffectedStatus" style="font-size:10px;color:#94a3b8;margin-top:8px;"></div>
+      </div>
+
+      <div id="poError" style="display:none;background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;padding:8px 12px;border-radius:6px;font-size:12px;margin-top:10px;"></div>
+    </div>
+    <div style="padding:14px 22px;border-top:1px solid #e2e8f0;background:#f8fafc;display:flex;justify-content:space-between;gap:8px;">
+      <div>
+        <button id="poDeleteBtn" onclick="_poDeleteFromModal()" style="display:none;background:#fef2f2;color:#dc2626;border:1px solid #fecaca;padding:8px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Delete</button>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button onclick="closePortfolioOfferModal()" style="background:#fff;color:#475569;border:1px solid #cbd5e1;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Cancel</button>
+        <button id="poSubmitBtn" onclick="submitPortfolioOffer()" style="background:#b45309;color:#fff;border:none;padding:8px 20px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">Save Offer</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ── DEAL SNAPSHOT POPUP ─────────────────────────────────────── -->
 <div id="dealSnapshotModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9600;align-items:flex-start;justify-content:center;padding:40px 20px;overflow-y:auto;" onclick="if(event.target===this)closeDealSnapshot()">
   <div style="background:#fff;border-radius:12px;width:580px;max-width:94vw;box-shadow:0 20px 60px rgba(0,0,0,0.4);max-height:calc(100vh - 80px);display:flex;flex-direction:column;overflow:hidden;">
@@ -11419,6 +11519,353 @@ function _emptyFinSide(){
   };
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// v102.28 Turn E: TENANT MIX + UNIT MIX AGGREGATION
+// ═══════════════════════════════════════════════════════════════════════
+// mf_unit_rent_data is a dual-purpose column:
+//   - Array shape:  [{Tenant Name, ...}, ...] — commercial tenant records
+//   - Object shape: {mode:'byType', byType:{eff, 1br, ...}, units:[]} — MF unit mix
+// Deals use whichever shape their asset type requires. Parser sniffs the
+// shape and routes to the right structure. See v102.26 commentary for the
+// full collision context.
+
+function _pfParseUnitRentData(raw){
+  if(!raw) return { tenants: [], unitMix: null };
+  let parsed;
+  try {
+    parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+  } catch(e) {
+    return { tenants: [], unitMix: null };
+  }
+  if(Array.isArray(parsed)){
+    return { tenants: parsed, unitMix: null };
+  }
+  if(parsed && typeof parsed === 'object' && parsed.mode === 'byType'){
+    return { tenants: [], unitMix: parsed };
+  }
+  return { tenants: [], unitMix: null };
+}
+
+// Walks all children, collects commercial tenants. Each tenant is tagged
+// with _sourceDealId + _sourceAddress so the renderer can show the source
+// column and link back to the child deal's Tenant Mix tab.
+function _portfolioTenants(children){
+  const out = [];
+  children.forEach(d => {
+    const raw = d['MF Unit Rent Data'] || d.mf_unit_rent_data;
+    const { tenants } = _pfParseUnitRentData(raw);
+    tenants.forEach(t => {
+      // Shallow-copy so we don't mutate the cached deal object
+      out.push({
+        ...t,
+        _sourceDealId: d.id,
+        _sourceAddress: d['Address'] || 'Unnamed',
+        _sourceType: d['CRM Asset Classification'] || d['Simple Text Property Type'] || ''
+      });
+    });
+  });
+  return out;
+}
+
+// Walks MF children, collects aggregate unit counts and blended rents per
+// bedroom type. Counts come from ace_properties columns (which are the
+// source of truth for unit counts on the deal card). Rents come from the
+// `byType` object in mf_unit_rent_data, weighted by unit count for blend.
+// Also walks commercial children (no byType) and just sums their total SF.
+//
+// Returns:
+//   {
+//     hasUnitData: bool,
+//     byType: {
+//       eff:    {label, count, vacant, totalRent, avgRent, sources:[{deal, count, avgRent, totalRent}]},
+//       '1br':  {...}, '2br':{...}, '3br':{...}, '4br':{...}, oth:{...}
+//     },
+//     totalUnits, totalVacant, totalMonthlyRent, totalAnnualRent
+//   }
+function _portfolioUnitMix(children){
+  const bedroomTypes = [
+    { key:'eff',  label:'Efficiency',  countField:'Units Efficiency',  vacField:'Units Efficiency Vacant' },
+    { key:'1br',  label:'1 Bedroom',   countField:'Units 1 Bedroom',   vacField:'Units 1 Bedroom Vacant' },
+    { key:'2br',  label:'2 Bedroom',   countField:'Units 2 Bedroom',   vacField:'Units 2 Bedroom Vacant' },
+    { key:'3br',  label:'3 Bedroom',   countField:'Units 3 Bedroom',   vacField:'Units 3 Bedroom Vacant' },
+    { key:'4br',  label:'4 Bedroom',   countField:'Units 4 Bedroom',   vacField:'Units 4 Bedroom Vacant' },
+    { key:'oth',  label:'Other',       countField:'Units Other',       vacField:'Units Other Vacant'     }
+  ];
+  const byType = {};
+  bedroomTypes.forEach(t => {
+    byType[t.key] = { label:t.label, count:0, countWithRent:0, vacant:0, totalRent:0, avgRent:null, sources:[] };
+  });
+  let hasUnitData = false;
+
+  children.forEach(d => {
+    const raw = d['MF Unit Rent Data'] || d.mf_unit_rent_data;
+    const { unitMix } = _pfParseUnitRentData(raw);
+    const addr = d['Address'] || 'Unnamed';
+
+    bedroomTypes.forEach(t => {
+      const cnt = Number(d[t.countField] || 0);
+      const vac = Number(d[t.vacField]   || 0);
+      const avgRent = unitMix && unitMix.byType ? Number(unitMix.byType[t.key] || 0) : 0;
+      if(cnt > 0){
+        hasUnitData = true;
+        byType[t.key].count  += cnt;
+        byType[t.key].vacant += vac;
+        if(avgRent > 0){
+          byType[t.key].countWithRent += cnt;
+          byType[t.key].totalRent += cnt * avgRent;
+          byType[t.key].sources.push({
+            deal: addr, dealId: d.id, count: cnt, avgRent, totalRent: cnt * avgRent
+          });
+        } else {
+          byType[t.key].sources.push({
+            deal: addr, dealId: d.id, count: cnt, avgRent: null, totalRent: 0
+          });
+        }
+      }
+    });
+  });
+
+  // Compute weighted avg rent per bedroom type — divide by units that
+  // HAVE rent data, not all units. Prevents under-reporting when some
+  // children have unit counts but no rents.
+  bedroomTypes.forEach(t => {
+    const b = byType[t.key];
+    if(b.countWithRent > 0 && b.totalRent > 0){
+      b.avgRent = b.totalRent / b.countWithRent;
+    }
+  });
+
+  const totalUnits        = bedroomTypes.reduce((s, t) => s + byType[t.key].count,     0);
+  const totalVacant       = bedroomTypes.reduce((s, t) => s + byType[t.key].vacant,    0);
+  const totalMonthlyRent  = bedroomTypes.reduce((s, t) => s + byType[t.key].totalRent, 0);
+  const totalAnnualRent   = totalMonthlyRent * 12;
+
+  return { hasUnitData, byType, totalUnits, totalVacant, totalMonthlyRent, totalAnnualRent };
+}
+
+// Renders the "Tenant & Unit Mix" tab content. Auto-detects whether to
+// show the Tenant section, the Unit Mix section, both, or an empty state.
+function _renderPortfolioTenantUnitMixTab(p, children, fmt$, fmtPct){
+  if(children.length === 0){
+    return `
+      <div style="background:#fff;border:1px dashed #cbd5e1;border-radius:10px;padding:40px 20px;text-align:center;">
+        <div style="font-size:36px;opacity:0.4;margin-bottom:8px;">🏪</div>
+        <div style="font-size:13px;font-weight:600;color:#475569;margin-bottom:4px;">No tenant or unit data to show</div>
+        <div style="font-size:11px;color:#94a3b8;">Add properties to this portfolio first — their tenants and unit mixes will roll up here automatically.</div>
+      </div>`;
+  }
+
+  const tenants = _portfolioTenants(children);
+  const um = _portfolioUnitMix(children);
+  const hasTenants = tenants.length > 0;
+  const hasUnits   = um.hasUnitData;
+
+  if(!hasTenants && !hasUnits){
+    return `
+      <div style="background:#fff;border:1px dashed #cbd5e1;border-radius:10px;padding:40px 20px;text-align:center;">
+        <div style="font-size:36px;opacity:0.4;margin-bottom:8px;">🏪</div>
+        <div style="font-size:13px;font-weight:600;color:#475569;margin-bottom:4px;">No tenant or unit mix data filled in</div>
+        <div style="font-size:11px;color:#94a3b8;line-height:1.6;">
+          Open individual child deals and fill in their Tenant Mix tab (for commercial) or Property Details → Unit Mix (for multifamily).<br>
+          Values will aggregate here automatically once saved.
+        </div>
+      </div>`;
+  }
+
+  // ── TENANT MIX SECTION ─────────────────────────────────────────
+  let tenantHtml = '';
+  if(hasTenants){
+    // Aggregate totals
+    const totalSF = tenants.reduce((s,t) => s + (Number(t['Square Footage'])||0), 0);
+    const totalMoRent = tenants.reduce((s,t) => s + (Number(t['Monthly Rent'])||0), 0);
+    const avgPSF = totalSF > 0 ? (totalMoRent * 12) / totalSF : 0;
+
+    // Lease type breakdown
+    const leaseBuckets = {};
+    tenants.forEach(t => {
+      const lt = t['Lease Type'] || 'Not specified';
+      leaseBuckets[lt] = (leaseBuckets[lt] || 0) + 1;
+    });
+    const leaseBreakdown = Object.entries(leaseBuckets)
+      .sort((a,b) => b[1] - a[1])
+      .map(([k, v]) => `${v} ${k}`)
+      .join(' · ');
+
+    // Color helper for lease type pills
+    const ltColor = (lt) => {
+      const l = (lt || '').toLowerCase();
+      if(l.includes('nnn') || l.includes('triple'))    return '#16a34a';
+      if(l.includes('modified') || l.includes('mg'))   return '#d97706';
+      if(l.includes('gross'))                          return '#2060b0';
+      if(l.includes('month'))                          return '#dc2626';
+      return '#64748b';
+    };
+
+    // Compute years-left for each tenant from lease end date
+    const yrsLeft = (t) => {
+      const end = t['Lease End Date'];
+      if(!end) return null;
+      try {
+        const endDt = new Date(end);
+        if(isNaN(endDt.getTime())) return null;
+        const now = new Date();
+        const ms = endDt - now;
+        if(ms < 0) return 0;
+        return Math.round((ms / (365.25 * 24 * 3600 * 1000)) * 10) / 10;
+      } catch(e) { return null; }
+    };
+
+    const tenantRows = tenants.map((t, i) => {
+      const sf = Number(t['Square Footage']) || 0;
+      const rent = Number(t['Monthly Rent']) || 0;
+      const psf = sf > 0 && rent > 0 ? ((rent * 12) / sf) : null;
+      const lt = t['Lease Type'] || '—';
+      const lc = ltColor(lt);
+      const yl = yrsLeft(t);
+      const ylColor = yl === null ? '#94a3b8' : (yl <= 1 ? '#dc2626' : yl <= 3 ? '#d97706' : '#16a34a');
+      const bg = i % 2 === 0 ? '#fff' : '#fafbfd';
+      return `
+        <tr style="background:${bg};cursor:pointer;" onclick="_pfOpenTenantSource('${t._sourceDealId}')">
+          <td style="padding:7px 12px;border-bottom:1px solid #f1f5f9;font-size:12px;">
+            <div style="font-weight:700;color:#0f172a;">${(t['Tenant Name']||'—').replace(/</g,'&lt;')}</div>
+            ${t['Industry'] ? `<div style="font-size:10px;color:#94a3b8;font-weight:400;">${t['Industry'].replace(/</g,'&lt;')}</div>` : ''}
+          </td>
+          <td style="padding:7px 12px;border-bottom:1px solid #f1f5f9;font-size:11px;color:#475569;">
+            <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:180px;">📁 ${(t._sourceAddress||'—').replace(/</g,'&lt;')}</div>
+            ${t['Unit / Suite'] ? `<div style="font-size:10px;color:#94a3b8;">Unit ${t['Unit / Suite'].replace(/</g,'&lt;')}</div>` : ''}
+          </td>
+          <td style="padding:7px 12px;border-bottom:1px solid #f1f5f9;font-size:11px;color:#0f172a;text-align:right;">${sf > 0 ? sf.toLocaleString() + ' SF' : '—'}</td>
+          <td style="padding:7px 12px;border-bottom:1px solid #f1f5f9;font-size:11px;color:#166534;text-align:right;font-weight:700;">${rent > 0 ? fmt$(rent) : '—'}</td>
+          <td style="padding:7px 12px;border-bottom:1px solid #f1f5f9;font-size:11px;color:#1a5a9a;text-align:right;">${psf != null ? '$' + psf.toFixed(2) : '—'}</td>
+          <td style="padding:7px 12px;border-bottom:1px solid #f1f5f9;text-align:center;">
+            <span style="background:${lc}22;color:${lc};border:1px solid ${lc}55;padding:2px 8px;border-radius:99px;font-size:10px;font-weight:700;">${lt}</span>
+          </td>
+          <td style="padding:7px 12px;border-bottom:1px solid #f1f5f9;text-align:center;font-size:11px;font-weight:700;color:${ylColor};">${yl === null ? '—' : yl + 'yr'}</td>
+        </tr>`;
+    }).join('');
+
+    tenantHtml = `
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin-bottom:16px;">
+        <div style="background:linear-gradient(180deg,#2a7a2a,#1a5a1a);color:#fff;padding:10px 16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+          <div style="font-weight:700;font-size:13px;">🏪 Tenant Mix — ${tenants.length} Tenant${tenants.length === 1 ? '' : 's'}</div>
+          <div style="display:flex;gap:14px;font-size:11px;opacity:0.95;flex-wrap:wrap;">
+            ${totalSF > 0 ? `<span><strong>${totalSF.toLocaleString()} SF</strong> occupied</span>` : ''}
+            ${totalMoRent > 0 ? `<span><strong>${fmt$(totalMoRent)}/mo</strong> total</span>` : ''}
+            ${avgPSF > 0 ? `<span><strong>$${avgPSF.toFixed(2)}/SF/yr</strong> avg</span>` : ''}
+          </div>
+        </div>
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;min-width:760px;">
+            <thead>
+              <tr style="background:#f1f5f9;">
+                <th style="padding:8px 12px;text-align:left;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;">Tenant</th>
+                <th style="padding:8px 12px;text-align:left;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;">Source Property</th>
+                <th style="padding:8px 12px;text-align:right;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;">SF</th>
+                <th style="padding:8px 12px;text-align:right;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;">Monthly Rent</th>
+                <th style="padding:8px 12px;text-align:right;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;">Rent/SF (yr)</th>
+                <th style="padding:8px 12px;text-align:center;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;">Lease Type</th>
+                <th style="padding:8px 12px;text-align:center;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;">Years Left</th>
+              </tr>
+            </thead>
+            <tbody>${tenantRows}</tbody>
+            <tfoot>
+              <tr style="background:#e8f4e8;font-weight:700;">
+                <td colspan="2" style="padding:8px 12px;font-size:11px;color:#166534;">Totals (${tenants.length} tenants)</td>
+                <td style="padding:8px 12px;font-size:11px;color:#166534;text-align:right;">${totalSF.toLocaleString()} SF</td>
+                <td style="padding:8px 12px;font-size:11px;color:#166534;text-align:right;">${fmt$(totalMoRent)}/mo</td>
+                <td style="padding:8px 12px;font-size:11px;color:#166534;text-align:right;">${avgPSF > 0 ? '$' + avgPSF.toFixed(2) : '—'}</td>
+                <td colspan="2" style="padding:8px 12px;font-size:10px;color:#166534;">${fmt$(totalMoRent * 12)}/yr · ${leaseBreakdown}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        <div style="padding:10px 16px;background:#f8fafc;font-size:11px;color:#94a3b8;border-top:1px solid #e2e8f0;">
+          Click any row to open the source deal and edit the tenant there.
+        </div>
+      </div>`;
+  }
+
+  // ── UNIT MIX SECTION ───────────────────────────────────────────
+  let unitMixHtml = '';
+  if(hasUnits){
+    // Headline stats
+    const occUnits = um.totalUnits - um.totalVacant;
+    const occPct   = um.totalUnits > 0 ? (occUnits / um.totalUnits) * 100 : 0;
+
+    // Bedroom rows — only show types that have at least one unit
+    const activeTypes = Object.entries(um.byType).filter(([k, b]) => b.count > 0);
+    const bedroomRows = activeTypes.map(([key, b]) => {
+      const vac = b.vacant;
+      const occ = b.count - vac;
+      const vacPct = b.count > 0 ? (vac / b.count) * 100 : 0;
+      const avgStr = b.avgRent != null ? fmt$(b.avgRent) : '—';
+      const totStr = b.totalRent > 0 ? fmt$(b.totalRent) : '—';
+      const sourceCount = b.sources.length;
+      const sourceLabel = sourceCount === 1 ? b.sources[0].deal : `${sourceCount} properties`;
+      return `
+        <tr>
+          <td style="padding:9px 12px;border-bottom:1px solid #f1f5f9;font-size:12px;font-weight:700;color:#0f172a;">${b.label}</td>
+          <td style="padding:9px 12px;border-bottom:1px solid #f1f5f9;font-size:11px;color:#64748b;text-align:right;">${b.count}</td>
+          <td style="padding:9px 12px;border-bottom:1px solid #f1f5f9;font-size:11px;color:${vac > 0 ? '#dc2626' : '#16a34a'};text-align:right;font-weight:600;">${occ}/${b.count}${vac > 0 ? ` · ${vac} vacant` : ''}</td>
+          <td style="padding:9px 12px;border-bottom:1px solid #f1f5f9;font-size:11px;color:#1a5a9a;text-align:right;font-weight:600;">${avgStr}</td>
+          <td style="padding:9px 12px;border-bottom:1px solid #f1f5f9;font-size:11px;color:#166534;text-align:right;font-weight:700;">${totStr}</td>
+          <td style="padding:9px 12px;border-bottom:1px solid #f1f5f9;font-size:10px;color:#94a3b8;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:160px;" title="${sourceLabel.replace(/"/g,'&quot;')}">${sourceLabel}</td>
+        </tr>`;
+    }).join('');
+
+    unitMixHtml = `
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;margin-bottom:16px;">
+        <div style="background:linear-gradient(180deg,#1a3a6e,#142b50);color:#fff;padding:10px 16px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+          <div style="font-weight:700;font-size:13px;">🏠 Multifamily Unit Mix — ${um.totalUnits} Total Unit${um.totalUnits === 1 ? '' : 's'}</div>
+          <div style="display:flex;gap:14px;font-size:11px;opacity:0.95;flex-wrap:wrap;">
+            <span><strong>${occUnits}</strong> occupied / <strong>${um.totalVacant}</strong> vacant</span>
+            <span><strong>${occPct.toFixed(1)}%</strong> occupancy</span>
+            ${um.totalMonthlyRent > 0 ? `<span><strong>${fmt$(um.totalMonthlyRent)}/mo</strong> blended GRI</span>` : ''}
+          </div>
+        </div>
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;min-width:640px;">
+            <thead>
+              <tr style="background:#f1f5f9;">
+                <th style="padding:8px 12px;text-align:left;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;">Bedroom Type</th>
+                <th style="padding:8px 12px;text-align:right;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;"># Units</th>
+                <th style="padding:8px 12px;text-align:right;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;">Occupancy</th>
+                <th style="padding:8px 12px;text-align:right;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;">Avg Rent (Blend)</th>
+                <th style="padding:8px 12px;text-align:right;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;">Monthly Total</th>
+                <th style="padding:8px 12px;text-align:left;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;">Source</th>
+              </tr>
+            </thead>
+            <tbody>${bedroomRows}</tbody>
+            <tfoot>
+              <tr style="background:#eef2fb;font-weight:700;">
+                <td style="padding:9px 12px;font-size:11px;color:#1a3a6e;">Portfolio Totals</td>
+                <td style="padding:9px 12px;font-size:11px;color:#1a3a6e;text-align:right;">${um.totalUnits}</td>
+                <td style="padding:9px 12px;font-size:11px;color:#1a3a6e;text-align:right;">${occPct.toFixed(1)}%</td>
+                <td style="padding:9px 12px;font-size:11px;color:#1a3a6e;text-align:right;">—</td>
+                <td style="padding:9px 12px;font-size:11px;color:#1a3a6e;text-align:right;">${um.totalMonthlyRent > 0 ? fmt$(um.totalMonthlyRent) : '—'}</td>
+                <td style="padding:9px 12px;font-size:10px;color:#1a3a6e;">${um.totalAnnualRent > 0 ? fmt$(um.totalAnnualRent) + '/yr' : ''}</td>
+              </tr>
+            </tfoot>
+          </table>
+        </div>
+        <div style="padding:10px 16px;background:#f8fafc;font-size:11px;color:#94a3b8;border-top:1px solid #e2e8f0;">
+          Blended avg rent = (sum of unit counts × avg rents) ÷ total units for that type.
+          Unit counts come from each child's Property Details; rents come from the MF Unit Rent Data.
+        </div>
+      </div>`;
+  }
+
+  return tenantHtml + unitMixHtml;
+}
+
+// Open a deal from a tenant row click. Opens the child deal — the user
+// can then navigate to its Tenant Mix tab to edit.
+function _pfOpenTenantSource(dealId){
+  const d = (allDeals || []).find(x => x.id === dealId);
+  if(!d){ alert('Source deal not found.'); return; }
+  if(typeof openDeal === 'function') openDeal(d);
+}
+
 // Tab state — which tab of the portfolio detail view is showing.
 let _currentPortfolioTab = 'summary';
 
@@ -11609,6 +12056,16 @@ function openPortfolioDetail(portfolioId){
   // Turn D: tab state persists across re-renders within the same portfolio
   // (for example after Edit or Add Deals) but resets on navigation.
   _currentPortfolioTab = 'summary';
+  // Turn F: clear the offers cache and trigger a background load so the
+  // Offers tab is populated when the user switches to it. Non-blocking —
+  // the Summary tab renders immediately. On completion we re-render if
+  // the user happens to be on the Offers tab already.
+  _currentPortfolioOffers = [];
+  _portfolioOffersLoad(portfolioId).then(() => {
+    if(_currentPortfolioId === portfolioId && _currentPortfolioTab === 'offers'){
+      _renderPortfolioDetail(p);
+    }
+  });
   _renderPortfolioDetail(p);
 }
 
@@ -11632,9 +12089,16 @@ function _renderPortfolioDetail(p){
   const fmtPct = n => (n != null && !isNaN(n)) ? n.toFixed(2) + '%' : '—';
 
   // Tab content rendered lazily based on _currentPortfolioTab.
-  const tabContent = _currentPortfolioTab === 'financials'
-    ? _renderPortfolioFinancialsTab(p, children, fmt$, fmtPct)
-    : _renderPortfolioSummaryTab(p, children, fmt$, fmtPct);
+  let tabContent;
+  if(_currentPortfolioTab === 'financials'){
+    tabContent = _renderPortfolioFinancialsTab(p, children, fmt$, fmtPct);
+  } else if(_currentPortfolioTab === 'tenantmix'){
+    tabContent = _renderPortfolioTenantUnitMixTab(p, children, fmt$, fmtPct);
+  } else if(_currentPortfolioTab === 'offers'){
+    tabContent = _renderPortfolioOffersTab(p, children, fmt$, fmtPct);
+  } else {
+    tabContent = _renderPortfolioSummaryTab(p, children, fmt$, fmtPct);
+  }
 
   // Tab button styling helper
   const tabBtn = (key, label, icon) => {
@@ -11701,6 +12165,8 @@ function _renderPortfolioDetail(p){
       <div style="background:#f1f5f9;border-radius:10px 10px 0 0;border:1px solid #e2e8f0;border-bottom:none;display:flex;gap:2px;padding:4px 4px 0;">
         ${tabBtn('summary',    'Summary',             '🏠')}
         ${tabBtn('financials', 'Financial Analysis',  '📊')}
+        ${tabBtn('tenantmix',  'Tenant & Unit Mix',   '🏪')}
+        ${tabBtn('offers',     'Offers',              '💰')}
       </div>
       <div id="pfTabContent" style="background:#fff;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 10px 10px;padding:20px 22px;">
         ${tabContent}
@@ -11848,25 +12314,15 @@ function _renderPortfolioFinancialsTab(p, children, fmt$, fmtPct){
         </tr>`;
     }).join('');
 
-  // Unit mix summary
+  // Unit mix summary — Turn E moved the detailed view to its own tab.
+  // The Financial Analysis tab now just shows total unit count in the
+  // headline cards and cross-references the new tab.
   const um = fin.unitMix;
   const hasUnits = (um.eff + um.br1 + um.br2 + um.br3 + um.br4 + um.other) > 0;
   const unitMixHtml = hasUnits ? `
-    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px 18px;margin-top:16px;">
-      <div style="font-size:13px;font-weight:700;color:#0f172a;margin-bottom:10px;">🏠 Portfolio Unit Mix</div>
-      <div style="display:grid;grid-template-columns:repeat(6, minmax(0,1fr));gap:8px;">
-        ${[['Efficiency',um.eff,um.effVac],['1BR',um.br1,um.br1Vac],['2BR',um.br2,um.br2Vac],['3BR',um.br3,um.br3Vac],['4BR',um.br4,um.br4Vac],['Other',um.other,um.otherVac]]
-          .filter(([,n]) => n > 0)
-          .map(([label, n, vac]) => `
-            <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:10px 12px;text-align:center;">
-              <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;">${label}</div>
-              <div style="font-size:20px;font-weight:800;color:#0f172a;margin-top:2px;">${n}</div>
-              ${vac > 0 ? `<div style="font-size:9px;color:#dc2626;">${vac} vacant</div>` : '<div style="font-size:9px;color:#16a34a;">fully leased</div>'}
-            </div>`).join('')}
-      </div>
-      <div style="font-size:11px;color:#64748b;margin-top:10px;text-align:right;">
-        <strong style="color:#0f172a;">${fin.totalUnits}</strong> total units summed across ${fin.count} ${fin.count===1?'property':'properties'}
-      </div>
+    <div style="background:#f8fafc;border:1px dashed #cbd5e1;border-radius:10px;padding:12px 16px;margin-top:14px;text-align:center;font-size:11px;color:#64748b;">
+      <strong style="color:#475569;">${fin.totalUnits} total units across ${fin.count} ${fin.count === 1 ? 'property' : 'properties'}.</strong>
+      See <a onclick="_pfSwitchTab('tenantmix')" style="color:#b45309;font-weight:700;cursor:pointer;text-decoration:underline;">🏪 Tenant &amp; Unit Mix</a> for the per-bedroom breakdown with blended rents.
     </div>` : '';
 
   // Package vs Sum pricing note
@@ -12342,6 +12798,363 @@ function _pfCancelHide(){
     clearTimeout(_pfHoverHideTimer);
     _pfHoverHideTimer = null;
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// v102.28 Turn F: PORTFOLIO OFFERS
+// ═══════════════════════════════════════════════════════════════════════
+// Read/write offers against the ace_portfolio_offers table. Mirrors the
+// deal-level offers pattern (raw column names, no field map). Differs in
+// one important way: the affected_child_ids array lets an offer scope
+// to a subset of the portfolio's children (partial-package offers).
+
+// Cache of offers for the current portfolio. Keyed to _currentPortfolioId.
+let _currentPortfolioOffers = [];
+
+// Fetches offers for a portfolio. Orders by offer_date desc (newest first).
+// Soft-deleted rows are filtered out. Safe to call repeatedly — replaces
+// the cache on each call.
+async function _portfolioOffersLoad(portfolioId){
+  if(!portfolioId){ _currentPortfolioOffers = []; return []; }
+  try {
+    const rows = await _sbGet(SB_TABLES.portfolioOffers,
+      `portfolio_id=eq.${portfolioId}&deleted_at=is.null&select=*&order=offer_date.desc.nullslast,created_at.desc`);
+    _currentPortfolioOffers = rows || [];
+    return _currentPortfolioOffers;
+  } catch(e) {
+    console.warn('[_portfolioOffersLoad] failed:', e.message);
+    _currentPortfolioOffers = [];
+    return [];
+  }
+}
+
+async function _portfolioOfferCreate(portfolioId, fields){
+  if(!portfolioId) throw new Error('portfolioId required');
+  const payload = { ...fields, portfolio_id: portfolioId };
+  if(typeof _currentUser !== 'undefined' && _currentUser && _currentUser.id){
+    payload.created_by_user_id = _currentUser.id;
+  }
+  return await _sbPost(SB_TABLES.portfolioOffers, payload);
+}
+
+async function _portfolioOfferUpdate(offerId, fields){
+  if(!offerId) throw new Error('offerId required');
+  return await _sbPatch(SB_TABLES.portfolioOffers, offerId, fields);
+}
+
+async function _portfolioOfferDelete(offerId){
+  if(!offerId) throw new Error('offerId required');
+  // Soft delete via deleted_at timestamp
+  return await _sbPatch(SB_TABLES.portfolioOffers, offerId, {
+    deleted_at: new Date().toISOString()
+  });
+}
+
+// ── OFFER MODAL HANDLERS ──────────────────────────────────────────
+let _poEditingOfferId = null;
+
+function openPortfolioOfferModal(portfolioId, offerId){
+  const p = (allPortfolios || []).find(x => x.id === portfolioId);
+  if(!p){ alert('Portfolio not found.'); return; }
+  _poEditingOfferId = offerId || null;
+  const modal = document.getElementById('portfolioOfferModal');
+  const title = document.getElementById('poModalTitle');
+  const err = document.getElementById('poError');
+  const deleteBtn = document.getElementById('poDeleteBtn');
+  if(err){ err.style.display = 'none'; err.textContent = ''; }
+
+  // Populate the affected children checkbox list
+  const children = _portfolioChildren(portfolioId);
+  const list = document.getElementById('poAffectedList');
+  if(list){
+    if(children.length === 0){
+      list.innerHTML = '<div style="font-size:11px;color:#94a3b8;padding:8px;">No properties in this portfolio yet.</div>';
+    } else {
+      list.innerHTML = children.map(d => `
+        <label class="po-affected-row" data-deal-id="${d.id}" style="display:flex;align-items:center;gap:8px;padding:6px 10px;background:#fff;border:1px solid #fde68a;border-radius:6px;cursor:pointer;">
+          <input type="checkbox" class="po-affected-cb" value="${d.id}" checked onchange="_poUpdateAffectedStatus()" />
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:12px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${(d['Address']||'Unnamed').replace(/</g,'&lt;')}</div>
+            <div style="font-size:10px;color:#94a3b8;">${d['Asking Price'] ? '$'+Number(d['Asking Price']).toLocaleString() : '—'}</div>
+          </div>
+        </label>`).join('');
+    }
+  }
+
+  // Prefill if editing
+  if(offerId){
+    const o = (_currentPortfolioOffers || []).find(x => x.id === offerId);
+    if(!o){ alert('Offer not found.'); return; }
+    if(title) title.textContent = '✏️ Edit Portfolio Offer';
+    document.getElementById('poType').value           = o.offer_type          || 'buyer_offer';
+    document.getElementById('poDate').value           = o.offer_date          || '';
+    document.getElementById('poPartyName').value      = o.party_name          || '';
+    document.getElementById('poAmount').value         = o.amount != null ? String(o.amount) : '';
+    document.getElementById('poFinancing').value      = o.financing_type      || '';
+    document.getElementById('poPresentation').value   = o.presentation_status || 'not_presented';
+    document.getElementById('poTerms').value          = o.terms               || '';
+    document.getElementById('poContingencies').value  = o.contingencies       || '';
+    document.getElementById('poNotes').value          = o.notes               || '';
+    // Affected children: if array is empty/null, treat as "all" (all checked)
+    if(Array.isArray(o.affected_child_ids) && o.affected_child_ids.length > 0){
+      const affected = new Set(o.affected_child_ids);
+      document.querySelectorAll('.po-affected-cb').forEach(cb => {
+        cb.checked = affected.has(cb.value);
+      });
+    }
+    if(deleteBtn) deleteBtn.style.display = 'inline-block';
+  } else {
+    if(title) title.textContent = '💰 New Portfolio Offer';
+    document.getElementById('poType').value           = 'buyer_offer';
+    document.getElementById('poDate').value           = new Date().toISOString().slice(0,10);
+    document.getElementById('poPartyName').value      = '';
+    document.getElementById('poAmount').value         = '';
+    document.getElementById('poFinancing').value      = '';
+    document.getElementById('poPresentation').value   = 'not_presented';
+    document.getElementById('poTerms').value          = '';
+    document.getElementById('poContingencies').value  = '';
+    document.getElementById('poNotes').value          = '';
+    // All checked by default (applies to whole portfolio)
+    document.querySelectorAll('.po-affected-cb').forEach(cb => { cb.checked = true; });
+    if(deleteBtn) deleteBtn.style.display = 'none';
+  }
+
+  _poUpdateAffectedStatus();
+  if(modal) modal.style.display = 'flex';
+  setTimeout(() => document.getElementById('poPartyName')?.focus(), 50);
+}
+
+function closePortfolioOfferModal(){
+  const modal = document.getElementById('portfolioOfferModal');
+  if(modal) modal.style.display = 'none';
+  _poEditingOfferId = null;
+}
+
+function _poUpdateAffectedStatus(){
+  const status = document.getElementById('poAffectedStatus');
+  if(!status) return;
+  const cbs = document.querySelectorAll('.po-affected-cb');
+  const total = cbs.length;
+  const checked = [...cbs].filter(cb => cb.checked).length;
+  if(total === 0){
+    status.textContent = '';
+  } else if(checked === total){
+    status.textContent = `Applies to all ${total} properties (package offer)`;
+    status.style.color = '#166534';
+  } else {
+    status.textContent = `Applies to ${checked} of ${total} properties (partial offer)`;
+    status.style.color = '#b45309';
+  }
+}
+
+async function submitPortfolioOffer(){
+  const portfolioId = _currentPortfolioId;
+  if(!portfolioId) return;
+
+  const err = document.getElementById('poError');
+  const btn = document.getElementById('poSubmitBtn');
+  const showErr = (msg) => { if(err){ err.textContent = msg; err.style.display='block'; } };
+  const hideErr = () => { if(err){ err.style.display = 'none'; } };
+
+  const partyName = document.getElementById('poPartyName')?.value?.trim() || '';
+  const rawAmount = document.getElementById('poAmount')?.value?.trim() || '';
+  const offerType = document.getElementById('poType')?.value || 'buyer_offer';
+  const offerDate = document.getElementById('poDate')?.value || null;
+  const financing = document.getElementById('poFinancing')?.value || null;
+  const presentation = document.getElementById('poPresentation')?.value || 'not_presented';
+  const terms = document.getElementById('poTerms')?.value?.trim() || null;
+  const contingencies = document.getElementById('poContingencies')?.value?.trim() || null;
+  const notes = document.getElementById('poNotes')?.value?.trim() || null;
+
+  if(!partyName){ showErr('Party / buyer name is required.'); return; }
+  if(!rawAmount){ showErr('Amount is required.'); return; }
+  const amount = parseFloat(rawAmount.replace(/,/g,''));
+  if(isNaN(amount) || amount < 0){ showErr('Amount must be a valid number.'); return; }
+  hideErr();
+
+  // Capture affected children
+  const cbs = document.querySelectorAll('.po-affected-cb');
+  const total = cbs.length;
+  const checkedIds = [...cbs].filter(cb => cb.checked).map(cb => cb.value);
+  // Convention: if all are checked OR none are checked, store NULL (meaning "applies to all").
+  // Only store an explicit array when a strict subset is selected.
+  const affectedChildIds = (checkedIds.length === total || checkedIds.length === 0) ? null : checkedIds;
+
+  const payload = {
+    offer_type:          offerType,
+    offer_date:          offerDate || null,
+    party_name:          partyName,
+    amount:              amount,
+    financing_type:      financing || null,
+    presentation_status: presentation || 'not_presented',
+    terms:               terms,
+    contingencies:       contingencies,
+    notes:               notes,
+    affected_child_ids:  affectedChildIds
+  };
+
+  if(btn){ btn.disabled = true; btn.textContent = 'Saving...'; }
+  try {
+    if(_poEditingOfferId){
+      await _portfolioOfferUpdate(_poEditingOfferId, payload);
+    } else {
+      await _portfolioOfferCreate(portfolioId, payload);
+    }
+    await _portfolioOffersLoad(portfolioId);
+    closePortfolioOfferModal();
+    const p = (allPortfolios || []).find(x => x.id === portfolioId);
+    if(p) _renderPortfolioDetail(p);
+  } catch(e) {
+    showErr('Failed to save: ' + (e.message || 'unknown error'));
+    if(btn){ btn.disabled = false; btn.textContent = 'Save Offer'; }
+  }
+}
+
+async function _poDeleteFromModal(){
+  if(!_poEditingOfferId) return;
+  if(!confirm('Delete this offer?\n\nThis will soft-delete the offer — it won\'t appear in the offers list, but the row is kept in the database for audit purposes.')) return;
+  try {
+    await _portfolioOfferDelete(_poEditingOfferId);
+    await _portfolioOffersLoad(_currentPortfolioId);
+    closePortfolioOfferModal();
+    const p = (allPortfolios || []).find(x => x.id === _currentPortfolioId);
+    if(p) _renderPortfolioDetail(p);
+  } catch(e) {
+    alert('Failed to delete: ' + (e.message || 'unknown error'));
+  }
+}
+
+// ── OFFERS TAB RENDERER ───────────────────────────────────────────
+function _renderPortfolioOffersTab(p, children, fmt$, fmtPct){
+  const offers = _currentPortfolioOffers || [];
+  const pkgPrice = p['Package Price'] != null ? Number(p['Package Price']) : null;
+
+  // Offer cards
+  let offersHtml;
+  if(offers.length === 0){
+    offersHtml = `
+      <div style="background:#fff;border:1px dashed #cbd5e1;border-radius:10px;padding:40px 20px;text-align:center;">
+        <div style="font-size:36px;opacity:0.4;margin-bottom:8px;">💰</div>
+        <div style="font-size:13px;font-weight:600;color:#475569;margin-bottom:4px;">No portfolio offers yet</div>
+        <div style="font-size:11px;color:#94a3b8;line-height:1.6;">
+          Offers recorded here apply to the portfolio as a whole, or to a subset of its properties.<br>
+          Individual per-property offers still live on each child deal's own Offers tab.
+        </div>
+      </div>`;
+  } else {
+    // Child ID → address lookup for the affected list
+    const childLookup = {};
+    children.forEach(d => { childLookup[d.id] = d['Address'] || 'Unnamed'; });
+
+    offersHtml = offers.map(o => {
+      const meta = (typeof _OFFER_TYPE_META !== 'undefined' && _OFFER_TYPE_META[o.offer_type])
+                 || { label: o.offer_type, color:'#64748b', bg:'#f1f5f9' };
+      const amount = o.amount != null ? fmt$(o.amount) : '—';
+      const date = o.offer_date || '—';
+
+      // Affected children display
+      let affectedHtml = '';
+      if(Array.isArray(o.affected_child_ids) && o.affected_child_ids.length > 0){
+        const addrs = o.affected_child_ids.map(id => childLookup[id] || '(unknown)');
+        const previewCount = 3;
+        const preview = addrs.slice(0, previewCount).join(' · ');
+        const more = addrs.length > previewCount ? ` +${addrs.length - previewCount} more` : '';
+        affectedHtml = `
+          <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:6px;padding:6px 10px;margin-top:8px;font-size:11px;color:#92400e;">
+            <strong style="font-weight:700;">Partial offer</strong> — applies to ${addrs.length} of ${children.length} properties: ${preview}${more}
+          </div>`;
+      } else {
+        affectedHtml = `
+          <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:6px;padding:6px 10px;margin-top:8px;font-size:11px;color:#166534;">
+            <strong style="font-weight:700;">Package offer</strong> — applies to all ${children.length} ${children.length === 1 ? 'property' : 'properties'}
+          </div>`;
+      }
+
+      // vs Package Price / vs Sum comparison
+      let comparison = '';
+      if(o.amount != null && pkgPrice){
+        const delta = Number(o.amount) - pkgPrice;
+        const pct = (delta / pkgPrice) * 100;
+        const dColor = delta >= 0 ? '#166534' : '#dc2626';
+        comparison = ` <span style="font-size:11px;color:${dColor};font-weight:600;">${delta >= 0 ? '+' : ''}${fmt$(Math.abs(delta))} (${pct >= 0 ? '+' : ''}${pct.toFixed(1)}%) vs package</span>`;
+      }
+
+      const presentationLabels = {
+        not_presented:   { label: 'Not Presented',   color: '#94a3b8' },
+        presented_verbal:{ label: 'Presented (Verbal)', color: '#d97706' },
+        presented_loi:   { label: 'Presented (LOI)',  color: '#16a34a' }
+      };
+      const ps = presentationLabels[o.presentation_status] || { label:'—', color:'#94a3b8' };
+
+      return `
+        <div onclick="openPortfolioOfferModal('${p.id}', '${o.id}')"
+          style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;margin-bottom:10px;cursor:pointer;transition:all 0.15s;"
+          onmouseover="this.style.borderColor='#b45309';"
+          onmouseout="this.style.borderColor='#e2e8f0';">
+          <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:8px;">
+            <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:0;">
+              <span style="background:${meta.bg};color:${meta.color};border:1px solid ${meta.color}55;padding:3px 10px;border-radius:99px;font-size:10px;font-weight:700;white-space:nowrap;">${meta.label}</span>
+              <div style="font-size:15px;font-weight:800;color:#0f172a;">${amount}</div>
+              ${comparison}
+            </div>
+            <div style="font-size:11px;color:#64748b;">${date}</div>
+          </div>
+          <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:12px;color:#475569;">
+            <div><strong style="color:#0f172a;">${(o.party_name || '—').replace(/</g,'&lt;')}</strong></div>
+            ${o.financing_type ? `<div style="color:#64748b;">💳 ${o.financing_type}</div>` : ''}
+            <div style="color:${ps.color};font-weight:600;">• ${ps.label}</div>
+          </div>
+          ${o.terms ? `<div style="font-size:11px;color:#64748b;margin-top:6px;line-height:1.5;"><strong style="color:#475569;">Terms:</strong> ${o.terms.replace(/</g,'&lt;')}</div>` : ''}
+          ${o.contingencies ? `<div style="font-size:11px;color:#64748b;margin-top:4px;line-height:1.5;"><strong style="color:#475569;">Contingencies:</strong> ${o.contingencies.replace(/</g,'&lt;')}</div>` : ''}
+          ${o.notes ? `<div style="font-size:11px;color:#64748b;margin-top:4px;font-style:italic;line-height:1.5;">"${o.notes.replace(/</g,'&lt;')}"</div>` : ''}
+          ${affectedHtml}
+        </div>`;
+    }).join('');
+  }
+
+  // Summary stats at the top
+  const bestOffer = offers.length > 0 ? offers.reduce((max, o) => {
+    const amt = Number(o.amount || 0);
+    return amt > (max ? Number(max.amount || 0) : 0) ? o : max;
+  }, null) : null;
+  const totalOffers = offers.length;
+  const packageOffers = offers.filter(o => !Array.isArray(o.affected_child_ids) || o.affected_child_ids.length === 0).length;
+  const partialOffers = totalOffers - packageOffers;
+
+  const statsHtml = totalOffers > 0 ? `
+    <div style="display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:10px;margin-bottom:16px;">
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;">
+        <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.04em;font-weight:700;">Total Offers</div>
+        <div style="font-size:22px;font-weight:800;color:#0f172a;margin-top:4px;">${totalOffers}</div>
+      </div>
+      <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px 14px;">
+        <div style="font-size:10px;color:#166534;text-transform:uppercase;letter-spacing:0.04em;font-weight:700;">Package Offers</div>
+        <div style="font-size:22px;font-weight:800;color:#166534;margin-top:4px;">${packageOffers}</div>
+      </div>
+      <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 14px;">
+        <div style="font-size:10px;color:#92400e;text-transform:uppercase;letter-spacing:0.04em;font-weight:700;">Partial Offers</div>
+        <div style="font-size:22px;font-weight:800;color:#b45309;margin-top:4px;">${partialOffers}</div>
+      </div>
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;">
+        <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.04em;font-weight:700;">Best Offer</div>
+        <div style="font-size:22px;font-weight:800;color:#0f172a;margin-top:4px;">${bestOffer ? fmt$(bestOffer.amount) : '—'}</div>
+      </div>
+    </div>` : '';
+
+  return `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;">
+      <div style="font-size:14px;font-weight:700;color:#0f172a;">💰 Portfolio Offers</div>
+      <button onclick="openPortfolioOfferModal('${p.id}')"
+        style="background:#b45309;color:#fff;border:none;padding:8px 16px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;">
+        + New Offer
+      </button>
+    </div>
+    ${statsHtml}
+    ${offersHtml}
+    <div style="font-size:11px;color:#94a3b8;margin-top:14px;line-height:1.6;text-align:center;">
+      Portfolio offers are separate from per-property offers.
+      <strong style="color:#475569;">Per-property offers</strong> still live on each child deal's own Offers tab.
+    </div>`;
 }
 
 function showDealBoard(){

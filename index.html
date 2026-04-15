@@ -22780,15 +22780,29 @@ async function _clkSearch(prefix, query){
   dd.style.display = 'block';
   dd.innerHTML = '<div style="padding:14px;text-align:center;color:#94a3b8;font-size:12px;">Searching…</div>';
   try{
-    // Build a PostgREST OR filter across name, phone_number, email
-    const safe = encodeURIComponent(query);
-    // PostgREST OR syntax: or=(name.ilike.*marc*,phone_number.ilike.*marc*,email.ilike.*marc*)
-    const orFilter = encodeURIComponent(
-      `name.ilike.*${query}*,phone_number.ilike.*${query}*,email.ilike.*${query}*,company.ilike.*${query}*`
-    );
+    // Build a PostgREST OR filter across name, phone_number, email, company.
+    // Critical: do NOT encodeURIComponent the WHOLE filter string — that
+    // mangles the commas and dots that PostgREST uses as syntax. Only
+    // escape characters inside the search value that PostgREST treats as
+    // operators within an ilike pattern (parens, commas). Spaces inside
+    // ilike patterns work fine raw via _sbGet's normal URL handling.
+    //
+    // Also strip non-digit chars from the query when building the phone
+    // sub-filter, so "Alan Chin" doesn't try to match a phone — but
+    // "(646) 891" does (matching against digits-only stored phones).
+    const safeVal = String(query).replace(/[,()]/g, ' ').trim();
+    const phoneDigits = String(query).replace(/[^0-9]/g, '');
+    const conds = [
+      'name.ilike.*'    + safeVal + '*',
+      'email.ilike.*'   + safeVal + '*',
+      'company.ilike.*' + safeVal + '*'
+    ];
+    if(phoneDigits.length >= 3){
+      conds.push('phone_number.ilike.*' + phoneDigits + '*');
+    }
     const rows = await _sbGet(SB_TABLES.contacts,
       'select=id,name,phone_number,email,company,type,date_added'
-      + '&or=(' + orFilter + ')'
+      + '&or=(' + conds.join(',') + ')'
       + '&limit=8');
     // Race-guard again — query may have changed during fetch
     if(_clkLastQuery[prefix] !== query) return;
@@ -23006,6 +23020,195 @@ function _clkUnlockFields(prefix){
     el.style.color = '';
     el.style.cursor = '';
   });
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// v102.41: DEAL-CARD CONTACT LOOKUP — Seller Contact Information section.
+// ═══════════════════════════════════════════════════════════════════════
+// When a deal has no owner_contact_id set, this lookup widget appears
+// in the Contacts/Buyers tab. The user can:
+//   - Search and pick an existing contact → property's owner_contact_id
+//     is patched, no new contact is created.
+//   - Or just type a name/phone/email into the form below and click
+//     Save → existing saveSellerContact() handles new-contact creation.
+//
+// Once an owner is set, the section flips to a read-only owner card
+// with "Open contact" and "Unlink owner" buttons (see renderContactsTab).
+//
+// Search uses the same OR-filter approach as the lead-intake _clk widget,
+// just with a separate prefix (dc_lookup_*) so the two widgets don't
+// collide on element IDs.
+
+let _dcLookupSearchTimer = null;
+let _dcLookupLastQuery = '';
+
+function _dcLookupOnInput(q, propertyId){
+  const query = (q || '').trim();
+  _dcLookupLastQuery = query;
+  if(_dcLookupSearchTimer) clearTimeout(_dcLookupSearchTimer);
+  if(query.length < 2){
+    const dd = document.getElementById('dc_lookup_dropdown');
+    if(dd){ dd.style.display = 'none'; dd.innerHTML = ''; }
+    return;
+  }
+  _dcLookupSearchTimer = setTimeout(() => _dcLookupSearch(query, propertyId), 250);
+}
+
+async function _dcLookupSearch(query, propertyId){
+  if(_dcLookupLastQuery !== query) return;
+  const dd = document.getElementById('dc_lookup_dropdown');
+  if(!dd) return;
+  dd.style.display = 'block';
+  dd.innerHTML = '<div style="padding:14px;text-align:center;color:#94a3b8;font-size:12px;">Searching…</div>';
+  try{
+    const safeVal = String(query).replace(/[,()]/g, ' ').trim();
+    const phoneDigits = String(query).replace(/[^0-9]/g, '');
+    const conds = [
+      'name.ilike.*'    + safeVal + '*',
+      'email.ilike.*'   + safeVal + '*',
+      'company.ilike.*' + safeVal + '*'
+    ];
+    if(phoneDigits.length >= 3){
+      conds.push('phone_number.ilike.*' + phoneDigits + '*');
+    }
+    const rows = await _sbGet(SB_TABLES.contacts,
+      'select=id,name,phone_number,email,company,type'
+      + '&or=(' + conds.join(',') + ')'
+      + '&limit=8');
+    if(_dcLookupLastQuery !== query) return;
+    _dcLookupRenderDropdown(query, Array.isArray(rows) ? rows : [], propertyId);
+  }catch(e){
+    console.error('deal-card contact lookup failed:', e);
+    dd.innerHTML = '<div style="padding:14px;text-align:center;color:#dc2626;font-size:12px;">Search failed: ' + (e.message||'unknown') + '</div>';
+  }
+}
+
+function _dcLookupRenderDropdown(query, rows, propertyId){
+  const dd = document.getElementById('dc_lookup_dropdown');
+  if(!dd) return;
+  let html = '';
+  if(rows.length === 0){
+    html += `<div style="padding:10px 12px;font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">No matches — keep typing in the form below to create a new contact</div>`;
+  } else {
+    html += `<div style="padding:8px 12px;font-size:11px;color:#94a3b8;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;">${rows.length} match${rows.length===1?'':'es'}</div>`;
+    rows.forEach((r, idx) => {
+      const safeName = String(r.name||'(no name)').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+      const sub = [r.company, r.phone_number, r.email].filter(Boolean).join(' · ');
+      const safeSub = String(sub || '—').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+      const initials = _wbContactInitials(r.name || '');
+      const borderTop = idx === 0 ? '' : 'border-top:1px solid #f1f5f9;';
+      html += `
+        <div onclick="_dcLookupSelect('${propertyId}','${r.id}')" onmousedown="event.preventDefault()"
+             style="padding:10px 12px;cursor:pointer;display:flex;align-items:center;gap:10px;${borderTop}"
+             onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'">
+          <div style="width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#d97706);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:11px;flex-shrink:0;">${initials}</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${safeName}</div>
+            <div style="font-size:11px;color:#64748b;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${safeSub}</div>
+          </div>
+        </div>
+      `;
+    });
+  }
+  dd.innerHTML = html;
+}
+
+// User picked an existing contact from the dropdown. Confirm, link the
+// property to that contact, refresh the section.
+async function _dcLookupSelect(propertyId, contactId){
+  const dd = document.getElementById('dc_lookup_dropdown');
+  if(dd){ dd.style.display = 'none'; }
+  // Fetch the contact name for the confirm dialog
+  let row = null;
+  try{
+    const rows = await _sbGet(SB_TABLES.contacts,
+      'select=id,name,phone_number,email,company,secondary_phone,contact_notes&id=eq.' + encodeURIComponent(contactId) + '&limit=1');
+    row = (Array.isArray(rows) && rows.length) ? rows[0] : null;
+  }catch(e){
+    console.error('contact fetch failed:', e);
+    showSaveConfirm('Lookup failed: ' + (e.message||'unknown'));
+    return;
+  }
+  if(!row){ showSaveConfirm('Contact not found — try again.'); return; }
+
+  const proceed = confirm(
+    'Link this property to ' + (row.name || 'this contact') + ' as the owner?\n\n' +
+    'No new contact will be created. The property\'s existing seller contact fields (if any) will be replaced with this contact\'s data.'
+  );
+  if(!proceed) return;
+
+  await linkExistingSellerContact(propertyId, contactId, row);
+}
+
+// Link a property to an existing contact as its owner. Patches the
+// property's owner_contact_id, mirrors the contact's fields onto the
+// in-memory deal so the section re-renders correctly, and refreshes.
+async function linkExistingSellerContact(propertyId, contactId, contactRow){
+  try{
+    await _sbPatch(SB_TABLES.properties, propertyId, { owner_contact_id: contactId });
+    if(currentDeal && currentDeal.id === propertyId){
+      currentDeal['_sellerContactId']    = contactId;
+      currentDeal['_sellerName']         = contactRow.name           || '';
+      currentDeal['_sellerCompany']      = contactRow.company        || '';
+      currentDeal['_sellerPhone']        = contactRow.phone_number   || '';
+      currentDeal['_sellerPhone2']       = contactRow.secondary_phone|| '';
+      currentDeal['_sellerEmail']        = contactRow.email          || '';
+      currentDeal['_sellerContactNotes'] = contactRow.contact_notes  || '';
+      currentDeal['Owner']               = [contactId];
+      currentDeal['_ownerName']          = contactRow.name || '';
+      // Update the deal-card header strip too
+      if(typeof _liveUpdateHeader === 'function') _liveUpdateHeader();
+    }
+    showSaveConfirm('✓ Owner linked to ' + (contactRow.name || 'contact'));
+    _dcRefreshContactsTab();
+  }catch(e){
+    console.error('linkExistingSellerContact failed:', e);
+    alert('Failed to link contact: ' + (e.message || 'unknown'));
+  }
+}
+
+// Unlink the property's owner. Doesn't delete the contact, just removes
+// the owner_contact_id link on the property. The section flips back to
+// the "no owner — lookup widget" state.
+async function unlinkSellerContact(propertyId){
+  if(!confirm('Unlink the current owner from this property?\n\nThe contact record itself stays — only the property-to-owner link is removed. You can link a different owner afterward.')) return;
+  try{
+    await _sbPatch(SB_TABLES.properties, propertyId, { owner_contact_id: null });
+    if(currentDeal && currentDeal.id === propertyId){
+      currentDeal['_sellerContactId']    = '';
+      currentDeal['_sellerName']         = '';
+      currentDeal['_sellerCompany']      = '';
+      currentDeal['_sellerPhone']        = '';
+      currentDeal['_sellerPhone2']       = '';
+      currentDeal['_sellerEmail']        = '';
+      currentDeal['_sellerContactNotes'] = '';
+      currentDeal['Owner']               = [];
+      currentDeal['_ownerName']          = '';
+      if(typeof _liveUpdateHeader === 'function') _liveUpdateHeader();
+    }
+    showSaveConfirm('✓ Owner unlinked');
+    _dcRefreshContactsTab();
+  }catch(e){
+    console.error('unlinkSellerContact failed:', e);
+    alert('Failed to unlink: ' + (e.message || 'unknown'));
+  }
+}
+
+// Re-render just the Contacts/Buyers tab in place. The deal-card uses
+// a single #tabContent container that switchTab swaps innerHTML on.
+// Calling switchTab with 'contacts' regenerates the tab from currentDeal,
+// which reflects whatever in-memory updates we just made.
+function _dcRefreshContactsTab(){
+  if(!currentDeal) return;
+  const tabContentEl = document.getElementById('tabContent');
+  if(tabContentEl){
+    tabContentEl.innerHTML = renderContactsTab(currentDeal);
+    return;
+  }
+  // Fallback: re-switch the tab if direct render didn't work.
+  if(typeof switchTab === 'function'){
+    try{ switchTab('contacts', null); return; }catch(e){}
+  }
 }
 
 function _liRenderSellerForm(){
@@ -28651,43 +28854,74 @@ function renderContactsTab(d){
         <div class="info-box">
           <div class="info-box-title">Seller Contact Information</div>
           ${d['_sellerContactId'] ? `
-            <div style="background:#e8f5e9;border:1px solid #a5d6a7;border-radius:4px;padding:6px 10px;margin-bottom:10px;font-size:10px;color:#2e7d32;">
-              ✓ Linked to contact record. <a onclick="openContactModal('${d['_sellerContactId']}')" style="color:#1a3a6e;cursor:pointer;text-decoration:underline;font-weight:600;">Open full contact view →</a>
+            <!-- v102.41 State B: linked — read-only owner card -->
+            <div style="background:#ecfdf5;border:1px solid #6ee7b7;border-radius:6px;padding:12px 14px;margin-bottom:12px;">
+              <div style="display:flex;align-items:center;gap:12px;">
+                <div style="width:42px;height:42px;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#d97706);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:13px;flex-shrink:0;">${_wbContactInitials(d['_sellerName']||'')}</div>
+                <div style="flex:1;min-width:0;">
+                  <div style="font-size:14px;font-weight:700;color:#04342c;">${(d['_sellerName']||'(no name)').replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>
+                  <div style="font-size:11px;color:#0f6e56;margin-top:2px;">${[d['_sellerCompany'], d['_sellerPhone'], d['_sellerEmail']].filter(Boolean).join(' · ').replace(/&/g,'&amp;').replace(/</g,'&lt;') || '—'}</div>
+                </div>
+              </div>
+              ${(d['_sellerPhone2'] || d['_sellerContactNotes']) ? `
+              <div style="display:grid;grid-template-columns:1fr;gap:6px;font-size:11px;margin-top:12px;padding-top:12px;border-top:1px solid #a7f3d0;">
+                ${d['_sellerPhone2']  ? `<div><span style="color:#475569;">Secondary phone:</span> <span style="color:#0f172a;">${d['_sellerPhone2']}</span></div>` : ''}
+                ${d['_sellerContactNotes'] ? `<div><span style="color:#475569;">Notes:</span> <span style="color:#0f172a;">${d['_sellerContactNotes'].replace(/&/g,'&amp;').replace(/</g,'&lt;')}</span></div>` : ''}
+              </div>` : ''}
+              <div style="display:flex;gap:8px;margin-top:14px;flex-wrap:wrap;align-items:center;">
+                <button onclick="openContactModal('${d['_sellerContactId']}')" style="font-size:11px;padding:6px 14px;background:#0f172a;color:#fff;border:none;border-radius:5px;font-weight:600;cursor:pointer;">Open contact ↗</button>
+                <button onclick="unlinkSellerContact('${d.id}')" style="font-size:11px;padding:6px 14px;background:#fff;color:#dc2626;border:1px solid #fecaca;border-radius:5px;font-weight:600;cursor:pointer;">Unlink owner</button>
+                <div style="flex:1;font-size:10px;color:#0f6e56;font-style:italic;min-width:200px;">To edit this contact's info, open the contact card.</div>
+              </div>
             </div>
-          ` : ''}
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;font-size:11px;">
-            <div>
-              <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Full Name</label>
-              <input class="form-input" id="sel_name" value="${d['_sellerName']||''}" style="width:100%;" placeholder="e.g. John Smith"/>
+          ` : `
+            <!-- v102.41 State A: no owner — lookup widget + manual entry form -->
+            <div style="background:#f0f7ff;border:1px solid #bfdbfe;border-radius:6px;padding:12px 14px;margin-bottom:12px;">
+              <label style="display:block;font-size:11px;font-weight:700;color:#1e40af;margin-bottom:5px;">🔍 Look up existing contact</label>
+              <div style="font-size:10px;color:#475569;margin-bottom:8px;line-height:1.4;">Search by name, phone, or email. Pick an existing contact to link them as the owner — or just fill in the form below to create a new one.</div>
+              <div style="position:relative;">
+                <input type="text" id="dc_lookup_input" placeholder="Type a name, phone, or email…" autocomplete="off"
+                  oninput="_dcLookupOnInput(this.value, '${d.id}')"
+                  onfocus="_dcLookupOnInput(this.value, '${d.id}')"
+                  onblur="setTimeout(()=>{const dd=document.getElementById('dc_lookup_dropdown'); if(dd) dd.style.display='none';}, 200)"
+                  style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:5px;font-size:12px;box-sizing:border-box;background:#fff;"/>
+                <div id="dc_lookup_dropdown" style="display:none;position:absolute;left:0;right:0;top:calc(100% + 4px);background:#fff;border:1px solid #cbd5e1;border-radius:5px;box-shadow:0 4px 16px rgba(0,0,0,0.08);z-index:50;max-height:300px;overflow-y:auto;"></div>
+              </div>
             </div>
-            <div>
-              <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Company</label>
-              <input class="form-input" id="sel_company" value="${d['_sellerCompany']||''}" style="width:100%;" placeholder="e.g. Smith Holdings LLC"/>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px 16px;font-size:11px;">
+              <div>
+                <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Full Name</label>
+                <input class="form-input" id="sel_name" value="${d['_sellerName']||''}" style="width:100%;" placeholder="e.g. John Smith"/>
+              </div>
+              <div>
+                <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Company</label>
+                <input class="form-input" id="sel_company" value="${d['_sellerCompany']||''}" style="width:100%;" placeholder="e.g. Smith Holdings LLC"/>
+              </div>
+              <div>
+                <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Phone Number</label>
+                <input class="form-input" id="sel_phone" value="${d['_sellerPhone']||''}" style="width:100%;" placeholder="e.g. (732) 555-1234"/>
+              </div>
+              <div>
+                <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Secondary Phone</label>
+                <input class="form-input" id="sel_phone2" value="${d['_sellerPhone2']||''}" style="width:100%;" placeholder="e.g. (732) 555-5678"/>
+              </div>
+              <div>
+                <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Email</label>
+                <input class="form-input" id="sel_email" value="${d['_sellerEmail']||''}" style="width:100%;" placeholder="e.g. john@email.com"/>
+              </div>
+              <div>
+                <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Contact Notes</label>
+                <input class="form-input" id="sel_notes" value="${d['_sellerContactNotes']||''}" style="width:100%;" placeholder="e.g. Best reached after 5pm"/>
+              </div>
             </div>
-            <div>
-              <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Phone Number</label>
-              <input class="form-input" id="sel_phone" value="${d['_sellerPhone']||''}" style="width:100%;" placeholder="e.g. (732) 555-1234"/>
+            <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
+              <button class="save-btn" style="background:linear-gradient(180deg,#60c060,#409040);color:#fff;border-color:#206020;padding:4px 18px;"
+                onclick="saveSellerContact('${d.id}')">
+                ✓ Save Seller Contact
+              </button>
+              <span id="sellerContactMsg" style="font-size:10px;color:#080;display:none;"></span>
             </div>
-            <div>
-              <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Secondary Phone</label>
-              <input class="form-input" id="sel_phone2" value="${d['_sellerPhone2']||''}" style="width:100%;" placeholder="e.g. (732) 555-5678"/>
-            </div>
-            <div>
-              <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Email</label>
-              <input class="form-input" id="sel_email" value="${d['_sellerEmail']||''}" style="width:100%;" placeholder="e.g. john@email.com"/>
-            </div>
-            <div>
-              <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Contact Notes</label>
-              <input class="form-input" id="sel_notes" value="${d['_sellerContactNotes']||''}" style="width:100%;" placeholder="e.g. Best reached after 5pm"/>
-            </div>
-          </div>
-          <div style="margin-top:10px;display:flex;align-items:center;gap:10px;">
-            <button class="save-btn" style="background:linear-gradient(180deg,#60c060,#409040);color:#fff;border-color:#206020;padding:4px 18px;"
-              onclick="saveSellerContact('${d.id}')">
-              ✓ Save Seller Contact
-            </button>
-            <span id="sellerContactMsg" style="font-size:10px;color:#080;display:none;"></span>
-          </div>
+          `}
         </div>
       </div>
       <div>

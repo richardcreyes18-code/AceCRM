@@ -15229,6 +15229,8 @@ function _contactTabSwitch(tab){
 }
 
 // Fetch properties where this contact is the owner
+// Turn H (v102.28): upgraded to show an Owner Detail dashboard on top of
+// the flat list — summary stats, pipeline stage breakdown, portfolio chips.
 async function _contactLoadLinkedProperties(contactId){
   const listEl = document.getElementById('contactPropsList');
   const badgeEl = document.getElementById('ctabPropsCount');
@@ -15240,10 +15242,11 @@ async function _contactLoadLinkedProperties(contactId){
       return Array.isArray(own) && own.includes(contactId);
     });
 
-    // Always also fetch directly from Supabase so we find properties outside the My Deals view
+    // Always also fetch directly from Supabase so we find properties outside the My Deals view.
+    // Turn H: pull NOI, units, SF, portfolio_id so the dashboard can aggregate them.
     if(isSupabase()){
       try{
-        const rows = await _sbGet(SB_TABLES.properties, `owner_contact_id=eq.${contactId}&select=id,address,pipeline_stage,asking_price,deal_tag,property_type_text&limit=200`);
+        const rows = await _sbGet(SB_TABLES.properties, `owner_contact_id=eq.${contactId}&select=id,address,pipeline_stage,asking_price,deal_tag,property_type_text,crm_asset_classification,noi,no_of_units,number_of_units,square_footage,total_building_sf,portfolio_id&limit=200`);
         // Merge: add any rows not already in matches
         const seen = new Set(matches.map(m=>m.id));
         (rows||[]).forEach(r=>{
@@ -15255,6 +15258,12 @@ async function _contactLoadLinkedProperties(contactId){
               'Asking Price': r.asking_price,
               'Deal Tag': r.deal_tag,
               'Simple Text Property Type': r.property_type_text,
+              'CRM Asset Classification': r.crm_asset_classification,
+              'NOI': r.noi,
+              'No. of Units': r.no_of_units || r.number_of_units,
+              'Square Footage': r.square_footage,
+              'Total Building SF': r.total_building_sf,
+              'Portfolio ID': r.portfolio_id,
               _fromDb: true
             });
           }
@@ -15269,15 +15278,132 @@ async function _contactLoadLinkedProperties(contactId){
       return;
     }
 
-    listEl.innerHTML = `
-      <div style="font-size:11px;color:#64748b;margin-bottom:8px;">${matches.length} linked ${matches.length===1?'property':'properties'}</div>
+    // ── TURN H: AGGREGATE STATS ────────────────────────────────────
+    const totalCount = matches.length;
+    const totalAsking = matches.reduce((s, d) => s + (Number(d['Asking Price'])||0), 0);
+    const totalNOI = matches.reduce((s, d) => s + (Number(d['NOI'])||0), 0);
+    const totalUnits = matches.reduce((s, d) => s + (Number(d['No. of Units']||d['Number of Units'])||0), 0);
+    const totalSF = matches.reduce((s, d) => s + (Number(d['Total Building SF']||d['Square Footage'])||0), 0);
+    const blendedCap = (totalNOI > 0 && totalAsking > 0) ? ((totalNOI / totalAsking) * 100) : null;
+
+    // Pipeline stage breakdown
+    const stageCounts = {};
+    matches.forEach(d => {
+      const s = d['Pipeline Stage'] || 'Unknown';
+      stageCounts[s] = (stageCounts[s] || 0) + 1;
+    });
+    // Sort stages following NEW_PIPELINE_STAGES order, with unknowns at the end
+    const orderedStages = Object.entries(stageCounts).sort((a, b) => {
+      const ia = NEW_PIPELINE_STAGES.indexOf(a[0]);
+      const ib = NEW_PIPELINE_STAGES.indexOf(b[0]);
+      if(ia === -1 && ib === -1) return a[0].localeCompare(b[0]);
+      if(ia === -1) return 1;
+      if(ib === -1) return -1;
+      return ia - ib;
+    });
+
+    // Portfolios this owner is in (dedup by portfolio_id)
+    const ownerPortfolioIds = new Set();
+    matches.forEach(d => {
+      const pid = d['Portfolio ID'];
+      if(pid) ownerPortfolioIds.add(pid);
+    });
+    const ownerPortfolios = [...ownerPortfolioIds]
+      .map(pid => (allPortfolios || []).find(p => p.id === pid))
+      .filter(Boolean);
+
+    // Concise currency formatter
+    const fmt$ = n => {
+      if(!n || isNaN(n)) return '—';
+      const v = Number(n);
+      if(v >= 1e6) return '$' + (v/1e6).toFixed(2) + 'M';
+      if(v >= 1e3) return '$' + Math.round(v/1e3) + 'K';
+      return '$' + v.toLocaleString();
+    };
+
+    // ── DASHBOARD HTML ─────────────────────────────────────────────
+    // Summary stats grid (4 cards)
+    const statsHtml = `
+      <div style="display:grid;grid-template-columns:repeat(4, minmax(0,1fr));gap:10px;margin-bottom:16px;">
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;">
+          <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.04em;font-weight:700;">Properties</div>
+          <div style="font-size:22px;font-weight:800;color:#0f172a;margin-top:4px;">${totalCount}</div>
+          ${totalUnits > 0 ? `<div style="font-size:10px;color:#94a3b8;margin-top:2px;">${totalUnits} units total</div>` : ''}
+        </div>
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px 14px;">
+          <div style="font-size:10px;color:#166534;text-transform:uppercase;letter-spacing:0.04em;font-weight:700;">Total Asking</div>
+          <div style="font-size:22px;font-weight:800;color:#166534;margin-top:4px;">${fmt$(totalAsking)}</div>
+          ${totalSF > 0 ? `<div style="font-size:10px;color:#16a34a;margin-top:2px;">${totalSF.toLocaleString()} SF</div>` : ''}
+        </div>
+        <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:12px 14px;">
+          <div style="font-size:10px;color:#1e40af;text-transform:uppercase;letter-spacing:0.04em;font-weight:700;">Blended Cap</div>
+          <div style="font-size:22px;font-weight:800;color:#1e40af;margin-top:4px;">${blendedCap != null ? blendedCap.toFixed(2)+'%' : '—'}</div>
+          <div style="font-size:10px;color:#3b82f6;margin-top:2px;">${totalNOI > 0 ? fmt$(totalNOI)+' NOI' : 'NOI not set'}</div>
+        </div>
+        <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 14px;">
+          <div style="font-size:10px;color:#92400e;text-transform:uppercase;letter-spacing:0.04em;font-weight:700;">Portfolios</div>
+          <div style="font-size:22px;font-weight:800;color:#b45309;margin-top:4px;">${ownerPortfolios.length}</div>
+          <div style="font-size:10px;color:#b45309;margin-top:2px;">${ownerPortfolios.length === 0 ? 'none' : (ownerPortfolios.length === 1 ? '1 grouping' : 'groupings')}</div>
+        </div>
+      </div>`;
+
+    // Pipeline stage breakdown (horizontal bar with counts)
+    const stageBarsHtml = orderedStages.length > 0 ? `
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;margin-bottom:14px;">
+        <div style="font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:10px;">Pipeline Breakdown</div>
+        <div style="display:flex;flex-direction:column;gap:6px;">
+          ${orderedStages.map(([stage, cnt]) => {
+            const color = NEW_PIPELINE_COLORS[stage] || '#94a3b8';
+            const pct = (cnt / totalCount) * 100;
+            return `
+              <div style="display:flex;align-items:center;gap:10px;font-size:11px;">
+                <div style="width:120px;color:#0f172a;font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${stage}</div>
+                <div style="flex:1;height:16px;background:#f1f5f9;border-radius:4px;overflow:hidden;position:relative;">
+                  <div style="width:${pct}%;height:100%;background:${color};border-radius:4px;transition:width 0.3s;"></div>
+                </div>
+                <div style="width:44px;text-align:right;color:#475569;font-weight:700;">${cnt}</div>
+              </div>`;
+          }).join('')}
+        </div>
+      </div>` : '';
+
+    // Portfolio chips (clickable, opens portfolio detail)
+    const portfoliosHtml = ownerPortfolios.length > 0 ? `
+      <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:10px;padding:14px 16px;margin-bottom:14px;">
+        <div style="font-size:11px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:10px;">📁 Portfolio Memberships</div>
+        <div style="display:flex;flex-wrap:wrap;gap:8px;">
+          ${ownerPortfolios.map(p => {
+            const stage = p['Pipeline Stage'] || '';
+            const stageColor = NEW_PIPELINE_COLORS[stage] || '#b45309';
+            const kidsFromOwner = matches.filter(m => m['Portfolio ID'] === p.id).length;
+            const totalKids = _portfolioChildren(p.id).length;
+            return `
+              <div onclick="event.stopPropagation(); openPortfolioDetail('${p.id}')"
+                style="background:#fff;border:1px solid #fde68a;border-radius:8px;padding:8px 12px;cursor:pointer;min-width:180px;transition:all 0.15s;"
+                onmouseenter="this.style.borderColor='#b45309';this.style.transform='translateY(-1px)';"
+                onmouseleave="this.style.borderColor='#fde68a';this.style.transform='translateY(0)';">
+                <div style="font-size:12px;font-weight:700;color:#92400e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:240px;">📁 ${(p['Name']||'Untitled').replace(/</g,'&lt;')}</div>
+                <div style="font-size:10px;color:#b45309;margin-top:3px;">
+                  ${kidsFromOwner} of ${totalKids} from this owner
+                  ${stage ? ` · <span style="color:${stageColor};font-weight:600;">${stage}</span>` : ''}
+                </div>
+              </div>`;
+          }).join('')}
+        </div>
+      </div>` : '';
+
+    // ── FLAT LIST (kept from existing behavior, lightly enhanced) ──
+    const listHtml = `
+      <div style="font-size:11px;color:#64748b;margin-bottom:8px;text-transform:uppercase;letter-spacing:0.04em;font-weight:700;">All ${totalCount} ${totalCount===1?'property':'properties'}</div>
       <div style="display:flex;flex-direction:column;gap:6px;">
         ${matches.map(d=>{
           const addr = d['Address']||'(no address)';
           const stage = d['Pipeline Stage']||'';
           const tag = d['Deal Tag']||'';
-          const type = d['Simple Text Property Type']||'';
+          const type = d['CRM Asset Classification']||d['Simple Text Property Type']||'';
           const price = d['Asking Price']?'$'+Number(d['Asking Price']).toLocaleString():'';
+          const pid = d['Portfolio ID'];
+          const portfolio = pid ? (allPortfolios||[]).find(p => p.id === pid) : null;
           const clickable = !d._fromDb || (allDeals||[]).some(x=>x.id===d.id);
           return `<div onclick="${clickable?`_contactNavToProp('${d.id}')`:`alert('This property is outside your current view. Switch to All Deals to open it.')`}"
             style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;cursor:pointer;transition:all 0.15s;"
@@ -15285,7 +15411,10 @@ async function _contactLoadLinkedProperties(contactId){
             onmouseleave="this.style.background='#f8fafc';this.style.borderColor='#e2e8f0';">
             <div style="font-size:18px;flex-shrink:0;">🏢</div>
             <div style="flex:1;min-width:0;">
-              <div style="font-size:13px;font-weight:600;color:#1a3a6e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${addr}</div>
+              <div style="font-size:13px;font-weight:600;color:#1a3a6e;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">
+                ${addr}
+                ${portfolio ? `<span onclick="event.stopPropagation(); openPortfolioDetail('${portfolio.id}')" title="Part of portfolio: ${(portfolio['Name']||'Untitled').replace(/"/g,'&quot;')}" style="display:inline-block;margin-left:6px;padding:1px 6px;background:#fffbeb;border:1px solid #fde68a;color:#b45309;font-size:10px;font-weight:700;border-radius:99px;cursor:pointer;vertical-align:middle;">📁</span>` : ''}
+              </div>
               <div style="font-size:11px;color:#64748b;margin-top:2px;display:flex;gap:8px;flex-wrap:wrap;">
                 ${type?`<span>${type}</span>`:''}
                 ${stage?`<span style="color:#2563eb;">• ${stage}</span>`:''}
@@ -15297,6 +15426,8 @@ async function _contactLoadLinkedProperties(contactId){
           </div>`;
         }).join('')}
       </div>`;
+
+    listEl.innerHTML = statsHtml + portfoliosHtml + stageBarsHtml + listHtml;
   }catch(e){
     listEl.innerHTML = '<div style="padding:20px;color:#dc2626;font-size:12px;">Error loading properties: '+e.message+'</div>';
   }
@@ -26990,9 +27121,27 @@ function showPipelineView(){
   const filteredDeals = applyPipelineFilters(allDeals);
   const viewMode = getPipelineViewMode();
 
-  // Calculate column total prices for header stats (on FILTERED deals)
+  // Turn G: filter portfolios for the board view. Only apply stage and
+  // search filters — portfolios don't have county/asset type/agent fields
+  // in the same way deals do, so other pipeline filters don't apply.
+  const _pFilters = getPipelineFilters();
+  const _pSearch = (_pFilters.search || '').toLowerCase();
+  const filteredPortfolios = (allPortfolios || []).filter(p => {
+    // Stage filter — if the pipeline filter bar has explicit stages, require membership
+    if(_pFilters.stages && _pFilters.stages.length){
+      if(!_pFilters.stages.includes(p['Pipeline Stage'])) return false;
+    }
+    // Search match on name + description
+    if(_pSearch){
+      const hay = ((p['Name']||'') + ' ' + (p['Description']||'')).toLowerCase();
+      if(hay.indexOf(_pSearch) === -1) return false;
+    }
+    return true;
+  });
+
+  // Calculate column total prices for header stats (on FILTERED deals + portfolios)
   const stageStats = {};
-  stages.forEach(s => { stageStats[s] = { count:0, total:0 }; });
+  stages.forEach(s => { stageStats[s] = { count:0, total:0, portfolioCount:0 }; });
   filteredDeals.forEach(d => {
     const s = getStage(d);
     if(stageStats[s]){
@@ -27000,16 +27149,33 @@ function showPipelineView(){
       stageStats[s].total += Number(d['Asking Price'])||0;
     }
   });
+  // Turn G: count portfolios too (separately so the header can show "3 deals · 1 portfolio")
+  filteredPortfolios.forEach(p => {
+    const s = p['Pipeline Stage'] || '';
+    if(stageStats[s]){
+      stageStats[s].portfolioCount++;
+      // Portfolio contributes its package price OR sum of children's asking
+      const pkg = Number(p['Package Price']||0);
+      if(pkg){
+        stageStats[s].total += pkg;
+      } else {
+        const kids = _portfolioChildren(p.id);
+        stageStats[s].total += kids.reduce((sum, d) => sum + (Number(d['Asking Price'])||0), 0);
+      }
+    }
+  });
 
   const f = getPipelineFilters();
   const filterCount = _countActiveFilters();
   const hasAnyFilter = filterCount > 0;
   // Hide empty columns when any filter is active. Explicit stage filter always takes precedence.
+  // Turn G: "has content" now includes portfolios too — a column with portfolios but no deals
+  // should stay visible.
   let visibleStages;
   if(f.stages.length){
     visibleStages = stages.filter(s => f.stages.includes(s));
   } else if(hasAnyFilter){
-    visibleStages = stages.filter(s => stageStats[s].count > 0);
+    visibleStages = stages.filter(s => (stageStats[s].count + stageStats[s].portfolioCount) > 0);
   } else {
     visibleStages = stages;
   }
@@ -27036,14 +27202,30 @@ function showPipelineView(){
   if(viewMode === 'table'){
     bodyContent = _buildPipelineTableHTML(filteredDeals);
   } else {
+    // Helper: format a portfolio's headline amount for its pipeline card
+    const _pfCardAmount = (p) => {
+      const pkg = Number(p['Package Price']||0);
+      if(pkg) return fmtMoney(pkg);
+      const kids = _portfolioChildren(p.id);
+      const sum = kids.reduce((s, d) => s + (Number(d['Asking Price'])||0), 0);
+      return sum > 0 ? fmtMoney(sum) : '—';
+    };
     bodyContent = `
       <div style="display:flex;gap:12px;padding-bottom:10px;">
         ${visibleStages.length === 0 ? `<div style="padding:40px 20px;color:#94a3b8;font-size:13px;font-style:italic;">No deals match your filters.</div>` : ''}
         ${visibleStages.map(s=>{
           const col=filteredDeals.filter(d=>getStage(d)===s);
+          const colPortfolios = filteredPortfolios.filter(p => (p['Pipeline Stage']||'') === s);
           const isCleanUp = s === 'Clean Up';
           const stats = stageStats[s];
           const totalLabel = stats.total >= 1000 ? fmtMoney(stats.total) : '';
+          // Header count string: "3 deals · 1 portfolio" when portfolios present
+          let countStr;
+          if(stats.portfolioCount > 0){
+            countStr = `${stats.count} deal${stats.count===1?'':'s'} · ${stats.portfolioCount} portfolio${stats.portfolioCount===1?'':'s'}`;
+          } else {
+            countStr = `${stats.count} deals`;
+          }
           return `
             <div class="pipeline-col-wrap" data-stage="${s}"
               ondragover="pipelineDragOver(event, '${s}')"
@@ -27052,9 +27234,24 @@ function showPipelineView(){
               style="flex-shrink:0;width:280px;">
               <div style="background:#fff;border-top:4px solid ${colors[s]};border-radius:6px 6px 0 0;padding:12px 14px 10px;border:1px solid #e2e8f0;border-bottom:none;${isCleanUp?'background:#fef9c3;':''}">
                 <div style="font-weight:700;font-size:14px;color:${colors[s]};${isCleanUp?'font-style:italic;':''}">${s}</div>
-                <div style="font-size:11px;color:#64748b;margin-top:3px;">${stats.count} deals${totalLabel?' · '+totalLabel:''}</div>
+                <div style="font-size:11px;color:#64748b;margin-top:3px;">${countStr}${totalLabel?' · '+totalLabel:''}</div>
               </div>
               <div class="pipeline-col-body" style="border:1px solid #e2e8f0;border-top:none;background:${isCleanUp?'#fffbeb':'#f8fafc'};min-height:400px;max-height:calc(100vh - 280px);overflow-y:auto;padding:10px;border-radius:0 0 6px 6px;">
+                ${colPortfolios.map(p => {
+                  const kidsCount = _portfolioChildren(p.id).length;
+                  const amount = _pfCardAmount(p);
+                  const name = (p['Name']||'Untitled').replace(/</g,'&lt;').replace(/'/g,"\\'");
+                  return `<div class="pipeline-card" draggable="true"
+                    ondragstart="pipelinePortfolioDragStart(event, '${p.id}')"
+                    ondragend="pipelineDragEnd(event)"
+                    onclick="openPortfolioDetail('${p.id}')"
+                    style="border-left:4px solid #b45309;background:#fffbeb;">
+                    <div class="pc-addr" style="color:#92400e;">📁 ${name}</div>
+                    <div class="pc-price" style="color:#b45309;">${amount}</div>
+                    <div class="pc-row"><span class="pc-icon">🏠</span><span>${kidsCount} ${kidsCount===1?'property':'properties'}</span></div>
+                    ${p['Description'] ? `<div class="pc-row"><span class="pc-icon">·</span><span style="font-style:italic;color:#b45309;">${p['Description'].replace(/</g,'&lt;').substring(0,60)}${p['Description'].length>60?'…':''}</span></div>` : ''}
+                  </div>`;
+                }).join('')}
                 ${col.map(d=>{
                   const rows = fieldDefs.map((fld,i) => {
                     const val = fld.getter(d);
@@ -27069,7 +27266,7 @@ function showPipelineView(){
                     ondragend="pipelineDragEnd(event)"
                     onclick="openDealSnapshot('${d.id}')">${rows}</div>`;
                 }).join('')}
-                ${col.length===0?'<div style="font-size:11px;color:#94a3b8;text-align:center;padding:20px;font-style:italic;">Empty</div>':''}
+                ${(col.length===0 && colPortfolios.length===0)?'<div style="font-size:11px;color:#94a3b8;text-align:center;padding:20px;font-style:italic;">Empty</div>':''}
               </div>
             </div>`;
         }).join('')}
@@ -27119,17 +27316,30 @@ function showPipelineView(){
 
 // ─── PIPELINE DRAG & DROP ────────────────────────────────────────
 let _pipelineDragId = null;
+let _pipelineDragKind = null; // Turn G: 'deal' | 'portfolio'
 
 function pipelineDragStart(e, dealId){
   _pipelineDragId = dealId;
+  _pipelineDragKind = 'deal';
   e.dataTransfer.effectAllowed = 'move';
   try { e.dataTransfer.setData('text/plain', dealId); } catch(err) {}
   // Visual feedback
   if(e.currentTarget) e.currentTarget.style.opacity = '0.4';
 }
 
+// Turn G: separate drag start for portfolio cards. Uses the same _pipelineDragId
+// slot but tags _pipelineDragKind so the drop handler knows which update to run.
+function pipelinePortfolioDragStart(e, portfolioId){
+  _pipelineDragId = portfolioId;
+  _pipelineDragKind = 'portfolio';
+  e.dataTransfer.effectAllowed = 'move';
+  try { e.dataTransfer.setData('text/plain', portfolioId); } catch(err) {}
+  if(e.currentTarget) e.currentTarget.style.opacity = '0.4';
+}
+
 function pipelineDragEnd(e){
   if(e.currentTarget) e.currentTarget.style.opacity = '';
+  _pipelineDragKind = null;
   // Clean up any hover highlights
   document.querySelectorAll('.pipeline-col-wrap').forEach(c => {
     const body = c.querySelector('.pipeline-col-body');
@@ -27155,20 +27365,39 @@ function pipelineDragLeave(e, stage){
 
 async function pipelineDrop(e, newStage){
   e.preventDefault();
-  const dealId = _pipelineDragId;
+  const draggedId = _pipelineDragId;
+  const draggedKind = _pipelineDragKind || 'deal';
   _pipelineDragId = null;
+  _pipelineDragKind = null;
 
   // Clear the outline immediately
   const wrap = e.currentTarget;
   const body = wrap.querySelector('.pipeline-col-body');
   if(body) body.style.outline = '';
 
-  if(!dealId) return;
-  const d = allDeals.find(x => x.id === dealId);
+  if(!draggedId) return;
+
+  // Turn G: route to the right updater based on what was being dragged.
+  if(draggedKind === 'portfolio'){
+    const p = (allPortfolios || []).find(x => x.id === draggedId);
+    if(!p) return;
+    if((p['Pipeline Stage'] || '') === newStage) return;
+    try {
+      await _portfolioUpdate(draggedId, { 'Pipeline Stage': newStage });
+      showPipelineView();
+      showSaveConfirm('✓ Portfolio moved to ' + newStage);
+    } catch(err) {
+      alert('Failed to update portfolio stage: ' + (err.message || 'unknown error'));
+    }
+    return;
+  }
+
+  // Deal drag
+  const d = allDeals.find(x => x.id === draggedId);
   if(!d) return;
   if(getStage(d) === newStage) return;
 
-  const ok = await updateDealStage(dealId, newStage);
+  const ok = await updateDealStage(draggedId, newStage);
   if(ok){
     showPipelineView(); // re-render with the card in its new column
     showSaveConfirm('✓ Moved to ' + newStage);

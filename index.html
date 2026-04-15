@@ -1226,7 +1226,7 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
       </div>
       <div class="config-field">
         <label>Supabase Anon Key</label>
-        <input type="password" id="cfgSbKey" name="sb_anon_key" autocomplete="off" data-lpignore="true" data-1p-ignore="true" value="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt4dHVlZ2pwdHZ6cXljZ3l6ZWhqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2ODg5NzQsImV4cCI6MjA5MTI2NDk3NH0.FctjQCWJfjxqD_07gbmKn9r5rCbNUNtEWNhYIhDo5Dc" style="background:#f5f5f5;"/>
+        <input type="text" id="cfgSbKey" name="sb_anon_key" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other" value="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt4dHVlZ2pwdHZ6cXljZ3l6ZWhqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2ODg5NzQsImV4cCI6MjA5MTI2NDk3NH0.FctjQCWJfjxqD_07gbmKn9r5rCbNUNtEWNhYIhDo5Dc" style="background:#f5f5f5;-webkit-text-security:disc;text-security:disc;"/>
       </div>
       <div id="cfgError" style="color:#c00;font-size:11px;display:none;margin-top:6px;"></div>
 
@@ -1237,7 +1237,7 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
         Get your key: <a href="https://console.cloud.google.com/apis/credentials" target="_blank" style="color:#1a6a1a;">console.cloud.google.com</a> → Create credentials → API key → Enable <strong>Places API</strong> and <strong>Maps JavaScript API</strong>.</p>
         <div class="config-field">
           <label>Google Places API Key</label>
-          <input type="password" id="cfgGoogleKey" name="gplaces_api_key" autocomplete="off" data-lpignore="true" data-1p-ignore="true" placeholder="AIzaSy..."/>
+          <input type="text" id="cfgGoogleKey" name="gplaces_api_key" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other" placeholder="AIzaSy..." style="-webkit-text-security:disc;text-security:disc;"/>
         </div>
         <div id="cfgGoogleStatus" style="font-size:11px;margin-top:4px;color:#888;"></div>
       </div>
@@ -1250,7 +1250,7 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
         <p style="font-size:11px;color:#666;margin-bottom:8px;">Powers AI rent roll parsing and other smart features. Get your key at <a href="https://console.anthropic.com" target="_blank" style="color:#6a0dad;">console.anthropic.com</a>. Stored locally only.</p>
         <div class="config-field">
           <label>Anthropic API Key (starts with "sk-ant-...")</label>
-          <input type="password" id="cfgAnthropicKey" name="anthropic_api_key" autocomplete="off" data-lpignore="true" data-1p-ignore="true" placeholder="sk-ant-api03-..."/>
+          <input type="text" id="cfgAnthropicKey" name="anthropic_api_key" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other" placeholder="sk-ant-api03-..." style="-webkit-text-security:disc;text-security:disc;"/>
         </div>
       </div>
 
@@ -1344,14 +1344,15 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   <button class="nav-btn" data-page="home" onclick="setNav(this,'home')">Deals</button>
   <button class="nav-btn" data-page="pipeline" onclick="setNav(this,'pipeline')">Pipeline</button>
   <button class="nav-btn" data-page="dealboard" onclick="setNav(this,'dealboard')" style="font-weight:bold;">Deal Board</button>
-  <button class="nav-btn" data-page="portfolios" onclick="setNav(this,'portfolios')" style="color:#b45309;">📁 Portfolios</button>
   <button class="nav-btn" data-page="map" onclick="setNav(this,'map')" style="color:#059669;">🗺 Map</button>
   <button class="nav-btn" data-page="contacts" onclick="setNav(this,'contacts')">Contacts</button>
   <button class="nav-btn" data-page="buyercriteria" onclick="setNav(this,'buyercriteria')">Buyer Criteria</button>
   <button class="nav-btn" data-page="company" onclick="setNav(this,'company')">🏢 Company</button>
   <button class="nav-btn" data-page="tasks-nav" onclick="setNav(this,'tasks-nav')" style="font-weight:600;color:#a78bfa;">☑ Tasks</button>
   <button class="nav-btn" id="navSettingsBtn" data-page="settings" onclick="setNav(this,'settings')" style="display:none;">⚙ Settings</button>
-  <button class="nav-btn" data-page="fieldmap" onclick="setNav(this,'fieldmap')" style="color:#2060b0;">⇄ Field Map</button>
+  <!-- v102.33: Portfolios moved to a toggle inside the Deal Board header.
+       Field Map moved to a button inside the Settings page (admin-only).
+       Both routes still work via setNav() / URL fragment for backwards compat. -->
   <div class="nav-spacer"></div>
   <span class="nav-user" id="navUser">Welcome, Ricky</span>
   <!-- v102.7: online/offline indicator. Green when Supabase is reachable,
@@ -1500,7 +1501,12 @@ const SB_TABLES = {
   // v102.31: buyer pitch log — tracks which properties have been sent
   // to which buyer contacts. Deals can be in-system (deal_id FK) or
   // off-system (offsystem_address + offsystem_agent_name text fields).
-  buyerPitches:      'ace_buyer_pitches'
+  buyerPitches:      'ace_buyer_pitches',
+  // v102.34: editable app-wide lists (asset_types, preferred_cities).
+  // Rows are keyed by list_key + value; is_active=false acts as a tombstone
+  // so _appListAdd can "reactivate over insert" when a value is re-added
+  // after a soft-delete.
+  appLists:          'ace_app_lists'
 };
 
 // ─── SUPABASE ↔ AIRTABLE FIELD MAPS ───────────────────────────
@@ -2371,6 +2377,10 @@ async function syncData(){
       // the rest of the app, so no splash update and errors are swallowed
       // by the loader itself.
       await _loadAllPortfolios();
+      // v102.34: load editable app lists (asset_types + preferred_cities).
+      // Silent failure — _dbGetCities() falls back to _NJ_MUNICIPALITIES and
+      // _dbGetAssetTypes() falls back to deal-distinct values if this no-ops.
+      try{ await _loadAppLists(); }catch(e){ console.warn('app lists load failed:', e.message); }
     }
 
     if(typeof _splashStep==='function') _splashStep('Building sidebar', 7, 8);
@@ -3730,6 +3740,7 @@ const _nav = {
           region: (_locFilters.region || []).slice(),
           county: (_locFilters.county || []).slice(),
           city:   (_locFilters.city || []).slice(),
+          type:   (_locFilters.type || []).slice(),
         };
       }
       // View mode (list vs map) — read from the view toggle button
@@ -3771,9 +3782,14 @@ const _nav = {
         _locFilters.region = (f.loc.region || []).slice();
         _locFilters.county = (f.loc.county || []).slice();
         _locFilters.city   = (f.loc.city   || []).slice();
+        _locFilters.type   = (f.loc.type   || []).slice();
         // Re-render LOC bar chips — _locPostRender re-runs _locRenderTags for all keys
         if(typeof _locPostRender === 'function'){
           try { _locPostRender(); } catch(e){}
+        }
+        // v102.34: also refresh the standalone type field
+        if(typeof _locRenderTags === 'function'){
+          try { _locRenderTags('type'); } catch(e){}
         }
       }
       // Re-run the filter (renderDealBoard reads DOM checkbox state + _locFilters)
@@ -6822,7 +6838,21 @@ function atSelectResult(fullLabel, type, sub){
   // Clear search
   atClearSearch();
 }
-const ASSET_SUBTYPES = {
+// v102.35: ASSET_SUBTYPES is now the SINGLE source of truth for both the
+// asset-type editor (deal card) and the seller lead form, but its contents
+// are derived at runtime from _appLists.asset_types (loaded from the
+// ace_app_lists Supabase table). The hardcoded literal below is the
+// FALLBACK used when the DB load hasn't completed yet OR when running
+// without a DB connection. Once _loadAppLists() finishes, _rebuildAssetSubtypes()
+// reassigns ASSET_SUBTYPES from the curated DB rows, and any edits made
+// in Settings → App Lists immediately flow into every consumer (lead form,
+// deal-card editor, Buyer Criteria editor, etc.) on next page render.
+//
+// Storage convention: each curated row in ace_app_lists is either a bare
+// category (e.g. "Multifamily") or a "Category: Subtype" combo (e.g.
+// "Multifamily: Garden/Low Rise"). The split happens on the FIRST ": "
+// only — colons inside subtype names are preserved.
+let ASSET_SUBTYPES = {
   'Multifamily':        ['Garden/Low Rise','Mid Rise','High Rise','Duplex','Triplex','Fourplex','Townhome','Student Housing','Military Housing','Affordable Housing','Mixed Income'],
   'Office':             ['CBD','Suburban','Medical','Creative/Flex','Government','R&D','Owner/User'],
   'Industrial':         ['Warehouse','Distribution','Manufacturing','Flex','Cold Storage','Data Center','Truck Terminal','Self Storage','R&D','Showroom'],
@@ -10929,7 +10959,7 @@ function _dbMultiChanged(kind){
 // Empty selection = null (no filter). Non-empty = array of picks. The rest
 // (stage, type, source) still read from the legacy checkbox multi-selects.
 function _dbMultiGetSelected(kind){
-  if(kind === 'state' || kind === 'region' || kind === 'county' || kind === 'city'){
+  if(kind === 'state' || kind === 'region' || kind === 'county' || kind === 'city' || kind === 'type'){
     const arr = _locFilters[kind] || [];
     return arr.length ? arr.slice() : null;
   }
@@ -10958,8 +10988,9 @@ function dbClearAllFilters(){
   // v102.24: region and county no longer live in checkbox DOM — they're in
   // the LOC-001 store. Clear them via _locClearAll(), then handle the
   // remaining checkbox-backed filters.
+  // v102.34: 'type' also moved into LOC-001 — _locClearAll() clears it.
   _locClearAll();
-  ['stage','type','source'].forEach(kind => {
+  ['stage','source'].forEach(kind => {
     document.querySelectorAll(`.db_${kind}_cb`).forEach(cb => { cb.checked = true; });
     _dbMultiChanged(kind);
     // Also clear any search box inside the menu
@@ -11017,11 +11048,517 @@ function showMapPage(){
 //   already handles 'region' and 'county'. State and city are new and get
 //   their own predicates added to renderDealBoard's filter().
 
+// ═══════════════════════════════════════════════════════════════════════
+// v102.34: APP LISTS — editable asset_types / preferred_cities
+// ═══════════════════════════════════════════════════════════════════════
+// Cache of active rows from ace_app_lists, keyed by list_key. Populated by
+// _loadAppLists() which is called once per sync from syncData(). The Deal
+// Board's type/city filters and the Settings > App Lists editor both read
+// from this cache so changes show up without a full resync.
+const _appLists = { asset_types: [], preferred_cities: [] };
+
+async function _loadAppLists(){
+  if(!isSupabase()) return;
+  try{
+    const rows = await _sbGet(SB_TABLES.appLists,
+      'select=list_key,value,sort_order,metadata&is_active=eq.true&order=sort_order.asc,value.asc');
+    if(!Array.isArray(rows)) return;
+    const next = { asset_types: [], preferred_cities: [] };
+    for(const r of rows){
+      const bucket = next[r.list_key];
+      if(bucket) bucket.push(r.value);
+    }
+    _appLists.asset_types     = next.asset_types;
+    _appLists.preferred_cities = next.preferred_cities;
+    // v102.35: rebuild ASSET_SUBTYPES from the curated list. This is what
+    // wires Settings edits through to the lead form / deal-card editor /
+    // Buyer Criteria editor — they all read the same global name.
+    _rebuildAssetSubtypes();
+  }catch(e){
+    console.warn('[v102.34] _loadAppLists failed:', e.message);
+  }
+}
+
+// v102.35: derive ASSET_SUBTYPES from _appLists.asset_types. Each row is
+// either a bare category ("Multifamily") or a "Category: Subtype" combo
+// ("Multifamily: Garden/Low Rise"). Bare-category rows seed empty subtype
+// arrays so categories with no subtypes still appear in the lead form's
+// left column. The combo rows split on the FIRST ": " only — subtype names
+// containing colons (none currently) would still parse correctly.
+//
+// Order preservation: ace_app_lists is loaded with order=sort_order.asc,
+// so iterating _appLists.asset_types in order produces categories in their
+// curated display order, with subtypes following each parent.
+function _rebuildAssetSubtypes(){
+  const list = (_appLists.asset_types || []);
+  if(!list.length) return; // keep the hardcoded fallback if DB load gave nothing
+  const next = {};
+  for(const v of list){
+    const idx = v.indexOf(': ');
+    if(idx === -1){
+      // Bare category. Seed empty array if not yet present.
+      if(!(v in next)) next[v] = [];
+    }else{
+      const cat = v.slice(0, idx);
+      const sub = v.slice(idx + 2);
+      if(!(cat in next)) next[cat] = [];
+      next[cat].push(sub);
+    }
+  }
+  ASSET_SUBTYPES = next;
+}
+
+// ─── App List editor helpers (Settings > App Lists) ───────────────────
+//
+// v102.35: asset_types is rendered as a collapsible tree (categories with
+// nested subtypes), preferred_cities stays as a flat list. Both share the
+// same _appListAdd/_appListRename/_appListDelete primitives, with extra
+// tree-specific behavior layered on for asset_types:
+//   - Validation: ":" not allowed in category names
+//   - Validation: subtypes can only be added under an existing category
+//   - Block delete: a category with active subtypes cannot be deleted
+//   - Reactivate-over-insert: the v102.34 tombstone semantics still apply
+//
+// IMPORTANT (v102.35 vs v102.36): renaming a category in this version only
+// updates the row itself — it does NOT cascade to "Category: X" subtype
+// rows or to the crm_asset_classification on existing deals. Cascading
+// rename ships in v102.36 alongside the drift-normalization migration so
+// the dangerous mutation lives in its own ship and can be rolled back
+// independently. The UI button shows a tooltip explaining this.
+
+// DOM id helper — asset_types -> AssetTypes, preferred_cities -> PreferredCities
+function _appListDomKey(listKey){
+  return listKey.split('_').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join('');
+}
+
+// Set the status message under the App Lists section.
+function _appListStatus(msg, isError){
+  const el = document.getElementById('alStatus');
+  if(!el) return;
+  el.textContent = msg || '';
+  el.style.color = isError ? '#dc2626' : '#64748b';
+  if(msg && !isError){
+    setTimeout(() => { if(el.textContent === msg) el.textContent = ''; }, 2500);
+  }
+}
+
+// Per-category collapse state for the asset_types tree. Default: all
+// categories collapsed on first render so the panel doesn't explode to
+// 140 rows immediately. Persisted only in-memory (resets on page reload).
+const _appListExpanded = {};
+
+function _appListToggleCategory(cat){
+  _appListExpanded[cat] = !_appListExpanded[cat];
+  _appListRender('asset_types');
+}
+
+// Group flat asset_types rows into a {category: [subtypes]} map. Bare
+// category rows seed an empty subtype array so categories with no subtypes
+// still render. Categories appear in the order they first appear in the
+// flat list (which is sort_order from the DB).
+function _appListGroupAssetTypes(){
+  const list = (_appLists.asset_types || []);
+  const groups = []; // [{cat, subs}] preserving order
+  const map = {};
+  for(const v of list){
+    const idx = v.indexOf(': ');
+    let cat, sub;
+    if(idx === -1){ cat = v; sub = null; }
+    else { cat = v.slice(0, idx); sub = v.slice(idx + 2); }
+    if(!(cat in map)){
+      map[cat] = { cat, subs: [] };
+      groups.push(map[cat]);
+    }
+    if(sub) map[cat].subs.push(sub);
+  }
+  return groups;
+}
+
+// HTML-escape a string for embedding in attributes / text.
+function _appListEsc(s){
+  return String(s)
+    .replace(/&/g,'&amp;').replace(/"/g,'&quot;')
+    .replace(/'/g,'&#39;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+}
+
+// JS-string-escape for use inside onclick="..._appListFoo('val')..." attrs.
+// Wraps the result in single quotes via the calling template — this just
+// escapes the contents.
+function _appListJsEsc(s){
+  return String(s).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+}
+
+// Re-render one subsection from _appLists cache.
+function _appListRender(listKey){
+  const domKey = _appListDomKey(listKey);
+  const listEl  = document.getElementById('alList'  + domKey);
+  const countEl = document.getElementById('alCount' + domKey);
+  if(!listEl) return;
+
+  if(listKey === 'preferred_cities'){
+    // Flat list (unchanged from v102.34).
+    const values = _appLists.preferred_cities || [];
+    if(countEl) countEl.textContent = values.length + ' item' + (values.length === 1 ? '' : 's');
+    if(!values.length){
+      listEl.innerHTML = '<div style="padding:14px;text-align:center;color:#94a3b8;font-size:11px;">No items yet — add one above.</div>';
+      return;
+    }
+    listEl.innerHTML = values.map(v => {
+      const safe = _appListEsc(v);
+      const attr = _appListJsEsc(v);
+      return '<div class="al-row" style="display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px solid #e2e8f0;background:#fff;">'
+           +   '<div style="flex:1;color:#0f172a;">' + safe + '</div>'
+           +   '<button onclick="_appListRename(\'preferred_cities\',\''+attr+'\')" style="background:#f1f5f9;border:1px solid #cbd5e1;color:#334155;padding:3px 8px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;">Rename</button>'
+           +   '<button onclick="_appListDelete(\'preferred_cities\',\''+attr+'\')" style="background:#fef2f2;border:1px solid #fecaca;color:#dc2626;padding:3px 8px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;">Delete</button>'
+           + '</div>';
+    }).join('');
+    return;
+  }
+
+  // asset_types — collapsible tree.
+  const groups = _appListGroupAssetTypes();
+  const totalSubs = groups.reduce((acc, g) => acc + g.subs.length, 0);
+  if(countEl) countEl.textContent = groups.length + ' categor' + (groups.length === 1 ? 'y' : 'ies')
+                                  + ' · ' + totalSubs + ' subtype' + (totalSubs === 1 ? '' : 's');
+  if(!groups.length){
+    listEl.innerHTML = '<div style="padding:14px;text-align:center;color:#94a3b8;font-size:11px;">No categories yet — add one above.</div>';
+    return;
+  }
+
+  const renameTip = 'Rename only updates this entry. Cascading rename to existing deals ships in v102.36.';
+  const deleteTip = 'Soft delete only — existing deals keep their value. Cleanup ships in v102.36.';
+
+  listEl.innerHTML = groups.map(g => {
+    const catSafe = _appListEsc(g.cat);
+    const catAttr = _appListJsEsc(g.cat);
+    const expanded = !!_appListExpanded[g.cat];
+    const arrow = expanded ? '▼' : '▶';
+    const blocked = g.subs.length > 0;
+    const deleteBtn = blocked
+      ? '<button title="Cannot delete — '+g.subs.length+' subtype'+(g.subs.length===1?'':'s')+' still active. Delete subtypes first." disabled style="background:#f1f5f9;border:1px solid #e2e8f0;color:#cbd5e1;padding:3px 8px;border-radius:4px;font-size:10px;font-weight:600;cursor:not-allowed;">Delete</button>'
+      : '<button title="'+_appListEsc(deleteTip)+'" onclick="_appListDelete(\'asset_types\',\''+catAttr+'\')" style="background:#fef2f2;border:1px solid #fecaca;color:#dc2626;padding:3px 8px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;">Delete</button>';
+
+    let html = '<div class="al-cat" style="border:1px solid #e2e8f0;border-radius:6px;margin-bottom:6px;background:#fff;overflow:hidden;">';
+    // Category header row
+    html += '<div style="display:flex;align-items:center;gap:6px;padding:8px 10px;background:#f1f5f9;border-bottom:'+(expanded?'1px solid #e2e8f0':'none')+';">'
+         +   '<button onclick="_appListToggleCategory(\''+catAttr+'\')" style="background:none;border:none;color:#64748b;font-size:11px;cursor:pointer;padding:0 4px;width:20px;text-align:center;">'+arrow+'</button>'
+         +   '<div style="flex:1;font-weight:700;color:#0f172a;font-size:12px;">'+catSafe+'</div>'
+         +   '<div style="font-size:10px;color:#94a3b8;">'+g.subs.length+'</div>'
+         +   '<button title="'+_appListEsc(renameTip)+'" onclick="_appListRename(\'asset_types\',\''+catAttr+'\')" style="background:#f1f5f9;border:1px solid #cbd5e1;color:#334155;padding:3px 8px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;">Rename</button>'
+         +   deleteBtn
+         + '</div>';
+
+    if(expanded){
+      // Subtype rows
+      if(g.subs.length){
+        html += g.subs.map(sub => {
+          const subSafe = _appListEsc(sub);
+          // Stored value is "Category: Subtype"; we pass that whole string
+          // to rename/delete so they target the right ace_app_lists row.
+          const fullVal = g.cat + ': ' + sub;
+          const fullAttr = _appListJsEsc(fullVal);
+          return '<div style="display:flex;align-items:center;gap:6px;padding:5px 10px 5px 32px;border-bottom:1px solid #f1f5f9;">'
+               +   '<div style="flex:1;color:#334155;font-size:12px;">'+subSafe+'</div>'
+               +   '<button title="'+_appListEsc(renameTip)+'" onclick="_appListRename(\'asset_types\',\''+fullAttr+'\')" style="background:#f8fafc;border:1px solid #e2e8f0;color:#475569;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;">Rename</button>'
+               +   '<button title="'+_appListEsc(deleteTip)+'" onclick="_appListDelete(\'asset_types\',\''+fullAttr+'\')" style="background:#fef2f2;border:1px solid #fecaca;color:#dc2626;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;">Delete</button>'
+               + '</div>';
+        }).join('');
+      }else{
+        html += '<div style="padding:8px 10px 8px 32px;color:#94a3b8;font-size:11px;font-style:italic;">No subtypes yet.</div>';
+      }
+      // Inline subtype-add input
+      const inpId = 'alAddSub_' + _appListEsc(g.cat).replace(/[^a-zA-Z0-9]/g,'_');
+      html += '<div style="display:flex;gap:6px;padding:6px 10px 8px 32px;background:#fafbfc;border-top:1px solid #f1f5f9;">'
+           +   '<input id="'+inpId+'" placeholder="New subtype…" onkeydown="if(event.key===\'Enter\'){event.preventDefault();_appListAddSubtype(\''+catAttr+'\',\''+inpId+'\');}" style="flex:1;padding:5px 8px;border:1px solid #cbd5e1;border-radius:4px;font-size:11px;font-family:inherit;background:#fff;"/>'
+           +   '<button onclick="_appListAddSubtype(\''+catAttr+'\',\''+inpId+'\')" style="background:#0f172a;color:#fff;border:none;padding:5px 12px;border-radius:4px;font-size:11px;font-weight:700;cursor:pointer;white-space:nowrap;">+ Add subtype</button>'
+           + '</div>';
+    }
+    html += '</div>';
+    return html;
+  }).join('');
+}
+
+// After any edit: reload the cache (which also rebuilds ASSET_SUBTYPES via
+// _rebuildAssetSubtypes) and re-render both subsections + the Deal Board
+// if it's currently visible.
+async function _appListAfterEdit(){
+  await _loadAppLists();
+  _appListRender('asset_types');
+  _appListRender('preferred_cities');
+  // Re-render Deal Board if open so filter dropdowns pick up changes.
+  const bar = document.getElementById('loc-compact-bar');
+  if(bar && typeof renderDealBoard === 'function'){
+    try{
+      ['city','type'].forEach(k => {
+        const inp = document.getElementById('loc-si-'+k);
+        const dd  = document.getElementById('loc-dd-'+k);
+        if(inp && dd && dd.style.display === 'block'){
+          _locBuildDD(k, inp.value);
+        }
+      });
+      renderDealBoard();
+    }catch(e){ console.warn('deal board refresh after app list edit failed:', e.message); }
+  }
+}
+
+// v102.35: add a new top-level CATEGORY (asset_types) or city. The plain
+// add input only handles bare values — for asset_types this means a new
+// main category. Subtypes use _appListAddSubtype below.
+//
+// Validation for asset_types: the value cannot contain ": " (that prefix
+// is reserved for subtype rows). Show a clear error and refuse.
+async function _appListAdd(listKey){
+  const domKey = _appListDomKey(listKey);
+  const inp = document.getElementById('alInput' + domKey);
+  if(!inp) return;
+  const raw = (inp.value || '').trim();
+  if(!raw){ _appListStatus('Enter a value first.', true); return; }
+  if(listKey === 'asset_types' && raw.indexOf(':') !== -1){
+    _appListStatus('Category names cannot contain ":". To add a subtype, expand a category and use "+ Add subtype".', true);
+    return;
+  }
+  if((_appLists[listKey] || []).some(v => v.toLowerCase() === raw.toLowerCase())){
+    _appListStatus('"' + raw + '" is already in the list.', true);
+    return;
+  }
+  _appListStatus('Saving…', false);
+  try{
+    await _appListUpsert(listKey, raw);
+    inp.value = '';
+    if(listKey === 'asset_types') _appListExpanded[raw] = true; // open it so user sees they can add subtypes
+    await _appListAfterEdit();
+    _appListStatus('Added "' + raw + '".', false);
+  }catch(e){
+    console.error('_appListAdd failed:', e);
+    _appListStatus('Add failed: ' + (e.message || 'unknown error'), true);
+  }
+}
+
+// v102.35: add a new SUBTYPE under an existing category. Stored value is
+// "Category: Subtype". Subtype name can contain anything (including colons).
+async function _appListAddSubtype(category, inputId){
+  const inp = document.getElementById(inputId);
+  if(!inp) return;
+  const raw = (inp.value || '').trim();
+  if(!raw){ _appListStatus('Enter a subtype name first.', true); return; }
+  const fullValue = category + ': ' + raw;
+  if((_appLists.asset_types || []).some(v => v.toLowerCase() === fullValue.toLowerCase())){
+    _appListStatus('"' + fullValue + '" is already in the list.', true);
+    return;
+  }
+  _appListStatus('Saving…', false);
+  try{
+    await _appListUpsert('asset_types', fullValue);
+    inp.value = '';
+    _appListExpanded[category] = true;
+    await _appListAfterEdit();
+    _appListStatus('Added "' + fullValue + '".', false);
+  }catch(e){
+    console.error('_appListAddSubtype failed:', e);
+    _appListStatus('Add failed: ' + (e.message || 'unknown error'), true);
+  }
+}
+
+// Reactivate-over-insert primitive used by both add paths.
+async function _appListUpsert(listKey, value){
+  const q = 'select=id,is_active&list_key=eq.' + encodeURIComponent(listKey)
+          + '&value=eq.' + encodeURIComponent(value) + '&limit=1';
+  const existing = await _sbGet(SB_TABLES.appLists, q);
+  if(Array.isArray(existing) && existing.length){
+    const row = existing[0];
+    if(row.is_active){
+      throw new Error('"' + value + '" already exists and is active.');
+    }
+    await _sbPatch(SB_TABLES.appLists, row.id, { is_active: true });
+  }else{
+    const meta = (listKey === 'preferred_cities') ? { state: 'NJ' } : {};
+    await _sbPost(SB_TABLES.appLists, {
+      list_key:   listKey,
+      value:      value,
+      sort_order: 0,
+      is_active:  true,
+      metadata:   meta
+    });
+  }
+}
+
+// v102.35: rename. Validation rules for asset_types:
+//   - If renaming a CATEGORY (no ": " in oldValue), the new name also can't
+//     contain ":" — same constraint as add.
+//   - If renaming a SUBTYPE (oldValue contains ": "), the new value is
+//     reconstructed as "<original-category>: <new-subtype-name>" — you
+//     cannot move a subtype to a different category by typing a new
+//     "Category: Subtype" string. (To move it, delete and re-add.)
+//
+// CASCADING TO DEALS / SUBTYPES IS DEFERRED TO v102.36. The button tooltips
+// in the UI explain this. Renaming "Multifamily" here will rename the row
+// in ace_app_lists but will NOT touch any "Multifamily: X" rows or any
+// crm_asset_classification field on existing deals.
+async function _appListRename(listKey, oldValue){
+  const isAssetTypes = (listKey === 'asset_types');
+  const colonIdx = oldValue.indexOf(': ');
+  const isSubtype = isAssetTypes && colonIdx !== -1;
+  const oldCategory = isSubtype ? oldValue.slice(0, colonIdx) : null;
+  const oldSubtype  = isSubtype ? oldValue.slice(colonIdx + 2) : null;
+  const promptCurrent = isSubtype ? oldSubtype : oldValue;
+  const promptLabel = isSubtype
+    ? 'Rename subtype "' + oldSubtype + '" (under "' + oldCategory + '") to:'
+    : 'Rename "' + oldValue + '" to:';
+
+  const next = prompt(promptLabel, promptCurrent);
+  if(next === null) return;
+  const trimmed = (next || '').trim();
+  if(!trimmed || trimmed === promptCurrent) return;
+
+  // Reassemble the new full value.
+  let newValue;
+  if(isSubtype){
+    newValue = oldCategory + ': ' + trimmed;
+  }else{
+    if(isAssetTypes && trimmed.indexOf(':') !== -1){
+      _appListStatus('Category names cannot contain ":".', true);
+      return;
+    }
+    newValue = trimmed;
+  }
+  if(newValue === oldValue) return;
+
+  _appListStatus('Renaming…', false);
+  try{
+    // 1. Find the old row.
+    const oldRows = await _sbGet(SB_TABLES.appLists,
+      'select=id&list_key=eq.' + encodeURIComponent(listKey)
+      + '&value=eq.' + encodeURIComponent(oldValue)
+      + '&is_active=eq.true&limit=1');
+    if(!Array.isArray(oldRows) || !oldRows.length){
+      _appListStatus('Original row not found.', true);
+      return;
+    }
+    // 2. Check target.
+    const targetRows = await _sbGet(SB_TABLES.appLists,
+      'select=id,is_active&list_key=eq.' + encodeURIComponent(listKey)
+      + '&value=eq.' + encodeURIComponent(newValue) + '&limit=1');
+    const targetExists = Array.isArray(targetRows) && targetRows.length;
+    if(targetExists && targetRows[0].is_active){
+      _appListStatus('"' + newValue + '" already exists.', true);
+      return;
+    }
+    // 3. Tombstone the old.
+    await _sbPatch(SB_TABLES.appLists, oldRows[0].id, { is_active: false });
+    // 4. Reactivate or insert the new.
+    if(targetExists){
+      await _sbPatch(SB_TABLES.appLists, targetRows[0].id, { is_active: true });
+    }else{
+      const meta = (listKey === 'preferred_cities') ? { state: 'NJ' } : {};
+      await _sbPost(SB_TABLES.appLists, {
+        list_key:   listKey,
+        value:      newValue,
+        sort_order: 0,
+        is_active:  true,
+        metadata:   meta
+      });
+    }
+    // Preserve expanded state across category renames.
+    if(!isSubtype && isAssetTypes && _appListExpanded[oldValue]){
+      _appListExpanded[newValue] = true;
+      delete _appListExpanded[oldValue];
+    }
+    await _appListAfterEdit();
+    _appListStatus('Renamed to "' + newValue + '". (Existing deals are not yet updated — that ships in v102.36.)', false);
+  }catch(e){
+    console.error('_appListRename failed:', e);
+    _appListStatus('Rename failed: ' + (e.message || 'unknown error'), true);
+  }
+}
+
+// v102.35: delete (soft). For asset_types CATEGORIES, blocked when active
+// subtypes still exist — caller must delete subtypes first. For asset_types
+// SUBTYPES and for preferred_cities, just flips is_active=false.
+//
+// CASCADING TO DEALS IS DEFERRED TO v102.36. Deals carrying a deleted
+// asset_type value will still display that value; the union in
+// _dbGetAssetTypes() ensures it remains visible in the Deal Board filter.
+async function _appListDelete(listKey, value){
+  const isAssetTypes = (listKey === 'asset_types');
+  const colonIdx = value.indexOf(': ');
+  const isCategory = isAssetTypes && colonIdx === -1;
+
+  if(isCategory){
+    // Block if active subtypes exist.
+    const prefix = value + ': ';
+    const orphans = (_appLists.asset_types || []).filter(v => v.indexOf(prefix) === 0);
+    if(orphans.length){
+      _appListStatus('Cannot delete "' + value + '" — ' + orphans.length + ' active subtype'
+        + (orphans.length === 1 ? '' : 's') + ' still exist. Delete or rename them first.', true);
+      return;
+    }
+  }
+
+  if(!confirm('Delete "' + value + '" from this list?\n\nThis is a soft delete — you can re-add it later and it will reactivate the existing row. Existing deals carrying this value are NOT modified.')) return;
+  _appListStatus('Deleting…', false);
+  try{
+    const rows = await _sbGet(SB_TABLES.appLists,
+      'select=id&list_key=eq.' + encodeURIComponent(listKey)
+      + '&value=eq.' + encodeURIComponent(value)
+      + '&is_active=eq.true&limit=1');
+    if(!Array.isArray(rows) || !rows.length){
+      _appListStatus('Row not found.', true);
+      return;
+    }
+    await _sbPatch(SB_TABLES.appLists, rows[0].id, { is_active: false });
+    if(isCategory) delete _appListExpanded[value];
+    await _appListAfterEdit();
+    _appListStatus('Deleted "' + value + '".', false);
+  }catch(e){
+    console.error('_appListDelete failed:', e);
+    _appListStatus('Delete failed: ' + (e.message || 'unknown error'), true);
+  }
+}
+
+// UNION of the curated asset_types list with any distinct values already
+// present on loaded deals. The union is the backwards-compat layer: if a
+// legacy deal has an asset type that's been removed from the curated list,
+// it still shows up in the filter so you can find it. Returns a sorted array.
+//
+// v102.35: read the RAW crm_asset_classification / Simple Text Property Type
+// values rather than _dealAssetType() output, because _dealAssetType strips
+// everything after the first ":" and would collapse "Multifamily: Mid Rise"
+// to just "Multifamily", losing the subtype distinction in the filter.
+// Drift normalization in v102.36 will eliminate the union entirely.
+function _dbGetAssetTypes(){
+  const set = new Set();
+  (_appLists.asset_types || []).forEach(v => { if(v) set.add(v); });
+  for(const d of (allDeals||[])){
+    const raw = (d && (d['CRM Asset Classification'] || d['Simple Text Property Type'])) || '';
+    if(!raw) continue;
+    // Pipe-delimited multi-pick: "Multifamily: Fourplex | Land: Development"
+    raw.split('|').forEach(part => {
+      const v = part.trim();
+      if(v) set.add(v);
+    });
+  }
+  return [...set].sort();
+}
+
+// Straight read of the curated preferred_cities list. If the cache is empty
+// (load failed or hasn't run yet), fall back to the hardcoded
+// _NJ_MUNICIPALITIES constant so the dropdown never comes up blank.
+function _dbGetCities(){
+  if(_appLists.preferred_cities && _appLists.preferred_cities.length){
+    return _appLists.preferred_cities.slice();
+  }
+  if(typeof _NJ_MUNICIPALITIES !== 'undefined' && Array.isArray(_NJ_MUNICIPALITIES)){
+    return _NJ_MUNICIPALITIES.slice();
+  }
+  return [];
+}
+
 // LOC-001 selection state. Default NJ selected (matches component gallery spec).
-const _locFilters = { state: ['NJ'], region: [], county: [], city: [] };
+// v102.34: 'type' joins state/region/county/city as a LOC-backed filter.
+const _locFilters = { state: ['NJ'], region: [], county: [], city: [], type: [] };
 
 // Keyboard navigation cursor per field (index of currently-highlighted option).
-const _locKb = { state: -1, region: -1, county: -1, city: -1 };
+const _locKb = { state: -1, region: -1, county: -1, city: -1, type: -1 };
 
 // Inject the LOC-001 scoped CSS once on first use. All class names are
 // prefixed "loc-" so they don't collide with the rest of the CRM's styling.
@@ -11202,32 +11739,26 @@ const _LOC_PLACEHOLDER = {
   region: 'Search...',
   county: 'Search...',
   city:   'Search...',
+  type:   'Asset type...',
 };
 
-// Build the four data source arrays from whatever is currently in allDeals.
-// Called at render time, so the option lists always reflect the live data.
+// Build the LOC-001 data source arrays. Called at render time so the option
+// lists always reflect the live data.
 //
-// v102.25: City source changed from "parse from addresses" to the curated
-// _NJ_MUNICIPALITIES constant (the same list used by the Buyer Criteria
-// "Preferred Cities / Towns" autocomplete). This gives ~300 NJ towns even
-// if you don't currently have a deal in that town. Cities parsed from
-// actual deal addresses are merged in afterward so out-of-state towns
-// (Philadelphia, Brooklyn, etc.) still appear when you have deals there.
+// v102.34: Cities now come from _dbGetCities() (the editable curated list
+// in ace_app_lists, fallback to _NJ_MUNICIPALITIES). The previous build
+// parsed cities out of deal addresses via _locCityFromAddress, which
+// regularly leaked raw street chunks like "1 Executive Dr Fort Lee" into
+// the dropdown when geocoding failed. Types now come from _dbGetAssetTypes()
+// so the Asset Type filter can share the same LOC-style tag input.
 function _locBuildDataSources(){
   const states = new Set();
   const counties = new Set();
-  const cities = new Set();
-  // Seed the city set with the full curated NJ municipality list.
-  if(typeof _NJ_MUNICIPALITIES !== 'undefined' && Array.isArray(_NJ_MUNICIPALITIES)){
-    _NJ_MUNICIPALITIES.forEach(c => cities.add(c));
-  }
   for(const d of (allDeals||[])){
     const st = _stateFromAddress(d['Address']||'');
     if(st) states.add(st);
     const c = (d['Simple County']||'').replace(/\s*county\s*/i,'').trim();
     if(c) counties.add(c);
-    const city = _locCityFromAddress(d['Address']||'');
-    if(city) cities.add(city);
   }
   // Region list is a hardcoded NJ-centric macro set + any present states
   // as single-state regions. Same list as the old db_region filter, but we
@@ -11238,7 +11769,8 @@ function _locBuildDataSources(){
     state:  [...states].sort(),
     region: baseRegions.concat(stateRegions),
     county: [...counties].sort(),
-    city:   [...cities].sort(),
+    city:   _dbGetCities(),
+    type:   _dbGetAssetTypes(),
   };
 }
 
@@ -11311,7 +11843,7 @@ function _locBuildDD(key, query){
 
 // Close every LOC-001 dropdown except one (pass null to close all).
 function _locCloseAllDDs(exceptKey){
-  ['state','region','county','city'].forEach(k => {
+  ['state','region','county','city','type'].forEach(k => {
     if(k === exceptKey) return;
     const dd = document.getElementById('loc-dd-'+k);
     if(dd) dd.style.display = 'none';
@@ -11405,7 +11937,8 @@ function _locClearAll(){
   _locFilters.region = [];
   _locFilters.county = [];
   _locFilters.city   = [];
-  ['state','region','county','city'].forEach(k => {
+  _locFilters.type   = [];
+  ['state','region','county','city','type'].forEach(k => {
     _locRenderTags(k);
     const dd = document.getElementById('loc-dd-'+k);
     if(dd) dd.style.display = 'none';
@@ -11414,46 +11947,62 @@ function _locClearAll(){
   });
 }
 
-// Build the LOC-001 compact-bar HTML. Called from showDealBoard's innerHTML.
-function _locCompactBarHTML(){
+// v102.34: Render a single LOC-style tag-input field as a standalone block.
+// Extracted from _locCompactBarHTML so the Asset Type filter (which lives
+// outside the compact location bar, in filter row 3) can share exactly the
+// same markup, CSS, and event wiring. Returns HTML ready to drop into
+// innerHTML; caller must still invoke _locWireField(key) and _locRenderTags(key)
+// after the HTML lands in the DOM.
+function _locRenderSingleField(key, label){
   _locInjectCSS();
-  const fieldHTML = (key, label) => `
-    <div class="loc-field" id="loc-field-${key}">
+  const placeholder = _LOC_PLACEHOLDER[key] || 'Search...';
+  return `
+    <div class="loc-field loc-single" id="loc-field-${key}">
       <span class="loc-label">${label}</span>
       <div class="loc-ti" id="loc-ti-${key}">
-        <input class="loc-si" id="loc-si-${key}" placeholder="${_LOC_PLACEHOLDER[key]}" autocomplete="off"/>
+        <input class="loc-si" id="loc-si-${key}" placeholder="${placeholder}" autocomplete="off"/>
       </div>
       <span class="loc-chevron">&#x25BE;</span>
       <div class="loc-dd" id="loc-dd-${key}" style="display:none;"></div>
     </div>`;
+}
+
+// Build the LOC-001 compact-bar HTML. Called from showDealBoard's innerHTML.
+function _locCompactBarHTML(){
+  _locInjectCSS();
   return `
     <div class="loc-compact-bar" id="loc-compact-bar">
-      ${fieldHTML('state',  'State')}
+      ${_locRenderSingleField('state',  'State')}
       <div class="loc-divider"></div>
-      ${fieldHTML('region', 'Region')}
+      ${_locRenderSingleField('region', 'Region')}
       <div class="loc-divider"></div>
-      ${fieldHTML('county', 'County')}
+      ${_locRenderSingleField('county', 'County')}
       <div class="loc-divider"></div>
-      ${fieldHTML('city',   'City')}
+      ${_locRenderSingleField('city',   'City')}
     </div>`;
 }
 
 // Post-render setup. Must be called after the LOC-001 HTML lands in the DOM
-// so the field elements exist. Wires all four fields, renders current tags,
-// and installs the global mousedown-outside handler that closes dropdowns.
+// so the field elements exist. Wires all four compact-bar fields, renders
+// current tags, and installs the global mousedown-outside handler that
+// closes dropdowns.
+//
+// v102.34: the outside-click handler now checks any .loc-field ancestor
+// instead of only the compact bar, so standalone fields rendered via
+// _locRenderSingleField (e.g. the Asset Type filter in row 3) don't auto-
+// close on every click.
 function _locPostRender(){
   ['state','region','county','city'].forEach(k => {
     _locWireField(k);
     _locRenderTags(k);
   });
-  // Close any open dropdown when the user clicks outside the component
+  // Close any open dropdown when the user clicks outside ANY loc-field
   if(!window._locOutsideHandlerInstalled){
     document.addEventListener('mousedown', e => {
-      const bar = document.getElementById('loc-compact-bar');
-      if(!bar) return; // Deal Board not currently visible
-      if(!bar.contains(e.target)){
-        _locCloseAllDDs(null);
-      }
+      // If the click landed inside any loc-field, let that field's own
+      // handlers manage open/close. Otherwise close every open dropdown.
+      if(e.target.closest && e.target.closest('.loc-field')) return;
+      _locCloseAllDDs(null);
     });
     // Tag-X removal is delegated so dynamically-added tags work
     document.addEventListener('click', e => {
@@ -13380,44 +13929,69 @@ function showDealBoard(){
   document.getElementById('mainArea').innerHTML = `
     <div style="padding:0;height:100%;display:flex;flex-direction:column;background:#f8fafc;">
 
-      <!-- HEADER BAR — v102.25: light aesthetic matching LOC-001 -->
-      <div class="db-fbar-wrap">
-        <div class="db-fbar-title">📋 Deal Board</div>
+      <!-- HEADER BAR — v102.33: restructured into a top row (title + sub-tabs + view toggle)
+           and a filter bar split into 3 explicit sub-rows.
+           Top row:  [📋 Deal Board]  [Deals | Portfolios]         [List | Map]  [count]
+           Row 1:    Search (solo)
+           Row 2:    Location selector (State / Region / County / City)
+           Row 3:    Stages  Asset Type  Sources  Priority  [spacer]  Clear Filters -->
+      <div class="db-fbar-wrap" style="flex-direction:column;align-items:stretch;gap:10px;padding:14px 20px 12px;">
 
-        <input id="db_search" class="db-fbar-search"
-          placeholder="Search address, county, notes..."
-          oninput="renderDealBoard();dbRefreshMapPins()"/>
+        <!-- TOP ROW: title, deals/portfolios toggle, view toggle, count -->
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+          <div class="db-fbar-title">📋 Deal Board</div>
 
-        <!-- STAGE MULTI-SELECT -->
-        ${_dbMultiBtn('stage', 'All Stages', stages, false)}
+          <!-- v102.33: Deals / Portfolios sub-tab — moved from the main nav.
+               Clicking Portfolios calls showPortfoliosPage() which renders the
+               portfolio list over mainArea. The Deals side is a no-op since
+               we're already on the Deal Board. -->
+          <div style="display:inline-flex;border:1px solid #cbd5e1;border-radius:6px;overflow:hidden;">
+            <button onclick="showDealBoard()" style="background:#0f172a;color:#fff;border:none;padding:7px 16px;font-size:12px;font-weight:700;cursor:pointer;border-right:1px solid #cbd5e1;">
+              📋 Deals
+            </button>
+            <button onclick="showPortfoliosPage()" style="background:#fff;color:#b45309;border:none;padding:7px 16px;font-size:12px;font-weight:700;cursor:pointer;">
+              📁 Portfolios
+            </button>
+          </div>
 
-        <!-- v102.24: LOC-001 Location Selector (State + Region + County + City)
-             replaces the old db_region and db_county button-style multi-selects.
-             Filter selections live in _locFilters and are read via _dbMultiGetSelected
-             which now routes location keys to the LOC store. -->
-        ${_locCompactBarHTML()}
+          <!-- Flex spacer pushes the right-side controls to the edge -->
+          <div style="flex:1;"></div>
 
-        <!-- ASSET TYPE MULTI-SELECT -->
-        ${_dbMultiBtn('type', 'All Asset Types', types, false)}
+          <span id="db_count" class="db-fbar-count"></span>
 
-        <!-- IMPORT SOURCE MULTI-SELECT -->
-        ${_dbMultiBtn('source', 'All Sources', sources, false)}
+          <!-- VIEW TOGGLE — moved from filter bar to top row -->
+          <div class="db-fbar-viewtoggle">
+            <button id="db_view_list" class="active" onclick="dbSetView('list')">&#128203; List</button>
+            <button id="db_view_map" onclick="dbSetView('map')">&#128506; Map</button>
+          </div>
+        </div>
 
-        <label class="db-fbar-check">
-          <input type="checkbox" id="db_priority" onchange="renderDealBoard();dbRefreshMapPins()"/>
-          &#9733; Priority Only
-        </label>
+        <!-- FILTER ROW 1: search (solo) -->
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <input id="db_search" class="db-fbar-search"
+            placeholder="Search address, county, notes, lead ID..."
+            style="flex:1;max-width:420px;"
+            oninput="renderDealBoard();dbRefreshMapPins()"/>
+        </div>
 
-        <button onclick="dbClearAllFilters()" class="db-fbar-clear">
-          &#10005; Clear Filters
-        </button>
+        <!-- FILTER ROW 2: LOC-001 Location Selector (State / Region / County / City) -->
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          ${_locCompactBarHTML()}
+        </div>
 
-        <span id="db_count" class="db-fbar-count"></span>
-
-        <!-- VIEW TOGGLE -->
-        <div class="db-fbar-viewtoggle">
-          <button id="db_view_list" class="active" onclick="dbSetView('list')">&#128203; List</button>
-          <button id="db_view_map" onclick="dbSetView('map')">&#128506; Map</button>
+        <!-- FILTER ROW 3: Stages + Asset Type + Sources + Priority + spacer + Clear Filters -->
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          ${_dbMultiBtn('stage', 'All Stages', stages, false)}
+          ${_locRenderSingleField('type', 'Asset Type')}
+          ${_dbMultiBtn('source', 'All Sources', sources, false)}
+          <label class="db-fbar-check">
+            <input type="checkbox" id="db_priority" onchange="renderDealBoard();dbRefreshMapPins()"/>
+            &#9733; Priority Only
+          </label>
+          <div style="flex:1;"></div>
+          <button onclick="dbClearAllFilters()" class="db-fbar-clear">
+            &#10005; Clear Filters
+          </button>
         </div>
       </div>
 
@@ -13502,6 +14076,11 @@ function showDealBoard(){
   window._dbCurrentView = 'list';
   // v102.24: Wire up LOC-001 fields now that the DOM elements exist.
   _locPostRender();
+  // v102.34: Asset Type filter now uses a standalone LOC-style tag input
+  // (not part of the compact bar, so not wired by _locPostRender). Wire it
+  // here after showDealBoard's innerHTML has landed.
+  _locWireField('type');
+  _locRenderTags('type');
 }
 
 let _dbCurrentView = 'list';
@@ -14656,11 +15235,17 @@ async function showContactsPage(){
     if(isSupabase()){
       // Kick off relationships load in parallel with contacts fetch
       const relPromise = _loadMyRelationships();
-      let from = 0, batchSize = 1000;
+      // v102.32: progressive load — render the first small batch as soon
+      // as it arrives (~200-300ms) so the user sees results immediately,
+      // then continue fetching larger batches in the background.
+      let from = 0;
+      let firstBatch = true;
       while(true){
+        // First batch is small (300) so it returns fast. Subsequent batches
+        // are 1000 to keep total round-trips low.
+        const batchSize = firstBatch ? 300 : 1000;
         const rows = await _sbGet(SB_TABLES.contacts, `select=*&order=name.asc&limit=${batchSize}&offset=${from}`);
         if(!rows.length) break;
-        // Normalize to Airtable-like {id, fields} structure for filterContacts/renderContactsTable
         rows.forEach(row => {
           records.push({ id: row.id, fields: {
             'Name': row.name, 'Phone Number': row.phone_number,
@@ -14673,10 +15258,30 @@ async function showContactsPage(){
             '_fubContactId': row.fub_contact_id || null
           }});
         });
+        // After the first batch, put what we have into allContacts and render
+        // so the user sees something immediately. Subsequent batches will
+        // re-render with more rows appended.
+        if(firstBatch){
+          allContacts = records.slice(); // copy so later pushes don't mutate mid-render
+          await relPromise; // relationships must be ready before filterContacts runs
+          _populateContactSourceFilter();
+          filterContacts();
+        }
+        // Advance by the batch size actually used this iteration
+        from += rows.length;
+        // If the server returned fewer than requested, we're done
         if(rows.length < batchSize) break;
-        from += batchSize;
+        firstBatch = false;
       }
-      await relPromise; // ensure _myRelationships is ready before render
+      // After all batches complete, update allContacts with the full set
+      // and re-render if new rows were added past the first batch.
+      if(records.length > allContacts.length){
+        allContacts = records;
+        _populateContactSourceFilter();
+        filterContacts();
+      } else {
+        allContacts = records;
+      }
     } else {
       let url = `https://api.airtable.com/v0/${cfg.base}/tblpTluzDlrvMCaca?pageSize=100&sort[0][field]=Name&sort[0][direction]=asc`;
       while(url){
@@ -14685,11 +15290,11 @@ async function showContactsPage(){
         records = records.concat(data.records||[]);
         url = data.offset ? `https://api.airtable.com/v0/${cfg.base}/tblpTluzDlrvMCaca?pageSize=100&sort[0][field]=Name&sort[0][direction]=asc&offset=${data.offset}` : null;
       }
+      allContacts = records;
+      _populateContactSourceFilter();
+      filterContacts();
     }
-    allContacts = records;
     _contactsLastLoadMs = Date.now();  // v64 perf cache marker
-    _populateContactSourceFilter();
-    filterContacts(); // respects _contactScope
   }catch(e){
     document.getElementById('contactsTableWrap').innerHTML=`<div style="padding:20px;color:#c00;">Error: ${e.message}</div>`;
   }
@@ -15224,11 +15829,45 @@ function _liPrefillBannerHTML(){
     </div>`;
 }
 
-function showContactDetailPage(recordId, returnTo){
-  const existing = allContacts.find(r=>r.id===recordId);
+async function showContactDetailPage(recordId, returnTo){
+  // v102.32: direct-open bypass. Previously we required allContacts to be
+  // loaded before opening a detail view — which forced every direct-open
+  // from deals, buyer criteria, or a permalink to wait for the full 5,900-row
+  // load. Now we first try the in-memory cache, and if the contact isn't
+  // there, fetch just that one row from Supabase. The Contacts list can
+  // finish loading in the background.
+  let existing = allContacts.find(r=>r.id===recordId);
   if(!existing){
-    alert('Contact not found. Try refreshing the Contacts page.');
-    return;
+    // Show a tiny loading splash so the page doesn't look frozen
+    const mainAreaLoading = document.getElementById('mainArea');
+    if(mainAreaLoading) mainAreaLoading.innerHTML = '<div style="padding:40px 20px;text-align:center;color:#64748b;font-size:13px;">⏳ Loading contact...</div>';
+    if(isSupabase()){
+      try {
+        const rows = await _sbGet(SB_TABLES.contacts, `id=${recordId}&select=*`);
+        const row = rows?.[0];
+        if(row){
+          existing = { id: row.id, fields: {
+            'Name': row.name, 'Phone Number': row.phone_number,
+            'Secondary Phone Number': row.secondary_phone,
+            'Email': row.email, 'Company': row.company,
+            'Contact Notes': row.contact_notes,
+            'Type': row.type || [],
+            'Date Added': row.date_added,
+            'Import Source': row.import_source || '',
+            '_fubContactId': row.fub_contact_id || null
+          }};
+          // Also push into allContacts cache so subsequent operations find it
+          if(!Array.isArray(allContacts)) allContacts = [];
+          allContacts.push(existing);
+        }
+      } catch(e) {
+        console.warn('Direct contact fetch failed:', e.message);
+      }
+    }
+    if(!existing){
+      if(mainAreaLoading) mainAreaLoading.innerHTML = '<div style="padding:40px 20px;text-align:center;color:#dc2626;font-size:13px;">Contact not found. It may have been deleted.<br><br><button class="save-btn" onclick="showContactsPage()">← Back to Contacts</button></div>';
+      return;
+    }
   }
   const f = existing.fields||{};
   const types = ['Seller','Buyer','1031','Other'];
@@ -16115,21 +16754,26 @@ async function _pitchDeleteFromModal(){
 // ── BUYER-CRITERIA JUMP HELPER ─────────────────────────────────────
 // Opens a contact detail page and auto-switches to the Pitches tab.
 // Used by the "Pitch History" button on the Buyer Criteria detail page.
+// v102.32: skips full Contacts page load — direct-open via openContactModal.
 function bcOpenContactPitches(contactId){
   if(!contactId){ return; }
   const returnTo = (_bcBatchQueue && _bcBatchQueue.length) ? 'batch' : 'buyercriteria';
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
   const contactBtn = [...document.querySelectorAll('.nav-btn')].find(b=>b.textContent.trim()==='Contacts');
   if(contactBtn) contactBtn.classList.add('active');
-  showContactsPage().then(()=>{
-    setTimeout(()=>{
-      openContactModal(contactId, returnTo);
-      // After the contact view renders, switch to the pitches tab
-      setTimeout(()=>{
-        if(typeof _contactTabSwitch === 'function') _contactTabSwitch('pitches');
-      }, 250);
-    }, 800);
-  });
+  openContactModal(contactId, returnTo);
+  // After the detail view renders, switch to the pitches tab. Poll briefly
+  // because showContactDetailPage is now async when the contact isn't cached.
+  let attempts = 0;
+  const tryTabSwitch = () => {
+    if(attempts++ > 20) return; // give up after ~4 seconds
+    if(document.getElementById('ctab_pitches') && typeof _contactTabSwitch === 'function'){
+      _contactTabSwitch('pitches');
+    } else {
+      setTimeout(tryTabSwitch, 200);
+    }
+  };
+  setTimeout(tryTabSwitch, 150);
 }
 
 // ─── COMMUNICATION HISTORY LOADER ─────────────────────────────────
@@ -18448,6 +19092,54 @@ function showSettingsPage(){
           <div id="tmUsersList" style="font-size:12px;color:#64748b;padding:20px;text-align:center;">Loading users…</div>
         </section>
 
+        <!-- ═══ v102.34 APP LISTS ═════════════════════════════════════ -->
+        <section style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
+          <div style="margin-bottom:14px;">
+            <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:4px;">⚙ App Lists</div>
+            <div style="font-size:12px;color:#64748b;">Edit the curated lists used by Deal Board filters, the asset-type editor, and the seller lead form. Asset Types are organized as Categories with nested subtypes — click ▶ to expand. Deletes are soft (tombstoned) so re-adding a removed value reactivates it instead of creating duplicates. <strong>Note:</strong> in v102.35 renames update only the curated list — existing deals carrying the old value are not modified. Cascading rename to deals ships in v102.36.</div>
+          </div>
+
+          <!-- Asset Types subsection (full width, tree) -->
+          <div style="border:1px solid #e2e8f0;border-radius:8px;padding:14px;background:#f8fafc;margin-bottom:18px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+              <div style="font-size:13px;font-weight:700;color:#0f172a;">🏢 Asset Types</div>
+              <div id="alCountAssetTypes" style="font-size:11px;color:#64748b;">—</div>
+            </div>
+            <div style="display:flex;gap:6px;margin-bottom:10px;">
+              <input id="alInputAssetTypes" placeholder="New main category (e.g. &quot;Boutique Hotel&quot;) — no &quot;:&quot; allowed" onkeydown="if(event.key==='Enter'){event.preventDefault();_appListAdd('asset_types');}" style="flex:1;padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;font-family:inherit;background:#fff;"/>
+              <button onclick="_appListAdd('asset_types')" style="background:#0f172a;color:#fff;border:none;padding:7px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">+ Add Category</button>
+            </div>
+            <div style="font-size:11px;color:#94a3b8;margin-bottom:8px;">To add a subtype, expand a category below and use its inline "+ Add subtype" input.</div>
+            <div id="alListAssetTypes" style="max-height:520px;overflow-y:auto;font-size:12px;">Loading…</div>
+          </div>
+
+          <!-- Preferred Cities subsection -->
+          <div style="border:1px solid #e2e8f0;border-radius:8px;padding:14px;background:#f8fafc;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+              <div style="font-size:13px;font-weight:700;color:#0f172a;">📍 Preferred Cities</div>
+              <div id="alCountPreferredCities" style="font-size:11px;color:#64748b;">—</div>
+            </div>
+            <div style="display:flex;gap:6px;margin-bottom:10px;">
+              <input id="alInputPreferredCities" placeholder="New city…" onkeydown="if(event.key==='Enter'){event.preventDefault();_appListAdd('preferred_cities');}" style="flex:1;padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;font-family:inherit;background:#fff;"/>
+              <button onclick="_appListAdd('preferred_cities')" style="background:#0f172a;color:#fff;border:none;padding:7px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">+ Add</button>
+            </div>
+            <div id="alListPreferredCities" style="max-height:320px;overflow-y:auto;font-size:12px;">Loading…</div>
+          </div>
+
+          <div id="alStatus" style="margin-top:12px;font-size:11px;color:#64748b;min-height:14px;"></div>
+        </section>
+
+
+        <!-- v102.33: FIELD MAP — moved from main nav -->
+        <section style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+            <div>
+              <div style="font-size:15px;font-weight:700;color:#0f172a;">⇄ Field Map</div>
+              <div style="font-size:12px;color:#64748b;margin-top:4px;line-height:1.5;">Reference sheet showing every database column, its display label, which tab it lives on, and read/write status. Useful for debugging missing data or verifying schema sync.</div>
+            </div>
+            <button onclick="showFieldMap()" style="background:#1a3a6e;color:#fff;border:none;padding:10px 20px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">Open Field Map ↗</button>
+          </div>
+        </section>
 
         <section style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;opacity:0.7;">
           <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:4px;">🎨 Display Preferences <span style="font-size:10px;background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:99px;margin-left:6px;">Coming Soon</span></div>
@@ -18459,6 +19151,17 @@ function showSettingsPage(){
 
   // Populate the Team Management users table (async, doesn't block render)
   setTimeout(() => { if(typeof _tmLoadUsers === 'function') _tmLoadUsers(); }, 50);
+  // v102.34: populate App Lists editor. If the cache is empty (e.g. user
+  // landed on Settings before syncData finished), load it first.
+  setTimeout(async () => {
+    try{
+      if(!_appLists.asset_types.length && !_appLists.preferred_cities.length){
+        await _loadAppLists();
+      }
+      _appListRender('asset_types');
+      _appListRender('preferred_cities');
+    }catch(e){ console.warn('app list render failed:', e.message); }
+  }, 60);
 }
 
 // ═══════════════════════════════════════════════════════════════
@@ -19488,14 +20191,13 @@ function bcOpenContact(contactId){
   // if we're in batch review mode, return to the current batch buyer;
   // otherwise return to the buyer criteria page.
   const returnTo = (_bcBatchQueue && _bcBatchQueue.length) ? 'batch' : 'buyercriteria';
-  // Switch to Contacts page — it will load with the contact visible
+  // v102.32: skip the full Contacts page load. Direct-open the detail view;
+  // showContactDetailPage now fetches the single row on demand if needed.
+  // Highlight the Contacts nav button for visual consistency.
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
   const contactBtn = [...document.querySelectorAll('.nav-btn')].find(b=>b.textContent.trim()==='Contacts');
   if(contactBtn) contactBtn.classList.add('active');
-  showContactsPage().then(()=>{
-    // After contacts load, open full-page detail view for this contact
-    setTimeout(()=>{ openContactModal(contactId, returnTo); }, 800);
-  });
+  openContactModal(contactId, returnTo);
 }
 
 async function bcOpenExpanded(recordId){
@@ -19746,9 +20448,9 @@ async function bcOpenExpanded(recordId){
         <div class="info-box">
           <div class="info-box-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
             <span>👤 Buyer Contact</span>
-            ${contactId ? `<div style="display:flex;gap:6px;flex-wrap:wrap;">
-              <button class="save-btn" style="padding:2px 10px;font-size:10px;background:#1e40af;" onclick="bcOpenContactPitches('${contactId}')">📨 Pitch History ↗</button>
-              <button class="save-btn" style="padding:2px 10px;font-size:10px;" onclick="bcOpenContact('${contactId}')">View Contact Record ↗</button>
+            ${contactId ? `<div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button onclick="bcOpenContactPitches('${contactId}')" style="background:#1a3a6e;color:#fff;border:1px solid #0a1f4a;padding:7px 14px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.08);white-space:nowrap;">📨 Pitch History ↗</button>
+              <button onclick="bcOpenContact('${contactId}')" style="background:#fff;color:#1a3a6e;border:1px solid #1a3a6e;padding:7px 14px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.04);white-space:nowrap;">👤 View Contact Record ↗</button>
             </div>` : ''}
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;">

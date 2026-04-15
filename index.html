@@ -1817,6 +1817,24 @@ async function _sbDelete(table, id) {
   return _proxyCall({ table, method: 'DELETE', id });
 }
 
+// v102.37: invoke a Postgres function via the crm-proxy. The proxy reads
+// ?rpc=<function_name> from the query string and the body as the params
+// object. Returns the function's return value (typically jsonb -> object).
+// Used for atomic multi-statement operations like cascading rename where
+// browser-side sequencing of individual sb* calls would risk partial writes.
+async function _sbRpc(fn, params = {}) {
+  const url = new URL(PROXY_URL);
+  url.searchParams.set('rpc', fn);
+  const res = await fetch(url.toString(), {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(params || {})
+  });
+  const data = await res.json();
+  if(data?.error) throw new Error(data.error);
+  return data;
+}
+
 // ─── AGENT RELATIONSHIPS (ace_agent_contacts) ────────────────────
 // Personal relationship list per agent. A contact can belong to
 // multiple agents' lists (shared-claim model). In My Deals mode,
@@ -11225,8 +11243,8 @@ function _appListRender(listKey){
     return;
   }
 
-  const renameTip = 'Rename only updates this entry. Cascading rename to existing deals ships in v102.36.';
-  const deleteTip = 'Soft delete only — existing deals keep their value. Cleanup ships in v102.36.';
+  const renameTip = 'Cascading rename: updates this row, all matching subtypes, and every deal carrying this value. Atomic.';
+  const deleteTip = 'Soft delete only — existing deals keep their value. (Cascading delete is not implemented; rename to "Needs Classification" if you want to retire a category.)';
 
   listEl.innerHTML = groups.map(g => {
     const catSafe = _appListEsc(g.cat);
@@ -11394,28 +11412,97 @@ async function _appListUpsert(listKey, value){
 // in the UI explain this. Renaming "Multifamily" here will rename the row
 // in ace_app_lists but will NOT touch any "Multifamily: X" rows or any
 // crm_asset_classification field on existing deals.
+// v102.37: type-to-confirm modal. Returns a promise that resolves to true
+// (user typed the confirm phrase and clicked Confirm) or false (cancelled).
+// Used for high-blast-radius operations like cascading category rename.
+function _appListConfirmTypeIn(opts){
+  return new Promise(resolve => {
+    const overlay = document.createElement('div');
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(0,0,0,0.55);z-index:99999;display:flex;align-items:center;justify-content:center;font-family:\'Inter\',system-ui,sans-serif;';
+    const phrase = opts.confirmPhrase || 'RENAME';
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:10px;max-width:520px;width:92%;padding:24px;box-shadow:0 20px 50px rgba(0,0,0,0.3);">
+        <div style="font-size:17px;font-weight:700;color:#0f172a;margin-bottom:8px;">${opts.title || 'Confirm'}</div>
+        <div style="font-size:13px;color:#334155;margin-bottom:16px;line-height:1.55;">${opts.body || ''}</div>
+        ${opts.danger ? `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:10px 12px;margin-bottom:16px;font-size:12px;color:#991b1b;line-height:1.5;">${opts.danger}</div>` : ''}
+        <div style="font-size:11px;color:#64748b;margin-bottom:6px;font-weight:600;">Type <code style="background:#f1f5f9;padding:1px 6px;border-radius:3px;color:#0f172a;font-weight:700;">${phrase}</code> to confirm:</div>
+        <input id="alConfirmInput" autocomplete="off" style="width:100%;padding:8px 12px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;font-family:monospace;box-sizing:border-box;margin-bottom:16px;" />
+        <div style="display:flex;gap:8px;justify-content:flex-end;">
+          <button id="alConfirmCancel" style="background:#f1f5f9;border:1px solid #cbd5e1;color:#334155;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Cancel</button>
+          <button id="alConfirmGo" disabled style="background:#dc2626;color:#fff;border:none;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:700;cursor:not-allowed;opacity:0.5;">${opts.confirmLabel || 'Confirm'}</button>
+        </div>
+      </div>`;
+    document.body.appendChild(overlay);
+
+    const inp = overlay.querySelector('#alConfirmInput');
+    const goBtn = overlay.querySelector('#alConfirmGo');
+    const cancelBtn = overlay.querySelector('#alConfirmCancel');
+    const cleanup = result => { document.body.removeChild(overlay); resolve(result); };
+    inp.addEventListener('input', () => {
+      const ok = inp.value.trim() === phrase;
+      goBtn.disabled = !ok;
+      goBtn.style.cursor = ok ? 'pointer' : 'not-allowed';
+      goBtn.style.opacity = ok ? '1' : '0.5';
+    });
+    inp.addEventListener('keydown', e => {
+      if(e.key === 'Enter' && !goBtn.disabled){ cleanup(true); }
+      else if(e.key === 'Escape'){ cleanup(false); }
+    });
+    cancelBtn.addEventListener('click', () => cleanup(false));
+    goBtn.addEventListener('click', () => { if(!goBtn.disabled) cleanup(true); });
+    setTimeout(() => inp.focus(), 50);
+  });
+}
+
+// v102.37: cascading rename. Renames a category or subtype in ace_app_lists
+// AND updates every deal whose crm_asset_classification references the old
+// value (handling pipe-delimited multi-pick segments correctly). The whole
+// operation runs as a single Postgres function (rename_asset_type) so it's
+// atomic — if any step fails, nothing is written.
+//
+// UI flow:
+//   1. prompt() for the new value (single-line, fast)
+//   2. RPC call to preview_rename_asset_type for live counts
+//   3. For CATEGORY renames: type-to-confirm modal showing the deal +
+//      subtype counts. For SUBTYPE renames with > 0 affected deals: a
+//      simpler confirm() with the count. For 0-deal subtype renames: no
+//      second confirm — just execute.
+//   4. RPC call to rename_asset_type to perform the cascade
+//   5. Reload _appLists and re-render
+//
+// Validation (refused server-side by preview_rename_asset_type):
+//   - Identical, blank, source-missing, target-already-active
+//   - Category names cannot contain ":"
+//   - Subtype renames must keep the same parent category
+//   - Cascade collisions: any "OldCat: X" -> "NewCat: X" target already active
 async function _appListRename(listKey, oldValue){
-  const isAssetTypes = (listKey === 'asset_types');
+  // preferred_cities still uses the simple in-place rename (no cascade —
+  // city values aren't propagated to deal columns the same way asset types
+  // are). Falls through to the legacy flow.
+  if(listKey !== 'asset_types'){
+    return _appListRenameSimple(listKey, oldValue);
+  }
+
   const colonIdx = oldValue.indexOf(': ');
-  const isSubtype = isAssetTypes && colonIdx !== -1;
+  const isSubtype = colonIdx !== -1;
   const oldCategory = isSubtype ? oldValue.slice(0, colonIdx) : null;
   const oldSubtype  = isSubtype ? oldValue.slice(colonIdx + 2) : null;
   const promptCurrent = isSubtype ? oldSubtype : oldValue;
   const promptLabel = isSubtype
     ? 'Rename subtype "' + oldSubtype + '" (under "' + oldCategory + '") to:'
-    : 'Rename "' + oldValue + '" to:';
+    : 'Rename category "' + oldValue + '" to:\n\n(Cascades to all subtypes and to every deal carrying this value.)';
 
   const next = prompt(promptLabel, promptCurrent);
   if(next === null) return;
   const trimmed = (next || '').trim();
   if(!trimmed || trimmed === promptCurrent) return;
 
-  // Reassemble the new full value.
+  // Reassemble the new full value the way the server expects it.
   let newValue;
   if(isSubtype){
     newValue = oldCategory + ': ' + trimmed;
   }else{
-    if(isAssetTypes && trimmed.indexOf(':') !== -1){
+    if(trimmed.indexOf(':') !== -1){
       _appListStatus('Category names cannot contain ":".', true);
       return;
     }
@@ -11423,9 +11510,102 @@ async function _appListRename(listKey, oldValue){
   }
   if(newValue === oldValue) return;
 
+  _appListStatus('Computing cascade scope…', false);
+
+  // Step 2: preview RPC for live counts.
+  let preview;
+  try{
+    preview = await _sbRpc('preview_rename_asset_type', {
+      p_old_value: oldValue, p_new_value: newValue
+    });
+  }catch(e){
+    console.error('preview RPC failed:', e);
+    _appListStatus('Preview failed: ' + (e.message || 'unknown error'), true);
+    return;
+  }
+  if(preview && preview.error){
+    _appListStatus(preview.error, true);
+    return;
+  }
+
+  // Step 3: confirmation. Tier the friction by blast radius.
+  const dealCount = preview.will_affect_deals || 0;
+  const subCount  = preview.will_rename_subtype_rows || 0;
+
+  if(isSubtype){
+    if(dealCount > 0){
+      const ok = confirm(
+        'Rename "' + oldValue + '" → "' + newValue + '"?\n\n'
+        + 'This will update ' + dealCount + ' deal' + (dealCount === 1 ? '' : 's')
+        + ' carrying this subtype value.\n\n'
+        + 'The change is atomic and reversible (rename it back to revert).'
+      );
+      if(!ok) return;
+    }
+    // 0-deal subtype rename: no second confirm needed, just execute.
+  }else{
+    // Category rename — always require type-to-confirm "RENAME".
+    const totalAffected = dealCount + subCount;
+    const dangerNote = totalAffected > 100
+      ? 'High-impact change. Make sure you have a recent DB backup if you\'re unsure.'
+      : '';
+    const ok = await _appListConfirmTypeIn({
+      title: 'Cascading rename: "' + oldValue + '" → "' + newValue + '"',
+      body: 'This will atomically:'
+          + '<ul style="margin:8px 0 0 18px;padding:0;font-size:12px;color:#475569;">'
+          + '<li>Rename the category row in App Lists</li>'
+          + '<li>Rename ' + subCount + ' subtype row' + (subCount === 1 ? '' : 's')
+            + ' (e.g. "' + oldValue + ': X" → "' + newValue + ': X")</li>'
+          + '<li>Rewrite <strong>' + dealCount + '</strong> deal' + (dealCount === 1 ? '' : 's')
+            + '\' asset classification (handling pipe-delimited multi-picks correctly)</li>'
+          + '</ul>'
+          + '<div style="margin-top:10px;font-size:12px;color:#64748b;">Atomic: if any step fails, nothing is written. Reversible: rename it back.</div>',
+      danger: dangerNote,
+      confirmPhrase: 'RENAME',
+      confirmLabel: 'Cascade rename'
+    });
+    if(!ok) return;
+  }
+
   _appListStatus('Renaming…', false);
   try{
-    // 1. Find the old row.
+    const result = await _sbRpc('rename_asset_type', {
+      p_old_value: oldValue, p_new_value: newValue
+    });
+    if(result && result.error){
+      _appListStatus(result.error, true);
+      return;
+    }
+    // Preserve expanded state across category renames.
+    if(!isSubtype && _appListExpanded[oldValue]){
+      _appListExpanded[newValue] = true;
+      delete _appListExpanded[oldValue];
+    }
+    await _appListAfterEdit();
+    const detail = (result && result.renamed_deals != null)
+      ? ' Updated ' + result.renamed_deals + ' deal' + (result.renamed_deals === 1 ? '' : 's')
+        + (result.renamed_subtype_rows ? ' and ' + result.renamed_subtype_rows + ' subtype row'
+          + (result.renamed_subtype_rows === 1 ? '' : 's') : '')
+        + '.'
+      : '';
+    _appListStatus('Renamed "' + oldValue + '" → "' + newValue + '".' + detail, false);
+  }catch(e){
+    console.error('rename RPC failed:', e);
+    _appListStatus('Rename failed: ' + (e.message || 'unknown error'), true);
+  }
+}
+
+// v102.37: legacy in-place rename (no cascade). Used for preferred_cities
+// where the value isn't propagated into deal columns the way asset_types
+// is. Same logic as the v102.35 _appListRename body.
+async function _appListRenameSimple(listKey, oldValue){
+  const next = prompt('Rename "' + oldValue + '" to:', oldValue);
+  if(next === null) return;
+  const trimmed = (next || '').trim();
+  if(!trimmed || trimmed === oldValue) return;
+
+  _appListStatus('Renaming…', false);
+  try{
     const oldRows = await _sbGet(SB_TABLES.appLists,
       'select=id&list_key=eq.' + encodeURIComponent(listKey)
       + '&value=eq.' + encodeURIComponent(oldValue)
@@ -11434,39 +11614,28 @@ async function _appListRename(listKey, oldValue){
       _appListStatus('Original row not found.', true);
       return;
     }
-    // 2. Check target.
     const targetRows = await _sbGet(SB_TABLES.appLists,
       'select=id,is_active&list_key=eq.' + encodeURIComponent(listKey)
-      + '&value=eq.' + encodeURIComponent(newValue) + '&limit=1');
+      + '&value=eq.' + encodeURIComponent(trimmed) + '&limit=1');
     const targetExists = Array.isArray(targetRows) && targetRows.length;
     if(targetExists && targetRows[0].is_active){
-      _appListStatus('"' + newValue + '" already exists.', true);
+      _appListStatus('"' + trimmed + '" already exists.', true);
       return;
     }
-    // 3. Tombstone the old.
     await _sbPatch(SB_TABLES.appLists, oldRows[0].id, { is_active: false });
-    // 4. Reactivate or insert the new.
     if(targetExists){
       await _sbPatch(SB_TABLES.appLists, targetRows[0].id, { is_active: true });
     }else{
       const meta = (listKey === 'preferred_cities') ? { state: 'NJ' } : {};
       await _sbPost(SB_TABLES.appLists, {
-        list_key:   listKey,
-        value:      newValue,
-        sort_order: 0,
-        is_active:  true,
-        metadata:   meta
+        list_key: listKey, value: trimmed,
+        sort_order: 0, is_active: true, metadata: meta
       });
     }
-    // Preserve expanded state across category renames.
-    if(!isSubtype && isAssetTypes && _appListExpanded[oldValue]){
-      _appListExpanded[newValue] = true;
-      delete _appListExpanded[oldValue];
-    }
     await _appListAfterEdit();
-    _appListStatus('Renamed to "' + newValue + '". (Existing deals are not yet updated — that ships in v102.36.)', false);
+    _appListStatus('Renamed to "' + trimmed + '".', false);
   }catch(e){
-    console.error('_appListRename failed:', e);
+    console.error('_appListRenameSimple failed:', e);
     _appListStatus('Rename failed: ' + (e.message || 'unknown error'), true);
   }
 }
@@ -19086,7 +19255,7 @@ function showSettingsPage(){
         <section style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
           <div style="margin-bottom:14px;">
             <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:4px;">⚙ App Lists</div>
-            <div style="font-size:12px;color:#64748b;">Edit the curated lists used by Deal Board filters, the asset-type editor, and the seller lead form. Asset Types are organized as Categories with nested subtypes — click ▶ to expand. Deletes are soft (tombstoned) so re-adding a removed value reactivates it instead of creating duplicates. <strong>Note:</strong> in v102.35 renames update only the curated list — existing deals carrying the old value are not modified. Cascading rename to deals ships in v102.36.</div>
+            <div style="font-size:12px;color:#64748b;">Edit the curated lists used by Deal Board filters, the asset-type editor, and the seller lead form. Asset Types are organized as Categories with nested subtypes — click ▶ to expand. Deletes are soft (tombstoned) so re-adding a removed value reactivates it instead of creating duplicates. <strong>Renames cascade</strong> to all matching subtype rows and to every deal carrying the value (atomic, reversible). Category renames require typing <code style="background:#f1f5f9;padding:1px 5px;border-radius:3px;">RENAME</code> to confirm.</div>
           </div>
 
           <!-- Asset Types subsection (full width, tree) -->

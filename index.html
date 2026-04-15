@@ -23050,6 +23050,7 @@ let _ddTierFilter = 'all'; // 'all' | 'high' | 'medium' | 'low'
 let _ddContactCache = {}; // contact_id -> full ace_contacts row, populated lazily
 let _ddOpenMergeId = null; // currently-open merge dialog candidate id
 let _ddMergePicks = {};   // field name -> picked value (or '__combine__' for notes)
+let _ddTagPicks = null;   // v102.42.5: Set<string> of tags chosen for the survivor
 
 async function showDedupePage(){
   const main = document.getElementById('mainArea');
@@ -23205,6 +23206,7 @@ async function _ddOpenMerge(candidateId){
   if(!cand) return;
   _ddOpenMergeId = candidateId;
   _ddMergePicks = {};
+  _ddTagPicks = null;
 
   const overlay = document.getElementById('ddMergeOverlay');
   if(!overlay) return;
@@ -23336,6 +23338,7 @@ function _ddCloseMerge(){
   if(overlay){ overlay.style.display = 'none'; overlay.innerHTML = ''; }
   _ddOpenMergeId = null;
   _ddMergePicks = {};
+  _ddTagPicks = null;
 }
 
 function _ddRenderMergeDialog(cand, contacts, dealCounts){
@@ -23437,9 +23440,6 @@ function _ddRenderMergeBody(cand, contacts, dealCounts, fields){
               ${bits.join(' · ')} · added ${c.date_added||'?'}
               ${isSurvSelected?'<span style="display:inline-block;margin-left:4px;background:#1e3a8a;color:#fff;padding:1px 6px;border-radius:8px;font-weight:600;">Surviving</span>':''}
             </div>
-            ${isSurvSelected
-              ? ''
-              : `<button onclick="event.preventDefault();event.stopPropagation();_ddPickSurvivor('${c.id}')" style="margin-top:8px;background:#fff;color:#1e3a8a;border:1px solid #1e3a8a;padding:5px 10px;font-size:11px;font-weight:600;border-radius:5px;cursor:pointer;white-space:nowrap;" title="Make this contact the survivor">↔ Make survivor</button>`}
           </div>
         </label>
       </div>`;
@@ -23510,16 +23510,60 @@ function _ddRenderInspectionRows(contacts){
   const labelCellStyle = 'padding:10px 14px;font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;background:#fafbfc;display:flex;align-items:flex-start;';
   const dataCellStyle  = 'padding:10px 14px;border-left:1px solid #f1f5f9;background:#fafbfc;font-size:12px;color:#0f172a;line-height:1.5;';
 
-  // Row 1: Type tags
+  // v102.42.5: initialize tag picks to the union of all contacts' types
+  // on first render. Persists across re-renders via the _ddTagPicks Set.
+  if(_ddTagPicks === null){
+    _ddTagPicks = new Set();
+    contacts.forEach(c => {
+      (Array.isArray(c.type) ? c.type : []).forEach(t => {
+        if(t) _ddTagPicks.add(t);
+      });
+    });
+  }
+  const survId = _ddMergePicks.surviving_id;
+
+  // Row 1: Type tags. Survivor cell shows the chosen tag set with × to
+  // remove. Loser cells show their original tags as toggleable chips:
+  // full color if present in survivor, dimmed if removed (click to re-add).
+  // The merge will save whatever's in _ddTagPicks at submit time.
   const typeRow = `
     <div style="display:grid;grid-template-columns:140px repeat(${cols}, minmax(0, 1fr));border-bottom:1px solid #f1f5f9;">
-      <div style="${labelCellStyle}">Tags</div>
+      <div style="${labelCellStyle}">Tags
+        <div style="font-size:9px;color:#94a3b8;margin-top:2px;font-weight:500;text-transform:none;letter-spacing:0;">Click to add/remove</div>
+      </div>
       ${contacts.map((c, idx) => {
-        const tags = Array.isArray(c.type) ? c.type : [];
-        const badges = tags.length
-          ? tags.map(t => `<span style="display:inline-block;font-size:11px;padding:2px 9px;border-radius:6px;background:#eef2fb;color:#1e3a8a;font-weight:600;margin-right:4px;margin-bottom:2px;">${String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;')}</span>`).join('')
-          : '<span style="color:#cbd5e1;font-style:italic;">(none)</span>';
-        return `<div style="${dataCellStyle}${idx===0?'border-left:none;':''}">${badges}</div>`;
+        const isSurv = (c.id === survId);
+        if(isSurv){
+          // Survivor cell: show currently-chosen tag set with × to remove
+          const chosenTags = Array.from(_ddTagPicks);
+          const chips = chosenTags.length
+            ? chosenTags.map(t => {
+                const safeT = String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/'/g,"\\'");
+                return `<span style="display:inline-flex;align-items:center;gap:4px;font-size:11px;padding:3px 5px 3px 10px;border-radius:6px;background:#1e3a8a;color:#fff;font-weight:600;margin-right:5px;margin-bottom:3px;">${safeT}<button onclick="_ddToggleTag('${safeT}', false)" title="Remove this tag from the surviving contact" style="background:transparent;border:none;color:#fff;font-size:14px;line-height:1;cursor:pointer;padding:0 4px;font-weight:700;">×</button></span>`;
+              }).join('')
+            : '<span style="color:#dc2626;font-style:italic;font-size:11px;">No tags selected — surviving contact will have no type tags</span>';
+          return `<div style="${dataCellStyle}${idx===0?'border-left:none;':''}background:#eef2fb;">${chips}</div>`;
+        } else {
+          // Loser cell: each of this contact's original tags shown as a chip.
+          // Full color = currently in survivor's set; dimmed = not in set.
+          // Click toggles its presence in the survivor.
+          const tags = Array.isArray(c.type) ? c.type : [];
+          if(!tags.length){
+            return `<div style="${dataCellStyle}${idx===0?'border-left:none;':''}color:#cbd5e1;font-style:italic;">(none)</div>`;
+          }
+          const chips = tags.map(t => {
+            const safeT = String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/'/g,"\\'");
+            const isPresent = _ddTagPicks.has(t);
+            const style = isPresent
+              ? 'background:#eef2fb;color:#1e3a8a;border:1px solid #c7d2fe;'
+              : 'background:#fff;color:#94a3b8;border:1px dashed #cbd5e1;text-decoration:line-through;';
+            const title = isPresent
+              ? 'Already on the surviving contact — click to remove'
+              : 'Click to add to the surviving contact';
+            return `<button onclick="_ddToggleTag('${safeT}', ${!isPresent})" title="${title}" style="${style}font-size:11px;padding:3px 9px;border-radius:6px;font-weight:600;margin-right:4px;margin-bottom:3px;cursor:pointer;">${isPresent?'':'+ '}${safeT}</button>`;
+          }).join('');
+          return `<div style="${dataCellStyle}${idx===0?'border-left:none;':''}">${chips}</div>`;
+        }
       }).join('')}
     </div>`;
 
@@ -23697,6 +23741,15 @@ function _ddPickSurvivor(contactId){
   _ddRefetchPreview();
 }
 
+// v102.42.5: add or remove a tag from the surviving contact's chosen
+// tag set. Called from the interactive tag chips in the inspection row.
+function _ddToggleTag(tag, makePresent){
+  if(!_ddTagPicks) _ddTagPicks = new Set();
+  if(makePresent) _ddTagPicks.add(tag);
+  else            _ddTagPicks.delete(tag);
+  _ddReRenderDialog();
+}
+
 function _ddPickField(fieldKey, contactIdOrCombine){
   _ddMergePicks[fieldKey] = contactIdOrCombine;
   _ddReRenderDialog();
@@ -23751,6 +23804,12 @@ async function _ddSubmitMerge(candidateId){
     fieldValues.contact_notes = parts.join('\n\n');
   } else if(notesPick && contactsById[notesPick]){
     fieldValues.contact_notes = contactsById[notesPick].contact_notes || '';
+  }
+
+  // v102.42.5: send the user's curated tag set. The RPC honors caller's
+  // type array if provided (else falls back to auto-union for back-compat).
+  if(_ddTagPicks){
+    fieldValues.type = Array.from(_ddTagPicks);
   }
 
   const btn = document.getElementById('ddMergeBtn');

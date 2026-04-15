@@ -11515,29 +11515,19 @@ async function _appListDelete(listKey, value){
   }
 }
 
-// UNION of the curated asset_types list with any distinct values already
-// present on loaded deals. The union is the backwards-compat layer: if a
-// legacy deal has an asset type that's been removed from the curated list,
-// it still shows up in the filter so you can find it. Returns a sorted array.
+// v102.36: returns the curated asset_types list directly. The legacy union
+// with deal-distinct values was removed once the v102.36 normalization
+// migration cleaned up the 2,495 deals carrying emoji-decorated, comma-
+// joined, or "Commercial" placeholder values. Every active deal now
+// references a value that exists in ace_app_lists, so the union was
+// adding nothing but noise.
 //
-// v102.35: read the RAW crm_asset_classification / Simple Text Property Type
-// values rather than _dealAssetType() output, because _dealAssetType strips
-// everything after the first ":" and would collapse "Multifamily: Mid Rise"
-// to just "Multifamily", losing the subtype distinction in the filter.
-// Drift normalization in v102.36 will eliminate the union entirely.
+// If a future deal somehow ends up with an off-list value (e.g. via direct
+// SQL or a bug), it will simply not appear as a filter option — the agent
+// can re-classify it via the deal-card asset-type editor, which writes
+// canonical values from the same curated list.
 function _dbGetAssetTypes(){
-  const set = new Set();
-  (_appLists.asset_types || []).forEach(v => { if(v) set.add(v); });
-  for(const d of (allDeals||[])){
-    const raw = (d && (d['CRM Asset Classification'] || d['Simple Text Property Type'])) || '';
-    if(!raw) continue;
-    // Pipe-delimited multi-pick: "Multifamily: Fourplex | Land: Development"
-    raw.split('|').forEach(part => {
-      const v = part.trim();
-      if(v) set.add(v);
-    });
-  }
-  return [...set].sort();
+  return (_appLists.asset_types || []).slice().sort();
 }
 
 // Straight read of the curated preferred_cities list. If the cache is empty

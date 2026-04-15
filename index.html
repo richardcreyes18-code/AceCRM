@@ -3671,6 +3671,7 @@ function _setNavDirect(btn, page){
   else if(page==='workbench') showWorkbenchPage();
   else if(page==='company') showCompanyPage();
   else if(page==='settings') showSettingsPage();
+  else if(page==='dedupe') showDedupePage();
   else if(page==='leadintake') showLeadIntakePage();
   else if(page==='tasks-nav') showTasksPage();
   else if(page==='dashboard') showDashboard();
@@ -20042,6 +20043,16 @@ function showSettingsPage(){
       <div style="max-width:900px;margin:22px auto;padding:0 22px 60px;">
         <div id="settingsSaveMsg" style="min-height:18px;font-size:12px;color:#16a34a;font-weight:600;margin-bottom:12px;"></div>
 
+        <!-- v102.42: Dedupe entry tile -->
+        <section style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
+          <div style="font-size:28px;flex-shrink:0;">🧹</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:15px;font-weight:700;color:#0f172a;">Contact dedupe</div>
+            <div style="font-size:12px;color:#64748b;margin-top:3px;line-height:1.5;">Find and merge duplicate contacts. Detection uses phone, email, and name matching across all live contacts.</div>
+          </div>
+          <button onclick="setNav(null,'dedupe')" style="background:#0f172a;color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Open dedupe queue →</button>
+        </section>
+
         <!-- CONNECTION -->
         <section style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
           <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:4px;">
@@ -23023,6 +23034,467 @@ function _clkUnlockFields(prefix){
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════
+// v102.42: CONTACT DEDUPE — queue + merge dialog
+// ═══════════════════════════════════════════════════════════════════════
+// Reads candidate match groups from ace_contact_dedupe_candidates,
+// renders them as a sortable/filterable list, and provides a side-by-
+// side merge dialog where the user picks the winning value per field.
+//
+// All the heavy lifting (FK re-pointing, soft-delete, log writes) is
+// in the merge_contacts(...) Postgres RPC. The JS just collects the
+// user's field picks and calls the RPC.
+
+let _ddCandidates = []; // raw rows from ace_contact_dedupe_candidates
+let _ddTierFilter = 'all'; // 'all' | 'high' | 'medium' | 'low'
+let _ddContactCache = {}; // contact_id -> full ace_contacts row, populated lazily
+let _ddOpenMergeId = null; // currently-open merge dialog candidate id
+let _ddMergePicks = {};   // field name -> picked value (or '__combine__' for notes)
+
+async function showDedupePage(){
+  const main = document.getElementById('mainArea');
+  if(!main) return;
+  main.innerHTML = '<div style="padding:60px;text-align:center;color:#94a3b8;font-size:13px;">Loading dedupe queue…</div>';
+  try{
+    await _ddLoadCandidates();
+  }catch(e){
+    console.error('dedupe load failed:', e);
+    main.innerHTML = '<div style="padding:60px;text-align:center;color:#dc2626;font-size:13px;">Failed to load dedupe queue: ' + (e.message||'unknown') + '</div>';
+    return;
+  }
+  _ddRenderShell();
+}
+
+async function _ddLoadCandidates(){
+  const rows = await _sbGet('ace_contact_dedupe_candidates',
+    'select=id,contact_ids,tier,match_signal,match_value,status,detected_at'
+    + '&status=eq.pending'
+    + '&order=tier.asc,detected_at.desc&limit=2000');
+  _ddCandidates = Array.isArray(rows) ? rows : [];
+}
+
+function _ddRenderShell(){
+  const main = document.getElementById('mainArea');
+  if(!main) return;
+  // Tier counts (across all pending, regardless of current filter)
+  const counts = { high: 0, medium: 0, low: 0 };
+  _ddCandidates.forEach(c => { counts[c.tier] = (counts[c.tier]||0) + 1; });
+  const total = _ddCandidates.length;
+  const tabBase = 'background:transparent;border:none;border-bottom:3px solid transparent;padding:8px 14px;font-size:13px;font-weight:500;color:#64748b;cursor:pointer;margin-bottom:-1px;';
+  const tabActive = (active) => active
+    ? 'background:transparent;border:none;border-bottom:3px solid #1e3a8a;padding:8px 14px;font-size:13px;font-weight:700;color:#1e3a8a;cursor:pointer;margin-bottom:-1px;'
+    : tabBase;
+  main.innerHTML = `
+    <div style="display:flex;flex-direction:column;height:100%;background:#f8fafc;font-family:'Inter',system-ui,sans-serif;">
+      <div style="background:#fff;border-bottom:1px solid #e2e8f0;padding:18px 24px 0;">
+        <div style="display:flex;align-items:flex-start;gap:14px;margin-bottom:12px;">
+          <div>
+            <div style="font-size:20px;font-weight:700;color:#0f172a;">🧹 Contact dedupe</div>
+            <div style="font-size:12px;color:#64748b;margin-top:3px;">${total} candidate match group${total===1?'':'s'} pending review · merging is reversible for 30 days from Settings.</div>
+          </div>
+          <div style="flex:1;"></div>
+          <button onclick="_ddRunScan()" id="ddScanBtn" style="background:#fff;color:#1e3a8a;border:1px solid #1e3a8a;padding:9px 16px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;">Scan now ↻</button>
+          <button onclick="setNav(null,'settings')" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:9px 16px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;">← Back to Settings</button>
+        </div>
+        <div style="display:flex;gap:0;border-bottom:1px solid transparent;">
+          <button onclick="_ddSetTier('all')"    style="${tabActive(_ddTierFilter==='all')}">All <span style="margin-left:6px;font-size:11px;color:#94a3b8;">${total}</span></button>
+          <button onclick="_ddSetTier('high')"   style="${tabActive(_ddTierFilter==='high')}">High confidence <span style="margin-left:6px;font-size:11px;color:#dc2626;font-weight:700;">${counts.high||0}</span></button>
+          <button onclick="_ddSetTier('medium')" style="${tabActive(_ddTierFilter==='medium')}">Medium <span style="margin-left:6px;font-size:11px;color:#d97706;font-weight:700;">${counts.medium||0}</span></button>
+          <button onclick="_ddSetTier('low')"    style="${tabActive(_ddTierFilter==='low')}">Low <span style="margin-left:6px;font-size:11px;color:#94a3b8;font-weight:700;">${counts.low||0}</span></button>
+        </div>
+      </div>
+      <div id="ddList" style="flex:1;overflow-y:auto;padding:12px 24px;"></div>
+      <div id="ddMergeOverlay" style="display:none;"></div>
+    </div>`;
+  _ddRenderList();
+}
+
+function _ddSetTier(tier){
+  _ddTierFilter = tier;
+  _ddRenderShell();
+}
+
+function _ddRenderList(){
+  const el = document.getElementById('ddList');
+  if(!el) return;
+  const filtered = _ddCandidates.filter(c =>
+    _ddTierFilter === 'all' || c.tier === _ddTierFilter);
+  if(!filtered.length){
+    el.innerHTML = `
+      <div style="padding:60px 20px;text-align:center;color:#64748b;font-size:13px;">
+        <div style="font-size:14px;font-weight:600;color:#334155;margin-bottom:8px;">No pending candidates ${_ddTierFilter==='all'?'':'in this tier'}.</div>
+        <div>Click <strong>Scan now</strong> above to re-run detection, or switch tiers.</div>
+      </div>`;
+    return;
+  }
+  // Cap render at 200 rows for performance — most users won't scroll
+  // beyond that, and merging a few at a time will shrink the queue.
+  const slice = filtered.slice(0, 200);
+  const tierColor = { high: '#dc2626', medium: '#d97706', low: '#94a3b8' };
+  const tierBg    = { high: '#fef2f2', medium: '#fffbeb', low: '#f8fafc' };
+  const tierLabel = { high: 'High', medium: 'Medium', low: 'Low' };
+  const signalLabel = (s, v) => {
+    if(s === 'phone') return 'Phone match: ' + (v||'').replace(/(\d{3})(\d{3})(\d+)/, '($1) $2-$3');
+    if(s === 'email') return 'Email match: ' + (v||'');
+    if(s === 'name')  return 'Name match: ' + (v||'');
+    return s;
+  };
+  el.innerHTML = `
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
+      ${slice.map((c, i) => `
+        <div style="padding:14px 18px;${i>0?'border-top:1px solid #f1f5f9;':''}display:flex;align-items:center;gap:12px;">
+          <span style="font-size:11px;padding:3px 9px;border-radius:6px;background:${tierBg[c.tier]};color:${tierColor[c.tier]};font-weight:700;flex-shrink:0;">${tierLabel[c.tier]||c.tier}</span>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13px;font-weight:600;color:#0f172a;">${c.contact_ids.length} contacts may be duplicates</div>
+            <div style="font-size:11px;color:#64748b;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${signalLabel(c.match_signal, c.match_value)}</div>
+          </div>
+          <button onclick="_ddOpenMerge('${c.id}')" style="font-size:12px;padding:7px 14px;background:#0f172a;color:#fff;border:none;border-radius:5px;font-weight:600;cursor:pointer;">Review & merge</button>
+          <button onclick="_ddSkip('${c.id}')" style="font-size:12px;padding:7px 12px;background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:5px;font-weight:600;cursor:pointer;">Skip</button>
+        </div>
+      `).join('')}
+    </div>
+    ${filtered.length > slice.length
+      ? `<div style="padding:12px;text-align:center;font-size:11px;color:#94a3b8;">Showing first ${slice.length} of ${filtered.length}. Action items above to see more.</div>`
+      : ''}
+  `;
+}
+
+async function _ddRunScan(){
+  const btn = document.getElementById('ddScanBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'Scanning…'; }
+  try{
+    const res = await _sbRpc('run_dedupe_detection', {});
+    if(res && res.error){ showSaveConfirm('Scan failed: ' + res.error); return; }
+    showSaveConfirm('Scan complete: ' + (res.pending_groups||0) + ' candidate groups');
+    await _ddLoadCandidates();
+    _ddRenderShell();
+  }catch(e){
+    console.error('scan failed:', e);
+    showSaveConfirm('Scan failed: ' + (e.message||'unknown'));
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = 'Scan now ↻'; }
+  }
+}
+
+async function _ddSkip(candidateId){
+  try{
+    const userId = (_currentUser && _currentUser.id) || null;
+    const res = await _sbRpc('skip_dedupe_candidate', { p_candidate_id: candidateId, p_user_id: userId });
+    if(res && res.error){ showSaveConfirm('Skip failed: ' + res.error); return; }
+    _ddCandidates = _ddCandidates.filter(c => c.id !== candidateId);
+    _ddRenderShell();
+    showSaveConfirm('Skipped — won\'t show again until you rescan');
+  }catch(e){ showSaveConfirm('Skip failed: ' + (e.message||'unknown')); }
+}
+
+async function _ddMarkNotDups(candidateId){
+  try{
+    const userId = (_currentUser && _currentUser.id) || null;
+    const res = await _sbRpc('mark_dedupe_not_duplicates', { p_candidate_id: candidateId, p_user_id: userId });
+    if(res && res.error){ showSaveConfirm('Action failed: ' + res.error); return; }
+    _ddCandidates = _ddCandidates.filter(c => c.id !== candidateId);
+    _ddCloseMerge();
+    _ddRenderShell();
+    showSaveConfirm('Marked as different people — won\'t be flagged again');
+  }catch(e){ showSaveConfirm('Action failed: ' + (e.message||'unknown')); }
+}
+
+// ─── Merge dialog ─────────────────────────────────────────────────────
+async function _ddOpenMerge(candidateId){
+  const cand = _ddCandidates.find(c => c.id === candidateId);
+  if(!cand) return;
+  _ddOpenMergeId = candidateId;
+  _ddMergePicks = {};
+
+  const overlay = document.getElementById('ddMergeOverlay');
+  if(!overlay) return;
+  overlay.style.display = 'block';
+  overlay.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(15,23,42,0.45);z-index:9000;display:flex;align-items:flex-start;justify-content:center;padding:30px 20px;overflow-y:auto;">
+      <div style="background:#fff;border-radius:12px;max-width:1100px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.25);">
+        <div style="padding:24px;text-align:center;color:#94a3b8;font-size:13px;">Loading contact data…</div>
+      </div>
+    </div>`;
+
+  // Fetch all contact rows for this candidate
+  let contacts = [];
+  try{
+    const filter = 'in.(' + cand.contact_ids.map(encodeURIComponent).join(',') + ')';
+    contacts = await _sbGet('ace_contacts',
+      'select=id,name,phone_number,secondary_phone,email,company,contact_notes,type,date_added,deleted_at&id=' + filter);
+  }catch(e){
+    showSaveConfirm('Failed to load contacts: ' + (e.message||'unknown'));
+    _ddCloseMerge();
+    return;
+  }
+  if(!Array.isArray(contacts) || contacts.length < 2){
+    showSaveConfirm('Could not load enough contacts to merge.');
+    _ddCloseMerge();
+    return;
+  }
+  // Filter out any that were already deleted (race with a concurrent merge)
+  contacts = contacts.filter(c => !c.deleted_at);
+  if(contacts.length < 2){
+    showSaveConfirm('Some contacts in this group were already merged. Refresh to reload.');
+    _ddCloseMerge();
+    return;
+  }
+  // Stable column order = ascending date_added (oldest first = leftmost)
+  contacts.sort((a, b) => String(a.date_added||'').localeCompare(String(b.date_added||'')));
+
+  // Also fetch deal counts per contact (helpful signal for picking survivor)
+  const dealCounts = {};
+  try{
+    const filter = 'in.(' + contacts.map(c => encodeURIComponent(c.id)).join(',') + ')';
+    const props = await _sbGet('ace_properties',
+      'select=id,owner_contact_id&owner_contact_id=' + filter + '&limit=2000');
+    (Array.isArray(props) ? props : []).forEach(p => {
+      dealCounts[p.owner_contact_id] = (dealCounts[p.owner_contact_id]||0) + 1;
+    });
+  }catch(e){ console.warn('deal count fetch failed:', e.message); }
+
+  _ddRenderMergeDialog(cand, contacts, dealCounts);
+}
+
+function _ddCloseMerge(){
+  const overlay = document.getElementById('ddMergeOverlay');
+  if(overlay){ overlay.style.display = 'none'; overlay.innerHTML = ''; }
+  _ddOpenMergeId = null;
+  _ddMergePicks = {};
+}
+
+function _ddRenderMergeDialog(cand, contacts, dealCounts){
+  const overlay = document.getElementById('ddMergeOverlay');
+  if(!overlay) return;
+  // Cache contacts so radio-change re-renders don't refetch
+  if(contacts && contacts.length){
+    _ddDialogContactsCache = contacts;
+    _ddDialogContactsCacheKey = cand.id;
+    _ddDialogDealCountsCache = dealCounts || {};
+  }
+  // Default surviving contact = the one with the most deals (highest signal
+  // of "this is the canonical record"). Fallback: oldest by date_added.
+  let defaultSurvivor = contacts[0].id;
+  let bestDeals = -1;
+  contacts.forEach(c => {
+    const d = (dealCounts||{})[c.id] || 0;
+    if(d > bestDeals){ bestDeals = d; defaultSurvivor = c.id; }
+  });
+  // Only set default if not yet picked (preserves user's choice on re-render)
+  if(!_ddMergePicks.surviving_id){
+    _ddMergePicks.surviving_id = defaultSurvivor;
+  }
+  const survId = _ddMergePicks.surviving_id;
+  // Default per-field pick = the value from the surviving contact (or first
+  // non-empty value if surviving's field is empty).
+  const fields = [
+    { key: 'name',            label: 'Name'            },
+    { key: 'phone_number',    label: 'Phone'           },
+    { key: 'secondary_phone', label: 'Secondary phone' },
+    { key: 'email',           label: 'Email'           },
+    { key: 'company',         label: 'Company'         },
+    { key: 'contact_notes',   label: 'Notes'           }
+  ];
+  fields.forEach(f => {
+    const survVal = (contacts.find(c => c.id === defaultSurvivor) || {})[f.key] || '';
+    if(survVal){ _ddMergePicks[f.key] = defaultSurvivor; return; }
+    const fallback = contacts.find(c => c[f.key]);
+    _ddMergePicks[f.key] = fallback ? fallback.id : defaultSurvivor;
+  });
+  // Notes default to "combine all" if 2+ contacts have notes
+  const notesCount = contacts.filter(c => (c.contact_notes||'').trim()).length;
+  if(notesCount >= 2) _ddMergePicks.contact_notes = '__combine__';
+
+  overlay.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(15,23,42,0.45);z-index:9000;display:flex;align-items:flex-start;justify-content:center;padding:30px 20px;overflow-y:auto;">
+      <div style="background:#fff;border-radius:12px;max-width:1100px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.25);font-family:'Inter',system-ui,sans-serif;">
+        <div style="padding:18px 24px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:12px;">
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:16px;font-weight:700;color:#0f172a;">Merge ${contacts.length} contacts → 1</div>
+            <div style="font-size:12px;color:#64748b;margin-top:2px;">Pick the surviving contact (top row) and the winning value per field. Related deals, buyer criteria, pitches, and tasks all re-point to the survivor.</div>
+          </div>
+          <button onclick="_ddCloseMerge()" style="background:transparent;border:none;font-size:20px;color:#94a3b8;cursor:pointer;padding:4px 10px;">×</button>
+        </div>
+
+        <div id="ddMergeBody" style="padding:18px 24px;max-height:60vh;overflow-y:auto;">
+          ${_ddRenderMergeBody(cand, contacts, dealCounts, fields)}
+        </div>
+
+        <div style="padding:14px 24px;border-top:1px solid #e2e8f0;background:#f8fafc;display:flex;align-items:center;gap:10px;">
+          <button onclick="_ddMarkNotDups('${cand.id}')" style="font-size:12px;padding:9px 14px;background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;font-weight:600;cursor:pointer;">Mark as not duplicates</button>
+          <div style="flex:1;"></div>
+          <button onclick="_ddCloseMerge()" style="font-size:13px;padding:9px 16px;background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;font-weight:600;cursor:pointer;">Cancel</button>
+          <button onclick="_ddSubmitMerge('${cand.id}')" id="ddMergeBtn" style="font-size:13px;padding:9px 22px;background:#0f172a;color:#fff;border:none;border-radius:6px;font-weight:700;cursor:pointer;">Merge into 1 contact</button>
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+function _ddRenderMergeBody(cand, contacts, dealCounts, fields){
+  // Header row: contact summary cards + "surviving" radio
+  const colHeader = (c, idx) => {
+    const initials = _wbContactInitials(c.name||'');
+    const deals = dealCounts[c.id] || 0;
+    const isSurvSelected = _ddMergePicks.surviving_id === c.id;
+    return `
+      <div style="padding:12px 14px;border-left:${idx===0?'none':'1px solid #f1f5f9'};background:${isSurvSelected?'#eef2fb':'#fff'};">
+        <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
+          <input type="radio" name="dd_surv" value="${c.id}" ${isSurvSelected?'checked':''} onchange="_ddPickSurvivor('${c.id}')" style="margin-top:3px;flex-shrink:0;"/>
+          <div style="flex:1;min-width:0;">
+            <div style="display:flex;align-items:center;gap:8px;">
+              <div style="width:28px;height:28px;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#d97706);color:#fff;display:flex;align-items:center;justify-content:center;font-weight:600;font-size:10px;flex-shrink:0;">${initials}</div>
+              <div style="font-size:12px;font-weight:700;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${(c.name||'(no name)').replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>
+            </div>
+            <div style="font-size:10px;color:#64748b;margin-top:4px;line-height:1.4;">
+              ${deals} deal${deals===1?'':'s'} · added ${c.date_added||'?'}
+              ${isSurvSelected?'<span style="display:inline-block;margin-left:4px;background:#1e3a8a;color:#fff;padding:1px 6px;border-radius:8px;font-weight:600;">Surviving</span>':''}
+            </div>
+          </div>
+        </label>
+      </div>`;
+  };
+  // Field row: per-contact value with radio
+  const fieldRow = (f) => {
+    const cells = contacts.map((c, idx) => {
+      const val = (c[f.key]||'').toString();
+      const safeVal = val.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+      const isPicked = _ddMergePicks[f.key] === c.id;
+      const isEmpty = !val.trim();
+      const cellBg = isPicked ? '#eef2fb' : '#fff';
+      const valStyle = isEmpty
+        ? 'color:#cbd5e1;font-style:italic;'
+        : 'color:#0f172a;';
+      const display = isEmpty ? '(empty)' : safeVal;
+      return `
+        <label style="padding:10px 14px;border-left:${idx===0?'none':'1px solid #f1f5f9'};background:${cellBg};cursor:${isEmpty?'default':'pointer'};display:flex;align-items:flex-start;gap:8px;${isEmpty?'opacity:0.7;':''}">
+          <input type="radio" name="dd_f_${f.key}" value="${c.id}" ${isPicked?'checked':''} ${isEmpty?'disabled':''} onchange="_ddPickField('${f.key}','${c.id}')" style="margin-top:3px;flex-shrink:0;"/>
+          <span style="font-size:12px;${valStyle}line-height:1.5;word-break:break-word;">${display}</span>
+        </label>`;
+    }).join('');
+    // For notes, also offer "combine all" as a fourth option
+    const isNotes = f.key === 'contact_notes';
+    const hasMultipleNotes = isNotes && contacts.filter(c => (c.contact_notes||'').trim()).length >= 2;
+    let combineCell = '';
+    if(hasMultipleNotes){
+      const isPicked = _ddMergePicks.contact_notes === '__combine__';
+      combineCell = `
+        <label style="grid-column:2/-1;padding:10px 14px;border-top:1px dashed #cbd5e1;background:${isPicked?'#ecfdf5':'#f8fafc'};cursor:pointer;display:flex;align-items:flex-start;gap:8px;">
+          <input type="radio" name="dd_f_contact_notes" value="__combine__" ${isPicked?'checked':''} onchange="_ddPickField('contact_notes','__combine__')" style="margin-top:3px;flex-shrink:0;"/>
+          <span style="font-size:12px;color:#04342c;font-weight:500;">Combine all notes (recommended) — preserves history with "[From X]" labels</span>
+        </label>`;
+    }
+    return `
+      <div style="display:grid;grid-template-columns:140px repeat(${contacts.length}, minmax(0, 1fr));border-bottom:1px solid #f1f5f9;">
+        <div style="padding:12px 14px;font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;display:flex;align-items:flex-start;">${f.label}</div>
+        ${cells}
+        ${combineCell}
+      </div>`;
+  };
+
+  return `
+    <div style="border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
+      <div style="display:grid;grid-template-columns:140px repeat(${contacts.length}, minmax(0, 1fr));border-bottom:1px solid #e2e8f0;background:#f8fafc;">
+        <div style="padding:10px 14px;font-size:11px;color:#475569;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">Contact</div>
+        ${contacts.map((c,i) => colHeader(c,i)).join('')}
+      </div>
+      ${fields.map(f => fieldRow(f)).join('')}
+    </div>
+  `;
+}
+
+function _ddPickSurvivor(contactId){
+  _ddMergePicks.surviving_id = contactId;
+  // Re-render the dialog body so the surviving badge moves and the
+  // header row colors update. We don't touch field picks since the user
+  // may have intentionally chosen a non-surviving contact's value for
+  // a particular field.
+  _ddReRenderDialog();
+}
+
+function _ddPickField(fieldKey, contactIdOrCombine){
+  _ddMergePicks[fieldKey] = contactIdOrCombine;
+  _ddReRenderDialog();
+}
+
+function _ddReRenderDialog(){
+  if(!_ddOpenMergeId) return;
+  const cand = _ddCandidates.find(c => c.id === _ddOpenMergeId);
+  if(!cand) return;
+  // Cheap re-render — refetch contacts is wasteful, so cache them on first render
+  if(!_ddDialogContactsCache || _ddDialogContactsCacheKey !== _ddOpenMergeId){ return; }
+  _ddRenderMergeDialog(cand, _ddDialogContactsCache, _ddDialogDealCountsCache);
+}
+
+// We need to cache contacts + dealCounts so re-renders (after radio
+// changes) don't refetch. The cache is populated at the top of
+// _ddRenderMergeDialog whenever it's called with fresh data.
+let _ddDialogContactsCache = null;
+let _ddDialogContactsCacheKey = null;
+let _ddDialogDealCountsCache = {};
+
+async function _ddSubmitMerge(candidateId){
+  const cand = _ddCandidates.find(c => c.id === candidateId);
+  if(!cand){ showSaveConfirm('Candidate not found.'); return; }
+  if(!_ddDialogContactsCache){ showSaveConfirm('Internal error: contact cache empty'); return; }
+
+  const survivingId = _ddMergePicks.surviving_id;
+  const loserIds = cand.contact_ids.filter(id => id !== survivingId);
+  if(loserIds.length === 0){
+    showSaveConfirm('Pick a surviving contact first.');
+    return;
+  }
+
+  // Build the field_values object the RPC expects.
+  const contactsById = {};
+  _ddDialogContactsCache.forEach(c => { contactsById[c.id] = c; });
+  const fieldValues = {};
+  ['name','phone_number','secondary_phone','email','company'].forEach(f => {
+    const pickedId = _ddMergePicks[f];
+    if(pickedId && contactsById[pickedId]){
+      fieldValues[f] = contactsById[pickedId][f] || '';
+    }
+  });
+  // Notes special case: '__combine__' joins all non-empty notes with provenance
+  const notesPick = _ddMergePicks.contact_notes;
+  if(notesPick === '__combine__'){
+    const parts = _ddDialogContactsCache
+      .filter(c => (c.contact_notes||'').trim())
+      .map(c => '[From ' + (c.name||'(unnamed)') + ', added ' + (c.date_added||'?') + ']\n' + c.contact_notes.trim());
+    fieldValues.contact_notes = parts.join('\n\n');
+  } else if(notesPick && contactsById[notesPick]){
+    fieldValues.contact_notes = contactsById[notesPick].contact_notes || '';
+  }
+
+  const btn = document.getElementById('ddMergeBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'Merging…'; }
+
+  try{
+    const userId = (_currentUser && _currentUser.id) || null;
+    const res = await _sbRpc('merge_contacts', {
+      p_surviving_id: survivingId,
+      p_loser_ids:    loserIds,
+      p_field_values: fieldValues,
+      p_user_id:      userId
+    });
+    if(res && res.error){
+      showSaveConfirm('Merge failed: ' + res.error);
+      if(btn){ btn.disabled = false; btn.textContent = 'Merge into 1 contact'; }
+      return;
+    }
+    showSaveConfirm('✓ Merged ' + (loserIds.length+1) + ' contacts into 1 (' + (res.fk_repointed_count||0) + ' related rows re-pointed)');
+    _ddCloseMerge();
+    // Refresh the queue so the merged candidate (and any subsumed groups)
+    // disappear immediately.
+    await _ddLoadCandidates();
+    _ddRenderShell();
+  }catch(e){
+    console.error('merge submit failed:', e);
+    showSaveConfirm('Merge failed: ' + (e.message||'unknown'));
+    if(btn){ btn.disabled = false; btn.textContent = 'Merge into 1 contact'; }
+  }
+}
+
 // v102.41: DEAL-CARD CONTACT LOOKUP — Seller Contact Information section.
 // ═══════════════════════════════════════════════════════════════════════
 // When a deal has no owner_contact_id set, this lookup widget appears

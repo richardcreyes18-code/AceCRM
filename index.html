@@ -23253,7 +23253,41 @@ async function _ddOpenMerge(candidateId){
     });
   }catch(e){ console.warn('deal count fetch failed:', e.message); }
 
+  // v102.42.2: fetch initial merge preview so the dialog can surface
+  // type-union, BC-count, BC-collision blocker, and the will-repoint
+  // counts before the user clicks Merge. Picks the most-deals contact
+  // as the default survivor for the preview; if the user changes the
+  // surviving radio, we re-fetch via _ddRefetchPreview.
+  let defaultSurv = contacts[0].id;
+  let bestDeals = -1;
+  contacts.forEach(c => {
+    const d = dealCounts[c.id] || 0;
+    if(d > bestDeals){ bestDeals = d; defaultSurv = c.id; }
+  });
+  let preview = null;
+  try{
+    preview = await _sbRpc('preview_merge_contacts', {
+      p_surviving_id: defaultSurv,
+      p_loser_ids:    contacts.filter(c => c.id !== defaultSurv).map(c => c.id)
+    });
+  }catch(e){ console.warn('preview fetch failed (non-fatal):', e.message); }
+  _ddDialogPreviewCache = preview;
+
   _ddRenderMergeDialog(cand, contacts, dealCounts);
+}
+
+// v102.42.2: refetch preview when surviving radio changes. The type
+// union and re-point counts are sensitive to which contact is survivor.
+async function _ddRefetchPreview(){
+  if(!_ddDialogContactsCache || !_ddOpenMergeId) return;
+  const survId = _ddMergePicks.surviving_id;
+  const loserIds = _ddDialogContactsCache.filter(c => c.id !== survId).map(c => c.id);
+  try{
+    _ddDialogPreviewCache = await _sbRpc('preview_merge_contacts', {
+      p_surviving_id: survId, p_loser_ids: loserIds
+    });
+  }catch(e){ console.warn('preview refetch failed:', e.message); }
+  _ddReRenderDialog();
 }
 
 function _ddCloseMerge(){
@@ -23317,6 +23351,7 @@ function _ddRenderMergeDialog(cand, contacts, dealCounts){
         </div>
 
         <div id="ddMergeBody" style="padding:18px 24px;max-height:60vh;overflow-y:auto;">
+          ${_ddRenderPreviewBanner(_ddDialogPreviewCache, contacts)}
           ${_ddRenderMergeBody(cand, contacts, dealCounts, fields)}
         </div>
 
@@ -23324,7 +23359,9 @@ function _ddRenderMergeDialog(cand, contacts, dealCounts){
           <button onclick="_ddMarkNotDups('${cand.id}')" style="font-size:12px;padding:9px 14px;background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;font-weight:600;cursor:pointer;">Mark as not duplicates</button>
           <div style="flex:1;"></div>
           <button onclick="_ddCloseMerge()" style="font-size:13px;padding:9px 16px;background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;font-weight:600;cursor:pointer;">Cancel</button>
-          <button onclick="_ddSubmitMerge('${cand.id}')" id="ddMergeBtn" style="font-size:13px;padding:9px 22px;background:#0f172a;color:#fff;border:none;border-radius:6px;font-weight:700;cursor:pointer;">Merge into 1 contact</button>
+          ${(_ddDialogPreviewCache && _ddDialogPreviewCache.blocker)
+            ? `<button id="ddMergeBtn" disabled title="Resolve the blocker shown above first" style="font-size:13px;padding:9px 22px;background:#cbd5e1;color:#64748b;border:none;border-radius:6px;font-weight:700;cursor:not-allowed;">Merge into 1 contact</button>`
+            : `<button onclick="_ddSubmitMerge('${cand.id}')" id="ddMergeBtn" style="font-size:13px;padding:9px 22px;background:#0f172a;color:#fff;border:none;border-radius:6px;font-weight:700;cursor:pointer;">Merge into 1 contact</button>`}
         </div>
       </div>
     </div>
@@ -23403,13 +23440,67 @@ function _ddRenderMergeBody(cand, contacts, dealCounts, fields){
   `;
 }
 
+// v102.42.2: Banner shown at the top of the merge dialog body. Displays
+// the consequences of the merge based on the preview RPC result:
+//   - Final type tags (union of all contacts' types) — calls out the
+//     Joseph Haim case (Buyer + Seller → both kept)
+//   - Buyer criteria status (preserved / collision blocker)
+//   - Counts of related rows that will re-point
+function _ddRenderPreviewBanner(preview, contacts){
+  if(!preview) return '';
+  const isBlocked = preview.blocker === 'BC_COLLISION';
+  const types = Array.isArray(preview.final_types) ? preview.final_types : [];
+  const repoint = preview.will_repoint || {};
+  const total = (repoint.properties||0) + (repoint.pitches||0) + (repoint.communications||0);
+
+  if(isBlocked){
+    // BC collision: 2+ buyer criteria across the group. Show owners + ask
+    // user to consolidate first.
+    const owners = Array.isArray(preview.bc_owners) ? preview.bc_owners : [];
+    const ownerLines = owners.map(o => '· ' + (o.contact_name||'(no name)')
+      + (o.date_added ? ' (BC added ' + o.date_added + ')' : '')).join('<br>');
+    return `
+      <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:14px 16px;margin-bottom:16px;">
+        <div style="display:flex;align-items:flex-start;gap:10px;">
+          <div style="font-size:20px;flex-shrink:0;line-height:1;">⛔</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13px;font-weight:700;color:#991b1b;margin-bottom:4px;">Merge blocked: ${preview.bc_count} of these contacts have buyer criteria</div>
+            <div style="font-size:12px;color:#7f1d1d;line-height:1.5;margin-bottom:6px;">Per the "1 buyer criteria per contact" rule, this merge would lose data. Open each of these contacts' Buyer Criteria tabs, copy the data into one, delete the others, then return here:</div>
+            <div style="font-size:12px;color:#7f1d1d;line-height:1.6;">${ownerLines}</div>
+          </div>
+        </div>
+      </div>`;
+  }
+
+  const typeBadges = types.map(t =>
+    '<span style="display:inline-block;font-size:11px;padding:2px 9px;border-radius:6px;background:#eef2fb;color:#1e3a8a;font-weight:600;margin-right:4px;">' + t + '</span>'
+  ).join('');
+
+  return `
+    <div style="background:#f0fdf4;border:1px solid #a7f3d0;border-radius:8px;padding:13px 16px;margin-bottom:16px;">
+      <div style="display:flex;align-items:flex-start;gap:10px;">
+        <div style="font-size:18px;flex-shrink:0;line-height:1;">✓</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13px;font-weight:700;color:#04342c;margin-bottom:6px;">After merge:</div>
+          <div style="font-size:12px;color:#0f6e56;line-height:1.7;">
+            <div>· Final tags on the surviving contact: ${typeBadges || '<em>none</em>'}</div>
+            ${preview.bc_count > 0
+              ? '<div>· The 1 buyer criteria entry will be preserved</div>'
+              : '<div>· No buyer criteria attached</div>'}
+            <div>· ${total} related row${total===1?'':'s'} will re-point to the surviving contact${total > 0 ? ` (${repoint.properties||0} deal${repoint.properties===1?'':'s'}, ${repoint.pitches||0} pitch${repoint.pitches===1?'':'es'}, ${repoint.communications||0} communication${repoint.communications===1?'':'s'})` : ''}</div>
+            <div style="margin-top:6px;font-style:italic;color:#475569;">The losing contacts are soft-deleted (recoverable from Settings for 30 days).</div>
+          </div>
+        </div>
+      </div>
+    </div>`;
+}
+
 function _ddPickSurvivor(contactId){
   _ddMergePicks.surviving_id = contactId;
-  // Re-render the dialog body so the surviving badge moves and the
-  // header row colors update. We don't touch field picks since the user
-  // may have intentionally chosen a non-surviving contact's value for
-  // a particular field.
-  _ddReRenderDialog();
+  // v102.42.2: re-fetch preview since type-union and re-point counts
+  // depend on which contact is the survivor. _ddRefetchPreview will
+  // call _ddReRenderDialog when done.
+  _ddRefetchPreview();
 }
 
 function _ddPickField(fieldKey, contactIdOrCombine){
@@ -23432,6 +23523,7 @@ function _ddReRenderDialog(){
 let _ddDialogContactsCache = null;
 let _ddDialogContactsCacheKey = null;
 let _ddDialogDealCountsCache = {};
+let _ddDialogPreviewCache = null; // v102.42.2: latest preview RPC result
 
 async function _ddSubmitMerge(candidateId){
   const cand = _ddCandidates.find(c => c.id === candidateId);

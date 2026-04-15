@@ -23273,6 +23273,47 @@ async function _ddOpenMerge(candidateId){
   }catch(e){ console.warn('preview fetch failed (non-fatal):', e.message); }
   _ddDialogPreviewCache = preview;
 
+  // v102.42.3: per-contact inspection data — properties, buyer criteria,
+  // pitches, communications. Batch-fetched in parallel so the dialog can
+  // render the "what each contact has today" inspection rows. All four
+  // fetches are scoped by contact_id IN (…), one round trip each.
+  const allIds = contacts.map(c => c.id);
+  const idFilter = 'in.(' + allIds.map(encodeURIComponent).join(',') + ')';
+  const detail = { byContact: {} };
+  allIds.forEach(id => {
+    detail.byContact[id] = { properties: [], buyerCriteria: null, pitchCount: 0, commCount: 0 };
+  });
+  try{
+    const [propRows, bcRows, pitchRows, commRows] = await Promise.all([
+      _sbGet('ace_properties',
+        'select=id,address,asking_price,pipeline_stage,deal_tag,owner_contact_id'
+        + '&owner_contact_id=' + idFilter + '&limit=2000').catch(e=>{console.warn('detail props:',e.message); return [];}),
+      _sbGet('ace_buyer_criteria',
+        'select=id,contact_id,desired_property_types,min_purchase_price,max_purchase_price,preferred_counties,simple_area_preference,financing_type,date_added'
+        + '&contact_id=' + idFilter + '&limit=2000').catch(e=>{console.warn('detail bcs:',e.message); return [];}),
+      _sbGet('ace_buyer_pitches',
+        'select=id,contact_id'
+        + '&contact_id=' + idFilter + '&limit=5000').catch(e=>{console.warn('detail pitches:',e.message); return [];}),
+      _sbGet('ace_contact_history',
+        'select=id,contact_id'
+        + '&contact_id=' + idFilter + '&limit=5000').catch(e=>{console.warn('detail comms:',e.message); return [];})
+    ]);
+    (Array.isArray(propRows)  ? propRows  : []).forEach(p => {
+      if(detail.byContact[p.owner_contact_id]) detail.byContact[p.owner_contact_id].properties.push(p);
+    });
+    (Array.isArray(bcRows)    ? bcRows    : []).forEach(bc => {
+      // Only one BC per contact per the model, but use last-write-wins just in case
+      if(detail.byContact[bc.contact_id]) detail.byContact[bc.contact_id].buyerCriteria = bc;
+    });
+    (Array.isArray(pitchRows) ? pitchRows : []).forEach(p => {
+      if(detail.byContact[p.contact_id]) detail.byContact[p.contact_id].pitchCount++;
+    });
+    (Array.isArray(commRows)  ? commRows  : []).forEach(c => {
+      if(detail.byContact[c.contact_id]) detail.byContact[c.contact_id].commCount++;
+    });
+  }catch(e){ console.warn('detail batch fetch failed (non-fatal):', e.message); }
+  _ddDialogDetailCache = detail;
+
   _ddRenderMergeDialog(cand, contacts, dealCounts);
 }
 
@@ -23374,6 +23415,15 @@ function _ddRenderMergeBody(cand, contacts, dealCounts, fields){
     const initials = _wbContactInitials(c.name||'');
     const deals = dealCounts[c.id] || 0;
     const isSurvSelected = _ddMergePicks.surviving_id === c.id;
+    // v102.42.3: richer summary line — beyond just deal count
+    const detailEntry = (_ddDialogDetailCache && _ddDialogDetailCache.byContact && _ddDialogDetailCache.byContact[c.id]) || {};
+    const hasBC   = !!detailEntry.buyerCriteria;
+    const pitches = detailEntry.pitchCount || 0;
+    const bits = [
+      deals + ' deal' + (deals===1?'':'s'),
+      (hasBC ? '1 BC' : '0 BC'),
+      pitches + ' pitch' + (pitches===1?'':'es')
+    ];
     return `
       <div style="padding:12px 14px;border-left:${idx===0?'none':'1px solid #f1f5f9'};background:${isSurvSelected?'#eef2fb':'#fff'};">
         <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
@@ -23384,7 +23434,7 @@ function _ddRenderMergeBody(cand, contacts, dealCounts, fields){
               <div style="font-size:12px;font-weight:700;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${(c.name||'(no name)').replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>
             </div>
             <div style="font-size:10px;color:#64748b;margin-top:4px;line-height:1.4;">
-              ${deals} deal${deals===1?'':'s'} · added ${c.date_added||'?'}
+              ${bits.join(' · ')} · added ${c.date_added||'?'}
               ${isSurvSelected?'<span style="display:inline-block;margin-left:4px;background:#1e3a8a;color:#fff;padding:1px 6px;border-radius:8px;font-weight:600;">Surviving</span>':''}
             </div>
           </div>
@@ -23435,9 +23485,143 @@ function _ddRenderMergeBody(cand, contacts, dealCounts, fields){
         <div style="padding:10px 14px;font-size:11px;color:#475569;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">Contact</div>
         ${contacts.map((c,i) => colHeader(c,i)).join('')}
       </div>
+      ${_ddRenderInspectionRows(contacts)}
+      <div style="display:grid;grid-template-columns:140px repeat(${contacts.length}, minmax(0, 1fr));border-bottom:1px solid #e2e8f0;background:#f8fafc;">
+        <div style="grid-column:1/-1;padding:8px 14px;font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;">Pick winning value per field ↓</div>
+      </div>
       ${fields.map(f => fieldRow(f)).join('')}
     </div>
   `;
+}
+
+// v102.42.3: Read-only inspection rows showing what each contact has
+// today — type tags, properties, buyer criteria, pitches, communications.
+// These are NOT pickable (no radios) — the user uses them to sanity-check
+// the contacts before committing to a merge. All FK-attached data
+// follows the merge automatically (re-points to the survivor) per the
+// merge_contacts RPC, so there's nothing to pick — only to inspect.
+function _ddRenderInspectionRows(contacts){
+  const detail = _ddDialogDetailCache && _ddDialogDetailCache.byContact;
+  if(!detail) return '';
+  const cols = contacts.length;
+  const labelCellStyle = 'padding:10px 14px;font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;background:#fafbfc;display:flex;align-items:flex-start;';
+  const dataCellStyle  = 'padding:10px 14px;border-left:1px solid #f1f5f9;background:#fafbfc;font-size:12px;color:#0f172a;line-height:1.5;';
+
+  // Row 1: Type tags
+  const typeRow = `
+    <div style="display:grid;grid-template-columns:140px repeat(${cols}, minmax(0, 1fr));border-bottom:1px solid #f1f5f9;">
+      <div style="${labelCellStyle}">Tags</div>
+      ${contacts.map((c, idx) => {
+        const tags = Array.isArray(c.type) ? c.type : [];
+        const badges = tags.length
+          ? tags.map(t => `<span style="display:inline-block;font-size:11px;padding:2px 9px;border-radius:6px;background:#eef2fb;color:#1e3a8a;font-weight:600;margin-right:4px;margin-bottom:2px;">${String(t).replace(/&/g,'&amp;').replace(/</g,'&lt;')}</span>`).join('')
+          : '<span style="color:#cbd5e1;font-style:italic;">(none)</span>';
+        return `<div style="${dataCellStyle}${idx===0?'border-left:none;':''}">${badges}</div>`;
+      }).join('')}
+    </div>`;
+
+  // Row 2: Buyer criteria summary
+  const bcRow = `
+    <div style="display:grid;grid-template-columns:140px repeat(${cols}, minmax(0, 1fr));border-bottom:1px solid #f1f5f9;">
+      <div style="${labelCellStyle}">Buyer criteria</div>
+      ${contacts.map((c, idx) => {
+        const bc = (detail[c.id]||{}).buyerCriteria;
+        if(!bc){
+          return `<div style="${dataCellStyle}${idx===0?'border-left:none;':''}color:#cbd5e1;font-style:italic;">(none)</div>`;
+        }
+        const types = bc.desired_property_types || '';
+        const fmtMoney = n => {
+          const v = Number(n); if(!v||isNaN(v)) return null;
+          if(v >= 1000000) return '$' + (v/1000000).toFixed(2).replace(/\.?0+$/,'') + 'M';
+          if(v >= 1000)    return '$' + Math.round(v/1000) + 'K';
+          return '$' + v;
+        };
+        const minP = fmtMoney(bc.min_purchase_price);
+        const maxP = fmtMoney(bc.max_purchase_price);
+        const range = (minP || maxP) ? `${minP||'?'} – ${maxP||'?'}` : null;
+        const counties = bc.preferred_counties || bc.simple_area_preference || '';
+        const lines = [];
+        if(types)    lines.push('<strong>Types:</strong> ' + String(types).replace(/&/g,'&amp;').replace(/</g,'&lt;'));
+        if(range)    lines.push('<strong>Range:</strong> ' + range);
+        if(counties) lines.push('<strong>Areas:</strong> ' + String(counties).replace(/&/g,'&amp;').replace(/</g,'&lt;'));
+        if(bc.financing_type) lines.push('<strong>Financing:</strong> ' + bc.financing_type);
+        if(bc.date_added) lines.push('<span style="color:#94a3b8;">Added ' + bc.date_added + '</span>');
+        return `
+          <div style="${dataCellStyle}${idx===0?'border-left:none;':''}">
+            <div style="display:flex;align-items:flex-start;gap:6px;">
+              <div style="flex:1;min-width:0;font-size:11px;line-height:1.6;">${lines.join('<br>')}</div>
+              <a href="javascript:void(0)" onclick="bcOpenExpanded('${bc.id}')" style="font-size:10px;color:#1e40af;text-decoration:none;flex-shrink:0;white-space:nowrap;" title="Open buyer criteria card">→</a>
+            </div>
+          </div>`;
+      }).join('')}
+    </div>`;
+
+  // Row 3: Properties — full list with deal addresses + stage
+  const propsRow = `
+    <div style="display:grid;grid-template-columns:140px repeat(${cols}, minmax(0, 1fr));border-bottom:1px solid #f1f5f9;">
+      <div style="${labelCellStyle}">Properties</div>
+      ${contacts.map((c, idx) => {
+        const props = ((detail[c.id]||{}).properties) || [];
+        if(!props.length){
+          return `<div style="${dataCellStyle}${idx===0?'border-left:none;':''}color:#cbd5e1;font-style:italic;">(none)</div>`;
+        }
+        const fmtPrice = n => {
+          const v = Number(n); if(!v||isNaN(v)) return '';
+          if(v >= 1000000) return '$' + (v/1000000).toFixed(2).replace(/\.?0+$/,'') + 'M';
+          if(v >= 1000)    return '$' + Math.round(v/1000) + 'K';
+          return '$' + v;
+        };
+        const lines = props.map(p => {
+          const addr = String(p.address||'(no address)').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+          const price = fmtPrice(p.asking_price);
+          const stage = p.pipeline_stage || p.deal_tag || '';
+          const safeStage = String(stage).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+          return `
+            <div style="display:flex;align-items:center;gap:6px;font-size:11px;line-height:1.5;padding:2px 0;">
+              <div style="flex:1;min-width:0;">
+                <span style="color:#0f172a;font-weight:500;">${addr}</span>
+                ${price?`<span style="color:#64748b;margin-left:4px;">· ${price}</span>`:''}
+                ${safeStage?`<span style="color:#94a3b8;margin-left:4px;">· ${safeStage}</span>`:''}
+              </div>
+              <a href="javascript:void(0)" onclick="_ddOpenDealFromMerge('${p.id}')" style="font-size:10px;color:#1e40af;text-decoration:none;flex-shrink:0;" title="Open deal">→</a>
+            </div>`;
+        }).join('');
+        return `<div style="${dataCellStyle}${idx===0?'border-left:none;':''}">
+          <div style="font-size:11px;color:#475569;font-weight:600;margin-bottom:4px;">${props.length} deal${props.length===1?'':'s'}</div>
+          ${lines}
+        </div>`;
+      }).join('')}
+    </div>`;
+
+  // Row 4: Pitches + Communications counts (combined to keep dialog short)
+  const activityRow = `
+    <div style="display:grid;grid-template-columns:140px repeat(${cols}, minmax(0, 1fr));border-bottom:1px solid #e2e8f0;">
+      <div style="${labelCellStyle}">Activity</div>
+      ${contacts.map((c, idx) => {
+        const d = detail[c.id] || {};
+        const p = d.pitchCount || 0;
+        const cm = d.commCount || 0;
+        if(p === 0 && cm === 0){
+          return `<div style="${dataCellStyle}${idx===0?'border-left:none;':''}color:#cbd5e1;font-style:italic;">(none)</div>`;
+        }
+        return `<div style="${dataCellStyle}${idx===0?'border-left:none;':''}">
+          <span style="font-size:11px;color:#475569;">${p} pitch${p===1?'':'es'} · ${cm} communication${cm===1?'':'s'}</span>
+        </div>`;
+      }).join('')}
+    </div>`;
+
+  return typeRow + bcRow + propsRow + activityRow;
+}
+
+// "→" affordance on a property row in the inspection grid. Closes the
+// merge dialog (so the user isn't blocked) and opens the deal page.
+function _ddOpenDealFromMerge(propertyId){
+  _ddCloseMerge();
+  const deal = (allDeals || []).find(x => x && x.id === propertyId);
+  if(deal && typeof openDeal === 'function'){ openDeal(deal); return; }
+  // Fallback: try to fetch + open
+  if(typeof openDealById === 'function'){ openDealById(propertyId); return; }
+  showSaveConfirm('Couldn\'t open deal — try opening from the Deal Board.');
 }
 
 // v102.42.2: Banner shown at the top of the merge dialog body. Displays
@@ -23524,6 +23708,7 @@ let _ddDialogContactsCache = null;
 let _ddDialogContactsCacheKey = null;
 let _ddDialogDealCountsCache = {};
 let _ddDialogPreviewCache = null; // v102.42.2: latest preview RPC result
+let _ddDialogDetailCache = null;  // v102.42.3: per-contact properties/BC/pitches/comms
 
 async function _ddSubmitMerge(candidateId){
   const cand = _ddCandidates.find(c => c.id === candidateId);

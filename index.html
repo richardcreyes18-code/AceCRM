@@ -1501,7 +1501,12 @@ const SB_TABLES = {
   // v102.31: buyer pitch log — tracks which properties have been sent
   // to which buyer contacts. Deals can be in-system (deal_id FK) or
   // off-system (offsystem_address + offsystem_agent_name text fields).
-  buyerPitches:      'ace_buyer_pitches'
+  buyerPitches:      'ace_buyer_pitches',
+  // v102.34: editable app-wide lists (asset_types, preferred_cities).
+  // Rows are keyed by list_key + value; is_active=false acts as a tombstone
+  // so _appListAdd can "reactivate over insert" when a value is re-added
+  // after a soft-delete.
+  appLists:          'ace_app_lists'
 };
 
 // ─── SUPABASE ↔ AIRTABLE FIELD MAPS ───────────────────────────
@@ -2372,6 +2377,10 @@ async function syncData(){
       // the rest of the app, so no splash update and errors are swallowed
       // by the loader itself.
       await _loadAllPortfolios();
+      // v102.34: load editable app lists (asset_types + preferred_cities).
+      // Silent failure — _dbGetCities() falls back to _NJ_MUNICIPALITIES and
+      // _dbGetAssetTypes() falls back to deal-distinct values if this no-ops.
+      try{ await _loadAppLists(); }catch(e){ console.warn('app lists load failed:', e.message); }
     }
 
     if(typeof _splashStep==='function') _splashStep('Building sidebar', 7, 8);
@@ -3731,6 +3740,7 @@ const _nav = {
           region: (_locFilters.region || []).slice(),
           county: (_locFilters.county || []).slice(),
           city:   (_locFilters.city || []).slice(),
+          type:   (_locFilters.type || []).slice(),
         };
       }
       // View mode (list vs map) — read from the view toggle button
@@ -3772,9 +3782,14 @@ const _nav = {
         _locFilters.region = (f.loc.region || []).slice();
         _locFilters.county = (f.loc.county || []).slice();
         _locFilters.city   = (f.loc.city   || []).slice();
+        _locFilters.type   = (f.loc.type   || []).slice();
         // Re-render LOC bar chips — _locPostRender re-runs _locRenderTags for all keys
         if(typeof _locPostRender === 'function'){
           try { _locPostRender(); } catch(e){}
+        }
+        // v102.34: also refresh the standalone type field
+        if(typeof _locRenderTags === 'function'){
+          try { _locRenderTags('type'); } catch(e){}
         }
       }
       // Re-run the filter (renderDealBoard reads DOM checkbox state + _locFilters)
@@ -10930,7 +10945,7 @@ function _dbMultiChanged(kind){
 // Empty selection = null (no filter). Non-empty = array of picks. The rest
 // (stage, type, source) still read from the legacy checkbox multi-selects.
 function _dbMultiGetSelected(kind){
-  if(kind === 'state' || kind === 'region' || kind === 'county' || kind === 'city'){
+  if(kind === 'state' || kind === 'region' || kind === 'county' || kind === 'city' || kind === 'type'){
     const arr = _locFilters[kind] || [];
     return arr.length ? arr.slice() : null;
   }
@@ -10959,8 +10974,9 @@ function dbClearAllFilters(){
   // v102.24: region and county no longer live in checkbox DOM — they're in
   // the LOC-001 store. Clear them via _locClearAll(), then handle the
   // remaining checkbox-backed filters.
+  // v102.34: 'type' also moved into LOC-001 — _locClearAll() clears it.
   _locClearAll();
-  ['stage','type','source'].forEach(kind => {
+  ['stage','source'].forEach(kind => {
     document.querySelectorAll(`.db_${kind}_cb`).forEach(cb => { cb.checked = true; });
     _dbMultiChanged(kind);
     // Also clear any search box inside the menu
@@ -11018,11 +11034,253 @@ function showMapPage(){
 //   already handles 'region' and 'county'. State and city are new and get
 //   their own predicates added to renderDealBoard's filter().
 
+// ═══════════════════════════════════════════════════════════════════════
+// v102.34: APP LISTS — editable asset_types / preferred_cities
+// ═══════════════════════════════════════════════════════════════════════
+// Cache of active rows from ace_app_lists, keyed by list_key. Populated by
+// _loadAppLists() which is called once per sync from syncData(). The Deal
+// Board's type/city filters and the Settings > App Lists editor both read
+// from this cache so changes show up without a full resync.
+const _appLists = { asset_types: [], preferred_cities: [] };
+
+async function _loadAppLists(){
+  if(!isSupabase()) return;
+  try{
+    const rows = await _sbGet(SB_TABLES.appLists,
+      'select=list_key,value,sort_order,metadata&is_active=eq.true&order=sort_order.asc,value.asc');
+    if(!Array.isArray(rows)) return;
+    const next = { asset_types: [], preferred_cities: [] };
+    for(const r of rows){
+      const bucket = next[r.list_key];
+      if(bucket) bucket.push(r.value);
+    }
+    _appLists.asset_types     = next.asset_types;
+    _appLists.preferred_cities = next.preferred_cities;
+  }catch(e){
+    console.warn('[v102.34] _loadAppLists failed:', e.message);
+  }
+}
+
+// ─── App List editor helpers (Settings > App Lists) ───────────────────
+// DOM id helper — asset_types -> AssetTypes, preferred_cities -> PreferredCities
+function _appListDomKey(listKey){
+  return listKey.split('_').map(s => s.charAt(0).toUpperCase() + s.slice(1)).join('');
+}
+
+// Set the status message under the App Lists section.
+function _appListStatus(msg, isError){
+  const el = document.getElementById('alStatus');
+  if(!el) return;
+  el.textContent = msg || '';
+  el.style.color = isError ? '#dc2626' : '#64748b';
+  if(msg && !isError){
+    setTimeout(() => { if(el.textContent === msg) el.textContent = ''; }, 2500);
+  }
+}
+
+// Re-render one subsection's row list from _appLists cache.
+function _appListRender(listKey){
+  const domKey = _appListDomKey(listKey);
+  const listEl  = document.getElementById('alList'  + domKey);
+  const countEl = document.getElementById('alCount' + domKey);
+  if(!listEl) return;
+  const values = _appLists[listKey] || [];
+  if(countEl) countEl.textContent = values.length + ' item' + (values.length === 1 ? '' : 's');
+  if(!values.length){
+    listEl.innerHTML = '<div style="padding:14px;text-align:center;color:#94a3b8;font-size:11px;">No items yet — add one above.</div>';
+    return;
+  }
+  listEl.innerHTML = values.map(v => {
+    const safe = String(v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+    const attr = String(v).replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+    return '<div class="al-row" style="display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px solid #e2e8f0;background:#fff;">'
+         +   '<div style="flex:1;color:#0f172a;">' + safe + '</div>'
+         +   '<button onclick="_appListRename(\''+listKey+'\',\''+attr+'\')" style="background:#f1f5f9;border:1px solid #cbd5e1;color:#334155;padding:3px 8px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;">Rename</button>'
+         +   '<button onclick="_appListDelete(\''+listKey+'\',\''+attr+'\')" style="background:#fef2f2;border:1px solid #fecaca;color:#dc2626;padding:3px 8px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;">Delete</button>'
+         + '</div>';
+  }).join('');
+}
+
+// After any edit: reload the cache and re-render both subsections + the
+// Deal Board if it's currently visible (so the new value shows up in the
+// type/city tag inputs without a full resync).
+async function _appListAfterEdit(){
+  await _loadAppLists();
+  _appListRender('asset_types');
+  _appListRender('preferred_cities');
+  // Re-render Deal Board if open so filter dropdowns pick up changes.
+  const bar = document.getElementById('loc-compact-bar');
+  if(bar && typeof renderDealBoard === 'function'){
+    try{
+      // Rebuild the open dropdowns from fresh data — _locBuildDD re-reads
+      // _locBuildDataSources, which reads _dbGetAssetTypes / _dbGetCities.
+      ['city','type'].forEach(k => {
+        const inp = document.getElementById('loc-si-'+k);
+        const dd  = document.getElementById('loc-dd-'+k);
+        if(inp && dd && dd.style.display === 'block'){
+          _locBuildDD(k, inp.value);
+        }
+      });
+      renderDealBoard();
+    }catch(e){ console.warn('deal board refresh after app list edit failed:', e.message); }
+  }
+}
+
+// Add a new value. Reactivate-over-insert: if an inactive tombstone already
+// exists for (list_key, value), flip is_active=true instead of inserting a
+// new row (which would collide with the partial unique index anyway).
+async function _appListAdd(listKey){
+  const domKey = _appListDomKey(listKey);
+  const inp = document.getElementById('alInput' + domKey);
+  if(!inp) return;
+  const raw = (inp.value || '').trim();
+  if(!raw){ _appListStatus('Enter a value first.', true); return; }
+  // Dup check against the active cache — cheap client-side guard.
+  if((_appLists[listKey] || []).some(v => v.toLowerCase() === raw.toLowerCase())){
+    _appListStatus('"' + raw + '" is already in the list.', true);
+    return;
+  }
+  _appListStatus('Saving…', false);
+  try{
+    // Look for an existing row by (list_key, value) — includes tombstoned ones.
+    const q = 'select=id,is_active&list_key=eq.' + encodeURIComponent(listKey)
+            + '&value=eq.' + encodeURIComponent(raw) + '&limit=1';
+    const existing = await _sbGet(SB_TABLES.appLists, q);
+    if(Array.isArray(existing) && existing.length){
+      const row = existing[0];
+      if(row.is_active){
+        _appListStatus('"' + raw + '" already exists and is active.', true);
+        return;
+      }
+      // Reactivate the tombstone. The updated_at trigger handles timestamps.
+      await _sbPatch(SB_TABLES.appLists, row.id, { is_active: true });
+    }else{
+      // Fresh insert. sort_order = 0 keeps ordering alphabetical via
+      // the order=sort_order.asc,value.asc query in _loadAppLists.
+      await _sbPost(SB_TABLES.appLists, {
+        list_key:   listKey,
+        value:      raw,
+        sort_order: 0,
+        is_active:  true,
+        metadata:   (listKey === 'preferred_cities') ? { state: 'NJ' } : {}
+      });
+    }
+    inp.value = '';
+    await _appListAfterEdit();
+    _appListStatus('Added "' + raw + '".', false);
+  }catch(e){
+    console.error('_appListAdd failed:', e);
+    _appListStatus('Add failed: ' + (e.message || 'unknown error'), true);
+  }
+}
+
+// Rename an existing value. Implemented as tombstone-old + add-new so the
+// partial unique index can't collide. Uses reactivate-over-insert for the
+// new value in case the new name is itself an old tombstone.
+async function _appListRename(listKey, oldValue){
+  const next = prompt('Rename "' + oldValue + '" to:', oldValue);
+  if(next === null) return;
+  const trimmed = (next || '').trim();
+  if(!trimmed || trimmed === oldValue) return;
+  _appListStatus('Renaming…', false);
+  try{
+    // 1. Find the old row
+    const oldRows = await _sbGet(SB_TABLES.appLists,
+      'select=id&list_key=eq.' + encodeURIComponent(listKey)
+      + '&value=eq.' + encodeURIComponent(oldValue)
+      + '&is_active=eq.true&limit=1');
+    if(!Array.isArray(oldRows) || !oldRows.length){
+      _appListStatus('Original row not found.', true);
+      return;
+    }
+    // 2. Check if the target name already exists (as active or tombstone)
+    const targetRows = await _sbGet(SB_TABLES.appLists,
+      'select=id,is_active&list_key=eq.' + encodeURIComponent(listKey)
+      + '&value=eq.' + encodeURIComponent(trimmed) + '&limit=1');
+    const targetExists = Array.isArray(targetRows) && targetRows.length;
+    if(targetExists && targetRows[0].is_active){
+      _appListStatus('"' + trimmed + '" already exists.', true);
+      return;
+    }
+    // 3. Tombstone the old row first (frees the partial unique index).
+    await _sbPatch(SB_TABLES.appLists, oldRows[0].id, { is_active: false });
+    // 4. Reactivate or insert the new name.
+    if(targetExists){
+      await _sbPatch(SB_TABLES.appLists, targetRows[0].id, { is_active: true });
+    }else{
+      await _sbPost(SB_TABLES.appLists, {
+        list_key:   listKey,
+        value:      trimmed,
+        sort_order: 0,
+        is_active:  true,
+        metadata:   (listKey === 'preferred_cities') ? { state: 'NJ' } : {}
+      });
+    }
+    await _appListAfterEdit();
+    _appListStatus('Renamed to "' + trimmed + '".', false);
+  }catch(e){
+    console.error('_appListRename failed:', e);
+    _appListStatus('Rename failed: ' + (e.message || 'unknown error'), true);
+  }
+}
+
+// Soft delete: flip is_active=false so the row becomes a tombstone. Future
+// _appListAdd calls for the same value will reactivate instead of duplicating.
+async function _appListDelete(listKey, value){
+  if(!confirm('Delete "' + value + '" from this list?\n\nThis is a soft delete — you can re-add it later and it will reactivate the existing row.')) return;
+  _appListStatus('Deleting…', false);
+  try{
+    const rows = await _sbGet(SB_TABLES.appLists,
+      'select=id&list_key=eq.' + encodeURIComponent(listKey)
+      + '&value=eq.' + encodeURIComponent(value)
+      + '&is_active=eq.true&limit=1');
+    if(!Array.isArray(rows) || !rows.length){
+      _appListStatus('Row not found.', true);
+      return;
+    }
+    await _sbPatch(SB_TABLES.appLists, rows[0].id, { is_active: false });
+    await _appListAfterEdit();
+    _appListStatus('Deleted "' + value + '".', false);
+  }catch(e){
+    console.error('_appListDelete failed:', e);
+    _appListStatus('Delete failed: ' + (e.message || 'unknown error'), true);
+  }
+}
+
+// UNION of the curated asset_types list with any distinct values already
+// present on loaded deals. The union is the backwards-compat layer: if a
+// legacy deal has an asset type that's been removed from the curated list,
+// it still shows up in the filter so you can find it. Returns a sorted array.
+function _dbGetAssetTypes(){
+  const set = new Set();
+  (_appLists.asset_types || []).forEach(v => { if(v) set.add(v); });
+  for(const d of (allDeals||[])){
+    const t = (typeof _dealAssetType === 'function') ? _dealAssetType(d) : (d && d['Type']);
+    if(Array.isArray(t)) t.forEach(x => { if(x) set.add(x); });
+    else if(t) set.add(t);
+  }
+  return [...set].sort();
+}
+
+// Straight read of the curated preferred_cities list. If the cache is empty
+// (load failed or hasn't run yet), fall back to the hardcoded
+// _NJ_MUNICIPALITIES constant so the dropdown never comes up blank.
+function _dbGetCities(){
+  if(_appLists.preferred_cities && _appLists.preferred_cities.length){
+    return _appLists.preferred_cities.slice();
+  }
+  if(typeof _NJ_MUNICIPALITIES !== 'undefined' && Array.isArray(_NJ_MUNICIPALITIES)){
+    return _NJ_MUNICIPALITIES.slice();
+  }
+  return [];
+}
+
 // LOC-001 selection state. Default NJ selected (matches component gallery spec).
-const _locFilters = { state: ['NJ'], region: [], county: [], city: [] };
+// v102.34: 'type' joins state/region/county/city as a LOC-backed filter.
+const _locFilters = { state: ['NJ'], region: [], county: [], city: [], type: [] };
 
 // Keyboard navigation cursor per field (index of currently-highlighted option).
-const _locKb = { state: -1, region: -1, county: -1, city: -1 };
+const _locKb = { state: -1, region: -1, county: -1, city: -1, type: -1 };
 
 // Inject the LOC-001 scoped CSS once on first use. All class names are
 // prefixed "loc-" so they don't collide with the rest of the CRM's styling.
@@ -11203,32 +11461,26 @@ const _LOC_PLACEHOLDER = {
   region: 'Search...',
   county: 'Search...',
   city:   'Search...',
+  type:   'Asset type...',
 };
 
-// Build the four data source arrays from whatever is currently in allDeals.
-// Called at render time, so the option lists always reflect the live data.
+// Build the LOC-001 data source arrays. Called at render time so the option
+// lists always reflect the live data.
 //
-// v102.25: City source changed from "parse from addresses" to the curated
-// _NJ_MUNICIPALITIES constant (the same list used by the Buyer Criteria
-// "Preferred Cities / Towns" autocomplete). This gives ~300 NJ towns even
-// if you don't currently have a deal in that town. Cities parsed from
-// actual deal addresses are merged in afterward so out-of-state towns
-// (Philadelphia, Brooklyn, etc.) still appear when you have deals there.
+// v102.34: Cities now come from _dbGetCities() (the editable curated list
+// in ace_app_lists, fallback to _NJ_MUNICIPALITIES). The previous build
+// parsed cities out of deal addresses via _locCityFromAddress, which
+// regularly leaked raw street chunks like "1 Executive Dr Fort Lee" into
+// the dropdown when geocoding failed. Types now come from _dbGetAssetTypes()
+// so the Asset Type filter can share the same LOC-style tag input.
 function _locBuildDataSources(){
   const states = new Set();
   const counties = new Set();
-  const cities = new Set();
-  // Seed the city set with the full curated NJ municipality list.
-  if(typeof _NJ_MUNICIPALITIES !== 'undefined' && Array.isArray(_NJ_MUNICIPALITIES)){
-    _NJ_MUNICIPALITIES.forEach(c => cities.add(c));
-  }
   for(const d of (allDeals||[])){
     const st = _stateFromAddress(d['Address']||'');
     if(st) states.add(st);
     const c = (d['Simple County']||'').replace(/\s*county\s*/i,'').trim();
     if(c) counties.add(c);
-    const city = _locCityFromAddress(d['Address']||'');
-    if(city) cities.add(city);
   }
   // Region list is a hardcoded NJ-centric macro set + any present states
   // as single-state regions. Same list as the old db_region filter, but we
@@ -11239,7 +11491,8 @@ function _locBuildDataSources(){
     state:  [...states].sort(),
     region: baseRegions.concat(stateRegions),
     county: [...counties].sort(),
-    city:   [...cities].sort(),
+    city:   _dbGetCities(),
+    type:   _dbGetAssetTypes(),
   };
 }
 
@@ -11312,7 +11565,7 @@ function _locBuildDD(key, query){
 
 // Close every LOC-001 dropdown except one (pass null to close all).
 function _locCloseAllDDs(exceptKey){
-  ['state','region','county','city'].forEach(k => {
+  ['state','region','county','city','type'].forEach(k => {
     if(k === exceptKey) return;
     const dd = document.getElementById('loc-dd-'+k);
     if(dd) dd.style.display = 'none';
@@ -11406,7 +11659,8 @@ function _locClearAll(){
   _locFilters.region = [];
   _locFilters.county = [];
   _locFilters.city   = [];
-  ['state','region','county','city'].forEach(k => {
+  _locFilters.type   = [];
+  ['state','region','county','city','type'].forEach(k => {
     _locRenderTags(k);
     const dd = document.getElementById('loc-dd-'+k);
     if(dd) dd.style.display = 'none';
@@ -11415,46 +11669,62 @@ function _locClearAll(){
   });
 }
 
-// Build the LOC-001 compact-bar HTML. Called from showDealBoard's innerHTML.
-function _locCompactBarHTML(){
+// v102.34: Render a single LOC-style tag-input field as a standalone block.
+// Extracted from _locCompactBarHTML so the Asset Type filter (which lives
+// outside the compact location bar, in filter row 3) can share exactly the
+// same markup, CSS, and event wiring. Returns HTML ready to drop into
+// innerHTML; caller must still invoke _locWireField(key) and _locRenderTags(key)
+// after the HTML lands in the DOM.
+function _locRenderSingleField(key, label){
   _locInjectCSS();
-  const fieldHTML = (key, label) => `
-    <div class="loc-field" id="loc-field-${key}">
+  const placeholder = _LOC_PLACEHOLDER[key] || 'Search...';
+  return `
+    <div class="loc-field loc-single" id="loc-field-${key}">
       <span class="loc-label">${label}</span>
       <div class="loc-ti" id="loc-ti-${key}">
-        <input class="loc-si" id="loc-si-${key}" placeholder="${_LOC_PLACEHOLDER[key]}" autocomplete="off"/>
+        <input class="loc-si" id="loc-si-${key}" placeholder="${placeholder}" autocomplete="off"/>
       </div>
       <span class="loc-chevron">&#x25BE;</span>
       <div class="loc-dd" id="loc-dd-${key}" style="display:none;"></div>
     </div>`;
+}
+
+// Build the LOC-001 compact-bar HTML. Called from showDealBoard's innerHTML.
+function _locCompactBarHTML(){
+  _locInjectCSS();
   return `
     <div class="loc-compact-bar" id="loc-compact-bar">
-      ${fieldHTML('state',  'State')}
+      ${_locRenderSingleField('state',  'State')}
       <div class="loc-divider"></div>
-      ${fieldHTML('region', 'Region')}
+      ${_locRenderSingleField('region', 'Region')}
       <div class="loc-divider"></div>
-      ${fieldHTML('county', 'County')}
+      ${_locRenderSingleField('county', 'County')}
       <div class="loc-divider"></div>
-      ${fieldHTML('city',   'City')}
+      ${_locRenderSingleField('city',   'City')}
     </div>`;
 }
 
 // Post-render setup. Must be called after the LOC-001 HTML lands in the DOM
-// so the field elements exist. Wires all four fields, renders current tags,
-// and installs the global mousedown-outside handler that closes dropdowns.
+// so the field elements exist. Wires all four compact-bar fields, renders
+// current tags, and installs the global mousedown-outside handler that
+// closes dropdowns.
+//
+// v102.34: the outside-click handler now checks any .loc-field ancestor
+// instead of only the compact bar, so standalone fields rendered via
+// _locRenderSingleField (e.g. the Asset Type filter in row 3) don't auto-
+// close on every click.
 function _locPostRender(){
   ['state','region','county','city'].forEach(k => {
     _locWireField(k);
     _locRenderTags(k);
   });
-  // Close any open dropdown when the user clicks outside the component
+  // Close any open dropdown when the user clicks outside ANY loc-field
   if(!window._locOutsideHandlerInstalled){
     document.addEventListener('mousedown', e => {
-      const bar = document.getElementById('loc-compact-bar');
-      if(!bar) return; // Deal Board not currently visible
-      if(!bar.contains(e.target)){
-        _locCloseAllDDs(null);
-      }
+      // If the click landed inside any loc-field, let that field's own
+      // handlers manage open/close. Otherwise close every open dropdown.
+      if(e.target.closest && e.target.closest('.loc-field')) return;
+      _locCloseAllDDs(null);
     });
     // Tag-X removal is delegated so dynamically-added tags work
     document.addEventListener('click', e => {
@@ -13434,7 +13704,7 @@ function showDealBoard(){
         <!-- FILTER ROW 3: Stages + Asset Type + Sources + Priority + spacer + Clear Filters -->
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
           ${_dbMultiBtn('stage', 'All Stages', stages, false)}
-          ${_dbMultiBtn('type', 'All Asset Types', types, false)}
+          ${_locRenderSingleField('type', 'Asset Type')}
           ${_dbMultiBtn('source', 'All Sources', sources, false)}
           <label class="db-fbar-check">
             <input type="checkbox" id="db_priority" onchange="renderDealBoard();dbRefreshMapPins()"/>
@@ -13528,6 +13798,11 @@ function showDealBoard(){
   window._dbCurrentView = 'list';
   // v102.24: Wire up LOC-001 fields now that the DOM elements exist.
   _locPostRender();
+  // v102.34: Asset Type filter now uses a standalone LOC-style tag input
+  // (not part of the compact bar, so not wired by _locPostRender). Wire it
+  // here after showDealBoard's innerHTML has landed.
+  _locWireField('type');
+  _locRenderTags('type');
 }
 
 let _dbCurrentView = 'list';
@@ -18539,6 +18814,44 @@ function showSettingsPage(){
           <div id="tmUsersList" style="font-size:12px;color:#64748b;padding:20px;text-align:center;">Loading users…</div>
         </section>
 
+        <!-- ═══ v102.34 APP LISTS ═════════════════════════════════════ -->
+        <section style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
+          <div style="margin-bottom:14px;">
+            <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:4px;">⚙ App Lists</div>
+            <div style="font-size:12px;color:#64748b;">Edit the curated lists used by Deal Board filters and Buyer Criteria. Deletes are soft (tombstoned) so re-adding a removed value reactivates it instead of creating duplicates.</div>
+          </div>
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:18px;">
+
+            <!-- Asset Types subsection -->
+            <div style="border:1px solid #e2e8f0;border-radius:8px;padding:14px;background:#f8fafc;">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                <div style="font-size:13px;font-weight:700;color:#0f172a;">🏢 Asset Types</div>
+                <div id="alCountTypes" style="font-size:11px;color:#64748b;">—</div>
+              </div>
+              <div style="display:flex;gap:6px;margin-bottom:10px;">
+                <input id="alInputAssetTypes" placeholder="New asset type…" onkeydown="if(event.key==='Enter'){event.preventDefault();_appListAdd('asset_types');}" style="flex:1;padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;font-family:inherit;background:#fff;"/>
+                <button onclick="_appListAdd('asset_types')" style="background:#0f172a;color:#fff;border:none;padding:7px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">+ Add</button>
+              </div>
+              <div id="alListAssetTypes" style="max-height:320px;overflow-y:auto;font-size:12px;">Loading…</div>
+            </div>
+
+            <!-- Preferred Cities subsection -->
+            <div style="border:1px solid #e2e8f0;border-radius:8px;padding:14px;background:#f8fafc;">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+                <div style="font-size:13px;font-weight:700;color:#0f172a;">📍 Preferred Cities</div>
+                <div id="alCountCities" style="font-size:11px;color:#64748b;">—</div>
+              </div>
+              <div style="display:flex;gap:6px;margin-bottom:10px;">
+                <input id="alInputPreferredCities" placeholder="New city…" onkeydown="if(event.key==='Enter'){event.preventDefault();_appListAdd('preferred_cities');}" style="flex:1;padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;font-family:inherit;background:#fff;"/>
+                <button onclick="_appListAdd('preferred_cities')" style="background:#0f172a;color:#fff;border:none;padding:7px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">+ Add</button>
+              </div>
+              <div id="alListPreferredCities" style="max-height:320px;overflow-y:auto;font-size:12px;">Loading…</div>
+            </div>
+
+          </div>
+          <div id="alStatus" style="margin-top:12px;font-size:11px;color:#64748b;min-height:14px;"></div>
+        </section>
+
 
         <!-- v102.33: FIELD MAP — moved from main nav -->
         <section style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
@@ -18561,6 +18874,17 @@ function showSettingsPage(){
 
   // Populate the Team Management users table (async, doesn't block render)
   setTimeout(() => { if(typeof _tmLoadUsers === 'function') _tmLoadUsers(); }, 50);
+  // v102.34: populate App Lists editor. If the cache is empty (e.g. user
+  // landed on Settings before syncData finished), load it first.
+  setTimeout(async () => {
+    try{
+      if(!_appLists.asset_types.length && !_appLists.preferred_cities.length){
+        await _loadAppLists();
+      }
+      _appListRender('asset_types');
+      _appListRender('preferred_cities');
+    }catch(e){ console.warn('app list render failed:', e.message); }
+  }, 60);
 }
 
 // ═══════════════════════════════════════════════════════════════

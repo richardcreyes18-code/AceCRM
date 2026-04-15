@@ -905,6 +905,132 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   <div style="margin-top:8px;padding-top:8px;border-top:1px solid #f3e8ff;font-size:10px;color:#b45309;font-weight:600;">Click the 📁 to open →</div>
 </div>
 
+<!-- ── v102.30: SNOOZE DATE PICKER MODAL ──────────────────────── -->
+<div id="snoozeModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9700;align-items:center;justify-content:center;padding:20px;" onclick="if(event.target===this)closeSnoozeModal()">
+  <div style="background:#fff;border-radius:12px;width:380px;max-width:94vw;box-shadow:0 20px 60px rgba(0,0,0,0.4);overflow:hidden;">
+    <div style="padding:16px 20px;border-bottom:1px solid #e2e8f0;background:#fff7ed;display:flex;justify-content:space-between;align-items:center;">
+      <div style="font-size:15px;font-weight:700;color:#9a3412;">💤 Snooze Deal</div>
+      <button onclick="closeSnoozeModal()" style="background:none;border:none;color:#ea580c;font-size:22px;cursor:pointer;line-height:1;">✕</button>
+    </div>
+    <div style="padding:20px;">
+      <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.04em;">Snooze until</label>
+      <input id="snoozeDateInput" type="date"
+        style="width:100%;padding:10px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:14px;box-sizing:border-box;" />
+      <div id="snoozeHint" style="font-size:11px;color:#94a3b8;margin-top:6px;">The deal will reappear in your active view on this date.</div>
+    </div>
+    <div style="padding:14px 20px;border-top:1px solid #e2e8f0;background:#f8fafc;display:flex;justify-content:flex-end;gap:8px;">
+      <button onclick="closeSnoozeModal()" style="background:#fff;color:#475569;border:1px solid #cbd5e1;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Cancel</button>
+      <button id="snoozeConfirmBtn" onclick="_snoozeConfirm()" style="background:#ea580c;color:#fff;border:none;padding:8px 20px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">Snooze</button>
+    </div>
+  </div>
+</div>
+
+<!-- ── v102.31: BUYER PITCH MODAL (create + edit) ──────────────── -->
+<div id="pitchModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9700;align-items:center;justify-content:center;padding:20px;" onclick="if(event.target===this)closePitchModal()">
+  <div style="background:#fff;border-radius:12px;width:640px;max-width:94vw;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.4);overflow:hidden;">
+    <div style="padding:16px 20px;border-bottom:1px solid #e2e8f0;background:#eff6ff;display:flex;justify-content:space-between;align-items:center;">
+      <div id="pitchModalTitle" style="font-size:16px;font-weight:700;color:#1e40af;">📨 Log New Pitch</div>
+      <button onclick="closePitchModal()" style="background:none;border:none;color:#2563eb;font-size:22px;cursor:pointer;line-height:1;">✕</button>
+    </div>
+    <div style="padding:20px;overflow-y:auto;flex:1;">
+
+      <!-- Mode toggle: In-System vs Off-System -->
+      <div style="margin-bottom:14px;">
+        <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:6px;text-transform:uppercase;letter-spacing:0.04em;">Deal Source</label>
+        <div style="display:flex;gap:0;border:1px solid #cbd5e1;border-radius:8px;overflow:hidden;">
+          <button id="pitchModeOn" onclick="_pitchSetMode('onsystem')" type="button"
+            style="flex:1;background:#1e40af;color:#fff;border:none;padding:10px 14px;font-size:12px;font-weight:700;cursor:pointer;border-right:1px solid #cbd5e1;">
+            🏢 In-System Deal
+          </button>
+          <button id="pitchModeOff" onclick="_pitchSetMode('offsystem')" type="button"
+            style="flex:1;background:#fff;color:#475569;border:none;padding:10px 14px;font-size:12px;font-weight:700;cursor:pointer;">
+            🌐 Off-System Deal
+          </button>
+        </div>
+      </div>
+
+      <!-- In-system section: searchable deal picker -->
+      <div id="pitchOnSystemSection" style="margin-bottom:14px;position:relative;">
+        <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Search Deal *</label>
+        <input id="pitchDealSearch" type="text" placeholder="Search by address, county, or lead ID..."
+          oninput="_pitchDealSearchInput()"
+          autocomplete="off"
+          style="width:100%;padding:10px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:14px;box-sizing:border-box;" />
+        <div id="pitchDealResults" style="display:none;position:absolute;left:0;right:0;top:100%;margin-top:2px;background:#fff;border:1px solid #cbd5e1;border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,0.08);max-height:280px;overflow-y:auto;z-index:10;"></div>
+        <div style="font-size:10px;color:#94a3b8;margin-top:4px;">Type at least 2 characters. Click a result to select.</div>
+      </div>
+
+      <!-- Off-system section: manual address entry -->
+      <div id="pitchOffSystemSection" style="display:none;margin-bottom:14px;padding:14px;background:#fffbeb;border:1px solid #fde68a;border-radius:8px;">
+        <div style="font-size:11px;font-weight:700;color:#92400e;margin-bottom:8px;">Off-System Deal</div>
+        <div style="margin-bottom:10px;">
+          <label style="font-size:10px;font-weight:700;color:#92400e;display:block;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.04em;">Property Address *</label>
+          <input id="pitchOffAddress" type="text" placeholder="e.g. 123 Main St, Newark, NJ 07102"
+            style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #fde68a;font-size:13px;box-sizing:border-box;background:#fff;" />
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">
+          <div>
+            <label style="font-size:10px;font-weight:700;color:#92400e;display:block;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.04em;">Listing Agent</label>
+            <input id="pitchOffAgent" type="text" placeholder="e.g. Jane Smith"
+              style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #fde68a;font-size:13px;box-sizing:border-box;background:#fff;" />
+          </div>
+          <div>
+            <label style="font-size:10px;font-weight:700;color:#92400e;display:block;margin-bottom:4px;text-transform:uppercase;letter-spacing:0.04em;">Source</label>
+            <input id="pitchOffSource" type="text" placeholder="e.g. LoopNet, MLS, word of mouth"
+              style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #fde68a;font-size:13px;box-sizing:border-box;background:#fff;" />
+          </div>
+        </div>
+      </div>
+
+      <!-- Common fields: date, channel, reaction, notes -->
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:14px;">
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Pitch Date *</label>
+          <input id="pitchDate" type="date" style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:13px;box-sizing:border-box;" />
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Channel</label>
+          <select id="pitchChannel" style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:13px;box-sizing:border-box;background:#fff;">
+            <option value="">— Select —</option>
+            <option value="email">✉ Email</option>
+            <option value="call">📞 Call</option>
+            <option value="text">💬 Text</option>
+            <option value="in_person">👥 In-Person</option>
+            <option value="other">· Other</option>
+          </select>
+        </div>
+        <div>
+          <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Reaction</label>
+          <select id="pitchReaction" style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:13px;box-sizing:border-box;background:#fff;">
+            <option value="">— Select —</option>
+            <option value="interested">Interested</option>
+            <option value="maybe">Maybe</option>
+            <option value="not_interested">Not Interested</option>
+            <option value="no_response">No Response</option>
+          </select>
+        </div>
+      </div>
+
+      <div>
+        <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Notes</label>
+        <textarea id="pitchNotes" rows="3" placeholder="Any details about the pitch — buyer's specific feedback, asks, concerns..."
+          style="width:100%;padding:9px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:13px;box-sizing:border-box;resize:vertical;font-family:inherit;"></textarea>
+      </div>
+
+      <div id="pitchError" style="display:none;background:#fef2f2;border:1px solid #fca5a5;color:#991b1b;padding:8px 12px;border-radius:6px;font-size:12px;margin-top:10px;"></div>
+    </div>
+    <div style="padding:14px 20px;border-top:1px solid #e2e8f0;background:#f8fafc;display:flex;justify-content:space-between;gap:8px;">
+      <div>
+        <button id="pitchDeleteBtn" onclick="_pitchDeleteFromModal()" style="display:none;background:#fef2f2;color:#dc2626;border:1px solid #fecaca;padding:8px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Delete</button>
+      </div>
+      <div style="display:flex;gap:8px;">
+        <button onclick="closePitchModal()" style="background:#fff;color:#475569;border:1px solid #cbd5e1;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Cancel</button>
+        <button id="pitchSubmitBtn" onclick="submitPitch()" style="background:#1e40af;color:#fff;border:none;padding:8px 20px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">Save Pitch</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 <!-- ── v102.28 Turn F: PORTFOLIO OFFER MODAL (create + edit) ─────── -->
 <div id="portfolioOfferModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9700;align-items:center;justify-content:center;padding:20px;" onclick="if(event.target===this)closePortfolioOfferModal()">
   <div style="background:#fff;border-radius:12px;width:680px;max-width:94vw;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.4);overflow:hidden;">
@@ -1370,7 +1496,11 @@ const SB_TABLES = {
   // v102.28: portfolios feature — two new tables added in the add_portfolios
   // migration. Deals reference a portfolio via ace_properties.portfolio_id.
   portfolios:        'ace_portfolios',
-  portfolioOffers:   'ace_portfolio_offers'
+  portfolioOffers:   'ace_portfolio_offers',
+  // v102.31: buyer pitch log — tracks which properties have been sent
+  // to which buyer contacts. Deals can be in-system (deal_id FK) or
+  // off-system (offsystem_address + offsystem_agent_name text fields).
+  buyerPitches:      'ace_buyer_pitches'
 };
 
 // ─── SUPABASE ↔ AIRTABLE FIELD MAPS ───────────────────────────
@@ -2824,14 +2954,51 @@ function snoozeDealToday(dealId){
   showSaveConfirm('💤 Snoozed until tomorrow');
 }
 
+// v102.30: Replaced the native prompt() with a styled inline date
+// picker modal. Default date = today + 2 days (matches typical
+// follow-up cadence).
+let _snoozeTargetDealId = null;
+
 function snoozeDealUntil(dealId){
-  const dateStr=prompt('Snooze until (YYYY-MM-DD):',new Date(Date.now()+86400000).toISOString().split('T')[0]);
-  if(!dateStr) return;
-  const d=allDeals.find(x=>x.id===dealId); if(!d) return;
-  d['Is Snoozed']=true; d['Snooze Until Date']=dateStr;
-  _saveSnoozeToDB(dealId,dateStr,true);
-  buildSidebar(document.getElementById('sideSearch')?.value||'');
-  showSaveConfirm('💤 Snoozed until '+dateStr);
+  _snoozeTargetDealId = dealId;
+  const modal = document.getElementById('snoozeModal');
+  const input = document.getElementById('snoozeDateInput');
+  if(input){
+    const d = new Date();
+    d.setDate(d.getDate() + 2);
+    input.value = d.toISOString().split('T')[0];
+    // Disallow past dates
+    const today = new Date();
+    input.min = today.toISOString().split('T')[0];
+  }
+  if(modal) modal.style.display = 'flex';
+  setTimeout(() => input?.focus(), 50);
+}
+
+function closeSnoozeModal(){
+  const modal = document.getElementById('snoozeModal');
+  if(modal) modal.style.display = 'none';
+  _snoozeTargetDealId = null;
+}
+
+function _snoozeConfirm(){
+  const dealId = _snoozeTargetDealId;
+  if(!dealId){ closeSnoozeModal(); return; }
+  const input = document.getElementById('snoozeDateInput');
+  const dateStr = input?.value;
+  if(!dateStr){
+    const hint = document.getElementById('snoozeHint');
+    if(hint){ hint.textContent = 'Please pick a date.'; hint.style.color = '#dc2626'; }
+    return;
+  }
+  const d = allDeals.find(x => x.id === dealId);
+  if(!d){ closeSnoozeModal(); return; }
+  d['Is Snoozed'] = true;
+  d['Snooze Until Date'] = dateStr;
+  _saveSnoozeToDB(dealId, dateStr, true);
+  buildSidebar(document.getElementById('sideSearch')?.value || '');
+  showSaveConfirm('💤 Snoozed until ' + dateStr);
+  closeSnoozeModal();
 }
 
 function unsnoozeDeal(dealId){
@@ -5456,21 +5623,42 @@ function renderSummaryTab(d){
   // ── Assemble full summary layout ───────────────────────────
   // v102.21: Current Next Steps card (read-only) between KPI row and the
   // Property Details / Financial Analysis two-column grid.
+  // v102.30: Card now has an inline "Add Next Step" editor so Ricky can
+  // write a new next step without navigating to the Notes tab.
   const ns = _parseNextSteps(d['Next Steps']);
+  const nsEditorHtml = `
+    <div style="margin-top:12px;padding-top:10px;border-top:1px dashed #bbf7d0;">
+      <div style="font-size:10px;font-weight:700;color:#408040;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Add new next step</div>
+      <textarea id="sumNsInput" placeholder="e.g. Follow up with seller Friday about inspection report..."
+        style="width:100%;padding:8px 10px;border:1px solid #bbf7d0;border-radius:6px;font-size:12px;font-family:inherit;resize:vertical;min-height:50px;box-sizing:border-box;"
+        oninput="_sumNsDirty()"></textarea>
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-top:6px;">
+        <div id="sumNsStatus" style="font-size:10px;color:#94a3b8;"></div>
+        <button id="sumNsSaveBtn" onclick="_sumNsSave()" disabled
+          style="background:#cbd5e1;color:#fff;border:none;padding:6px 14px;font-size:11px;font-weight:700;border-radius:6px;cursor:not-allowed;transition:all .15s;">
+          Save Next Step
+        </button>
+      </div>
+    </div>`;
   const nsCard = ns.current ? `
     <div style="background:#fff;border:1px solid #bbf7d0;border-left:4px solid #408040;border-radius:10px;padding:14px 18px;margin-bottom:14px;box-shadow:0 1px 2px rgba(0,0,0,0.03);">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;">
         <div style="font-size:11px;font-weight:700;color:#408040;text-transform:uppercase;letter-spacing:.06em;">
           ▸ Current Next Steps${ns.current.date ? ` <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">· ${ns.current.date}</span>` : ''}${ns.history.length ? ` <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">· ${ns.history.length} in history</span>` : ''}
         </div>
-        <a onclick="switchTab('notes', document.querySelector('.tab-btn[onclick*=notes]'))" style="font-size:11px;color:#2563eb;cursor:pointer;text-decoration:underline;white-space:nowrap;">Edit in Notes tab →</a>
+        <a onclick="switchTab('notes', document.querySelector('.tab-btn[onclick*=notes]'))" style="font-size:11px;color:#2563eb;cursor:pointer;text-decoration:underline;white-space:nowrap;">Open in Notes tab →</a>
       </div>
       <div style="font-size:13px;color:#0f172a;white-space:pre-wrap;line-height:1.55;">${ns.current.body.replace(/</g,'&lt;')}</div>
+      ${nsEditorHtml}
     </div>
   ` : `
-    <div style="background:#f8fafc;border:1px dashed #cbd5e1;border-radius:10px;padding:12px 18px;margin-bottom:14px;display:flex;align-items:center;justify-content:space-between;gap:12px;">
-      <div style="font-size:12px;color:#94a3b8;font-style:italic;">No next steps recorded yet.</div>
-      <a onclick="switchTab('notes', document.querySelector('.tab-btn[onclick*=notes]'))" style="font-size:11px;color:#2563eb;cursor:pointer;text-decoration:underline;white-space:nowrap;">Add in Notes tab →</a>
+    <div style="background:#fff;border:1px solid #bbf7d0;border-left:4px solid #408040;border-radius:10px;padding:14px 18px;margin-bottom:14px;box-shadow:0 1px 2px rgba(0,0,0,0.03);">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:6px;">
+        <div style="font-size:11px;font-weight:700;color:#408040;text-transform:uppercase;letter-spacing:.06em;">▸ Next Steps</div>
+        <a onclick="switchTab('notes', document.querySelector('.tab-btn[onclick*=notes]'))" style="font-size:11px;color:#2563eb;cursor:pointer;text-decoration:underline;white-space:nowrap;">Open in Notes tab →</a>
+      </div>
+      <div style="font-size:12px;color:#94a3b8;font-style:italic;margin-bottom:4px;">No next steps recorded yet.</div>
+      ${nsEditorHtml}
     </div>
   `;
 
@@ -15146,6 +15334,7 @@ function showContactDetailPage(recordId, returnTo){
             <button id="ctab_comm" onclick="_contactTabSwitch('comm')" style="background:transparent;border:none;border-bottom:3px solid #2563eb;padding:16px 20px;font-size:14px;font-weight:700;color:#1e40af;cursor:pointer;margin-bottom:-1px;">📞 Communication <span id="ctabCommCount" style="background:#dbeafe;color:#1e40af;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:700;">…</span></button>
             <button id="ctab_props" onclick="_contactTabSwitch('props')" style="background:transparent;border:none;border-bottom:3px solid transparent;padding:16px 20px;font-size:14px;font-weight:600;color:#64748b;cursor:pointer;margin-bottom:-1px;">🏢 Properties <span id="ctabPropsCount" style="background:#f1f5f9;color:#64748b;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:700;">…</span></button>
             <button id="ctab_buyer" onclick="_contactTabSwitch('buyer')" style="background:transparent;border:none;border-bottom:3px solid transparent;padding:16px 20px;font-size:14px;font-weight:600;color:#64748b;cursor:pointer;margin-bottom:-1px;">🎯 Buyer Criteria <span id="ctabBuyerCount" style="background:#f1f5f9;color:#64748b;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:700;">…</span></button>
+            <button id="ctab_pitches" onclick="_contactTabSwitch('pitches')" style="background:transparent;border:none;border-bottom:3px solid transparent;padding:16px 20px;font-size:14px;font-weight:600;color:#64748b;cursor:pointer;margin-bottom:-1px;">📨 Pitches <span id="ctabPitchesCount" style="background:#f1f5f9;color:#64748b;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:700;">…</span></button>
           </div>
 
           <!-- Content panes -->
@@ -15173,6 +15362,17 @@ function showContactDetailPage(recordId, returnTo){
               </div>
               <div id="contactBuyerList" style="color:#64748b;font-size:13px;"><div style="text-align:center;padding:40px;">⏳ Loading buyer criteria...</div></div>
             </div>
+
+            <div id="cpane_pitches" style="display:none;">
+              <!-- v102.31: Pitch log — which properties have been sent/discussed with this contact -->
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;gap:12px;flex-wrap:wrap;">
+                <div style="font-size:13px;color:#64748b;">Track every property sent to or discussed with this contact — in-system deals or off-system listings.</div>
+                <button onclick="openPitchModal('${recordId}')" style="background:#0f172a;color:#fff;border:none;padding:10px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;font-family:'Inter',system-ui,sans-serif;white-space:nowrap;">
+                  + Log Pitch
+                </button>
+              </div>
+              <div id="contactPitchesList" style="color:#64748b;font-size:13px;"><div style="text-align:center;padding:40px;">⏳ Loading pitch history...</div></div>
+            </div>
           </div>
         </div>
       </div>
@@ -15182,6 +15382,8 @@ function showContactDetailPage(recordId, returnTo){
   _contactLoadLinkedProperties(recordId);
   _contactLoadLinkedBuyerCriteria(recordId);
   _contactLoadCommunication(recordId);
+  // v102.31: load pitches for the new Pitches tab
+  _contactLoadPitches(recordId);
 
   // Refresh relationships in background in case this page was opened directly
   // from a deal (without visiting the Contacts list first). If the fetched
@@ -15201,8 +15403,8 @@ function showContactDetailPage(recordId, returnTo){
 // inactive tabs have a transparent bottom border. Count pills switch between
 // blue-filled (active) and grey (inactive).
 function _contactTabSwitch(tab){
-  const tabs = ['props','buyer','comm','info'];
-  const pillIdMap = { props:'ctabPropsCount', buyer:'ctabBuyerCount', comm:'ctabCommCount' };
+  const tabs = ['props','buyer','comm','info','pitches'];
+  const pillIdMap = { props:'ctabPropsCount', buyer:'ctabBuyerCount', comm:'ctabCommCount', pitches:'ctabPitchesCount' };
   tabs.forEach(t=>{
     const btn = document.getElementById('ctab_'+t);
     const pane = document.getElementById('cpane_'+t);
@@ -15487,6 +15689,447 @@ async function _contactLoadLinkedBuyerCriteria(contactId){
   }catch(e){
     listEl.innerHTML = '<div style="padding:20px;color:#dc2626;font-size:12px;">Error loading buyer criteria: '+e.message+'</div>';
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// v102.31: BUYER PITCH LOG
+// ═══════════════════════════════════════════════════════════════════════
+// Tracks every property we've sent to or discussed with a buyer contact.
+// Each row in ace_buyer_pitches is either:
+//   (a) In-system: deal_id FK → ace_properties
+//   (b) Off-system: offsystem_address + offsystem_agent_name text fields
+// Reaction is buyer's response (interested / not_interested / maybe / no_response).
+// Soft delete via deleted_at. No RLS.
+
+// Cache for the currently-open contact's pitches. Re-fetched when the
+// pitches tab loads or after any create/edit/delete.
+let _currentContactPitches = [];
+
+// ── CRUD HELPERS ───────────────────────────────────────────────────
+async function _pitchCreate(fields){
+  if(!isSupabase()) throw new Error('Supabase required');
+  const payload = { ...fields };
+  if(typeof _currentUser !== 'undefined' && _currentUser && _currentUser.id){
+    payload.created_by_user_id = _currentUser.id;
+  }
+  return await _sbPost(SB_TABLES.buyerPitches, payload);
+}
+
+async function _pitchUpdate(pitchId, fields){
+  if(!pitchId) throw new Error('pitchId required');
+  return await _sbPatch(SB_TABLES.buyerPitches, pitchId, fields);
+}
+
+async function _pitchDelete(pitchId){
+  if(!pitchId) throw new Error('pitchId required');
+  // Soft delete via deleted_at timestamp
+  return await _sbPatch(SB_TABLES.buyerPitches, pitchId, {
+    deleted_at: new Date().toISOString()
+  });
+}
+
+// ── LOAD + RENDER ──────────────────────────────────────────────────
+async function _contactLoadPitches(contactId){
+  const listEl = document.getElementById('contactPitchesList');
+  const badgeEl = document.getElementById('ctabPitchesCount');
+  if(!listEl) return;
+
+  if(!isSupabase()){
+    listEl.innerHTML = '<div style="padding:20px;color:#94a3b8;font-size:12px;text-align:center;">Pitch log requires Supabase mode.</div>';
+    if(badgeEl) badgeEl.textContent = '0';
+    return;
+  }
+
+  try {
+    const rows = await _sbGet(SB_TABLES.buyerPitches,
+      `contact_id=eq.${contactId}&deleted_at=is.null&select=*&order=pitch_date.desc.nullslast,created_at.desc&limit=200`);
+    _currentContactPitches = rows || [];
+    if(badgeEl) badgeEl.textContent = _currentContactPitches.length;
+    _renderPitchesList(contactId);
+  } catch(e) {
+    listEl.innerHTML = '<div style="padding:20px;color:#dc2626;font-size:12px;">Error loading pitches: '+e.message+'</div>';
+  }
+}
+
+// Renders the pitch list for the currently-loaded contact. Called after
+// load and after any create/edit/delete.
+function _renderPitchesList(contactId){
+  const listEl = document.getElementById('contactPitchesList');
+  if(!listEl) return;
+  const pitches = _currentContactPitches || [];
+
+  if(pitches.length === 0){
+    listEl.innerHTML = `
+      <div style="background:#fff;border:1px dashed #cbd5e1;border-radius:10px;padding:40px 20px;text-align:center;">
+        <div style="font-size:36px;opacity:0.4;margin-bottom:8px;">📨</div>
+        <div style="font-size:13px;font-weight:600;color:#475569;margin-bottom:4px;">No pitches logged yet</div>
+        <div style="font-size:11px;color:#94a3b8;line-height:1.6;max-width:420px;margin:0 auto;">
+          Click <strong>+ Log Pitch</strong> above to record a property you sent or discussed with this contact.
+          You can link an in-system deal or type an off-system address.
+        </div>
+      </div>`;
+    return;
+  }
+
+  const fmt$ = n => {
+    if(!n || isNaN(n)) return '—';
+    const v = Number(n);
+    if(v >= 1e6) return '$' + (v/1e6).toFixed(2) + 'M';
+    if(v >= 1e3) return '$' + Math.round(v/1e3) + 'K';
+    return '$' + v.toLocaleString();
+  };
+
+  // Reaction pill styling
+  const REACTIONS = {
+    interested:     { label:'Interested',     color:'#16a34a', bg:'#dcfce7' },
+    maybe:          { label:'Maybe',          color:'#d97706', bg:'#fef3c7' },
+    not_interested: { label:'Not Interested', color:'#dc2626', bg:'#fee2e2' },
+    no_response:    { label:'No Response',    color:'#64748b', bg:'#f1f5f9' }
+  };
+  const CHANNELS = {
+    email:     '✉ Email',
+    call:      '📞 Call',
+    text:      '💬 Text',
+    in_person: '👥 In-Person',
+    other:     '· Other'
+  };
+
+  // Summary stats row
+  const reactionCounts = {};
+  pitches.forEach(p => {
+    const r = p.reaction || 'no_response';
+    reactionCounts[r] = (reactionCounts[r] || 0) + 1;
+  });
+  const totalOnSystem  = pitches.filter(p => p.deal_id).length;
+  const totalOffSystem = pitches.length - totalOnSystem;
+
+  const statsHtml = `
+    <div style="display:grid;grid-template-columns:repeat(4, minmax(0,1fr));gap:10px;margin-bottom:16px;">
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;">
+        <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.04em;font-weight:700;">Total Pitches</div>
+        <div style="font-size:22px;font-weight:800;color:#0f172a;margin-top:4px;">${pitches.length}</div>
+      </div>
+      <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:12px 14px;">
+        <div style="font-size:10px;color:#1e40af;text-transform:uppercase;letter-spacing:0.04em;font-weight:700;">In-System</div>
+        <div style="font-size:22px;font-weight:800;color:#1e40af;margin-top:4px;">${totalOnSystem}</div>
+      </div>
+      <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:12px 14px;">
+        <div style="font-size:10px;color:#92400e;text-transform:uppercase;letter-spacing:0.04em;font-weight:700;">Off-System</div>
+        <div style="font-size:22px;font-weight:800;color:#b45309;margin-top:4px;">${totalOffSystem}</div>
+      </div>
+      <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:12px 14px;">
+        <div style="font-size:10px;color:#166534;text-transform:uppercase;letter-spacing:0.04em;font-weight:700;">Interested</div>
+        <div style="font-size:22px;font-weight:800;color:#166534;margin-top:4px;">${reactionCounts.interested || 0}</div>
+      </div>
+    </div>`;
+
+  const cardsHtml = pitches.map(p => {
+    const isOnSystem = !!p.deal_id;
+    let addressHtml, metaHtml;
+    if(isOnSystem){
+      const deal = (allDeals || []).find(x => x.id === p.deal_id);
+      const addr = deal ? (deal['Address'] || '(no address)') : '(deal not in current view)';
+      const agent = deal ? (deal['Assigned Agent'] || '') : '';
+      const price = deal && deal['Asking Price'] ? fmt$(deal['Asking Price']) : '';
+      addressHtml = `
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span style="background:#dbeafe;color:#1e40af;border:1px solid #93c5fd;padding:2px 10px;border-radius:99px;font-size:10px;font-weight:700;">IN-SYSTEM</span>
+          <span style="font-size:14px;font-weight:700;color:#0f172a;">${addr.replace(/</g,'&lt;')}</span>
+          ${price ? `<span style="font-size:12px;color:#166534;font-weight:700;">${price}</span>` : ''}
+        </div>`;
+      metaHtml = agent ? `<span>Agent: <strong>${agent.replace(/</g,'&lt;')}</strong></span>` : '';
+    } else {
+      addressHtml = `
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;padding:2px 10px;border-radius:99px;font-size:10px;font-weight:700;">OFF-SYSTEM</span>
+          <span style="font-size:14px;font-weight:700;color:#0f172a;">${(p.offsystem_address || '(no address)').replace(/</g,'&lt;')}</span>
+        </div>`;
+      const parts = [];
+      if(p.offsystem_agent_name) parts.push(`Agent: <strong>${p.offsystem_agent_name.replace(/</g,'&lt;')}</strong>`);
+      if(p.offsystem_source) parts.push(`via <strong>${p.offsystem_source.replace(/</g,'&lt;')}</strong>`);
+      metaHtml = parts.join(' · ');
+    }
+
+    const reaction = p.reaction ? REACTIONS[p.reaction] : null;
+    const channel  = p.pitch_channel ? CHANNELS[p.pitch_channel] : '';
+    const dateStr  = p.pitch_date ? new Date(p.pitch_date + 'T00:00:00').toLocaleDateString() : '—';
+
+    return `
+      <div onclick="openPitchModal('${contactId}', '${p.id}')"
+        style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;margin-bottom:10px;cursor:pointer;transition:all 0.15s;"
+        onmouseover="this.style.borderColor='#2563eb';"
+        onmouseout="this.style.borderColor='#e2e8f0';">
+        <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:10px;flex-wrap:wrap;margin-bottom:6px;">
+          <div style="min-width:0;flex:1;">${addressHtml}</div>
+          <div style="display:flex;gap:8px;align-items:center;flex-shrink:0;">
+            ${reaction ? `<span style="background:${reaction.bg};color:${reaction.color};border:1px solid ${reaction.color}55;padding:2px 10px;border-radius:99px;font-size:10px;font-weight:700;white-space:nowrap;">${reaction.label}</span>` : ''}
+            <span style="font-size:11px;color:#64748b;white-space:nowrap;">${dateStr}</span>
+          </div>
+        </div>
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;font-size:11px;color:#64748b;margin-top:4px;">
+          ${channel ? `<span>${channel}</span>` : ''}
+          ${metaHtml}
+        </div>
+        ${p.notes ? `<div style="font-size:11px;color:#475569;margin-top:8px;line-height:1.5;font-style:italic;">"${p.notes.replace(/</g,'&lt;')}"</div>` : ''}
+      </div>`;
+  }).join('');
+
+  listEl.innerHTML = statsHtml + cardsHtml;
+}
+
+// ── PITCH MODAL HANDLERS ───────────────────────────────────────────
+let _pitchEditingId = null;
+let _pitchTargetContactId = null;
+let _pitchMode = 'onsystem'; // 'onsystem' | 'offsystem'
+let _pitchSelectedDealId = null;
+
+function openPitchModal(contactId, pitchId){
+  if(!contactId) return;
+  _pitchTargetContactId = contactId;
+  _pitchEditingId = pitchId || null;
+  _pitchMode = 'onsystem';
+  _pitchSelectedDealId = null;
+
+  const modal = document.getElementById('pitchModal');
+  const title = document.getElementById('pitchModalTitle');
+  const err = document.getElementById('pitchError');
+  const deleteBtn = document.getElementById('pitchDeleteBtn');
+  if(err){ err.style.display = 'none'; err.textContent = ''; }
+
+  // Reset form fields
+  document.getElementById('pitchDate').value    = new Date().toISOString().slice(0,10);
+  document.getElementById('pitchChannel').value = '';
+  document.getElementById('pitchReaction').value = '';
+  document.getElementById('pitchNotes').value   = '';
+  document.getElementById('pitchDealSearch').value = '';
+  document.getElementById('pitchOffAddress').value = '';
+  document.getElementById('pitchOffAgent').value   = '';
+  document.getElementById('pitchOffSource').value  = '';
+  _pitchClearDealSearch();
+
+  if(pitchId){
+    // Edit mode — prefill from cache
+    const p = (_currentContactPitches || []).find(x => x.id === pitchId);
+    if(!p){ alert('Pitch not found.'); return; }
+    if(title) title.textContent = '✏️ Edit Pitch';
+    document.getElementById('pitchDate').value     = p.pitch_date     || '';
+    document.getElementById('pitchChannel').value  = p.pitch_channel  || '';
+    document.getElementById('pitchReaction').value = p.reaction       || '';
+    document.getElementById('pitchNotes').value    = p.notes          || '';
+    if(p.deal_id){
+      _pitchMode = 'onsystem';
+      _pitchSelectedDealId = p.deal_id;
+      const d = (allDeals || []).find(x => x.id === p.deal_id);
+      if(d){
+        document.getElementById('pitchDealSearch').value =
+          (d['Address'] || 'Unnamed') + (d['Asking Price'] ? ' · $'+Number(d['Asking Price']).toLocaleString() : '');
+      } else {
+        document.getElementById('pitchDealSearch').value = '(Deal not in current view)';
+      }
+    } else {
+      _pitchMode = 'offsystem';
+      document.getElementById('pitchOffAddress').value = p.offsystem_address     || '';
+      document.getElementById('pitchOffAgent').value   = p.offsystem_agent_name  || '';
+      document.getElementById('pitchOffSource').value  = p.offsystem_source      || '';
+    }
+    if(deleteBtn) deleteBtn.style.display = 'inline-block';
+  } else {
+    if(title) title.textContent = '📨 Log New Pitch';
+    if(deleteBtn) deleteBtn.style.display = 'none';
+  }
+  _pitchSetMode(_pitchMode);
+
+  if(modal) modal.style.display = 'flex';
+  setTimeout(() => {
+    if(_pitchMode === 'onsystem') document.getElementById('pitchDealSearch')?.focus();
+    else document.getElementById('pitchOffAddress')?.focus();
+  }, 50);
+}
+
+function closePitchModal(){
+  const modal = document.getElementById('pitchModal');
+  if(modal) modal.style.display = 'none';
+  _pitchEditingId = null;
+  _pitchTargetContactId = null;
+  _pitchSelectedDealId = null;
+  _pitchClearDealSearch();
+}
+
+// Toggle between in-system and off-system modes. Hides/shows the
+// respective field groups and remembers which mode was last chosen.
+function _pitchSetMode(mode){
+  _pitchMode = mode;
+  const onBtn  = document.getElementById('pitchModeOn');
+  const offBtn = document.getElementById('pitchModeOff');
+  const onSection  = document.getElementById('pitchOnSystemSection');
+  const offSection = document.getElementById('pitchOffSystemSection');
+  if(onBtn){
+    onBtn.style.background = mode === 'onsystem' ? '#1e40af' : '#fff';
+    onBtn.style.color      = mode === 'onsystem' ? '#fff' : '#475569';
+  }
+  if(offBtn){
+    offBtn.style.background = mode === 'offsystem' ? '#b45309' : '#fff';
+    offBtn.style.color      = mode === 'offsystem' ? '#fff' : '#475569';
+  }
+  if(onSection)  onSection.style.display  = mode === 'onsystem'  ? 'block' : 'none';
+  if(offSection) offSection.style.display = mode === 'offsystem' ? 'block' : 'none';
+}
+
+// Deal picker — live-filters allDeals as the user types.
+function _pitchDealSearchInput(){
+  const q = (document.getElementById('pitchDealSearch')?.value || '').trim().toLowerCase();
+  const results = document.getElementById('pitchDealResults');
+  if(!results) return;
+  // Once the user starts typing, they're re-picking; clear any previous selection
+  if(_pitchSelectedDealId){
+    _pitchSelectedDealId = null;
+  }
+  if(!q || q.length < 2){
+    results.innerHTML = '';
+    results.style.display = 'none';
+    return;
+  }
+  // Filter deals by address / county / id
+  const matches = (allDeals || [])
+    .filter(d => {
+      if(d['Is Archived']) return false;
+      const addr = (d['Address'] || '').toLowerCase();
+      const county = (d['Simple County'] || '').toLowerCase();
+      const id = (d.id || '').toLowerCase();
+      return addr.includes(q) || county.includes(q) || id.includes(q);
+    })
+    .slice(0, 12); // cap results
+
+  if(matches.length === 0){
+    results.innerHTML = '<div style="padding:10px 12px;font-size:11px;color:#94a3b8;font-style:italic;">No deals match. Try a different search, or switch to Off-System.</div>';
+    results.style.display = 'block';
+    return;
+  }
+  results.innerHTML = matches.map(d => {
+    const addr = (d['Address'] || 'Unnamed').replace(/</g,'&lt;').replace(/'/g,"\\'");
+    const price = d['Asking Price'] ? '$'+Number(d['Asking Price']).toLocaleString() : '—';
+    const stage = (d['Pipeline Stage'] || '').replace(/</g,'&lt;');
+    const county = (d['Simple County'] || '').replace(/</g,'&lt;');
+    return `
+      <div onclick="_pitchSelectDeal('${d.id}')"
+        style="padding:10px 12px;cursor:pointer;border-bottom:1px solid #f1f5f9;transition:background 0.1s;"
+        onmouseover="this.style.background='#eff6ff';"
+        onmouseout="this.style.background='';">
+        <div style="font-size:13px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${addr}</div>
+        <div style="font-size:10px;color:#64748b;margin-top:2px;">${price}${stage ? ' · '+stage : ''}${county ? ' · '+county : ''}</div>
+      </div>`;
+  }).join('');
+  results.style.display = 'block';
+}
+
+function _pitchSelectDeal(dealId){
+  const d = (allDeals || []).find(x => x.id === dealId);
+  if(!d) return;
+  _pitchSelectedDealId = dealId;
+  const input = document.getElementById('pitchDealSearch');
+  if(input){
+    input.value = (d['Address'] || 'Unnamed') + (d['Asking Price'] ? ' · $'+Number(d['Asking Price']).toLocaleString() : '');
+  }
+  _pitchClearDealSearch();
+}
+
+function _pitchClearDealSearch(){
+  const results = document.getElementById('pitchDealResults');
+  if(results){
+    results.innerHTML = '';
+    results.style.display = 'none';
+  }
+}
+
+async function submitPitch(){
+  const err = document.getElementById('pitchError');
+  const btn = document.getElementById('pitchSubmitBtn');
+  const showErr = (msg) => { if(err){ err.textContent = msg; err.style.display='block'; } };
+
+  if(!_pitchTargetContactId){ showErr('Contact missing.'); return; }
+
+  const pitchDate = document.getElementById('pitchDate')?.value || null;
+  const channel   = document.getElementById('pitchChannel')?.value || null;
+  const reaction  = document.getElementById('pitchReaction')?.value || null;
+  const notes     = document.getElementById('pitchNotes')?.value?.trim() || null;
+
+  const payload = {
+    contact_id:    _pitchTargetContactId,
+    pitch_date:    pitchDate,
+    pitch_channel: channel || null,
+    reaction:      reaction || null,
+    notes:         notes || null
+  };
+
+  if(_pitchMode === 'onsystem'){
+    if(!_pitchSelectedDealId){
+      showErr('Pick a deal from the search results, or switch to Off-System.');
+      return;
+    }
+    payload.deal_id              = _pitchSelectedDealId;
+    payload.offsystem_address    = null;
+    payload.offsystem_agent_name = null;
+    payload.offsystem_source     = null;
+  } else {
+    const addr   = document.getElementById('pitchOffAddress')?.value?.trim() || '';
+    const agent  = document.getElementById('pitchOffAgent')?.value?.trim() || null;
+    const source = document.getElementById('pitchOffSource')?.value?.trim() || null;
+    if(!addr){
+      showErr('Off-System address is required.');
+      return;
+    }
+    payload.deal_id              = null;
+    payload.offsystem_address    = addr;
+    payload.offsystem_agent_name = agent;
+    payload.offsystem_source     = source;
+  }
+
+  if(btn){ btn.disabled = true; btn.textContent = 'Saving...'; }
+  try {
+    if(_pitchEditingId){
+      await _pitchUpdate(_pitchEditingId, payload);
+    } else {
+      await _pitchCreate(payload);
+    }
+    await _contactLoadPitches(_pitchTargetContactId);
+    closePitchModal();
+  } catch(e) {
+    showErr('Failed to save: ' + (e.message || 'unknown error'));
+    if(btn){ btn.disabled = false; btn.textContent = 'Save Pitch'; }
+  }
+}
+
+async function _pitchDeleteFromModal(){
+  if(!_pitchEditingId) return;
+  if(!confirm('Delete this pitch entry?\n\nThis will soft-delete the pitch — it won\'t appear in the list but the row is kept for audit.')) return;
+  try {
+    await _pitchDelete(_pitchEditingId);
+    const contactId = _pitchTargetContactId;
+    closePitchModal();
+    await _contactLoadPitches(contactId);
+  } catch(e) {
+    alert('Failed to delete: ' + (e.message || 'unknown error'));
+  }
+}
+
+// ── BUYER-CRITERIA JUMP HELPER ─────────────────────────────────────
+// Opens a contact detail page and auto-switches to the Pitches tab.
+// Used by the "Pitch History" button on the Buyer Criteria detail page.
+function bcOpenContactPitches(contactId){
+  if(!contactId){ return; }
+  const returnTo = (_bcBatchQueue && _bcBatchQueue.length) ? 'batch' : 'buyercriteria';
+  document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
+  const contactBtn = [...document.querySelectorAll('.nav-btn')].find(b=>b.textContent.trim()==='Contacts');
+  if(contactBtn) contactBtn.classList.add('active');
+  showContactsPage().then(()=>{
+    setTimeout(()=>{
+      openContactModal(contactId, returnTo);
+      // After the contact view renders, switch to the pitches tab
+      setTimeout(()=>{
+        if(typeof _contactTabSwitch === 'function') _contactTabSwitch('pitches');
+      }, 250);
+    }, 800);
+  });
 }
 
 // ─── COMMUNICATION HISTORY LOADER ─────────────────────────────────
@@ -19101,9 +19744,12 @@ async function bcOpenExpanded(recordId){
 
         <!-- BUYER CONTACT INFO -->
         <div class="info-box">
-          <div class="info-box-title" style="display:flex;align-items:center;justify-content:space-between;">
+          <div class="info-box-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
             <span>👤 Buyer Contact</span>
-            ${contactId ? `<button class="save-btn" style="padding:2px 10px;font-size:10px;" onclick="bcOpenContact('${contactId}')">View Contact Record ↗</button>` : ''}
+            ${contactId ? `<div style="display:flex;gap:6px;flex-wrap:wrap;">
+              <button class="save-btn" style="padding:2px 10px;font-size:10px;background:#1e40af;" onclick="bcOpenContactPitches('${contactId}')">📨 Pitch History ↗</button>
+              <button class="save-btn" style="padding:2px 10px;font-size:10px;" onclick="bcOpenContact('${contactId}')">View Contact Record ↗</button>
+            </div>` : ''}
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;">
             <div><div class="bc-label">Name</div><div style="font-weight:bold;font-size:13px;">${buyerName}</div></div>
@@ -26052,13 +26698,35 @@ function _parseNextSteps(raw){
 function renderNotesTab(d){
   const ns = _parseNextSteps(d['Next Steps']);
 
-  // Non-Next-Steps notes render as before
-  const otherEntries = [
-    {label:'Deal Notes', content:d['Deal Notes'], color:'#1a3a6e'},
-    {label:'General Property Notes', content:d['General Property Notes'], color:'#1a3a6e'}
-  ].filter(e => e.content);
+  // v102.30: Deal Notes and General Property Notes now render as separate
+  // timestamped cards (stacked newest-first) using the same [date] block
+  // parser as Next Steps. Historical blobs were saved in append order, so
+  // we reverse the parsed entries array to put newest on top. New saves
+  // (from saveNoteEntry below) prepend, so they're already in the right
+  // order and the reverse still produces newest-first.
+  const _parseBlob = (raw) => {
+    // _parseNextSteps returns {current, history} where current is entries[0].
+    // For append-order blobs, entries[0] is OLDEST. Flatten and reverse.
+    const parsed = _parseNextSteps(raw);
+    const flat = [];
+    if(parsed.current) flat.push(parsed.current);
+    parsed.history.forEach(h => flat.push(h));
+    // Reverse so newest-by-position comes first for legacy append-order blobs.
+    // New prepended entries will also end up newest-first (entries[0] is newest
+    // after prepend → reversed it lands at the end → but then we re-reverse).
+    // Actually: we want "as saved newest at top" regardless of source order.
+    // Strategy: assume the blob is EITHER all-appended-old-on-bottom OR
+    // all-prepended-old-on-top (post-migration). Detect by looking at parsed
+    // dates — if first entry's date is LATER than last entry's date, it's
+    // already newest-first; otherwise reverse.
+    if(flat.length <= 1) return flat;
+    const first = _tryParseDate(flat[0].date);
+    const last  = _tryParseDate(flat[flat.length-1].date);
+    if(first && last && first >= last) return flat; // already newest-first
+    return flat.slice().reverse();
+  };
 
-  // Next Steps section (current + collapsible history)
+  // Next Steps section (current + collapsible history) — unchanged
   const nsSection = (ns.current || ns.history.length) ? `
     <div style="background:#fff;border:1px solid #bbf7d0;border-left:4px solid #408040;border-radius:8px;padding:14px 16px;margin-bottom:12px;">
       <div style="font-size:11px;font-weight:700;color:#408040;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">
@@ -26086,15 +26754,26 @@ function renderNotesTab(d){
     </div>
   ` : '';
 
-  const otherSection = otherEntries.length > 0
-    ? otherEntries.map(e=>`
-        <div class="notes-entry">
-          <div class="notes-meta" style="color:${e.color};font-weight:bold;">${e.label}</div>
-          <div class="notes-body">${e.content}</div>
-        </div>`).join('')
-    : '';
+  // v102.30: Deal Notes and General Property Notes render as stacked cards
+  const _renderBlobCards = (label, raw, accent) => {
+    const entries = _parseBlob(raw);
+    if(entries.length === 0) return '';
+    return `
+      <div style="margin-bottom:12px;">
+        <div style="font-size:11px;font-weight:700;color:${accent};text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">${label} <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">· ${entries.length} ${entries.length===1?'entry':'entries'}</span></div>
+        ${entries.map(e => `
+          <div style="background:#fff;border:1px solid #e2e8f0;border-left:3px solid ${accent};border-radius:6px;padding:10px 14px;margin-bottom:6px;">
+            ${e.date ? `<div style="font-size:10px;color:#94a3b8;font-weight:600;margin-bottom:4px;">${e.date}</div>` : ''}
+            <div style="font-size:12px;color:#334155;white-space:pre-wrap;line-height:1.5;">${e.body.replace(/</g,'&lt;')}</div>
+          </div>
+        `).join('')}
+      </div>`;
+  };
 
-  const leftPane = nsSection + otherSection ||
+  const dealNotesSection = _renderBlobCards('Deal Notes',             d['Deal Notes'],             '#1a3a6e');
+  const genNotesSection  = _renderBlobCards('General Property Notes', d['General Property Notes'], '#1a3a6e');
+
+  const leftPane = (nsSection + dealNotesSection + genNotesSection) ||
     '<div style="color:#888;font-size:11px;padding:10px 0;">No notes recorded for this deal.</div>';
 
   return `
@@ -26105,20 +26784,36 @@ function renderNotesTab(d){
         <div class="info-box">
           <div class="info-box-title">Add Note</div>
           <div style="margin-bottom:8px;">
-            <select class="form-select" id="noteTypeSelect" style="width:100%;margin-bottom:6px;">
+            <select class="form-select" id="noteTypeSelect" style="width:100%;margin-bottom:6px;" onchange="_noteTypeChanged()">
               <option>Deal Notes</option>
               <option>Next Steps</option>
               <option>General Property Notes</option>
             </select>
             <textarea class="form-textarea" id="newNoteText" placeholder="Enter your note..." style="min-height:100px;"></textarea>
           </div>
-          <button class="save-btn" onclick="saveNoteEntry()">Save Note to Airtable</button>
-          <div style="font-size:10px;color:#94a3b8;margin-top:6px;line-height:1.4;">
+          <button class="save-btn" onclick="saveNoteEntry()">Save Note</button>
+          <div id="noteHelperLine" style="font-size:10px;color:#94a3b8;margin-top:6px;line-height:1.4;display:none;">
             Next Steps: saving a new entry moves the current one into history.
           </div>
         </div>
       </div>
     </div>`;
+}
+
+// v102.30: Tiny helper to safely parse "Apr 14, 2026"-style dates.
+// Returns a Date or null. Used by renderNotesTab's blob sorter.
+function _tryParseDate(s){
+  if(!s) return null;
+  const d = new Date(s);
+  return isNaN(d.getTime()) ? null : d;
+}
+
+// v102.30: Show/hide the "saving a new entry moves..." helper line based
+// on which note type is selected. Only meaningful for Next Steps.
+function _noteTypeChanged(){
+  const type = document.getElementById('noteTypeSelect')?.value;
+  const line = document.getElementById('noteHelperLine');
+  if(line) line.style.display = (type === 'Next Steps') ? 'block' : 'none';
 }
 
 // v102.21: Toggle Next Steps history collapsible
@@ -26129,6 +26824,51 @@ function _toggleNsHistory(headerEl){
   const open = body.style.display !== 'none';
   body.style.display = open ? 'none' : 'block';
   if(caret) caret.style.transform = open ? 'rotate(0deg)' : 'rotate(90deg)';
+}
+
+// v102.30: Summary tab inline "Add Next Step" editor. Enables the save
+// button once the user has typed something, then prepends a new dated
+// entry to the Next Steps blob via the same save path as saveNoteEntry.
+function _sumNsDirty(){
+  const input = document.getElementById('sumNsInput');
+  const btn = document.getElementById('sumNsSaveBtn');
+  if(!input || !btn) return;
+  const hasText = input.value.trim().length > 0;
+  btn.disabled = !hasText;
+  btn.style.background = hasText ? '#408040' : '#cbd5e1';
+  btn.style.cursor = hasText ? 'pointer' : 'not-allowed';
+}
+
+async function _sumNsSave(){
+  if(!currentDeal) return;
+  const input = document.getElementById('sumNsInput');
+  const btn = document.getElementById('sumNsSaveBtn');
+  const status = document.getElementById('sumNsStatus');
+  const text = (input?.value || '').trim();
+  if(!text) return;
+  if(btn){ btn.disabled = true; btn.textContent = 'Saving...'; }
+  if(status){ status.textContent = ''; }
+  const existing = currentDeal['Next Steps'] || '';
+  const timestamp = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+  const newVal = existing
+    ? '['+timestamp+'] ' + text + '\n\n' + existing
+    : '['+timestamp+'] ' + text;
+  try {
+    const ok = await airtableUpdate(currentDeal.id, { 'Next Steps': newVal });
+    if(ok){
+      currentDeal['Next Steps'] = newVal;
+      showSaveConfirm('Next step saved ✓');
+      // Re-render the Summary tab so the card shows the new current entry
+      // and the previous one moves to history.
+      switchTab('summary', document.querySelector('.tab-btn[onclick*=summary]') || document.querySelector('.tab-btn.active'));
+    } else {
+      if(status){ status.textContent = 'Save failed.'; status.style.color = '#dc2626'; }
+      if(btn){ btn.disabled = false; btn.textContent = 'Save Next Step'; }
+    }
+  } catch(e) {
+    if(status){ status.textContent = 'Error: ' + (e.message || 'unknown'); status.style.color = '#dc2626'; }
+    if(btn){ btn.disabled = false; btn.textContent = 'Save Next Step'; }
+  }
 }
 
 // ─── TAB: CALENDAR ────────────────────────────────────────────
@@ -28332,16 +29072,13 @@ function saveNoteEntry(){
   const airtableField = fieldMap[type] || 'Deal Notes';
   const existing = currentDeal[airtableField]||'';
   const timestamp = new Date().toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
-  // v102.21: Next Steps PREPENDS so the newest entry is on top and
-  // everything else becomes history. Other note types still append.
-  let newVal;
-  if(airtableField === 'Next Steps'){
-    newVal = existing
-      ? '['+timestamp+'] ' + text + '\n\n' + existing
-      : '['+timestamp+'] ' + text;
-  } else {
-    newVal = existing ? existing + '\n\n['+timestamp+'] ' + text : '['+timestamp+'] ' + text;
-  }
+  // v102.30: ALL note types prepend newest-first (unified with Next Steps
+  // behavior from v102.21). Previous append behavior for Deal Notes /
+  // General Property Notes caused entries to concatenate on render. The
+  // parser in renderNotesTab handles mixed-order legacy blobs.
+  const newVal = existing
+    ? '['+timestamp+'] ' + text + '\n\n' + existing
+    : '['+timestamp+'] ' + text;
   airtableUpdate(currentDeal.id,{[airtableField]: newVal}).then(ok=>{
     if(ok){
       currentDeal[airtableField] = newVal;

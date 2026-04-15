@@ -2402,6 +2402,20 @@ async function syncData(){
       // Silent failure — _dbGetCities() falls back to _NJ_MUNICIPALITIES and
       // _dbGetAssetTypes() falls back to deal-distinct values if this no-ops.
       try{ await _loadAppLists(); }catch(e){ console.warn('app lists load failed:', e.message); }
+      // v102.39: warm the Workbench contact-id cache so contact-add buttons
+      // can render in their already-added state without a DB call.
+      try{
+        if(_currentUser && _currentUser.id){
+          const wbRows = await _sbGet(SB_TABLES.workbench,
+            'select=contact_id,position'
+            + '&user_id=eq.' + encodeURIComponent(_currentUser.id)
+            + '&item_type=eq.contact&limit=500');
+          if(Array.isArray(wbRows)){
+            _wbContactPositions.clear();
+            wbRows.forEach(r => { if(r.contact_id) _wbContactPositions.set(r.contact_id, r.position); });
+          }
+        }
+      }catch(e){ console.warn('workbench warm-cache failed:', e.message); }
     }
 
     if(typeof _splashStep==='function') _splashStep('Building sidebar', 7, 8);
@@ -11717,6 +11731,47 @@ let _workbenchItems = []; // [{id, deal_id, position, notes, deal: <ref into all
 let _workbenchSelectedDealId = null;
 let _workbenchNotesSaveTimer = null;
 
+// v102.39: contact-side state (independent positions, separate selection)
+let _workbenchContacts = []; // [{id, contact_id, position, notes, contact: <hydrated row>}]
+let _workbenchSelectedContactId = null;
+let _workbenchActiveTab = 'properties'; // 'properties' | 'contacts'
+
+// Session cache of contact_ids currently on this user's Workbench, with their
+// positions. Lets us render the "+ Add to Workbench" button in its
+// already-added state without making a DB call every time we paint a
+// contact card or a buyer criteria card.
+//
+// Updated by: addContactToWorkbench (on success), _wbLoadContacts (on full
+// load), _wbRemoveContactById (on removal), and the initial app sync.
+const _wbContactPositions = new Map(); // contact_id -> position number
+
+// Apply the cached state to every contact-add button currently on screen.
+// Called after add/remove and on every page render that paints a button.
+// Buttons are marked with class "wb-add-contact-btn" and data-contact-id
+// so we can find sibling buttons on the page that point at the same contact.
+function _wbSyncContactAddButtons(contactId, position){
+  // If specific contactId provided, target that one only; otherwise sync all.
+  const sel = contactId
+    ? '.wb-add-contact-btn[data-contact-id="' + contactId + '"]'
+    : '.wb-add-contact-btn';
+  document.querySelectorAll(sel).forEach(btn => {
+    const cid = btn.dataset.contactId;
+    if(!cid) return;
+    const pos = (typeof position === 'number')
+      ? position
+      : _wbContactPositions.get(cid);
+    if(pos){
+      btn.disabled = false;
+      btn.textContent = '✓ On Workbench (#' + pos + ')';
+      btn.style.background = '#16a34a';
+    }else{
+      btn.disabled = false;
+      btn.textContent = '+ Add to Workbench';
+      btn.style.background = '#1e3a8a';
+    }
+  });
+}
+
 // Add the current deal (or any deal id) to the logged-in agent's workbench.
 async function addToWorkbench(dealId, btnEl){
   if(!_currentUser || !_currentUser.id){
@@ -11764,6 +11819,7 @@ async function _wbLoadItems(){
   const rows = await _sbGet(SB_TABLES.workbench,
     'select=id,deal_id,position,notes,created_at,updated_at'
     + '&user_id=eq.' + encodeURIComponent(_currentUser.id)
+    + '&item_type=eq.property'
     + '&order=position.asc&limit=500');
   const list = Array.isArray(rows) ? rows : [];
   // Hydrate from allDeals first
@@ -11788,6 +11844,85 @@ async function _wbLoadItems(){
     id: r.id, deal_id: r.deal_id, position: r.position, notes: r.notes || '',
     deal: dealMap[r.deal_id] || null
   }));
+}
+
+// v102.39: add a contact to the agent's Workbench. Idempotent — re-clicking
+// from any of the contact's buyer-criteria cards adds the contact (one row),
+// not the criterion. Same UX pattern as addToWorkbench for properties.
+async function addContactToWorkbench(contactId, btnEl){
+  if(!_currentUser || !_currentUser.id){
+    showSaveConfirm('Sign in to use Workbench');
+    return;
+  }
+  if(!contactId){ console.warn('addContactToWorkbench: no contactId'); return; }
+  const origText = btnEl ? btnEl.textContent : '';
+  if(btnEl){ btnEl.disabled = true; btnEl.textContent = 'Adding…'; }
+  try{
+    const result = await _sbRpc('workbench_add_contact', {
+      p_user_id: _currentUser.id, p_contact_id: contactId, p_notes: ''
+    });
+    if(result && result.error){
+      showSaveConfirm('Workbench: ' + result.error);
+      if(btnEl){ btnEl.disabled = false; btnEl.textContent = origText; }
+      return;
+    }
+    if(result.already_present){
+      showSaveConfirm('Already on Workbench (position ' + result.position + ')');
+    }else{
+      showSaveConfirm('Added to Workbench (position ' + result.position + ')');
+    }
+    _wbContactPositions.set(contactId, result.position);
+    _wbSyncContactAddButtons(contactId, result.position);
+  }catch(e){
+    console.error('addContactToWorkbench failed:', e);
+    showSaveConfirm('Workbench: ' + (e.message || 'add failed'));
+    if(btnEl){ btnEl.disabled = false; btnEl.textContent = origText; }
+  }
+}
+
+// v102.39: load the agent's contact-side workbench items + hydrate each
+// contact via a single batched fetch.
+async function _wbLoadContacts(){
+  if(!_currentUser || !_currentUser.id){
+    _workbenchContacts = [];
+    return;
+  }
+  const rows = await _sbGet(SB_TABLES.workbench,
+    'select=id,contact_id,position,notes,created_at,updated_at'
+    + '&user_id=eq.' + encodeURIComponent(_currentUser.id)
+    + '&item_type=eq.contact'
+    + '&order=position.asc&limit=500');
+  const list = Array.isArray(rows) ? rows : [];
+  const contactMap = {};
+  if(list.length){
+    try{
+      const filter = 'in.(' + list.map(r => encodeURIComponent(r.contact_id)).join(',') + ')';
+      const fetched = await _sbGet(SB_TABLES.contacts,
+        'select=id,name,phone_number,email,company,type,last_contact_date,date_added&id=' + filter);
+      (Array.isArray(fetched) ? fetched : []).forEach(c => { contactMap[c.id] = c; });
+    }catch(e){ console.warn('Workbench: contact fetch failed:', e.message); }
+  }
+  // For the buyer-criteria count badge, batch a count per contact_id.
+  const bcCounts = {};
+  if(list.length){
+    try{
+      const filter = 'in.(' + list.map(r => encodeURIComponent(r.contact_id)).join(',') + ')';
+      const bcRows = await _sbGet(SB_TABLES.buyerCriteria,
+        'select=id,contact_id&contact_id=' + filter + '&limit=2000');
+      (Array.isArray(bcRows) ? bcRows : []).forEach(r => {
+        bcCounts[r.contact_id] = (bcCounts[r.contact_id] || 0) + 1;
+      });
+    }catch(e){ console.warn('Workbench: buyer criteria count fetch failed:', e.message); }
+  }
+  _workbenchContacts = list.map(r => ({
+    id: r.id, contact_id: r.contact_id, position: r.position, notes: r.notes || '',
+    contact: contactMap[r.contact_id] || null,
+    bcCount: bcCounts[r.contact_id] || 0
+  }));
+  // Refresh the cross-page button cache from the authoritative list
+  _wbContactPositions.clear();
+  _workbenchContacts.forEach(it => _wbContactPositions.set(it.contact_id, it.position));
+  _wbSyncContactAddButtons();
 }
 
 // Get the main photo URL for a deal, falling back to the first photo, or
@@ -11844,15 +11979,18 @@ async function showWorkbenchPage(){
   }
   main.innerHTML = '<div style="padding:60px;text-align:center;color:#94a3b8;font-size:13px;">Loading your Workbench…</div>';
   try{
-    await _wbLoadItems();
+    await Promise.all([_wbLoadItems(), _wbLoadContacts()]);
   }catch(e){
     console.error('Workbench load failed:', e);
     main.innerHTML = '<div style="padding:60px;text-align:center;color:#dc2626;font-size:13px;">Workbench load failed: ' + (e.message||'unknown') + '</div>';
     return;
   }
-  // Default selection = first item if any
+  // Default selections
   if(!_workbenchSelectedDealId || !_workbenchItems.find(it => it.deal_id === _workbenchSelectedDealId)){
     _workbenchSelectedDealId = _workbenchItems.length ? _workbenchItems[0].deal_id : null;
+  }
+  if(!_workbenchSelectedContactId || !_workbenchContacts.find(it => it.contact_id === _workbenchSelectedContactId)){
+    _workbenchSelectedContactId = _workbenchContacts.length ? _workbenchContacts[0].contact_id : null;
   }
   _wbRenderShell();
 }
@@ -11860,15 +11998,32 @@ async function showWorkbenchPage(){
 function _wbRenderShell(){
   const main = document.getElementById('mainArea');
   if(!main) return;
+  const tabBase = 'background:transparent;border:none;border-bottom:3px solid transparent;padding:12px 18px;font-size:13px;font-weight:600;color:#64748b;cursor:pointer;margin-bottom:-1px;';
+  const tabActive = 'background:transparent;border:none;border-bottom:3px solid #1e3a8a;padding:12px 18px;font-size:13px;font-weight:700;color:#1e3a8a;cursor:pointer;margin-bottom:-1px;';
+  const propCount = _workbenchItems.length;
+  const contactCount = _workbenchContacts.length;
+  const onProps = (_workbenchActiveTab === 'properties');
+  const totalCount = onProps ? propCount : contactCount;
+  const noun = onProps ? ('deal' + (propCount===1?'':'s')) : ('contact' + (contactCount===1?'':'s'));
   main.innerHTML = `
     <div style="display:flex;flex-direction:column;height:100%;background:#f8fafc;font-family:'Inter',system-ui,sans-serif;">
-      <div style="padding:18px 24px;background:#fff;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;gap:14px;">
-        <div>
-          <div style="font-size:18px;font-weight:700;color:#0f172a;">My Workbench</div>
-          <div style="font-size:12px;color:#64748b;margin-top:2px;">Your private triage queue. Drag rows or type a position number to reorder.</div>
+      <div style="padding:18px 24px 0;background:#fff;border-bottom:1px solid #e2e8f0;">
+        <div style="display:flex;align-items:flex-start;gap:14px;margin-bottom:10px;">
+          <div>
+            <div style="font-size:18px;font-weight:700;color:#0f172a;">My Workbench</div>
+            <div style="font-size:12px;color:#64748b;margin-top:2px;">Your private triage queue. Drag rows or type a position number to reorder.</div>
+          </div>
+          <div style="flex:1;"></div>
+          <div id="wbCount" style="font-size:12px;color:#64748b;padding-top:4px;">${totalCount} ${noun}</div>
         </div>
-        <div style="flex:1;"></div>
-        <div id="wbCount" style="font-size:12px;color:#64748b;">${_workbenchItems.length} deal${_workbenchItems.length===1?'':'s'}</div>
+        <div style="display:flex;gap:2px;border-bottom:1px solid transparent;">
+          <button onclick="_wbSwitchTab('properties')" style="${onProps ? tabActive : tabBase}">
+            Properties <span style="background:${onProps?'#dbeafe':'#f1f5f9'};color:${onProps?'#1e40af':'#64748b'};font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:600;">${propCount}</span>
+          </button>
+          <button onclick="_wbSwitchTab('contacts')" style="${!onProps ? tabActive : tabBase}">
+            Buyers <span style="background:${!onProps?'#dbeafe':'#f1f5f9'};color:${!onProps?'#1e40af':'#64748b'};font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:600;">${contactCount}</span>
+          </button>
+        </div>
       </div>
       <div style="flex:1;display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:0;min-height:0;">
         <div id="wbList" style="overflow-y:auto;border-right:1px solid #e2e8f0;padding:12px;background:#f8fafc;"></div>
@@ -11879,7 +12034,21 @@ function _wbRenderShell(){
   _wbRenderDetail();
 }
 
+function _wbSwitchTab(which){
+  if(which !== 'properties' && which !== 'contacts') return;
+  if(_workbenchActiveTab === which) return;
+  // Flush any pending notes save before switching
+  if(_workbenchNotesSaveTimer){ clearTimeout(_workbenchNotesSaveTimer); _workbenchNotesSaveTimer = null; _wbSaveNotes(true); }
+  _workbenchActiveTab = which;
+  _wbRenderShell();
+}
+
 function _wbRenderList(){
+  if(_workbenchActiveTab === 'contacts') return _wbRenderContactList();
+  return _wbRenderPropertyList();
+}
+
+function _wbRenderPropertyList(){
   const el = document.getElementById('wbList');
   if(!el) return;
   if(!_workbenchItems.length){
@@ -11891,19 +12060,38 @@ function _wbRenderList(){
     return;
   }
   el.innerHTML = _workbenchItems.map((it, idx) => _wbRenderRow(it, idx)).join('');
-  // Wire up drag-and-drop
+  _wbWireRows('property');
+}
+
+function _wbRenderContactList(){
+  const el = document.getElementById('wbList');
+  if(!el) return;
+  if(!_workbenchContacts.length){
+    el.innerHTML = `
+      <div style="padding:40px 20px;text-align:center;color:#64748b;font-size:13px;">
+        <div style="font-size:14px;font-weight:600;color:#334155;margin-bottom:8px;">No buyers on your Workbench yet.</div>
+        <div>Open any contact card or buyer criteria card and click <strong>+ Add to Workbench</strong> to start triaging.</div>
+      </div>`;
+    return;
+  }
+  el.innerHTML = _workbenchContacts.map((it, idx) => _wbRenderContactRow(it, idx)).join('');
+  _wbWireRows('contact');
+}
+
+// Wire drag-drop + rank input + click for the currently-rendered list rows.
+function _wbWireRows(kind){
+  const el = document.getElementById('wbList');
+  if(!el) return;
   el.querySelectorAll('[data-wb-row]').forEach(row => {
     row.addEventListener('dragstart', _wbDragStart);
     row.addEventListener('dragover',  _wbDragOver);
     row.addEventListener('drop',      _wbDrop);
     row.addEventListener('dragend',   _wbDragEnd);
     row.addEventListener('click', e => {
-      // Only fire selection when clicking outside interactive children
       if(e.target.closest('button, input, [data-wb-grip]')) return;
-      _wbSelect(row.dataset.wbRow);
+      _wbSelect(row.dataset.wbRow, kind);
     });
   });
-  // Wire up rank inputs
   el.querySelectorAll('[data-wb-rank]').forEach(inp => {
     inp.addEventListener('keydown', e => {
       if(e.key === 'Enter'){ e.preventDefault(); _wbRankCommit(inp); }
@@ -11957,16 +12145,77 @@ function _wbRenderRow(item, idx){
     </div>`;
 }
 
-function _wbSelect(dealId){
-  if(_workbenchSelectedDealId === dealId) return;
-  // Flush any pending notes save before switching
-  if(_workbenchNotesSaveTimer){ clearTimeout(_workbenchNotesSaveTimer); _workbenchNotesSaveTimer = null; _wbSaveNotes(true); }
-  _workbenchSelectedDealId = dealId;
+// v102.39: render one row in the Buyers tab.
+function _wbRenderContactRow(item, idx){
+  const c = item.contact || {};
+  const contactId = item.contact_id;
+  const isSelected = (contactId === _workbenchSelectedContactId);
+  const name = c.name || '(no name)';
+  const safeName = String(name).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  const company = c.company || '';
+  const types = Array.isArray(c.type) ? c.type.join(', ') : (c.type || '');
+  const subline = company || types || '—';
+  const phone = c.phone_number || '';
+  const email = c.email || '';
+  const contactLine = phone || email || '';
+  const last = _wbRelDate(c.last_contact_date);
+  const bcCount = item.bcCount || 0;
+  const noteSnippet = (item.notes || '').trim().split('\n')[0].slice(0, 90);
+  const initials = _wbContactInitials(name);
+
+  const bg = isSelected ? '#eef2fb' : '#fff';
+  const border = isSelected ? '1px solid #1e3a8a' : '1px solid #e2e8f0';
+
+  return `
+    <div data-wb-row="${contactId}" draggable="true"
+         style="display:flex;align-items:center;gap:10px;padding:10px 12px;background:${bg};border:${border};border-radius:6px;margin-bottom:6px;cursor:pointer;">
+      <div data-wb-grip style="display:flex;align-items:center;justify-content:center;width:14px;color:#94a3b8;cursor:grab;font-size:14px;line-height:1;user-select:none;" title="Drag to reorder">⋮⋮</div>
+      <input type="text" inputmode="numeric" maxlength="3" value="${idx+1}" data-wb-rank="${idx+1}" data-wb-deal="${contactId}"
+             title="Click and type a position to jump"
+             style="width:32px;height:30px;padding:0;text-align:center;font-size:13px;font-weight:600;font-family:monospace;border:1px solid #cbd5e1;border-radius:4px;background:#fff;"/>
+      <div style="width:48px;height:48px;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#d97706);color:#fff;display:flex;align-items:center;justify-content:center;font-size:14px;font-weight:700;flex-shrink:0;">${initials}</div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:13px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${safeName}</div>
+        <div style="font-size:11px;color:#64748b;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${subline}${contactLine ? ' · ' + contactLine : ''}</div>
+        ${noteSnippet ? `<div style="font-size:11px;color:#475569;margin-top:2px;font-style:italic;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${String(noteSnippet).replace(/&/g,'&amp;').replace(/</g,'&lt;')}</div>` : ''}
+      </div>
+      <div style="text-align:right;flex-shrink:0;min-width:90px;">
+        <div style="font-size:11px;color:#475569;">${bcCount} buyer ${bcCount===1?'criterion':'criteria'}</div>
+        <div style="font-size:10px;color:#94a3b8;margin-top:2px;">Last contact ${last}</div>
+      </div>
+    </div>`;
+}
+
+function _wbContactInitials(name){
+  const n = (name || '').trim();
+  if(!n) return '?';
+  const parts = n.split(/\s+/);
+  if(parts.length === 1) return parts[0].slice(0, 2).toUpperCase();
+  return (parts[0][0] + parts[parts.length-1][0]).toUpperCase();
+}
+
+function _wbSelect(id, kind){
+  // Default kind to the active tab if not specified (drag-drop callsite)
+  kind = kind || (_workbenchActiveTab === 'contacts' ? 'contact' : 'property');
+  if(kind === 'contact'){
+    if(_workbenchSelectedContactId === id) return;
+    if(_workbenchNotesSaveTimer){ clearTimeout(_workbenchNotesSaveTimer); _workbenchNotesSaveTimer = null; _wbSaveNotes(true); }
+    _workbenchSelectedContactId = id;
+  }else{
+    if(_workbenchSelectedDealId === id) return;
+    if(_workbenchNotesSaveTimer){ clearTimeout(_workbenchNotesSaveTimer); _workbenchNotesSaveTimer = null; _wbSaveNotes(true); }
+    _workbenchSelectedDealId = id;
+  }
   _wbRenderList();
   _wbRenderDetail();
 }
 
 function _wbRenderDetail(){
+  if(_workbenchActiveTab === 'contacts') return _wbRenderContactDetail();
+  return _wbRenderPropertyDetail();
+}
+
+function _wbRenderPropertyDetail(){
   const el = document.getElementById('wbDetail');
   if(!el) return;
   if(!_workbenchSelectedDealId){
@@ -12016,21 +12265,94 @@ function _wbRenderDetail(){
       <div id="wbNotesStatus" style="font-size:11px;color:#94a3b8;margin-top:4px;">Auto-saves as you type.</div>
     </div>`;
 
-  const ta = document.getElementById('wbNotes');
-  if(ta){
-    ta.addEventListener('input', () => {
-      const status = document.getElementById('wbNotesStatus');
-      if(status){ status.textContent = 'Saving…'; status.style.color = '#94a3b8'; }
-      if(_workbenchNotesSaveTimer) clearTimeout(_workbenchNotesSaveTimer);
-      _workbenchNotesSaveTimer = setTimeout(() => _wbSaveNotes(false), 600);
-    });
+  _wbWireNotes();
+}
+
+// v102.39: Buyers tab detail — contact name + phone + buyer criteria link
+// + the agent's "what needs to be done" notes on this buyer.
+function _wbRenderContactDetail(){
+  const el = document.getElementById('wbDetail');
+  if(!el) return;
+  if(!_workbenchSelectedContactId){
+    el.innerHTML = '<div style="padding:60px 20px;text-align:center;color:#94a3b8;font-size:13px;">Add a contact to your Workbench to begin.</div>';
+    return;
   }
+  const item = _workbenchContacts.find(it => it.contact_id === _workbenchSelectedContactId);
+  if(!item){ el.innerHTML = ''; return; }
+  const c = item.contact || {};
+  const name = c.name || '(no name)';
+  const safeName = String(name).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const company = c.company || '';
+  const phone = c.phone_number || '';
+  const email = c.email || '';
+  const types = Array.isArray(c.type) ? c.type.join(', ') : (c.type || '');
+  const last = _wbRelDate(c.last_contact_date);
+  const initials = _wbContactInitials(name);
+  const safeNotes = String(item.notes || '').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const phoneDigits = phone.replace(/[^0-9+]/g, '');
+  const bcCount = item.bcCount || 0;
+
+  // Buyer criteria link — typical case is one criterion per contact, so we
+  // jump straight to it if there's exactly one. Otherwise route to the
+  // contact card's Buyer Criteria tab via _wbOpenContact.
+  const bcLink = bcCount === 0
+    ? '<span style="font-size:11px;color:#94a3b8;">No buyer criteria yet</span>'
+    : bcCount === 1
+      ? `<a href="javascript:void(0)" onclick="_wbOpenContactBC('${item.contact_id}')" style="font-size:12px;color:#1e40af;text-decoration:underline;">Open buyer criteria →</a>`
+      : `<a href="javascript:void(0)" onclick="_wbOpenContactBC('${item.contact_id}')" style="font-size:12px;color:#1e40af;text-decoration:underline;">${bcCount} buyer criteria →</a>`;
+
+  el.innerHTML = `
+    <div style="display:flex;align-items:flex-start;gap:14px;margin-bottom:18px;">
+      <div style="width:64px;height:64px;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#d97706);color:#fff;display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;flex-shrink:0;">${initials}</div>
+      <div style="flex:1;min-width:0;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap;">
+          <span style="font-size:11px;padding:2px 8px;border-radius:6px;background:#dbeafe;color:#1e40af;font-weight:600;">Position ${item.position}</span>
+          ${types ? `<span style="font-size:11px;padding:2px 8px;border-radius:6px;background:#f1f5f9;color:#475569;">${types}</span>` : ''}
+        </div>
+        <div style="font-size:18px;font-weight:600;color:#0f172a;">${safeName}</div>
+        <div style="font-size:12px;color:#64748b;margin-top:3px;">${company || '<em style=\"color:#94a3b8;\">No company</em>'}${last !== '—' ? ' · Last contact ' + last : ''}</div>
+        <div style="font-size:13px;margin-top:8px;display:flex;flex-direction:column;gap:4px;color:#0f172a;">
+          ${phone ? `<div>📞 <a href="tel:${phoneDigits}" style="color:#1e40af;text-decoration:none;font-weight:600;">${phone}</a></div>` : '<div style="color:#94a3b8;font-size:12px;">No phone</div>'}
+          ${email ? `<div>✉ <a href="mailto:${email}" style="color:#1e40af;text-decoration:none;">${email}</a></div>` : ''}
+        </div>
+        <div style="margin-top:8px;">${bcLink}</div>
+      </div>
+      <div style="display:flex;flex-direction:column;gap:6px;flex-shrink:0;">
+        <button onclick="_wbOpenContact('${item.contact_id}')" style="font-size:11px;padding:6px 12px;background:#0f172a;color:#fff;border:none;border-radius:5px;font-weight:600;cursor:pointer;white-space:nowrap;">Open contact</button>
+        <button onclick="_wbMarkContactComplete('${item.contact_id}')" style="font-size:11px;padding:6px 12px;background:#fff;color:#16a34a;border:1px solid #86efac;border-radius:5px;font-weight:600;cursor:pointer;white-space:nowrap;">Mark complete</button>
+        <button onclick="_wbRemoveContact('${item.contact_id}')" style="font-size:11px;padding:6px 12px;background:#fff;color:#dc2626;border:1px solid #fecaca;border-radius:5px;font-weight:600;cursor:pointer;white-space:nowrap;">Remove</button>
+      </div>
+    </div>
+
+    <div>
+      <label style="font-size:12px;color:#64748b;font-weight:600;">What needs to be done</label>
+      <textarea id="wbNotes" placeholder="Type what needs to be done with this buyer — auto-saves as you type."
+        style="width:100%;min-height:240px;margin-top:6px;resize:vertical;font-family:inherit;font-size:13px;line-height:1.6;padding:10px 12px;box-sizing:border-box;border:1px solid #cbd5e1;border-radius:6px;">${safeNotes}</textarea>
+      <div id="wbNotesStatus" style="font-size:11px;color:#94a3b8;margin-top:4px;">Auto-saves as you type.</div>
+    </div>`;
+
+  _wbWireNotes();
+}
+
+function _wbWireNotes(){
+  const ta = document.getElementById('wbNotes');
+  if(!ta) return;
+  ta.addEventListener('input', () => {
+    const status = document.getElementById('wbNotesStatus');
+    if(status){ status.textContent = 'Saving…'; status.style.color = '#94a3b8'; }
+    if(_workbenchNotesSaveTimer) clearTimeout(_workbenchNotesSaveTimer);
+    _workbenchNotesSaveTimer = setTimeout(() => _wbSaveNotes(false), 600);
+  });
 }
 
 async function _wbSaveNotes(silent){
   const ta = document.getElementById('wbNotes');
-  const item = _workbenchItems.find(it => it.deal_id === _workbenchSelectedDealId);
-  if(!ta || !item) return;
+  if(!ta) return;
+  const isContact = (_workbenchActiveTab === 'contacts');
+  const item = isContact
+    ? _workbenchContacts.find(it => it.contact_id === _workbenchSelectedContactId)
+    : _workbenchItems.find(it => it.deal_id === _workbenchSelectedDealId);
+  if(!item) return;
   const newNotes = ta.value;
   if(newNotes === item.notes) return;
   try{
@@ -12044,12 +12366,8 @@ async function _wbSaveNotes(silent){
         if(s){ s.textContent = 'Auto-saves as you type.'; s.style.color = '#94a3b8'; }
       }, 1500);
     }
-    // Refresh the row's note preview without re-rendering the whole list
-    const row = document.querySelector('[data-wb-row="' + item.deal_id + '"]');
-    if(row){
-      // Easiest: re-render just the list to keep snippet consistent
-      _wbRenderList();
-    }
+    // Refresh row preview
+    _wbRenderList();
   }catch(e){
     console.error('wb save notes failed:', e);
     const status = document.getElementById('wbNotesStatus');
@@ -12100,22 +12418,85 @@ async function _wbRemoveById(dealId){
   }
 }
 
+// v102.39: contact-side equivalents
+async function _wbMarkContactComplete(contactId){
+  if(!confirm('Mark this buyer complete and remove from your Workbench?\n\nThe contact record itself is unaffected.')) return;
+  await _wbRemoveContactById(contactId);
+  showSaveConfirm('Marked complete and removed from Workbench');
+}
+
+async function _wbRemoveContact(contactId){
+  if(!confirm('Remove this buyer from your Workbench?\n\nYou can re-add them any time from the contact card or buyer criteria card.')) return;
+  await _wbRemoveContactById(contactId);
+  showSaveConfirm('Removed from Workbench');
+}
+
+async function _wbRemoveContactById(contactId){
+  try{
+    const result = await _sbRpc('workbench_remove_contact', {
+      p_user_id: _currentUser.id, p_contact_id: contactId
+    });
+    if(result && result.error){ showSaveConfirm('Workbench: ' + result.error); return; }
+    if(_workbenchSelectedContactId === contactId) _workbenchSelectedContactId = null;
+    _wbContactPositions.delete(contactId);
+    _wbSyncContactAddButtons(contactId);
+    await _wbLoadContacts();
+    if(!_workbenchSelectedContactId && _workbenchContacts.length){
+      _workbenchSelectedContactId = _workbenchContacts[0].contact_id;
+    }
+    _wbRenderShell();
+  }catch(e){
+    console.error('wb contact remove failed:', e);
+    showSaveConfirm('Workbench remove failed: ' + (e.message || 'unknown'));
+  }
+}
+
+// "Open contact" — jumps to the contact card from the Buyers tab.
+function _wbOpenContact(contactId){
+  if(typeof openContactModal === 'function'){
+    try { openContactModal(contactId); } catch(e){ console.warn('openContactModal failed:', e); }
+  }
+}
+
+// "Open buyer criteria" — jumps to the contact card and switches it to the
+// Buyer Criteria tab. openContactModal handles tab routing via its own logic;
+// after open we ask the contact-tab switcher for the buyer pane.
+function _wbOpenContactBC(contactId){
+  if(typeof openContactModal === 'function'){
+    try{
+      openContactModal(contactId);
+      setTimeout(() => {
+        if(typeof _contactTabSwitch === 'function'){
+          try { _contactTabSwitch('buyer'); } catch(e){}
+        }
+      }, 250);
+    }catch(e){ console.warn('openContactModal failed:', e); }
+  }
+}
+
 // Rank input commit — type a number, blur or Enter, row jumps to that pos.
+// Routes to the right tab's move RPC based on _workbenchActiveTab.
 async function _wbRankCommit(inp){
-  const dealId = inp.dataset.wbDeal;
+  const id = inp.dataset.wbDeal; // (legacy attr name; holds either deal_id or contact_id)
   const oldPos = parseInt(inp.dataset.wbRank, 10);
   const newPos = parseInt(inp.value, 10);
   if(isNaN(newPos) || newPos === oldPos){ inp.value = oldPos; return; }
-  await _wbMoveTo(dealId, newPos);
+  await _wbMoveTo(id, newPos);
 }
 
-async function _wbMoveTo(dealId, newPosition){
+async function _wbMoveTo(id, newPosition){
+  const isContact = (_workbenchActiveTab === 'contacts');
   try{
-    const result = await _sbRpc('workbench_move', {
-      p_user_id: _currentUser.id, p_deal_id: dealId, p_new_position: newPosition
-    });
+    const result = isContact
+      ? await _sbRpc('workbench_move_contact', {
+          p_user_id: _currentUser.id, p_contact_id: id, p_new_position: newPosition
+        })
+      : await _sbRpc('workbench_move', {
+          p_user_id: _currentUser.id, p_deal_id: id, p_new_position: newPosition
+        });
     if(result && result.error){ showSaveConfirm('Workbench: ' + result.error); return; }
-    await _wbLoadItems();
+    if(isContact) await _wbLoadContacts();
+    else          await _wbLoadItems();
     _wbRenderList();
     _wbRenderDetail();
   }catch(e){
@@ -12154,7 +12535,10 @@ async function _wbDrop(e){
   e.currentTarget.style.borderTop = '';
   const targetId = e.currentTarget.dataset.wbRow;
   if(!_wbDragSourceId || _wbDragSourceId === targetId) return;
-  const targetItem = _workbenchItems.find(it => it.deal_id === targetId);
+  const isContact = (_workbenchActiveTab === 'contacts');
+  const targetItem = isContact
+    ? _workbenchContacts.find(it => it.contact_id === targetId)
+    : _workbenchItems.find(it => it.deal_id === targetId);
   if(!targetItem) return;
   await _wbMoveTo(_wbDragSourceId, targetItem.position);
 }
@@ -16551,6 +16935,10 @@ async function showContactDetailPage(recordId, returnTo){
         </div>
         <div id="cdp_headerBadges" style="display:flex;gap:6px;align-items:center;">${typeBadges}</div>
         <button id="cdp_relBtn" onclick="toggleContactRelationshipFromDetail('${recordId}')" title="${_isMyRelationship(recordId)?'In your relationships — click to remove':'Add to your personal relationships list'}" style="${_cdpRelBtnStyle(_isMyRelationship(recordId))}">${_cdpRelBtnLabel(_isMyRelationship(recordId))}</button>
+        <button class="wb-add-contact-btn" data-contact-id="${recordId}" onclick="addContactToWorkbench('${recordId}', this)"
+          style="background:#1e3a8a;color:#fff;border:none;padding:9px 14px;font-size:12px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">
+          + Add to Workbench
+        </button>
         <div id="cmSaveMsg" style="font-size:11px;color:#16a34a;min-width:80px;text-align:right;font-weight:600;"></div>
         <button onclick="saveContactFromModal('${recordId}')" style="background:#16a34a;color:#fff;border:none;padding:10px 22px;font-size:13px;font-weight:700;border-radius:8px;cursor:pointer;">✓ Save Changes</button>
       </div>
@@ -16661,6 +17049,11 @@ async function showContactDetailPage(recordId, returnTo){
   _contactLoadCommunication(recordId);
   // v102.31: load pitches for the new Pitches tab
   _contactLoadPitches(recordId);
+
+  // v102.39: sync the "+ Add to Workbench" button with the warm-cache state
+  // so the button paints in its already-added form when this contact is
+  // already on the agent's Workbench.
+  if(typeof _wbSyncContactAddButtons === 'function') _wbSyncContactAddButtons(recordId);
 
   // Refresh relationships in background in case this page was opened directly
   // from a deal (without visiting the Contacts list first). If the fetched
@@ -21089,6 +21482,7 @@ async function bcOpenExpanded(recordId){
             ${contactId ? `<div style="display:flex;gap:8px;flex-wrap:wrap;">
               <button onclick="bcOpenContactPitches('${contactId}')" style="background:#1a3a6e;color:#fff;border:1px solid #0a1f4a;padding:7px 14px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.08);white-space:nowrap;">📨 Pitch History ↗</button>
               <button onclick="bcOpenContact('${contactId}')" style="background:#fff;color:#1a3a6e;border:1px solid #1a3a6e;padding:7px 14px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.04);white-space:nowrap;">👤 View Contact Record ↗</button>
+              <button class="wb-add-contact-btn" data-contact-id="${contactId}" onclick="addContactToWorkbench('${contactId}', this)" style="background:#1e3a8a;color:#fff;border:none;padding:7px 14px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.08);white-space:nowrap;">+ Add to Workbench</button>
             </div>` : ''}
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;">
@@ -21256,6 +21650,10 @@ async function bcOpenExpanded(recordId){
 
       </div>
     </div>`;
+  // v102.39: sync the "+ Add to Workbench" button on the BC card with the
+  // warm-cache state so it paints in its already-added form when this
+  // contact is already on the agent's Workbench.
+  if(typeof _wbSyncContactAddButtons === 'function') _wbSyncContactAddButtons(contactId);
 }
 
 function bcExpandedAssetSection(asset, f){

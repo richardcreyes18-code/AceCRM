@@ -2856,8 +2856,13 @@ async function _saveSnoozeToDB(dealId,dateStr,isSnoozed){
 
 function buildSidebar(filter=''){
   const list=document.getElementById('recentList');
+  const f = (filter||'').toLowerCase();
   let deals=allDeals.filter(d=>{
-    if(filter&&!(d['Address']||'').toLowerCase().includes(filter.toLowerCase())) return false;
+    if(f){
+      const addr = (d['Address']||'').toLowerCase();
+      const id   = (d.id||'').toLowerCase();
+      if(!addr.includes(f) && !id.includes(f)) return false;
+    }
     if(_sideView==='archived') return !!d['Is Archived'];
     if(_sideView==='starred') return !!d['Top Priority'] && !d['Is Archived'];
     if(_sideView==='snoozed') return _isSnoozedToday(d) && !d['Is Archived'];
@@ -4284,7 +4289,7 @@ function renderDealPage(){
   const stage=getStage(d);
   const prob=closeProb(d);
   const addr=d['Address']||'Unnamed Property';
-  const entered=d['Created Time']?new Date(d['Created Time']).toLocaleDateString():'—';
+  const entered=d['Date Added']?new Date(d['Date Added']).toLocaleDateString():'—';
   const leadId=d.id?d.id.substring(0,8).toUpperCase():'—';
 
   _rendering = true;
@@ -13688,7 +13693,7 @@ async function initDealMap(){
     const county = (d['Simple County']||'').replace(/\s*county\s*/i,'').trim();
     const addr = (d['Address']||'').toLowerCase();
     const notes = (d['Next Steps']||'').toLowerCase();
-    const matchSearch = !search || addr.includes(search) || county.toLowerCase().includes(search) || notes.includes(search) || dtype.toLowerCase().includes(search);
+    const matchSearch = !search || addr.includes(search) || county.toLowerCase().includes(search) || notes.includes(search) || dtype.toLowerCase().includes(search) || (d.id||'').toLowerCase().includes(search);
     const matchStage  = !selStages   || selStages.includes(stage);
     const matchType   = !selTypes    || selTypes.includes(dtype);
     const matchCounty = !selCounties || selCounties.includes(county);
@@ -14057,7 +14062,7 @@ function renderDealBoard(){
     const addr = (d['Address']||'').toLowerCase();
     const countyLow = c.toLowerCase();
     const notes = (d['Next Steps']||'').toLowerCase();
-    const matchSearch  = !search || addr.includes(search) || countyLow.includes(search) || notes.includes(search) || t.toLowerCase().includes(search);
+    const matchSearch  = !search || addr.includes(search) || countyLow.includes(search) || notes.includes(search) || t.toLowerCase().includes(search) || (d.id||'').toLowerCase().includes(search);
     const matchStage   = !selStages   || selStages.includes(s);
     const matchCounty  = !selCounties || selCounties.includes(c);
     const matchType    = !selTypes    || selTypes.includes(t);
@@ -26405,7 +26410,7 @@ function applyPipelineFilters(deals){
   const q = (f.search || '').trim().toLowerCase();
 
   return deals.filter(d => {
-    // Search: match if ANY of address, owner, agent, asset type, city, county contains the query
+    // Search: match if ANY of address, owner, agent, asset type, city, county, or lead ID contains the query
     if(q){
       const addr = (d['Address']||'').toLowerCase();
       const owner = (d['_sellerName']||d['_ownerName']||'').toLowerCase();
@@ -26413,8 +26418,10 @@ function applyPipelineFilters(deals){
       const atype = (d['CRM Asset Classification']||d['Simple Text Property Type']||'').toLowerCase();
       const propName = (d['Property Name']||'').toLowerCase();
       const county = (d['Simple County']||'').toLowerCase();
+      const leadId = (d.id||'').toLowerCase();
       const hit = addr.includes(q) || owner.includes(q) || agent.includes(q) ||
-                  atype.includes(q) || propName.includes(q) || county.includes(q);
+                  atype.includes(q) || propName.includes(q) || county.includes(q) ||
+                  leadId.includes(q);
       if(!hit) return false;
     }
     // Stage

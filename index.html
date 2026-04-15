@@ -1344,14 +1344,15 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   <button class="nav-btn" data-page="home" onclick="setNav(this,'home')">Deals</button>
   <button class="nav-btn" data-page="pipeline" onclick="setNav(this,'pipeline')">Pipeline</button>
   <button class="nav-btn" data-page="dealboard" onclick="setNav(this,'dealboard')" style="font-weight:bold;">Deal Board</button>
-  <button class="nav-btn" data-page="portfolios" onclick="setNav(this,'portfolios')" style="color:#b45309;">📁 Portfolios</button>
   <button class="nav-btn" data-page="map" onclick="setNav(this,'map')" style="color:#059669;">🗺 Map</button>
   <button class="nav-btn" data-page="contacts" onclick="setNav(this,'contacts')">Contacts</button>
   <button class="nav-btn" data-page="buyercriteria" onclick="setNav(this,'buyercriteria')">Buyer Criteria</button>
   <button class="nav-btn" data-page="company" onclick="setNav(this,'company')">🏢 Company</button>
   <button class="nav-btn" data-page="tasks-nav" onclick="setNav(this,'tasks-nav')" style="font-weight:600;color:#a78bfa;">☑ Tasks</button>
   <button class="nav-btn" id="navSettingsBtn" data-page="settings" onclick="setNav(this,'settings')" style="display:none;">⚙ Settings</button>
-  <button class="nav-btn" data-page="fieldmap" onclick="setNav(this,'fieldmap')" style="color:#2060b0;">⇄ Field Map</button>
+  <!-- v102.33: Portfolios moved to a toggle inside the Deal Board header.
+       Field Map moved to a button inside the Settings page (admin-only).
+       Both routes still work via setNav() / URL fragment for backwards compat. -->
   <div class="nav-spacer"></div>
   <span class="nav-user" id="navUser">Welcome, Ricky</span>
   <!-- v102.7: online/offline indicator. Green when Supabase is reachable,
@@ -13380,44 +13381,69 @@ function showDealBoard(){
   document.getElementById('mainArea').innerHTML = `
     <div style="padding:0;height:100%;display:flex;flex-direction:column;background:#f8fafc;">
 
-      <!-- HEADER BAR — v102.25: light aesthetic matching LOC-001 -->
-      <div class="db-fbar-wrap">
-        <div class="db-fbar-title">📋 Deal Board</div>
+      <!-- HEADER BAR — v102.33: restructured into a top row (title + sub-tabs + view toggle)
+           and a filter bar split into 3 explicit sub-rows.
+           Top row:  [📋 Deal Board]  [Deals | Portfolios]         [List | Map]  [count]
+           Row 1:    Search (solo)
+           Row 2:    Location selector (State / Region / County / City)
+           Row 3:    Stages  Asset Type  Sources  Priority  [spacer]  Clear Filters -->
+      <div class="db-fbar-wrap" style="flex-direction:column;align-items:stretch;gap:10px;padding:14px 20px 12px;">
 
-        <input id="db_search" class="db-fbar-search"
-          placeholder="Search address, county, notes..."
-          oninput="renderDealBoard();dbRefreshMapPins()"/>
+        <!-- TOP ROW: title, deals/portfolios toggle, view toggle, count -->
+        <div style="display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+          <div class="db-fbar-title">📋 Deal Board</div>
 
-        <!-- STAGE MULTI-SELECT -->
-        ${_dbMultiBtn('stage', 'All Stages', stages, false)}
+          <!-- v102.33: Deals / Portfolios sub-tab — moved from the main nav.
+               Clicking Portfolios calls showPortfoliosPage() which renders the
+               portfolio list over mainArea. The Deals side is a no-op since
+               we're already on the Deal Board. -->
+          <div style="display:inline-flex;border:1px solid #cbd5e1;border-radius:6px;overflow:hidden;">
+            <button onclick="showDealBoard()" style="background:#0f172a;color:#fff;border:none;padding:7px 16px;font-size:12px;font-weight:700;cursor:pointer;border-right:1px solid #cbd5e1;">
+              📋 Deals
+            </button>
+            <button onclick="showPortfoliosPage()" style="background:#fff;color:#b45309;border:none;padding:7px 16px;font-size:12px;font-weight:700;cursor:pointer;">
+              📁 Portfolios
+            </button>
+          </div>
 
-        <!-- v102.24: LOC-001 Location Selector (State + Region + County + City)
-             replaces the old db_region and db_county button-style multi-selects.
-             Filter selections live in _locFilters and are read via _dbMultiGetSelected
-             which now routes location keys to the LOC store. -->
-        ${_locCompactBarHTML()}
+          <!-- Flex spacer pushes the right-side controls to the edge -->
+          <div style="flex:1;"></div>
 
-        <!-- ASSET TYPE MULTI-SELECT -->
-        ${_dbMultiBtn('type', 'All Asset Types', types, false)}
+          <span id="db_count" class="db-fbar-count"></span>
 
-        <!-- IMPORT SOURCE MULTI-SELECT -->
-        ${_dbMultiBtn('source', 'All Sources', sources, false)}
+          <!-- VIEW TOGGLE — moved from filter bar to top row -->
+          <div class="db-fbar-viewtoggle">
+            <button id="db_view_list" class="active" onclick="dbSetView('list')">&#128203; List</button>
+            <button id="db_view_map" onclick="dbSetView('map')">&#128506; Map</button>
+          </div>
+        </div>
 
-        <label class="db-fbar-check">
-          <input type="checkbox" id="db_priority" onchange="renderDealBoard();dbRefreshMapPins()"/>
-          &#9733; Priority Only
-        </label>
+        <!-- FILTER ROW 1: search (solo) -->
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <input id="db_search" class="db-fbar-search"
+            placeholder="Search address, county, notes, lead ID..."
+            style="flex:1;max-width:420px;"
+            oninput="renderDealBoard();dbRefreshMapPins()"/>
+        </div>
 
-        <button onclick="dbClearAllFilters()" class="db-fbar-clear">
-          &#10005; Clear Filters
-        </button>
+        <!-- FILTER ROW 2: LOC-001 Location Selector (State / Region / County / City) -->
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          ${_locCompactBarHTML()}
+        </div>
 
-        <span id="db_count" class="db-fbar-count"></span>
-
-        <!-- VIEW TOGGLE -->
-        <div class="db-fbar-viewtoggle">
-          <button id="db_view_list" class="active" onclick="dbSetView('list')">&#128203; List</button>
-          <button id="db_view_map" onclick="dbSetView('map')">&#128506; Map</button>
+        <!-- FILTER ROW 3: Stages + Asset Type + Sources + Priority + spacer + Clear Filters -->
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          ${_dbMultiBtn('stage', 'All Stages', stages, false)}
+          ${_dbMultiBtn('type', 'All Asset Types', types, false)}
+          ${_dbMultiBtn('source', 'All Sources', sources, false)}
+          <label class="db-fbar-check">
+            <input type="checkbox" id="db_priority" onchange="renderDealBoard();dbRefreshMapPins()"/>
+            &#9733; Priority Only
+          </label>
+          <div style="flex:1;"></div>
+          <button onclick="dbClearAllFilters()" class="db-fbar-clear">
+            &#10005; Clear Filters
+          </button>
         </div>
       </div>
 
@@ -18513,6 +18539,17 @@ function showSettingsPage(){
           <div id="tmUsersList" style="font-size:12px;color:#64748b;padding:20px;text-align:center;">Loading users…</div>
         </section>
 
+
+        <!-- v102.33: FIELD MAP — moved from main nav -->
+        <section style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
+            <div>
+              <div style="font-size:15px;font-weight:700;color:#0f172a;">⇄ Field Map</div>
+              <div style="font-size:12px;color:#64748b;margin-top:4px;line-height:1.5;">Reference sheet showing every database column, its display label, which tab it lives on, and read/write status. Useful for debugging missing data or verifying schema sync.</div>
+            </div>
+            <button onclick="showFieldMap()" style="background:#1a3a6e;color:#fff;border:none;padding:10px 20px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">Open Field Map ↗</button>
+          </div>
+        </section>
 
         <section style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;opacity:0.7;">
           <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:4px;">🎨 Display Preferences <span style="font-size:10px;background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:99px;margin-left:6px;">Coming Soon</span></div>

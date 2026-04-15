@@ -23451,15 +23451,25 @@ function _ddRenderMergeBody(cand, contacts, dealCounts, fields){
       const safeVal = val.replace(/&/g,'&amp;').replace(/</g,'&lt;');
       const isPicked = _ddMergePicks[f.key] === c.id;
       const isEmpty = !val.trim();
-      const cellBg = isPicked ? '#eef2fb' : '#fff';
+      // v102.42.6: winning cells get a strong visual treatment (green
+      // left border + ✓) regardless of which column they're in, so the
+      // user can see at a glance that "email is picked from column 3"
+      // even though column 1 is the surviving column.
+      const cellBg = isPicked ? '#ecfdf5' : '#fff';
+      const cellBorder = isPicked
+        ? 'border-left:4px solid #16a34a;'
+        : (idx===0 ? 'border-left:none;' : 'border-left:1px solid #f1f5f9;');
       const valStyle = isEmpty
         ? 'color:#cbd5e1;font-style:italic;'
-        : 'color:#0f172a;';
+        : (isPicked ? 'color:#04342c;font-weight:600;' : 'color:#0f172a;');
       const display = isEmpty ? '(empty)' : safeVal;
+      const winnerBadge = isPicked
+        ? '<span style="display:inline-block;font-size:9px;padding:1px 5px;border-radius:8px;background:#16a34a;color:#fff;font-weight:700;margin-left:6px;letter-spacing:0.04em;">WINNER ✓</span>'
+        : '';
       return `
-        <label style="padding:10px 14px;border-left:${idx===0?'none':'1px solid #f1f5f9'};background:${cellBg};cursor:${isEmpty?'default':'pointer'};display:flex;align-items:flex-start;gap:8px;${isEmpty?'opacity:0.7;':''}">
+        <label style="padding:10px 14px;${cellBorder}background:${cellBg};cursor:${isEmpty?'default':'pointer'};display:flex;align-items:flex-start;gap:8px;${isEmpty?'opacity:0.7;':''}">
           <input type="radio" name="dd_f_${f.key}" value="${c.id}" ${isPicked?'checked':''} ${isEmpty?'disabled':''} onchange="_ddPickField('${f.key}','${c.id}')" style="margin-top:3px;flex-shrink:0;"/>
-          <span style="font-size:12px;${valStyle}line-height:1.5;word-break:break-word;">${display}</span>
+          <span style="font-size:12px;${valStyle}line-height:1.5;word-break:break-word;flex:1;min-width:0;">${display}${winnerBadge}</span>
         </label>`;
     }).join('');
     // For notes, also offer "combine all" as a fourth option
@@ -23468,10 +23478,13 @@ function _ddRenderMergeBody(cand, contacts, dealCounts, fields){
     let combineCell = '';
     if(hasMultipleNotes){
       const isPicked = _ddMergePicks.contact_notes === '__combine__';
+      const combineBorder = isPicked
+        ? 'border-left:4px solid #16a34a;border-top:1px dashed #cbd5e1;'
+        : 'border-top:1px dashed #cbd5e1;';
       combineCell = `
-        <label style="grid-column:2/-1;padding:10px 14px;border-top:1px dashed #cbd5e1;background:${isPicked?'#ecfdf5':'#f8fafc'};cursor:pointer;display:flex;align-items:flex-start;gap:8px;">
+        <label style="grid-column:2/-1;padding:10px 14px;${combineBorder}background:${isPicked?'#ecfdf5':'#f8fafc'};cursor:pointer;display:flex;align-items:flex-start;gap:8px;">
           <input type="radio" name="dd_f_contact_notes" value="__combine__" ${isPicked?'checked':''} onchange="_ddPickField('contact_notes','__combine__')" style="margin-top:3px;flex-shrink:0;"/>
-          <span style="font-size:12px;color:#04342c;font-weight:500;">Combine all notes (recommended) — preserves history with "[From X]" labels</span>
+          <span style="font-size:12px;color:#04342c;font-weight:${isPicked?'700':'500'};">Combine all notes (recommended) — preserves history with "[From X]" labels${isPicked?' <span style=\"display:inline-block;font-size:9px;padding:1px 5px;border-radius:8px;background:#16a34a;color:#fff;font-weight:700;margin-left:6px;letter-spacing:0.04em;\">WINNER ✓</span>':''}</span>
         </label>`;
     }
     return `
@@ -23489,10 +23502,66 @@ function _ddRenderMergeBody(cand, contacts, dealCounts, fields){
         ${contacts.map((c,i) => colHeader(c,i)).join('')}
       </div>
       ${_ddRenderInspectionRows(contacts)}
+      ${_ddRenderSurvivingPreview(contacts, fields)}
       <div style="display:grid;grid-template-columns:140px repeat(${contacts.length}, minmax(0, 1fr));border-bottom:1px solid #e2e8f0;background:#f8fafc;">
         <div style="grid-column:1/-1;padding:8px 14px;font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;">Pick winning value per field ↓</div>
       </div>
       ${fields.map(f => fieldRow(f)).join('')}
+    </div>
+  `;
+}
+
+// v102.42.6: Live preview row showing what the surviving contact will
+// look like after merge. Computed from _ddMergePicks (per-field winners)
+// and _ddTagPicks (curated type set). Re-renders on every radio click
+// so the user sees the outcome update in real time. This is the
+// unambiguous source of truth for what gets saved.
+function _ddRenderSurvivingPreview(contacts, fields){
+  const contactsById = {};
+  contacts.forEach(c => { contactsById[c.id] = c; });
+
+  // Compute the would-be surviving values
+  const survId = _ddMergePicks.surviving_id;
+  const surv   = contactsById[survId] || {};
+  const valueFor = (f) => {
+    const pickedId = _ddMergePicks[f.key];
+    if(f.key === 'contact_notes' && pickedId === '__combine__'){
+      const parts = contacts
+        .filter(c => (c.contact_notes||'').trim())
+        .map(c => '[From ' + (c.name||'(unnamed)') + ']');
+      return parts.length ? '(combined: ' + parts.join(' + ') + ')' : '';
+    }
+    if(pickedId && contactsById[pickedId]){
+      return contactsById[pickedId][f.key] || '';
+    }
+    return '';
+  };
+  const tags = _ddTagPicks ? Array.from(_ddTagPicks) : [];
+
+  // Build a compact one-line summary of the post-merge contact
+  const escape = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const tagBadges = tags.length
+    ? tags.map(t => `<span style="display:inline-block;font-size:10px;padding:1px 7px;border-radius:5px;background:rgba(255,255,255,0.25);color:#fff;font-weight:600;margin-right:3px;">${escape(t)}</span>`).join('')
+    : '<span style="color:rgba(255,255,255,0.7);font-style:italic;">no tags</span>';
+
+  const fieldBits = fields.map(f => {
+    const v = valueFor(f);
+    if(!v || !String(v).trim()) return null;
+    const truncated = String(v).length > 60 ? String(v).substring(0, 60) + '…' : String(v);
+    return `<div style="display:flex;gap:6px;align-items:flex-start;padding:1px 0;">
+      <span style="font-size:10px;color:rgba(255,255,255,0.7);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;min-width:80px;">${f.label}:</span>
+      <span style="font-size:11px;color:#fff;font-weight:500;flex:1;min-width:0;">${escape(truncated)}</span>
+    </div>`;
+  }).filter(Boolean).join('');
+
+  return `
+    <div style="background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 100%);color:#fff;padding:12px 16px;border-bottom:1px solid #e2e8f0;">
+      <div style="font-size:11px;color:rgba(255,255,255,0.85);font-weight:700;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:8px;">↓ Surviving contact will be:</div>
+      <div style="display:flex;align-items:center;gap:6px;margin-bottom:8px;flex-wrap:wrap;">
+        <span style="font-size:10px;color:rgba(255,255,255,0.7);font-weight:700;text-transform:uppercase;letter-spacing:0.04em;min-width:80px;">Tags:</span>
+        ${tagBadges}
+      </div>
+      ${fieldBits || '<div style="font-size:11px;color:rgba(255,255,255,0.7);font-style:italic;">No field values selected yet.</div>'}
     </div>
   `;
 }

@@ -1226,7 +1226,7 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
       </div>
       <div class="config-field">
         <label>Supabase Anon Key</label>
-        <input type="password" id="cfgSbKey" name="sb_anon_key" autocomplete="off" data-lpignore="true" data-1p-ignore="true" value="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt4dHVlZ2pwdHZ6cXljZ3l6ZWhqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2ODg5NzQsImV4cCI6MjA5MTI2NDk3NH0.FctjQCWJfjxqD_07gbmKn9r5rCbNUNtEWNhYIhDo5Dc" style="background:#f5f5f5;"/>
+        <input type="text" id="cfgSbKey" name="sb_anon_key" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other" value="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt4dHVlZ2pwdHZ6cXljZ3l6ZWhqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2ODg5NzQsImV4cCI6MjA5MTI2NDk3NH0.FctjQCWJfjxqD_07gbmKn9r5rCbNUNtEWNhYIhDo5Dc" style="background:#f5f5f5;-webkit-text-security:disc;text-security:disc;"/>
       </div>
       <div id="cfgError" style="color:#c00;font-size:11px;display:none;margin-top:6px;"></div>
 
@@ -1237,7 +1237,7 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
         Get your key: <a href="https://console.cloud.google.com/apis/credentials" target="_blank" style="color:#1a6a1a;">console.cloud.google.com</a> → Create credentials → API key → Enable <strong>Places API</strong> and <strong>Maps JavaScript API</strong>.</p>
         <div class="config-field">
           <label>Google Places API Key</label>
-          <input type="password" id="cfgGoogleKey" name="gplaces_api_key" autocomplete="off" data-lpignore="true" data-1p-ignore="true" placeholder="AIzaSy..."/>
+          <input type="text" id="cfgGoogleKey" name="gplaces_api_key" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other" placeholder="AIzaSy..." style="-webkit-text-security:disc;text-security:disc;"/>
         </div>
         <div id="cfgGoogleStatus" style="font-size:11px;margin-top:4px;color:#888;"></div>
       </div>
@@ -1250,7 +1250,7 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
         <p style="font-size:11px;color:#666;margin-bottom:8px;">Powers AI rent roll parsing and other smart features. Get your key at <a href="https://console.anthropic.com" target="_blank" style="color:#6a0dad;">console.anthropic.com</a>. Stored locally only.</p>
         <div class="config-field">
           <label>Anthropic API Key (starts with "sk-ant-...")</label>
-          <input type="password" id="cfgAnthropicKey" name="anthropic_api_key" autocomplete="off" data-lpignore="true" data-1p-ignore="true" placeholder="sk-ant-api03-..."/>
+          <input type="text" id="cfgAnthropicKey" name="anthropic_api_key" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other" placeholder="sk-ant-api03-..." style="-webkit-text-security:disc;text-security:disc;"/>
         </div>
       </div>
 
@@ -14656,11 +14656,17 @@ async function showContactsPage(){
     if(isSupabase()){
       // Kick off relationships load in parallel with contacts fetch
       const relPromise = _loadMyRelationships();
-      let from = 0, batchSize = 1000;
+      // v102.32: progressive load — render the first small batch as soon
+      // as it arrives (~200-300ms) so the user sees results immediately,
+      // then continue fetching larger batches in the background.
+      let from = 0;
+      let firstBatch = true;
       while(true){
+        // First batch is small (300) so it returns fast. Subsequent batches
+        // are 1000 to keep total round-trips low.
+        const batchSize = firstBatch ? 300 : 1000;
         const rows = await _sbGet(SB_TABLES.contacts, `select=*&order=name.asc&limit=${batchSize}&offset=${from}`);
         if(!rows.length) break;
-        // Normalize to Airtable-like {id, fields} structure for filterContacts/renderContactsTable
         rows.forEach(row => {
           records.push({ id: row.id, fields: {
             'Name': row.name, 'Phone Number': row.phone_number,
@@ -14673,10 +14679,30 @@ async function showContactsPage(){
             '_fubContactId': row.fub_contact_id || null
           }});
         });
+        // After the first batch, put what we have into allContacts and render
+        // so the user sees something immediately. Subsequent batches will
+        // re-render with more rows appended.
+        if(firstBatch){
+          allContacts = records.slice(); // copy so later pushes don't mutate mid-render
+          await relPromise; // relationships must be ready before filterContacts runs
+          _populateContactSourceFilter();
+          filterContacts();
+        }
+        // Advance by the batch size actually used this iteration
+        from += rows.length;
+        // If the server returned fewer than requested, we're done
         if(rows.length < batchSize) break;
-        from += batchSize;
+        firstBatch = false;
       }
-      await relPromise; // ensure _myRelationships is ready before render
+      // After all batches complete, update allContacts with the full set
+      // and re-render if new rows were added past the first batch.
+      if(records.length > allContacts.length){
+        allContacts = records;
+        _populateContactSourceFilter();
+        filterContacts();
+      } else {
+        allContacts = records;
+      }
     } else {
       let url = `https://api.airtable.com/v0/${cfg.base}/tblpTluzDlrvMCaca?pageSize=100&sort[0][field]=Name&sort[0][direction]=asc`;
       while(url){
@@ -14685,11 +14711,11 @@ async function showContactsPage(){
         records = records.concat(data.records||[]);
         url = data.offset ? `https://api.airtable.com/v0/${cfg.base}/tblpTluzDlrvMCaca?pageSize=100&sort[0][field]=Name&sort[0][direction]=asc&offset=${data.offset}` : null;
       }
+      allContacts = records;
+      _populateContactSourceFilter();
+      filterContacts();
     }
-    allContacts = records;
     _contactsLastLoadMs = Date.now();  // v64 perf cache marker
-    _populateContactSourceFilter();
-    filterContacts(); // respects _contactScope
   }catch(e){
     document.getElementById('contactsTableWrap').innerHTML=`<div style="padding:20px;color:#c00;">Error: ${e.message}</div>`;
   }
@@ -15224,11 +15250,45 @@ function _liPrefillBannerHTML(){
     </div>`;
 }
 
-function showContactDetailPage(recordId, returnTo){
-  const existing = allContacts.find(r=>r.id===recordId);
+async function showContactDetailPage(recordId, returnTo){
+  // v102.32: direct-open bypass. Previously we required allContacts to be
+  // loaded before opening a detail view — which forced every direct-open
+  // from deals, buyer criteria, or a permalink to wait for the full 5,900-row
+  // load. Now we first try the in-memory cache, and if the contact isn't
+  // there, fetch just that one row from Supabase. The Contacts list can
+  // finish loading in the background.
+  let existing = allContacts.find(r=>r.id===recordId);
   if(!existing){
-    alert('Contact not found. Try refreshing the Contacts page.');
-    return;
+    // Show a tiny loading splash so the page doesn't look frozen
+    const mainAreaLoading = document.getElementById('mainArea');
+    if(mainAreaLoading) mainAreaLoading.innerHTML = '<div style="padding:40px 20px;text-align:center;color:#64748b;font-size:13px;">⏳ Loading contact...</div>';
+    if(isSupabase()){
+      try {
+        const rows = await _sbGet(SB_TABLES.contacts, `id=${recordId}&select=*`);
+        const row = rows?.[0];
+        if(row){
+          existing = { id: row.id, fields: {
+            'Name': row.name, 'Phone Number': row.phone_number,
+            'Secondary Phone Number': row.secondary_phone,
+            'Email': row.email, 'Company': row.company,
+            'Contact Notes': row.contact_notes,
+            'Type': row.type || [],
+            'Date Added': row.date_added,
+            'Import Source': row.import_source || '',
+            '_fubContactId': row.fub_contact_id || null
+          }};
+          // Also push into allContacts cache so subsequent operations find it
+          if(!Array.isArray(allContacts)) allContacts = [];
+          allContacts.push(existing);
+        }
+      } catch(e) {
+        console.warn('Direct contact fetch failed:', e.message);
+      }
+    }
+    if(!existing){
+      if(mainAreaLoading) mainAreaLoading.innerHTML = '<div style="padding:40px 20px;text-align:center;color:#dc2626;font-size:13px;">Contact not found. It may have been deleted.<br><br><button class="save-btn" onclick="showContactsPage()">← Back to Contacts</button></div>';
+      return;
+    }
   }
   const f = existing.fields||{};
   const types = ['Seller','Buyer','1031','Other'];
@@ -16115,21 +16175,26 @@ async function _pitchDeleteFromModal(){
 // ── BUYER-CRITERIA JUMP HELPER ─────────────────────────────────────
 // Opens a contact detail page and auto-switches to the Pitches tab.
 // Used by the "Pitch History" button on the Buyer Criteria detail page.
+// v102.32: skips full Contacts page load — direct-open via openContactModal.
 function bcOpenContactPitches(contactId){
   if(!contactId){ return; }
   const returnTo = (_bcBatchQueue && _bcBatchQueue.length) ? 'batch' : 'buyercriteria';
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
   const contactBtn = [...document.querySelectorAll('.nav-btn')].find(b=>b.textContent.trim()==='Contacts');
   if(contactBtn) contactBtn.classList.add('active');
-  showContactsPage().then(()=>{
-    setTimeout(()=>{
-      openContactModal(contactId, returnTo);
-      // After the contact view renders, switch to the pitches tab
-      setTimeout(()=>{
-        if(typeof _contactTabSwitch === 'function') _contactTabSwitch('pitches');
-      }, 250);
-    }, 800);
-  });
+  openContactModal(contactId, returnTo);
+  // After the detail view renders, switch to the pitches tab. Poll briefly
+  // because showContactDetailPage is now async when the contact isn't cached.
+  let attempts = 0;
+  const tryTabSwitch = () => {
+    if(attempts++ > 20) return; // give up after ~4 seconds
+    if(document.getElementById('ctab_pitches') && typeof _contactTabSwitch === 'function'){
+      _contactTabSwitch('pitches');
+    } else {
+      setTimeout(tryTabSwitch, 200);
+    }
+  };
+  setTimeout(tryTabSwitch, 150);
 }
 
 // ─── COMMUNICATION HISTORY LOADER ─────────────────────────────────
@@ -19488,14 +19553,13 @@ function bcOpenContact(contactId){
   // if we're in batch review mode, return to the current batch buyer;
   // otherwise return to the buyer criteria page.
   const returnTo = (_bcBatchQueue && _bcBatchQueue.length) ? 'batch' : 'buyercriteria';
-  // Switch to Contacts page — it will load with the contact visible
+  // v102.32: skip the full Contacts page load. Direct-open the detail view;
+  // showContactDetailPage now fetches the single row on demand if needed.
+  // Highlight the Contacts nav button for visual consistency.
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
   const contactBtn = [...document.querySelectorAll('.nav-btn')].find(b=>b.textContent.trim()==='Contacts');
   if(contactBtn) contactBtn.classList.add('active');
-  showContactsPage().then(()=>{
-    // After contacts load, open full-page detail view for this contact
-    setTimeout(()=>{ openContactModal(contactId, returnTo); }, 800);
-  });
+  openContactModal(contactId, returnTo);
 }
 
 async function bcOpenExpanded(recordId){
@@ -19746,9 +19810,9 @@ async function bcOpenExpanded(recordId){
         <div class="info-box">
           <div class="info-box-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
             <span>👤 Buyer Contact</span>
-            ${contactId ? `<div style="display:flex;gap:6px;flex-wrap:wrap;">
-              <button class="save-btn" style="padding:2px 10px;font-size:10px;background:#1e40af;" onclick="bcOpenContactPitches('${contactId}')">📨 Pitch History ↗</button>
-              <button class="save-btn" style="padding:2px 10px;font-size:10px;" onclick="bcOpenContact('${contactId}')">View Contact Record ↗</button>
+            ${contactId ? `<div style="display:flex;gap:8px;flex-wrap:wrap;">
+              <button onclick="bcOpenContactPitches('${contactId}')" style="background:#1a3a6e;color:#fff;border:1px solid #0a1f4a;padding:7px 14px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.08);white-space:nowrap;">📨 Pitch History ↗</button>
+              <button onclick="bcOpenContact('${contactId}')" style="background:#fff;color:#1a3a6e;border:1px solid #1a3a6e;padding:7px 14px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.04);white-space:nowrap;">👤 View Contact Record ↗</button>
             </div>` : ''}
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr 1fr;gap:12px;">

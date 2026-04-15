@@ -11261,6 +11261,167 @@ function _portfolioAggregates(children){
   return agg;
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// v102.28 Turn D: COMBINED FINANCIAL ANALYSIS
+// ═══════════════════════════════════════════════════════════════════════
+// Computes aggregated financials across all children in a portfolio.
+// Returns a structured object the renderer can read without any math.
+// Handles partial data gracefully — tracks how many children contributed
+// to each aggregate so the UI can surface data-quality warnings.
+//
+// Convention: all monthly values are normalized to monthly, all yearly
+// to yearly. When a child has only one side filled in, we derive the
+// other from a 12x multiplier. This matches how the deal-level tab
+// behaves (see syncData → _sbToAt → SB_PROP_MAP).
+
+function _portfolioFinancials(children, portfolio){
+  const count = children.length;
+  const agg = {
+    count, portfolio: portfolio || null,
+    totalAsking: 0, totalSF: 0, totalUnits: 0, totalNOI: 0,
+    packagePrice: portfolio && portfolio['Package Price'] != null ? Number(portfolio['Package Price']) : null,
+    actual: _emptyFinSide(),
+    proforma: _emptyFinSide(),
+    unitMix: { eff:0, br1:0, br2:0, br3:0, br4:0, other:0,
+               effVac:0, br1Vac:0, br2Vac:0, br3Vac:0, br4Vac:0, otherVac:0 },
+    childrenWithAsking: 0,
+    childrenWithGRI: 0,
+    childrenWithExpenses: 0,
+    childrenWithNOI: 0
+  };
+  const getMo = (d, monthlyKey, yearlyKey) => {
+    const m = Number(d[monthlyKey] || 0);
+    if(m) return m;
+    const y = Number(d[yearlyKey] || 0);
+    return y ? y / 12 : 0;
+  };
+  const getYr = (d, monthlyKey, yearlyKey) => {
+    const y = Number(d[yearlyKey] || 0);
+    if(y) return y;
+    const m = Number(d[monthlyKey] || 0);
+    return m ? m * 12 : 0;
+  };
+  children.forEach(d => {
+    const ask = Number(d['Asking Price']||0);
+    if(ask){ agg.totalAsking += ask; agg.childrenWithAsking++; }
+    const sf  = Number(d['Total Building SF']||d['Square Footage']||d['Net Rentable SF']||0);
+    if(sf)  agg.totalSF += sf;
+    const u   = Number(d['No. of Units']||d['Number of Units']||0);
+    if(u)   agg.totalUnits += u;
+
+    // Actual side
+    const griMo = getMo(d, 'Gross Revenue Monthly', 'Gross Revenue Yearly');
+    if(griMo){ agg.actual.griMonthly += griMo; agg.childrenWithGRI++; }
+    const expMo = getMo(d, 'Expenses Monthly', 'Expenses Yearly');
+    if(expMo){ agg.actual.expensesMonthly += expMo; agg.childrenWithExpenses++; }
+    // Individual expense categories — sum monthly, best-effort
+    agg.actual.exp_electric      += Number(d['Electric (Monthly)']||0);
+    agg.actual.exp_gas           += Number(d['Gas (Monthly)']||0);
+    agg.actual.exp_water         += Number(d['Water & Sewer (Monthly)']||0);
+    agg.actual.exp_trash         += Number(d['Trash (Monthly)']||0);
+    agg.actual.exp_propertyTax   += Number(d['Property Tax (Monthly)']||0);
+    agg.actual.exp_insurance     += Number(d['Insurance (Monthly)']||0);
+    agg.actual.exp_mgmtFee       += Number(d['Property Management Fee (Monthly)']||0);
+    agg.actual.exp_maintenance   += Number(d['Maintenance & Repair Costs (Monthly)']||0);
+    agg.actual.exp_landscaping   += Number(d['Landscaping (Monthly)']||0);
+    agg.actual.exp_janitorial    += Number(d['Janitorial (Monthly)']||0);
+    agg.actual.exp_supplies      += Number(d['Supplies (Monthly)']||0);
+    agg.actual.exp_capitalReserve+= Number(d['Capital Reserve (Monthly)']||0);
+    agg.actual.exp_admin         += Number(d['Admin Expenses (Monthly)']||0);
+    agg.actual.exp_misc          += Number(d['Miscellaneous Expenses (Monthly)']||0);
+
+    // NOI — prefer stored, fallback to derived
+    let noi = Number(d['NOI']||0);
+    if(!noi && griMo && expMo){ noi = (griMo - expMo) * 12; }
+    if(noi){ agg.totalNOI += noi; agg.childrenWithNOI++; }
+
+    // Debt service
+    agg.actual.annualDebtService += Number(d['Annual Debt Service']||0);
+
+    // Proforma side
+    const pfGriMo = getMo(d, 'Pro Forma Gross Revenue Monthly', 'Pro Forma Gross Revenue Yearly')
+                 || Number(d['Proforma Gross Rent (Monthly)']||0);
+    if(pfGriMo) agg.proforma.griMonthly += pfGriMo;
+    const pfExpMo = getMo(d, 'Pro Forma Expenses Monthly', 'Pro Forma Expenses Yearly');
+    if(pfExpMo) agg.proforma.expensesMonthly += pfExpMo;
+
+    // Unit mix
+    agg.unitMix.eff      += Number(d['Units Efficiency']||0);
+    agg.unitMix.br1      += Number(d['Units 1 Bedroom']||0);
+    agg.unitMix.br2      += Number(d['Units 2 Bedroom']||0);
+    agg.unitMix.br3      += Number(d['Units 3 Bedroom']||0);
+    agg.unitMix.br4      += Number(d['Units 4 Bedroom']||0);
+    agg.unitMix.other    += Number(d['Units Other']||0);
+    agg.unitMix.effVac   += Number(d['Units Efficiency Vacant']||0);
+    agg.unitMix.br1Vac   += Number(d['Units 1 Bedroom Vacant']||0);
+    agg.unitMix.br2Vac   += Number(d['Units 2 Bedroom Vacant']||0);
+    agg.unitMix.br3Vac   += Number(d['Units 3 Bedroom Vacant']||0);
+    agg.unitMix.br4Vac   += Number(d['Units 4 Bedroom Vacant']||0);
+    agg.unitMix.otherVac += Number(d['Units Other Vacant']||0);
+  });
+
+  // Derive yearly from monthly (actual)
+  agg.actual.griYearly        = agg.actual.griMonthly * 12;
+  agg.actual.expensesYearly   = agg.actual.expensesMonthly * 12;
+  agg.actual.noiYearly        = agg.totalNOI;
+  agg.actual.cashFlowYearly   = agg.totalNOI - agg.actual.annualDebtService;
+  agg.proforma.griYearly      = agg.proforma.griMonthly * 12;
+  agg.proforma.expensesYearly = agg.proforma.expensesMonthly * 12;
+  agg.proforma.noiYearly      = (agg.proforma.griMonthly - agg.proforma.expensesMonthly) * 12;
+
+  // Cap rates — sum-based and package-based (if package set)
+  if(agg.totalAsking > 0 && agg.totalNOI > 0){
+    agg.actual.capRateSum = (agg.totalNOI / agg.totalAsking) * 100;
+  }
+  if(agg.packagePrice && agg.packagePrice > 0 && agg.totalNOI > 0){
+    agg.actual.capRatePackage = (agg.totalNOI / agg.packagePrice) * 100;
+  }
+  if(agg.totalAsking > 0 && agg.proforma.noiYearly > 0){
+    agg.proforma.capRateSum = (agg.proforma.noiYearly / agg.totalAsking) * 100;
+  }
+  if(agg.packagePrice && agg.packagePrice > 0 && agg.proforma.noiYearly > 0){
+    agg.proforma.capRatePackage = (agg.proforma.noiYearly / agg.packagePrice) * 100;
+  }
+
+  // DSCR = NOI / Debt Service
+  if(agg.actual.annualDebtService > 0 && agg.totalNOI > 0){
+    agg.actual.dscr = agg.totalNOI / agg.actual.annualDebtService;
+  }
+
+  // GRM — total asking / effective gross revenue (annual)
+  if(agg.actual.griYearly > 0 && agg.totalAsking > 0){
+    agg.actual.grm = agg.totalAsking / agg.actual.griYearly;
+  }
+
+  // Break-even occupancy — (OpEx + Debt) / GRI
+  if(agg.actual.griYearly > 0){
+    agg.actual.breakEvenPct = ((agg.actual.expensesYearly + agg.actual.annualDebtService) / agg.actual.griYearly) * 100;
+  }
+
+  // Price per SF / per unit — use package price if set, else total asking
+  const priceBase = agg.packagePrice || agg.totalAsking;
+  if(priceBase > 0 && agg.totalSF > 0)    agg.pricePerSF   = priceBase / agg.totalSF;
+  if(priceBase > 0 && agg.totalUnits > 0) agg.pricePerUnit = priceBase / agg.totalUnits;
+
+  return agg;
+}
+
+function _emptyFinSide(){
+  return {
+    griMonthly:0, griYearly:0,
+    expensesMonthly:0, expensesYearly:0,
+    noiYearly:0, annualDebtService:0, cashFlowYearly:0,
+    capRateSum:null, capRatePackage:null, dscr:null, grm:null, breakEvenPct:null,
+    exp_electric:0, exp_gas:0, exp_water:0, exp_trash:0,
+    exp_propertyTax:0, exp_insurance:0, exp_mgmtFee:0,
+    exp_maintenance:0, exp_landscaping:0, exp_janitorial:0,
+    exp_supplies:0, exp_capitalReserve:0, exp_admin:0, exp_misc:0
+  };
+}
+
+// Tab state — which tab of the portfolio detail view is showing.
+let _currentPortfolioTab = 'summary';
+
 // ── MODAL HANDLERS ─────────────────────────────────────────────────────
 function openCreatePortfolioModal(){
   const modal = document.getElementById('createPortfolioModal');
@@ -11444,6 +11605,10 @@ function openPortfolioDetail(portfolioId){
     } catch(e){}
   }
   _currentPortfolioId = portfolioId;
+  // Always land on Summary tab when opening a portfolio for the first time.
+  // Turn D: tab state persists across re-renders within the same portfolio
+  // (for example after Edit or Add Deals) but resets on navigation.
+  _currentPortfolioTab = 'summary';
   _renderPortfolioDetail(p);
 }
 
@@ -11466,46 +11631,26 @@ function _renderPortfolioDetail(p){
   };
   const fmtPct = n => (n != null && !isNaN(n)) ? n.toFixed(2) + '%' : '—';
 
-  // Child rows — click opens the normal deal view
-  const childRowsHtml = children.length === 0 ? `
-    <div style="background:#fff;border:1px dashed #cbd5e1;border-radius:10px;padding:40px 20px;text-align:center;">
-      <div style="font-size:36px;opacity:0.4;margin-bottom:8px;">🏠</div>
-      <div style="font-size:13px;font-weight:600;color:#475569;margin-bottom:4px;">No properties in this portfolio yet</div>
-      <div style="font-size:11px;color:#94a3b8;">Grouping existing deals into portfolios arrives in the next update.</div>
-    </div>
-  ` : children.map((d, i) => {
-    const ask = d['Asking Price'] ? fmt$(d['Asking Price']) : '—';
-    const cap = d['Cap Rate (CRM)'];
-    let capStr = '—';
-    if(cap != null && cap !== ''){
-      const v = Number(cap);
-      if(!isNaN(v) && v > 0) capStr = ((v < 1 ? v*100 : v)).toFixed(2) + '%';
-    }
-    const units = d['No. of Units'] || d['Number of Units'] || '';
-    const sf = d['Total Building SF'] || d['Square Footage'] || '';
-    const type = d['CRM Asset Classification'] || d['Simple Text Property Type'] || '—';
-    return `
-      <div style="display:grid;grid-template-columns:28px minmax(0,1fr) 90px 80px 90px 90px;gap:12px;align-items:center;padding:12px 16px;background:#fff;border:1px solid #e2e8f0;border-radius:10px;margin-bottom:8px;transition:all 0.15s;"
-        onmouseover="this.style.borderColor='#b45309';"
-        onmouseout="this.style.borderColor='#e2e8f0';">
-        <div style="width:24px;height:24px;border-radius:50%;background:#fef3c7;color:#92400e;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;">${i+1}</div>
-        <div style="min-width:0;cursor:pointer;" onclick="_pfOpenChildDeal('${d.id}')">
-          <div style="font-size:13px;font-weight:700;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${(d['Address']||'Unnamed').replace(/</g,'&lt;')}</div>
-          <div style="font-size:11px;color:#64748b;margin-top:2px;">${type}${units?' · '+units+' units':''}${sf?' · '+Number(sf).toLocaleString()+' SF':''}</div>
-        </div>
-        <div style="font-size:12px;font-weight:700;color:#0f172a;text-align:right;cursor:pointer;" onclick="_pfOpenChildDeal('${d.id}')">${ask}</div>
-        <div style="font-size:11px;color:#64748b;text-align:right;cursor:pointer;" onclick="_pfOpenChildDeal('${d.id}')">${capStr}</div>
-        <div style="font-size:11px;color:#64748b;text-align:right;cursor:pointer;" onclick="_pfOpenChildDeal('${d.id}')">${d['Pipeline Stage']||'—'}</div>
-        <div style="display:flex;gap:4px;justify-content:flex-end;align-items:center;">
-          <button onclick="event.stopPropagation(); _pfOpenChildDeal('${d.id}')"
-            title="Open this deal"
-            style="background:none;border:none;color:#b45309;font-size:11px;font-weight:600;cursor:pointer;padding:4px 6px;">Open →</button>
-          <button onclick="event.stopPropagation(); _portfolioRemoveChild('${d.id}')"
-            title="Remove from portfolio"
-            style="background:#fef2f2;border:1px solid #fecaca;color:#dc2626;font-size:10px;font-weight:700;cursor:pointer;padding:3px 7px;border-radius:4px;">×</button>
-        </div>
-      </div>`;
-  }).join('');
+  // Tab content rendered lazily based on _currentPortfolioTab.
+  const tabContent = _currentPortfolioTab === 'financials'
+    ? _renderPortfolioFinancialsTab(p, children, fmt$, fmtPct)
+    : _renderPortfolioSummaryTab(p, children, fmt$, fmtPct);
+
+  // Tab button styling helper
+  const tabBtn = (key, label, icon) => {
+    const active = _currentPortfolioTab === key;
+    return `<button onclick="_pfSwitchTab('${key}')" style="
+      background:${active?'#fff':'transparent'};
+      color:${active?'#b45309':'#64748b'};
+      border:none;
+      border-bottom:3px solid ${active?'#b45309':'transparent'};
+      padding:10px 20px;
+      font-size:13px;
+      font-weight:${active?'700':'500'};
+      cursor:pointer;
+      transition:all 0.15s;
+    ">${icon} ${label}</button>`;
+  };
 
   main.innerHTML = `
     <div style="padding:24px 28px;max-width:1200px;margin:0 auto;font-family:Tahoma,Arial,sans-serif;">
@@ -11550,20 +11695,258 @@ function _renderPortfolioDetail(p){
             <div style="font-size:10px;color:#94a3b8;margin-top:2px;">${agg.totalSF ? agg.totalSF.toLocaleString() + ' SF total' : '—'}</div>
           </div>
         </div>
+      </div>
 
-        <div style="margin-top:18px;padding:10px 14px;background:#f8fafc;border-radius:8px;font-size:11px;color:#64748b;line-height:1.5;">
-          <strong style="color:#475569;">Level 1/2 aggregates shown.</strong> Combined Financial Analysis (NOI breakdown, cash flow, DSCR), combined Tenant/Unit Mix, and portfolio-level offers arrive in Turns D–F.
+      <!-- TAB BAR -->
+      <div style="background:#f1f5f9;border-radius:10px 10px 0 0;border:1px solid #e2e8f0;border-bottom:none;display:flex;gap:2px;padding:4px 4px 0;">
+        ${tabBtn('summary',    'Summary',             '🏠')}
+        ${tabBtn('financials', 'Financial Analysis',  '📊')}
+      </div>
+      <div id="pfTabContent" style="background:#fff;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 10px 10px;padding:20px 22px;">
+        ${tabContent}
+      </div>
+    </div>`;
+}
+
+// Tab switcher — re-renders only the tab content area, not the whole detail page.
+function _pfSwitchTab(tabKey){
+  _currentPortfolioTab = tabKey;
+  if(!_currentPortfolioId) return;
+  const p = (allPortfolios || []).find(x => x.id === _currentPortfolioId);
+  if(p) _renderPortfolioDetail(p);
+}
+
+// ── SUMMARY TAB CONTENT ────────────────────────────────────────────
+// The Summary tab contains the child properties list. Matches the
+// layout of the pre-tab-refactor detail page.
+function _renderPortfolioSummaryTab(p, children, fmt$, fmtPct){
+  const childRowsHtml = children.length === 0 ? `
+    <div style="background:#fff;border:1px dashed #cbd5e1;border-radius:10px;padding:40px 20px;text-align:center;">
+      <div style="font-size:36px;opacity:0.4;margin-bottom:8px;">🏠</div>
+      <div style="font-size:13px;font-weight:600;color:#475569;margin-bottom:4px;">No properties in this portfolio yet</div>
+      <div style="font-size:11px;color:#94a3b8;">Click "+ Add property" above to add existing deals.</div>
+    </div>
+  ` : children.map((d, i) => {
+    const ask = d['Asking Price'] ? fmt$(d['Asking Price']) : '—';
+    const cap = d['Cap Rate (CRM)'];
+    let capStr = '—';
+    if(cap != null && cap !== ''){
+      const v = Number(cap);
+      if(!isNaN(v) && v > 0) capStr = ((v < 1 ? v*100 : v)).toFixed(2) + '%';
+    }
+    const units = d['No. of Units'] || d['Number of Units'] || '';
+    const sf = d['Total Building SF'] || d['Square Footage'] || '';
+    const type = d['CRM Asset Classification'] || d['Simple Text Property Type'] || '—';
+    return `
+      <div style="display:grid;grid-template-columns:28px minmax(0,1fr) 90px 80px 90px 90px;gap:12px;align-items:center;padding:12px 16px;background:#fff;border:1px solid #e2e8f0;border-radius:10px;margin-bottom:8px;transition:all 0.15s;"
+        onmouseover="this.style.borderColor='#b45309';"
+        onmouseout="this.style.borderColor='#e2e8f0';">
+        <div style="width:24px;height:24px;border-radius:50%;background:#fef3c7;color:#92400e;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;">${i+1}</div>
+        <div style="min-width:0;cursor:pointer;" onclick="_pfOpenChildDeal('${d.id}')">
+          <div style="font-size:13px;font-weight:700;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${(d['Address']||'Unnamed').replace(/</g,'&lt;')}</div>
+          <div style="font-size:11px;color:#64748b;margin-top:2px;">${type}${units?' · '+units+' units':''}${sf?' · '+Number(sf).toLocaleString()+' SF':''}</div>
         </div>
-      </div>
+        <div style="font-size:12px;font-weight:700;color:#0f172a;text-align:right;cursor:pointer;" onclick="_pfOpenChildDeal('${d.id}')">${ask}</div>
+        <div style="font-size:11px;color:#64748b;text-align:right;cursor:pointer;" onclick="_pfOpenChildDeal('${d.id}')">${capStr}</div>
+        <div style="font-size:11px;color:#64748b;text-align:right;cursor:pointer;" onclick="_pfOpenChildDeal('${d.id}')">${d['Pipeline Stage']||'—'}</div>
+        <div style="display:flex;gap:4px;justify-content:flex-end;align-items:center;">
+          <button onclick="event.stopPropagation(); _pfOpenChildDeal('${d.id}')"
+            title="Open this deal"
+            style="background:none;border:none;color:#b45309;font-size:11px;font-weight:600;cursor:pointer;padding:4px 6px;">Open →</button>
+          <button onclick="event.stopPropagation(); _portfolioRemoveChild('${d.id}')"
+            title="Remove from portfolio"
+            style="background:#fef2f2;border:1px solid #fecaca;color:#dc2626;font-size:10px;font-weight:700;cursor:pointer;padding:3px 7px;border-radius:4px;">×</button>
+        </div>
+      </div>`;
+  }).join('');
 
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
-        <div style="font-size:14px;font-weight:700;color:#0f172a;">Properties in this portfolio</div>
-        <button onclick="openAddDealsModal('${p.id}')"
-          style="background:#b45309;color:#fff;border:none;padding:6px 14px;font-size:11px;font-weight:700;border-radius:6px;cursor:pointer;">
-          + Add property
-        </button>
+  return `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+      <div style="font-size:14px;font-weight:700;color:#0f172a;">Properties in this portfolio</div>
+      <button onclick="openAddDealsModal('${p.id}')"
+        style="background:#b45309;color:#fff;border:none;padding:6px 14px;font-size:11px;font-weight:700;border-radius:6px;cursor:pointer;">
+        + Add property
+      </button>
+    </div>
+    ${childRowsHtml}`;
+}
+
+// ── FINANCIAL ANALYSIS TAB CONTENT ────────────────────────────────
+// Read-only aggregated financials across all children. No editing —
+// edits happen on child deals. Values are derived from _portfolioFinancials.
+function _renderPortfolioFinancialsTab(p, children, fmt$, fmtPct){
+  if(children.length === 0){
+    return `
+      <div style="background:#fff;border:1px dashed #cbd5e1;border-radius:10px;padding:40px 20px;text-align:center;">
+        <div style="font-size:36px;opacity:0.4;margin-bottom:8px;">📊</div>
+        <div style="font-size:13px;font-weight:600;color:#475569;margin-bottom:4px;">No financials to aggregate</div>
+        <div style="font-size:11px;color:#94a3b8;">Add properties to this portfolio first — their financials will roll up here automatically.</div>
+      </div>`;
+  }
+  const fin = _portfolioFinancials(children, p);
+  const dq = (n, total) => {
+    if(!total) return '';
+    const pct = (n / total) * 100;
+    const color = pct >= 80 ? '#16a34a' : (pct >= 50 ? '#d97706' : '#dc2626');
+    return `<span style="color:${color};font-weight:600;">${n}/${total}</span>`;
+  };
+  const cell = (label, value, sub, highlight) => `
+    <div style="background:${highlight?'#fffbeb':'#f8fafc'};border:1px solid ${highlight?'#fde68a':'#e2e8f0'};border-radius:8px;padding:12px 14px;">
+      <div style="font-size:10px;color:${highlight?'#92400e':'#64748b'};text-transform:uppercase;letter-spacing:0.04em;font-weight:700;">${label}</div>
+      <div style="font-size:18px;font-weight:800;color:${highlight?'#b45309':'#0f172a'};margin-top:4px;">${value}</div>
+      ${sub ? `<div style="font-size:10px;color:#94a3b8;margin-top:2px;">${sub}</div>` : ''}
+    </div>`;
+  const row = (label, actualVal, pfVal, note) => `
+    <tr>
+      <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;font-size:12px;color:#475569;">${label}${note?`<div style="font-size:9px;color:#94a3b8;">${note}</div>`:''}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;font-size:12px;color:#0f172a;text-align:right;font-weight:600;">${actualVal}</td>
+      <td style="padding:8px 12px;border-bottom:1px solid #f1f5f9;font-size:12px;color:#0f172a;text-align:right;font-weight:600;">${pfVal}</td>
+    </tr>`;
+
+  // Data quality banner
+  const anyMissing = fin.childrenWithNOI < fin.count || fin.childrenWithExpenses < fin.count || fin.childrenWithGRI < fin.count;
+  const dqBanner = anyMissing ? `
+    <div style="background:#fffbeb;border:1px solid #fde68a;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:11px;color:#92400e;line-height:1.5;">
+      <strong style="font-weight:700;">Data quality note:</strong> Not all children have complete financials filled in.
+      ${dq(fin.childrenWithAsking, fin.count)} have asking price ·
+      ${dq(fin.childrenWithGRI, fin.count)} have GRI ·
+      ${dq(fin.childrenWithExpenses, fin.count)} have expenses ·
+      ${dq(fin.childrenWithNOI, fin.count)} have NOI.
+      Missing values are treated as $0 in the sums below.
+    </div>` : `
+    <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-radius:8px;padding:10px 14px;margin-bottom:16px;font-size:11px;color:#166534;line-height:1.5;">
+      <strong style="font-weight:700;">✓ All ${fin.count} children have complete financials.</strong> Aggregates below reflect the full portfolio.
+    </div>`;
+
+  // Expense breakdown table rows
+  const expCats = [
+    ['Property Tax',      'exp_propertyTax'],
+    ['Insurance',         'exp_insurance'],
+    ['Management Fee',    'exp_mgmtFee'],
+    ['Maintenance & Repair','exp_maintenance'],
+    ['Electric',          'exp_electric'],
+    ['Gas',               'exp_gas'],
+    ['Water & Sewer',     'exp_water'],
+    ['Trash',             'exp_trash'],
+    ['Landscaping',       'exp_landscaping'],
+    ['Janitorial',        'exp_janitorial'],
+    ['Supplies',          'exp_supplies'],
+    ['Capital Reserve',   'exp_capitalReserve'],
+    ['Admin',             'exp_admin'],
+    ['Miscellaneous',     'exp_misc']
+  ];
+  const expRows = expCats
+    .filter(([, k]) => fin.actual[k] > 0)
+    .map(([label, k]) => {
+      const mo = fin.actual[k];
+      const yr = mo * 12;
+      return `
+        <tr>
+          <td style="padding:6px 12px;border-bottom:1px solid #f1f5f9;font-size:11px;color:#475569;">${label}</td>
+          <td style="padding:6px 12px;border-bottom:1px solid #f1f5f9;font-size:11px;color:#0f172a;text-align:right;">${fmt$(mo)}</td>
+          <td style="padding:6px 12px;border-bottom:1px solid #f1f5f9;font-size:11px;color:#0f172a;text-align:right;">${fmt$(yr)}</td>
+        </tr>`;
+    }).join('');
+
+  // Unit mix summary
+  const um = fin.unitMix;
+  const hasUnits = (um.eff + um.br1 + um.br2 + um.br3 + um.br4 + um.other) > 0;
+  const unitMixHtml = hasUnits ? `
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px 18px;margin-top:16px;">
+      <div style="font-size:13px;font-weight:700;color:#0f172a;margin-bottom:10px;">🏠 Portfolio Unit Mix</div>
+      <div style="display:grid;grid-template-columns:repeat(6, minmax(0,1fr));gap:8px;">
+        ${[['Efficiency',um.eff,um.effVac],['1BR',um.br1,um.br1Vac],['2BR',um.br2,um.br2Vac],['3BR',um.br3,um.br3Vac],['4BR',um.br4,um.br4Vac],['Other',um.other,um.otherVac]]
+          .filter(([,n]) => n > 0)
+          .map(([label, n, vac]) => `
+            <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:10px 12px;text-align:center;">
+              <div style="font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;">${label}</div>
+              <div style="font-size:20px;font-weight:800;color:#0f172a;margin-top:2px;">${n}</div>
+              ${vac > 0 ? `<div style="font-size:9px;color:#dc2626;">${vac} vacant</div>` : '<div style="font-size:9px;color:#16a34a;">fully leased</div>'}
+            </div>`).join('')}
       </div>
-      ${childRowsHtml}
+      <div style="font-size:11px;color:#64748b;margin-top:10px;text-align:right;">
+        <strong style="color:#0f172a;">${fin.totalUnits}</strong> total units summed across ${fin.count} ${fin.count===1?'property':'properties'}
+      </div>
+    </div>` : '';
+
+  // Package vs Sum pricing note
+  const priceBasisLabel = fin.packagePrice ? 'package price' : 'sum of individual asking';
+  const priceBasis = fin.packagePrice || fin.totalAsking;
+
+  return `
+    ${dqBanner}
+
+    <!-- KEY METRICS CARDS -->
+    <div style="display:grid;grid-template-columns:repeat(4, minmax(0,1fr));gap:10px;margin-bottom:18px;">
+      ${cell('NOI (Annual)', fmt$(fin.totalNOI), 'across all children', true)}
+      ${cell('Cash Flow (Annual)', fmt$(fin.actual.cashFlowYearly), fin.actual.annualDebtService > 0 ? 'after debt service' : 'no debt tracked')}
+      ${cell('DSCR', fin.actual.dscr != null ? fin.actual.dscr.toFixed(2) : '—', fin.actual.dscr != null ? 'debt coverage' : 'no debt tracked')}
+      ${cell('GRM', fin.actual.grm != null ? fin.actual.grm.toFixed(2) : '—', 'price ÷ gross rent')}
+    </div>
+
+    <div style="display:grid;grid-template-columns:repeat(4, minmax(0,1fr));gap:10px;margin-bottom:18px;">
+      ${cell('Cap Rate (on sum)', fmtPct(fin.actual.capRateSum), 'NOI ÷ total asking')}
+      ${cell('Cap Rate (package)', fin.actual.capRatePackage != null ? fmtPct(fin.actual.capRatePackage) : '—', fin.packagePrice ? 'NOI ÷ package price' : 'set package price to compute', fin.packagePrice != null)}
+      ${cell('Break-Even Occupancy', fin.actual.breakEvenPct != null ? fmtPct(fin.actual.breakEvenPct) : '—', '(expenses + debt) ÷ GRI')}
+      ${cell('Price / SF', fin.pricePerSF != null ? '$' + fin.pricePerSF.toFixed(2) : '—', `based on ${priceBasisLabel}`)}
+    </div>
+
+    <!-- INCOME & EXPENSE SIDE-BY-SIDE (ACTUAL vs PROFORMA) -->
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px 18px;margin-bottom:16px;">
+      <div style="font-size:13px;font-weight:700;color:#0f172a;margin-bottom:10px;">💰 Income & Expenses</div>
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr style="background:#f8fafc;">
+            <th style="padding:8px 12px;text-align:left;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;border-bottom:2px solid #e2e8f0;">Line Item</th>
+            <th style="padding:8px 12px;text-align:right;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;border-bottom:2px solid #e2e8f0;">Actual</th>
+            <th style="padding:8px 12px;text-align:right;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;border-bottom:2px solid #e2e8f0;">Proforma</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${row('Gross Rental Income (Monthly)', fmt$(fin.actual.griMonthly), fmt$(fin.proforma.griMonthly))}
+          ${row('Gross Rental Income (Yearly)',  fmt$(fin.actual.griYearly),  fmt$(fin.proforma.griYearly))}
+          ${row('Total Expenses (Monthly)',      fmt$(fin.actual.expensesMonthly), fmt$(fin.proforma.expensesMonthly))}
+          ${row('Total Expenses (Yearly)',       fmt$(fin.actual.expensesYearly),  fmt$(fin.proforma.expensesYearly))}
+          <tr style="background:#fffbeb;">
+            <td style="padding:10px 12px;font-size:12px;color:#92400e;font-weight:700;border-top:2px solid #fde68a;">Net Operating Income (NOI)</td>
+            <td style="padding:10px 12px;font-size:13px;color:#b45309;font-weight:800;text-align:right;border-top:2px solid #fde68a;">${fmt$(fin.actual.noiYearly)}</td>
+            <td style="padding:10px 12px;font-size:13px;color:#b45309;font-weight:800;text-align:right;border-top:2px solid #fde68a;">${fmt$(fin.proforma.noiYearly)}</td>
+          </tr>
+          ${fin.actual.annualDebtService > 0 ? `
+          ${row('Annual Debt Service', fmt$(fin.actual.annualDebtService), '—')}
+          <tr style="background:#f0fdf4;">
+            <td style="padding:10px 12px;font-size:12px;color:#166534;font-weight:700;">Annual Cash Flow</td>
+            <td style="padding:10px 12px;font-size:13px;color:#166534;font-weight:800;text-align:right;">${fmt$(fin.actual.cashFlowYearly)}</td>
+            <td style="padding:10px 12px;font-size:13px;color:#94a3b8;text-align:right;">—</td>
+          </tr>
+          ` : ''}
+        </tbody>
+      </table>
+    </div>
+
+    <!-- EXPENSE BREAKDOWN BY CATEGORY -->
+    ${expRows ? `
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px 18px;margin-bottom:16px;">
+      <div style="font-size:13px;font-weight:700;color:#0f172a;margin-bottom:10px;">📋 Expense Breakdown (Actual)</div>
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr style="background:#f8fafc;">
+            <th style="padding:8px 12px;text-align:left;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;border-bottom:2px solid #e2e8f0;">Category</th>
+            <th style="padding:8px 12px;text-align:right;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;border-bottom:2px solid #e2e8f0;">Monthly</th>
+            <th style="padding:8px 12px;text-align:right;font-size:10px;color:#64748b;text-transform:uppercase;font-weight:700;border-bottom:2px solid #e2e8f0;">Yearly</th>
+          </tr>
+        </thead>
+        <tbody>${expRows}</tbody>
+      </table>
+      <div style="font-size:10px;color:#94a3b8;margin-top:8px;line-height:1.5;">
+        Summed across all children that have values set. Categories with $0 total are hidden.
+      </div>
+    </div>` : ''}
+
+    ${unitMixHtml}
+
+    <div style="font-size:11px;color:#94a3b8;margin-top:16px;line-height:1.6;text-align:center;">
+      All values are read-only aggregates. To change a number, <strong style="color:#475569;">open the child deal and edit there.</strong>
     </div>`;
 }
 

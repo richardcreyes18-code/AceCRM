@@ -23437,6 +23437,9 @@ function _ddRenderMergeBody(cand, contacts, dealCounts, fields){
               ${bits.join(' · ')} · added ${c.date_added||'?'}
               ${isSurvSelected?'<span style="display:inline-block;margin-left:4px;background:#1e3a8a;color:#fff;padding:1px 6px;border-radius:8px;font-weight:600;">Surviving</span>':''}
             </div>
+            ${isSurvSelected
+              ? ''
+              : `<button onclick="event.preventDefault();event.stopPropagation();_ddPickSurvivor('${c.id}')" style="margin-top:8px;background:#fff;color:#1e3a8a;border:1px solid #1e3a8a;padding:5px 10px;font-size:11px;font-weight:600;border-radius:5px;cursor:pointer;white-space:nowrap;" title="Make this contact the survivor">↔ Make survivor</button>`}
           </div>
         </label>
       </div>`;
@@ -23541,7 +23544,14 @@ function _ddRenderInspectionRows(contacts){
         const range = (minP || maxP) ? `${minP||'?'} – ${maxP||'?'}` : null;
         const counties = bc.preferred_counties || bc.simple_area_preference || '';
         const lines = [];
-        if(types)    lines.push('<strong>Types:</strong> ' + String(types).replace(/&/g,'&amp;').replace(/</g,'&lt;'));
+        if(types) {
+          // v102.42.4: strip stale legacy emoji decorations from
+          // ace_buyer_criteria.desired_property_types (the v102.36
+          // normalization didn't touch this column — separate migration
+          // needed). Display-only fix; data stays as-is until then.
+          const cleanTypes = String(types).replace(/[🔴🟠🟡🟢🔵🟣⚪⚫]/g, '').replace(/\s+/g, ' ').trim();
+          lines.push('<strong>Types:</strong> ' + cleanTypes.replace(/&/g,'&amp;').replace(/</g,'&lt;'));
+        }
         if(range)    lines.push('<strong>Range:</strong> ' + range);
         if(counties) lines.push('<strong>Areas:</strong> ' + String(counties).replace(/&/g,'&amp;').replace(/</g,'&lt;'));
         if(bc.financing_type) lines.push('<strong>Financing:</strong> ' + bc.financing_type);

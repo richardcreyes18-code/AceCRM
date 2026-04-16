@@ -23374,14 +23374,25 @@ function _ddRenderMergeDialog(cand, contacts, dealCounts){
     { key: 'contact_notes',   label: 'Notes'           }
   ];
   fields.forEach(f => {
+    // v102.42.8: CRITICAL — only set a default if the user hasn't picked
+    // anything for this field yet. Previously this loop ran on every
+    // re-render and unconditionally reset _ddMergePicks[f.key] to the
+    // survivor's id, which silently undid every click on a non-survivor
+    // column. That's why right-column radios appeared unclickable.
+    if(_ddMergePicks[f.key] !== undefined) return;
     const survVal = (contacts.find(c => c.id === defaultSurvivor) || {})[f.key] || '';
     if(survVal){ _ddMergePicks[f.key] = defaultSurvivor; return; }
     const fallback = contacts.find(c => c[f.key]);
     _ddMergePicks[f.key] = fallback ? fallback.id : defaultSurvivor;
   });
-  // Notes default to "combine all" if 2+ contacts have notes
+  // Notes default to "combine all" if 2+ contacts have notes — but only
+  // on first render, same reason as above.
   const notesCount = contacts.filter(c => (c.contact_notes||'').trim()).length;
-  if(notesCount >= 2) _ddMergePicks.contact_notes = '__combine__';
+  if(notesCount >= 2 && _ddMergePicks.contact_notes === defaultSurvivor){
+    // Only override the "default" pick to combine if the default-picker
+    // landed on the survivor (i.e. nothing else was explicitly chosen yet).
+    _ddMergePicks.contact_notes = '__combine__';
+  }
 
   overlay.innerHTML = `
     <div style="position:fixed;inset:0;background:rgba(15,23,42,0.45);z-index:9000;display:flex;align-items:flex-start;justify-content:center;padding:30px 20px;overflow-y:auto;">

@@ -4094,13 +4094,17 @@ const _recentStore = {
 };
 
 // ── Google Maps opener ───────────────────────────────────────────
-// v109.2: reuse a single named tab ('aceMapsTab') so repeated clicks
-// navigate the existing tab instead of spawning new ones. Browser will
-// also bring that tab to focus automatically.
+// v110.1: open Google Maps in a named popup WINDOW instead of a tab.
+// Passing window features (width/height) forces Chrome to create a popup
+// instead of a tab, and the named target ('aceMapsPopup') means repeated
+// clicks reuse the same popup window — it just navigates to the new
+// address and comes to the foreground. If the user closed the popup,
+// a fresh one opens automatically on the next click.
 function openGoogleMaps(addr){
   if(!addr){ alert('No address available.'); return; }
   const url = 'https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(addr);
-  const w = window.open(url, 'aceMapsTab');
+  const features = 'width=1280,height=900,menubar=no,toolbar=no,location=no,status=no';
+  const w = window.open(url, 'aceMapsPopup', features);
   if(w && w.focus) w.focus();
 }
 

@@ -16227,7 +16227,7 @@ async function showContactsPage(){
             <button id="cscope_all"  data-base-style="${scopeBtnAllBase}"  style="${scopeBtnAllBase}${_contactScope==='all'?activeStyle:idleStyle}"  onclick="setContactScope('all')"  title="Show every contact in the system">All Contacts</button>
             <button id="cscope_mine" data-base-style="${scopeBtnMineBase}" style="${scopeBtnMineBase}${_contactScope==='mine'?activeStyle:idleStyle}" onclick="setContactScope('mine')" title="Your personal relationships + contacts tied to your deals">★ My Contacts</button>
           </div>
-          <input id="contactSearch" class="form-input" placeholder="Search name, phone, company..." style="width:220px;" oninput="filterContacts()"/>
+          <input id="contactSearch" class="form-input" placeholder="Search name, phone, company..." style="width:220px;" oninput="_filterContactsDebounced()"/>
           <select id="contactTypeFilter" class="form-select" style="width:120px;" onchange="filterContacts()">
             <option value="">All Types</option>
             <option value="Seller">Sellers</option>
@@ -16536,6 +16536,33 @@ function _populateBcSourceFilter(){
   wrap.innerHTML = _msBtn('bcs', 'All Sources', sources, () => renderBuyerCriteriaTable(allBuyerCriteria));
 }
 
+// v102.44: contacts search — debounce + result cap + spinner. Previously
+// every keystroke immediately re-rendered the entire filtered table
+// (often 3000+ rows + per-row deal lookup), which caused 200-500ms hangs
+// and the "doesn't show until I delete characters" symptom — when a
+// short query matched too many rows, the renderer was still working
+// when you typed the next character, and the result of the prior render
+// got dropped on the floor. Two fixes:
+//   1. Debounce the input handler — wait 150ms after last keystroke
+//   2. Cap rendered rows at 200 with a footer hint
+//   3. Cache the deal/contact-to-deal maps so they're not rebuilt per render
+let _contactsFilterTimer = null;
+let _contactsFilterPending = false;
+function _filterContactsDebounced(){
+  if(_contactsFilterTimer) clearTimeout(_contactsFilterTimer);
+  _contactsFilterPending = true;
+  // Show a subtle spinner so the user knows their typing is being processed
+  const wrap = document.getElementById('contactsTableWrap');
+  if(wrap && !wrap.querySelector('#contactsFilterSpinner')){
+    const existing = wrap.querySelector('div[style*="font-size:11px"][style*="margin-bottom:6px"]');
+    if(existing) existing.innerHTML = '<span id="contactsFilterSpinner" style="color:#64748b;">Searching…</span>';
+  }
+  _contactsFilterTimer = setTimeout(() => {
+    _contactsFilterPending = false;
+    filterContacts();
+  }, 150);
+}
+
 function filterContacts(){
   const q     = document.getElementById('contactSearch')?.value?.toLowerCase()||'';
   const type  = document.getElementById('contactTypeFilter')?.value||'';
@@ -16561,14 +16588,16 @@ const TYPE_COLORS = {
   Other:  'background:#e2e3e5;color:#383d41;border:1px solid #adb5bd;'
 };
 
-function renderContactsTable(records){
-  const wrap = document.getElementById('contactsTableWrap');
-  if(!wrap) return;
-  if(!records.length){ wrap.innerHTML='<div style="text-align:center;padding:30px;color:#888;font-size:12px;">No contacts found.</div>'; return; }
-
-  // Build a quick ID→deal map from allDeals for instant address lookup
+// v102.44: cached deal/contact-to-deal maps. Recomputing these on every
+// keystroke (over 5000 deals) was burning ~50ms per render. Cached at
+// allDeals length + version so re-renders are instant. Invalidates if
+// allDeals is mutated (length change is a cheap heuristic).
+let _contactsDealMapCache = null;
+let _contactsDealMapCacheKey = null;
+function _getContactsDealMaps(){
+  const key = (allDeals||[]).length + ':' + (typeof _contactsDataVersion !== 'undefined' ? _contactsDataVersion : 0);
+  if(_contactsDealMapCache && _contactsDealMapCacheKey === key) return _contactsDealMapCache;
   const dealMap = {};
-  // Also build a reverse map: contactId → [deals] using the Owner array (populated from owner_contact_id)
   const contactToDeals = {};
   (allDeals||[]).forEach(d=>{
     dealMap[d.id]=d;
@@ -16580,9 +16609,29 @@ function renderContactsTable(records){
       });
     }
   });
+  _contactsDealMapCache = { dealMap, contactToDeals };
+  _contactsDealMapCacheKey = key;
+  return _contactsDealMapCache;
+}
+
+function renderContactsTable(records){
+  const wrap = document.getElementById('contactsTableWrap');
+  if(!wrap) return;
+  if(!records.length){ wrap.innerHTML='<div style="text-align:center;padding:30px;color:#888;font-size:12px;">No contacts found.</div>'; return; }
+
+  // v102.44: cap render at 200 rows. Searching 5000+ contacts and rendering
+  // them all per keystroke is the main cause of the search lag. People rarely
+  // scroll past the first 50; if they need more they'll keep typing to narrow.
+  const HARD_CAP = 200;
+  const totalCount = records.length;
+  const wasCapped = totalCount > HARD_CAP;
+  const renderRecords = wasCapped ? records.slice(0, HARD_CAP) : records;
+
+  // Use cached deal maps so we don't rebuild them every keystroke
+  const { dealMap, contactToDeals } = _getContactsDealMaps();
 
   wrap.innerHTML = `
-    <div style="font-size:11px;color:#666;margin-bottom:6px;">${records.length} contact${records.length!==1?'s':''}</div>
+    <div style="font-size:11px;color:#666;margin-bottom:6px;">${totalCount} contact${totalCount!==1?'s':''}${wasCapped?' <span style="color:#94a3b8;">(showing first '+HARD_CAP+' — keep typing to narrow)</span>':''}</div>
     <table style="width:100%;border-collapse:collapse;font-size:11px;">
       <thead>
         <tr style="background:linear-gradient(180deg,#1a3a6e,#0e2244);color:#fff;">
@@ -16599,7 +16648,7 @@ function renderContactsTable(records){
         </tr>
       </thead>
       <tbody>
-        ${records.map((r,i)=>{
+        ${renderRecords.map((r,i)=>{
           const f = r.fields;
           const types = (f.Type||[]).map(t=>`<span style="font-size:10px;padding:1px 6px;border-radius:3px;margin-right:3px;${TYPE_COLORS[t]||TYPE_COLORS.Other}">${t}</span>`).join('');
           const notes = (f['Contact Notes']||'').replace(/</g,'&lt;').substring(0,60)+(f['Contact Notes']?.length>60?'…':'');
@@ -20847,7 +20896,7 @@ async function showBuyerCriteriaPage(){
       <!-- HEADER BAR -->
       <div style="background:linear-gradient(180deg,#1a3a6e,#0e2244);padding:10px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         <div style="color:#fff;font-size:15px;font-weight:bold;margin-right:8px;">🎯 Buyer Criteria</div>
-        <input id="bcSearch" value="${_bcState.search.replace(/"/g,'&quot;')}" placeholder="Search name, asset type, county..." oninput="_bcSaveState();renderBuyerCriteriaTable(allBuyerCriteria)"
+        <input id="bcSearch" value="${_bcState.search.replace(/"/g,'&quot;')}" placeholder="Search buyer name, phone, asset type, county..." oninput="_bcSaveState();renderBuyerCriteriaTable(allBuyerCriteria)"
           style="width:220px;font-size:11px;border:1px solid #aaa;border-radius:2px;padding:4px 8px;background:#fff;"/>
         <select id="bcTypeFilter" onchange="_bcSaveState();_bcUpdateUnitsFilter();renderBuyerCriteriaTable(allBuyerCriteria)"
           style="font-size:11px;width:150px;border:1px solid #aaa;border-radius:2px;padding:4px 8px;">
@@ -21102,7 +21151,21 @@ function renderBuyerCriteriaTable(records){
     const areas  = (f['Simple Area Preference']||'').toLowerCase();
     const notes  = (f['Other Requirements ']||'').toLowerCase();
     const cities = (f['Preferred Cities']||'').toLowerCase();
-    const matchQ = !q || name.includes(q) || assets.includes(q) || areas.includes(q) || notes.includes(q) || cities.includes(q);
+    // v102.44: also search the LINKED CONTACT's name/phone/company. The
+    // BC's own Name field is often blank or just the asset type. Searching
+    // by buyer name (e.g. "Joseph Haim") needs to look at the contact
+    // record this BC is linked to.
+    const cid = (f['Buyer']||[])[0];
+    const linkedContact = cid ? (allBuyerContacts[cid] || {}) : {};
+    const contactName    = (linkedContact.Name           || '').toLowerCase();
+    const contactPhone   = (linkedContact['Phone Number']|| '').toLowerCase();
+    const contactCompany = (linkedContact.Company        || '').toLowerCase();
+    const contactEmail   = (linkedContact.Email          || '').toLowerCase();
+    const matchQ = !q
+      || name.includes(q) || assets.includes(q) || areas.includes(q)
+      || notes.includes(q) || cities.includes(q)
+      || contactName.includes(q) || contactPhone.includes(q)
+      || contactCompany.includes(q) || contactEmail.includes(q);
     const matchT = !type || assets.includes(type);
     const matchC = !county || areas.includes(county);
     // Units range filter: if set, buyer must have MF type AND the number falls within their min–max range

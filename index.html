@@ -34483,6 +34483,17 @@ async function _quickRefreshData(){
     // Invalidate deal map cache
     _contactsDealMapCache = null;
     buildSidebar(document.getElementById('sideSearch')?.value || '');
+
+    // v105.2: if a deal card is currently open, refresh it with the
+    // updated data so the user sees changes immediately (no manual
+    // page reload needed). Find the updated deal in allDeals and
+    // re-render the card.
+    if(currentDeal && currentDeal.id){
+      const updated = allDeals.find(d => d.id === currentDeal.id);
+      if(updated && typeof openDeal === 'function'){
+        openDeal(updated);
+      }
+    }
   }catch(e){ console.warn('quick refresh failed:', e.message); }
 }
 

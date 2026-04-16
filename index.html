@@ -8512,7 +8512,10 @@ function renderFinancialTab(d){
   const debt   = Number(d['Annual Debt Service'])||0;
 
   // Actual inputs
-  const aGrossRent   = Number(d['Gross Revenue Yearly']) || (Number(d['Gross Rental Income (Monthly)'])||0)*12 || (Number(d['Gross Revenue Monthly'])||0)*12 || 0;
+  // v107: legacy fields (gross_revenue_yearly, gross_revenue_monthly) have
+  // been migrated to gross_rental_income_monthly and nulled. Read only the
+  // canonical field now.
+  const aGrossRent   = (Number(d['Gross Rental Income (Monthly)'])||0)*12;
   const aVacancy     = (d['Vacancy Rate (%)'] !== null && d['Vacancy Rate (%)'] !== undefined && d['Vacancy Rate (%)'] !== '') ? Number(d['Vacancy Rate (%)']) : '';
   const aOtherInc    = (Number(d['Other Income (Monthly)'])||0)*12;
   const aExpenses    = Number(d['Expenses Yearly']) || (Number(d['Expenses Monthly'])||0)*12 || 0;
@@ -10548,10 +10551,10 @@ function _tmmBuildText(d, opt){
   // ── FINANCIALS ─────────────────────────────────────────────────
   if(opt.financials){
     const fin = [];
-    const griMo = Number(d['Gross Revenue Monthly'] || 0);
-    const griYr = Number(d['Gross Revenue Yearly']  || 0);
+    const griMo = Number(d['Gross Rental Income (Monthly)'] || 0);
+    const griYr = griMo * 12;
     const expMo = Number(d['Expenses Monthly']      || 0);
-    const expYr = Number(d['Expenses Yearly']       || 0);
+    const expYr = expMo * 12;
     const noi   = Number(d['NOI'] || 0);
     const cap   = Number(d['Cap Rate (CRM)'] || 0);
     if(griMo) fin.push('Gross Monthly Revenue: ' + _tmmMoney(griMo));
@@ -19823,7 +19826,7 @@ function createBrochure(){
 
   // Financial — v102.6: read directly from Supabase deal fields. No more localStorage.
   let fi = {};
-  const gri_mo   = d['Gross Rental Income (Monthly)']||d['Gross Revenue Monthly']||0;
+  const gri_mo   = d['Gross Rental Income (Monthly)']||0;
   const gri_yr   = gri_mo*12;
   const vac_pct  = (d['Vacancy Rate (%)']||0);
   const vac_yr   = gri_yr*(vac_pct/100);
@@ -25849,12 +25852,11 @@ async function _liSubmitSeller(){
       dealFields['Total Building SF'] = sf;
     }
     // Financial fields: correctly map monthly/yearly to their respective fields
-    if(griMo) dealFields['Gross Revenue Monthly'] = griMo;
-    if(griYr) dealFields['Gross Revenue Yearly']  = griYr;
-    else if(griMo) dealFields['Gross Revenue Yearly'] = griMo*12;
+    // v107: write to canonical monthly fields only (legacy fields migrated + nulled)
+    if(griMo) dealFields['Gross Rental Income (Monthly)'] = griMo;
+    else if(griYr) dealFields['Gross Rental Income (Monthly)'] = Math.round(griYr/12);
     if(expMo) dealFields['Expenses Monthly'] = expMo;
-    if(expYr) dealFields['Expenses Yearly']  = expYr;
-    else if(expMo) dealFields['Expenses Yearly'] = expMo*12;
+    else if(expYr) dealFields['Expenses Monthly'] = Math.round(expYr/12);
     // Per Ricky: the intake expense should land in Maintenance & Repair Costs on the
     // Financial Analysis tab. That field stores monthly dollars.
     if(expMo)      dealFields['Maintenance & Repair Costs (Monthly)'] = expMo;

@@ -22257,6 +22257,20 @@ async function bcOpenExpanded(recordId){
 
               <!-- COUNTIES — searchable pill input -->
               <div class="bc-label" style="margin-bottom:6px;">Counties <span style="color:#888;font-weight:400;">(click ✕ to remove)</span></div>
+
+              <!-- v110.3: NJ Region quick-add chips. Clicking a region adds all
+                   counties in that region to the pill list. Ocean (South+Central)
+                   and Hunterdon (North+Central) are handled by _countyRegions. -->
+              <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;align-items:center;">
+                <span style="font-size:10px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-right:4px;">Quick add:</span>
+                <button type="button" onclick="_bcAddRegionCounties('All NJ')" style="background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;padding:3px 10px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;">🗽 All NJ</button>
+                <button type="button" onclick="_bcAddRegionCounties('North NJ')" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;padding:3px 10px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;">⬆ North NJ</button>
+                <button type="button" onclick="_bcAddRegionCounties('Central NJ')" style="background:#ecfccb;color:#3f6212;border:1px solid #d9f99d;padding:3px 10px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;">▬ Central NJ</button>
+                <button type="button" onclick="_bcAddRegionCounties('South NJ')" style="background:#fce7f3;color:#9d174d;border:1px solid #fbcfe8;padding:3px 10px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;">⬇ South NJ</button>
+                <button type="button" onclick="_bcAddRegionCounties('Tri-State')" style="background:#e0e7ff;color:#3730a3;border:1px solid #c7d2fe;padding:3px 10px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;" title="Adds all NJ counties + enables NY/PA states">🗺 Tri-State</button>
+                <button type="button" onclick="_bcClearCounties()" style="background:#fef2f2;color:#991b1b;border:1px solid #fecaca;padding:3px 10px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;margin-left:4px;">✕ Clear all</button>
+              </div>
+
               <div id="bcf_county_pills" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px;min-height:28px;padding:4px;background:#f8faff;border:1px solid #c0d0e8;border-radius:5px;">
                 ${(() => {
                   // v102.15: Read both the legacy Simple Area Preference field
@@ -22508,6 +22522,74 @@ function _bcGetPillTexts(containerId){
 function _bcSyncAssets(){ document.getElementById('bcf_assets_hidden').value = _bcGetPillTexts('bcf_asset_pills').join(', '); }
 function _bcSyncCounties(){ document.getElementById('bcf_counties_hidden').value = _bcGetPillTexts('bcf_county_pills').join(', '); }
 function _bcSyncCities(){ document.getElementById('bcf_cities_hidden').value = _bcGetPillTexts('bcf_city_pills').join(', '); }
+
+// v110.3: NJ Region quick-add for buyer criteria counties. Adds every
+// county in the named region as a pill. Dedupes against existing pills.
+// For 'Tri-State', also adds NY/PA to the states field.
+function _bcAddRegionCounties(regionName){
+  // Look up counties for this region. Maps region → array of county NAMES
+  // (without "County" suffix) derived from the constants declared earlier:
+  //   NJ_NORTH_COUNTIES, NJ_CENTRAL_COUNTIES, NJ_SOUTH_COUNTIES
+  let counties = [];
+  if(regionName === 'All NJ'){
+    counties = [...new Set([...NJ_NORTH_COUNTIES, ...NJ_CENTRAL_COUNTIES, ...NJ_SOUTH_COUNTIES])];
+  } else if(regionName === 'North NJ'){
+    counties = [...NJ_NORTH_COUNTIES];
+  } else if(regionName === 'Central NJ'){
+    // Central intentionally includes Ocean (per Ricky's rule in _countyRegions)
+    counties = [...NJ_CENTRAL_COUNTIES];
+  } else if(regionName === 'South NJ'){
+    counties = [...NJ_SOUTH_COUNTIES];
+    // Ocean is nominally Central, but per Ricky's rule it also belongs to South
+    if(!counties.includes('Ocean')) counties.push('Ocean');
+  } else if(regionName === 'Tri-State'){
+    // All NJ counties PLUS auto-add NY and PA to the states pills
+    counties = [...new Set([...NJ_NORTH_COUNTIES, ...NJ_CENTRAL_COUNTIES, ...NJ_SOUTH_COUNTIES])];
+    // Also add NY, PA to the states section if not already there.
+    // Uses _bcAddState to get the proper "NY — New York" pill format.
+    const stateNames = { 'NY': 'New York', 'PA': 'Pennsylvania' };
+    Object.entries(stateNames).forEach(([code, name]) => {
+      const existingStates = _bcGetPillTexts('bcf_state_pills');
+      const already = existingStates.some(s => s.startsWith(code + ' '));
+      if(!already && typeof _bcAddState === 'function'){
+        _bcAddState(code, name);
+      }
+    });
+  }
+
+  if(!counties.length){
+    console.warn('_bcAddRegionCounties: unknown region', regionName);
+    return;
+  }
+
+  // Add each county as a pill if not already present
+  let added = 0;
+  counties.forEach(bare => {
+    // Existing pills may include the full "X County" form or just "X"; be tolerant
+    const existing = _bcGetPillTexts('bcf_county_pills').map(s => s.replace(/\s+County$/i,'').trim().toLowerCase());
+    if(existing.includes(bare.toLowerCase())) return;
+    // Use bare form (e.g. "Bergen") to match existing county-search results pattern
+    _bcAddPill('bcf_county_pills', bare, '#0ea5e9', _bcSyncCounties);
+    added++;
+  });
+
+  // Sync + trigger autosave so the change persists
+  _bcSyncCounties();
+  if(typeof _bcAutoSave === 'function') _bcAutoSave();
+}
+
+// v110.3: Clear all county pills at once. Useful when switching regions
+// (e.g., you added North NJ, then realized you meant South NJ).
+function _bcClearCounties(){
+  const container = document.getElementById('bcf_county_pills');
+  if(!container) return;
+  const pillCount = container.querySelectorAll('span').length;
+  if(pillCount === 0) return;
+  if(pillCount > 3 && !confirm('Clear all ' + pillCount + ' counties from this buyer\'s preferences?')) return;
+  container.innerHTML = '';
+  _bcSyncCounties();
+  if(typeof _bcAutoSave === 'function') _bcAutoSave();
+}
 
 function _bcAddPill(containerId, text, color, syncFn){
   text = text.trim().replace(/,$/,'').trim();

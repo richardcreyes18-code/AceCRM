@@ -20755,7 +20755,7 @@ async function showCompanyPage(){
     <div style="padding:0;font-family:'Inter',system-ui,sans-serif;">
       <div style="background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 100%);color:#fff;padding:18px 24px;">
         <div style="font-size:22px;font-weight:700;letter-spacing:0.5px;">🏢 Company</div>
-        <div style="font-size:12px;color:#93c5fd;margin-top:4px;">Directory · Schedule · Documents · Training · SOPs</div>
+        <div style="font-size:12px;color:#93c5fd;margin-top:4px;">Directory · Schedule · Documents · Training · SOPs · System Help</div>
       </div>
       <div style="display:flex;background:#f8fafc;border-bottom:1px solid #e2e8f0;padding:0 20px;gap:2px;">
         ${[
@@ -20763,7 +20763,8 @@ async function showCompanyPage(){
           ['schedule','📅 Schedule'],
           ['documents','📄 Documents'],
           ['training','🎥 Training'],
-          ['sops','📋 SOPs']
+          ['sops','📋 SOPs'],
+          ['help','❓ System Help']
         ].map(([k,label])=>`
           <button onclick="_companySetSubTab('${k}')" style="${k===sub
             ?'background:#fff;border:1px solid #e2e8f0;border-bottom:2px solid #2563eb;color:#1a3a6e;font-weight:700;'
@@ -20775,12 +20776,153 @@ async function showCompanyPage(){
 
   if(sub==='directory')    await _companyRenderDirectory();
   else if(sub==='schedule') _companyRenderSchedule();
+  else if(sub==='help')    _companyRenderSystemHelp();
   else                     _companyRenderPlaceholder(sub);
 }
 
 function _companySetSubTab(tab){
   _companySubTab = tab;
   showCompanyPage();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// v106: SYSTEM HELP — living documentation of CRM features + AI assistant
+// ═══════════════════════════════════════════════════════════════════════
+// This page stays up-to-date as new features ship. Each section is a
+// collapsible card. The AI Assistant section is first and most detailed
+// since it's the newest and least discoverable feature.
+
+function _companyRenderSystemHelp(){
+  const body = document.getElementById('companyBody');
+  if(!body) return;
+
+  const section = (title, icon, content, open) => `
+    <details ${open?'open ':''} style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;margin-bottom:14px;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+      <summary style="padding:16px 20px;font-size:15px;font-weight:700;color:#0f172a;cursor:pointer;display:flex;align-items:center;gap:10px;user-select:none;list-style:none;">
+        <span style="font-size:20px;">${icon}</span> ${title}
+      </summary>
+      <div style="padding:0 20px 20px;font-size:13px;color:#334155;line-height:1.7;">
+        ${content}
+      </div>
+    </details>`;
+
+  const cmdRow = (cmd, desc) =>
+    `<div style="display:flex;gap:12px;padding:8px 0;border-bottom:1px solid #f1f5f9;">
+      <code style="flex-shrink:0;background:#eef2fb;color:#1e3a8a;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:600;white-space:nowrap;">${cmd}</code>
+      <div style="flex:1;min-width:0;color:#475569;font-size:12px;">${desc}</div>
+    </div>`;
+
+  const aiCost = (() => {
+    try {
+      const s = JSON.parse(localStorage.getItem('ai_cost_tracker') || '{}');
+      const cost = ((s.total_input||0) * 0.25 + (s.total_output||0) * 1.25) / 1e6;
+      return `<div style="margin-top:12px;padding:10px 14px;background:#f0fdf4;border:1px solid #a7f3d0;border-radius:8px;font-size:12px;color:#04342c;">
+        <strong>Your AI usage so far:</strong> ${(s.call_count||0)} calls · ${(s.total_input||0).toLocaleString()} input tokens · ${(s.total_output||0).toLocaleString()} output tokens · <strong>$${cost.toFixed(4)}</strong> total cost
+      </div>`;
+    } catch(e) { return ''; }
+  })();
+
+  body.innerHTML = `
+    <div style="max-width:900px;margin:0 auto;">
+      <div style="margin-bottom:20px;">
+        <div style="font-size:22px;font-weight:700;color:#0f172a;">System Help</div>
+        <div style="font-size:13px;color:#64748b;margin-top:4px;">How to use the Ace Acquisitions CRM. This page is always kept up-to-date with the latest features.</div>
+      </div>
+
+      ${section('AI Assistant (✦ button)', '✦', `
+        <p>The purple <strong>✦</strong> button in the bottom-right corner opens the AI assistant. It understands your CRM's data model, field names, pipeline stages, asset types, and business processes. Powered by Claude Haiku — costs less than $0.001 per interaction.</p>
+
+        <div style="font-size:13px;font-weight:700;color:#0f172a;margin:16px 0 8px;">What the AI can do:</div>
+
+        <div style="font-size:13px;font-weight:600;color:#1e3a8a;margin:14px 0 6px;">📋 1. Create Seller Leads</div>
+        <p>Paste call notes, email text, or describe a seller lead in plain English. The AI extracts the contact info + property details and creates both records in the CRM.</p>
+        ${cmdRow('"Spoke with John Smith at 201-555-1234, he has a 12-unit multifamily at 45 Park Ave Bayonne asking 2.5M, NOI 150K, wants to sell because he\'s retiring"', 'Creates contact (John Smith, Seller) + property (45 Park Ave, Multifamily, 12 units, $2.5M asking, $150K NOI, stage: New Lead)')}
+        ${cmdRow('"Got a call from Sarah at 973-222-3333, owns a warehouse on Route 46 in Clifton, about 15000 SF, wants 1.8M"', 'Creates contact + property with asset type Industrial: Warehouse, 15K SF, $1.8M asking')}
+        <p style="font-size:12px;color:#64748b;">The AI checks for existing contacts by phone/email before creating — if it finds a match, it updates the existing contact instead of creating a duplicate.</p>
+
+        <div style="font-size:13px;font-weight:600;color:#1e3a8a;margin:14px 0 6px;">🎯 2. Create Buyer Criteria</div>
+        <p>Describe what a buyer is looking for. The AI creates the contact + fills out their buy box.</p>
+        ${cmdRow('"New buyer Mike Jones 973-555-9876, looking for warehouses in Bergen and Passaic counties, budget 1-5M, cash buyer, needs at least 10K SF"', 'Creates contact (Buyer) + buyer criteria with asset types, counties, price range, financing type, min SF')}
+        ${cmdRow('"Add a buyer: Lisa Chen from ABC Capital, email lisa@abccap.com, wants multifamily 20+ units in Essex or Hudson, 2-8M range, conventional financing, minimum 6% cap"', 'Creates contact + buyer criteria with all fields populated')}
+
+        <div style="font-size:13px;font-weight:600;color:#1e3a8a;margin:14px 0 6px;">📝 3. Update Existing Deals</div>
+        <p>Tell the AI to change any field on an existing deal. It finds the deal by address and applies the changes instantly — the deal card updates live without refreshing.</p>
+        ${cmdRow('"Change the asking price on 45 Park Ave to 3M"', 'Updates asking_price to $3,000,000')}
+        ${cmdRow('"Move 120 Main St to Pitch Out stage"', 'Updates pipeline_stage')}
+        ${cmdRow('"The gross rental income for 167 Main St is 180K per year"', 'Sets gross_rental_income_monthly to $15,000 (auto-converts yearly to monthly)')}
+        ${cmdRow('"Add note to Stevens Ave deal: owner called back, wants to close by June"', 'Appends to deal_notes with date prefix')}
+        ${cmdRow('"Star 78 Stevens Ave as top priority"', 'Sets top_priority = true')}
+        ${cmdRow('"Archive the MLK Drive property"', 'Sets is_archived = true')}
+
+        <div style="font-size:13px;font-weight:600;color:#1e3a8a;margin:14px 0 6px;">📊 4. Log Buyer Pitches (preview only)</div>
+        <p>Tell the AI which deals you pitched to which buyer and their response. Currently shows a preview — full commit coming soon.</p>
+        ${cmdRow('"I pitched 45 Park Ave and 120 Main St to Joseph Haim, he was interested in the first one"', 'Extracts buyer + deal addresses + responses (preview only for now)')}
+
+        <div style="font-size:13px;font-weight:600;color:#1e3a8a;margin:14px 0 6px;">💡 Tips</div>
+        <ul style="margin:6px 0;padding-left:20px;font-size:12px;color:#475569;">
+          <li>The AI <strong>always shows a preview</strong> before writing to the database — you confirm every change</li>
+          <li>If something is unclear, it asks <strong>clarifying questions</strong> instead of guessing</li>
+          <li><strong>Multi-turn</strong> conversation works — you can answer its questions and continue</li>
+          <li>If you have a deal card open and say "update the asking price", it tries the <strong>currently-viewed deal first</strong></li>
+          <li>Financial fields: say "rent is 240K per year" and the AI automatically converts to the correct monthly field ($20K/mo)</li>
+          <li>Asset types are matched to your <strong>system asset type list</strong> — "warehouse" → "Industrial: Warehouse"</li>
+          <li>Click the <strong>↻</strong> button in the chat header to clear the conversation and start fresh</li>
+        </ul>
+
+        ${aiCost}
+
+        <div style="margin-top:14px;padding:10px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;font-size:11px;color:#64748b;">
+          <strong>Model:</strong> Claude Haiku 4.5 · <strong>Cost:</strong> ~$0.001 per interaction · <strong>API key:</strong> stored server-side (Supabase Edge Function) · <strong>Last updated:</strong> v105
+        </div>
+      `, true)}
+
+      ${section('Contact Dedupe & Merge', '🧹', `
+        <p>Find and merge duplicate contacts across your 5,900+ contact database. Access via <strong>Settings → Contact Dedupe</strong>.</p>
+        <ul style="margin:6px 0;padding-left:20px;font-size:12px;color:#475569;">
+          <li><strong>Detection:</strong> Scans by phone match (high confidence), email match (high), and name match (medium). Click "Scan now" to re-run.</li>
+          <li><strong>Merge dialog:</strong> Side-by-side comparison of all contacts in a group. Pick the surviving contact, choose the winning value per field (name, phone, email, company, notes). Green "WINNER ✓" badge shows which value is selected.</li>
+          <li><strong>Tag curation:</strong> The Tags row lets you add/remove type tags (Buyer, Seller, 1031, Other) for the surviving contact. Defaults to the union of all contacts' tags.</li>
+          <li><strong>Secondary slots:</strong> Use "↓ to 2°" buttons on phone/email rows to preserve a second contact's phone or email as the secondary value.</li>
+          <li><strong>Property merge:</strong> If duplicate contacts own properties at the same address, a collapsible "🏠 Duplicate properties detected" section appears. Expand to compare and merge properties with the same per-field picker UI.</li>
+          <li><strong>BC collision blocker:</strong> If 2+ contacts have buyer criteria, merge is blocked until you consolidate them manually.</li>
+          <li><strong>Safety:</strong> All merges are reversible for 30 days (Settings → Recently merged contacts). All FK references (deals, buyer criteria, pitches, communications, tasks, workbench, offers) re-point atomically.</li>
+        </ul>
+      `, false)}
+
+      ${section('Workbench', '🔧', `
+        <p>Your personal triage queue — a per-agent prioritized list of deals and buyers you're actively working. Access via the <strong>Workbench</strong> tab in the top nav.</p>
+        <ul style="margin:6px 0;padding-left:20px;font-size:12px;color:#475569;">
+          <li><strong>Properties tab:</strong> Drag-and-drop to reorder. Click a row to jump to the deal card. "Mark complete" removes without affecting the deal itself.</li>
+          <li><strong>Buyers tab:</strong> Same pattern for buyer contacts. Add from any contact card via "+ Add to Workbench".</li>
+          <li><strong>Per-agent:</strong> Each user sees only their own workbench items. Positions persist across sessions.</li>
+        </ul>
+      `, false)}
+
+      ${section('Search Tips', '🔍', `
+        <div style="font-size:13px;font-weight:600;color:#1e3a8a;margin:8px 0 6px;">Left Sidebar Search</div>
+        <p>Searches by address, property owner name, and deal ID. Strips type prefixes ("MF 4U -") and agent initials ("- DK") for better matching.</p>
+
+        <div style="font-size:13px;font-weight:600;color:#1e3a8a;margin:14px 0 6px;">Contacts Page Search</div>
+        <p>Searches by name, phone, email, company, and contact notes. Debounced (150ms) with a 200-row render cap for speed. Click column headers to sort.</p>
+
+        <div style="font-size:13px;font-weight:600;color:#1e3a8a;margin:14px 0 6px;">Buyer Criteria Page Search</div>
+        <p>Searches by buyer's contact name, phone, email, company, asset types, counties, areas, cities, and notes. Linked contact data is searched even if the BC's own name field is blank.</p>
+      `, false)}
+
+      ${section('Resizable Columns', '↔', `
+        <p>All major tables (Contacts, Buyer Criteria, Deal Board, Pipeline Table View) support column resizing. Hover the right edge of any column header — a blue handle appears. Drag to resize. Widths persist across reloads via localStorage.</p>
+      `, false)}
+
+      ${section('Keyboard Shortcuts', '⌨', `
+        <p>Currently supported in the AI assistant chat and merge dialogs:</p>
+        <ul style="margin:6px 0;padding-left:20px;font-size:12px;color:#475569;">
+          <li><strong>Enter</strong> — send message (AI chat) or confirm (merge dialog)</li>
+          <li><strong>Shift+Enter</strong> — new line in AI chat input</li>
+          <li><strong>Escape</strong> — close merge dialog or confirmation modal</li>
+        </ul>
+      `, false)}
+    </div>
+  `;
 }
 
 async function _companyRenderDirectory(){
@@ -34785,7 +34927,7 @@ async function _aiCommitDealUpdate(){
 
     // Apply updates
     const patch = {};
-    const numericFields = ['asking_price','offer_price','noi','gross_revenue_yearly','expenses_yearly','square_footage','number_of_units','no_of_units'];
+    const numericFields = ['asking_price','offer_price','noi','gross_revenue_yearly','expenses_yearly','gross_rental_income_monthly','expenses_monthly','square_footage','number_of_units','no_of_units'];
     const boolFields = ['is_archived','top_priority','discuss_in_meeting'];
     Object.entries(updates).forEach(([k,v])=>{
       if(k === 'deal_notes'){
@@ -34817,6 +34959,8 @@ async function _aiCommitDealUpdate(){
         general_property_notes: 'General Property Notes',
         crm_asset_classification: 'CRM Asset Classification',
         why_selling: 'Why Selling', noi: 'NOI',
+        gross_rental_income_monthly: 'Gross Rental Income (Monthly)',
+        expenses_monthly: 'Expenses Monthly',
         gross_revenue_yearly: 'Gross Revenue (Yearly)',
         expenses_yearly: 'Expenses (Yearly)',
         number_of_units: 'Number of Units', no_of_units: '# of Units',
@@ -34856,7 +35000,7 @@ function _aiSelectDealForUpdate(dealId){
   (async()=>{
     try{
       const patch = {};
-      const numericFields = ['asking_price','offer_price','noi','gross_revenue_yearly','expenses_yearly','square_footage','number_of_units'];
+      const numericFields = ['asking_price','offer_price','noi','gross_revenue_yearly','expenses_yearly','gross_rental_income_monthly','expenses_monthly','square_footage','number_of_units'];
       const boolFields = ['is_archived','top_priority','discuss_in_meeting'];
       Object.entries(updates).forEach(([k,v])=>{
         if(k === 'deal_notes'){

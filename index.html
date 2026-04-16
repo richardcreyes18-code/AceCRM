@@ -23449,12 +23449,16 @@ function _ddRenderMergeBody(cand, contacts, dealCounts, fields){
     const cells = contacts.map((c, idx) => {
       const val = (c[f.key]||'').toString();
       const safeVal = val.replace(/&/g,'&amp;').replace(/</g,'&lt;');
-      const isPicked = _ddMergePicks[f.key] === c.id;
       const isEmpty = !val.trim();
-      // v102.42.6: winning cells get a strong visual treatment (green
-      // left border + ✓) regardless of which column they're in, so the
-      // user can see at a glance that "email is picked from column 3"
-      // even though column 1 is the surviving column.
+      // v102.42.7: A cell is the WINNER only if it's both picked AND
+      // non-empty. Empty cells can't win — there's nothing to save.
+      // Previously empty cells in the survivor column got marked WINNER
+      // ✓ which made it look like every empty field was "decided" when
+      // it was actually just the survivor's empty value defaulting in.
+      const isPicked = _ddMergePicks[f.key] === c.id && !isEmpty;
+      // Visual treatments — winner gets the dramatic green look,
+      // everything else stays neutral so the right column reads as
+      // clickable, not "already decided".
       const cellBg = isPicked ? '#ecfdf5' : '#fff';
       const cellBorder = isPicked
         ? 'border-left:4px solid #16a34a;'
@@ -23466,8 +23470,13 @@ function _ddRenderMergeBody(cand, contacts, dealCounts, fields){
       const winnerBadge = isPicked
         ? '<span style="display:inline-block;font-size:9px;padding:1px 5px;border-radius:8px;background:#16a34a;color:#fff;font-weight:700;margin-left:6px;letter-spacing:0.04em;">WINNER ✓</span>'
         : '';
+      // Make non-empty, non-winning cells visibly clickable so it's
+      // obvious you can pick from any column. Subtle hover hint via
+      // the data-* attribute + a light background change on :hover.
+      const isClickable = !isEmpty && !isPicked;
+      const hoverHint = isClickable ? 'onmouseover="this.style.background=\'#f8fafc\'" onmouseout="this.style.background=\'#fff\'"' : '';
       return `
-        <label style="padding:10px 14px;${cellBorder}background:${cellBg};cursor:${isEmpty?'default':'pointer'};display:flex;align-items:flex-start;gap:8px;${isEmpty?'opacity:0.7;':''}">
+        <label ${hoverHint} style="padding:10px 14px;${cellBorder}background:${cellBg};cursor:${isEmpty?'default':'pointer'};display:flex;align-items:flex-start;gap:8px;${isEmpty?'opacity:0.7;':''}transition:background 0.1s;">
           <input type="radio" name="dd_f_${f.key}" value="${c.id}" ${isPicked?'checked':''} ${isEmpty?'disabled':''} onchange="_ddPickField('${f.key}','${c.id}')" style="margin-top:3px;flex-shrink:0;"/>
           <span style="font-size:12px;${valStyle}line-height:1.5;word-break:break-word;flex:1;min-width:0;">${display}${winnerBadge}</span>
         </label>`;

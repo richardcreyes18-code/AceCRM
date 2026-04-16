@@ -568,6 +568,173 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   background: rgba(80,80,80,0.6);
   cursor: default;
 }
+
+/* ═══════════════════════════════════════════════════════════════════
+   v111: BUYER CRITERIA FIELD STATUS — stamps + checklist
+   Pattern mirrors the v106 NO FINANCIALS stamp in Financial Analysis.
+   Fields wrapped in [data-bc-field] get an absolutely-positioned
+   diagonal stamp when their status is 'no_preference' or 'not_available'.
+   Stamp is hidden by default (display:none) and toggled by JS.
+   ═══════════════════════════════════════════════════════════════════ */
+[data-bc-field]{
+  position: relative;  /* anchor for the absolutely-positioned stamp */
+}
+.bc-field-stamp{
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(-10deg);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 4;
+  padding: 4px 12px;
+  border-radius: 5px;
+  font-size: 13px;
+  opacity: 0.82;
+  display: none;
+}
+.bc-field-stamp.no-pref{
+  color: rgba(180, 83, 9, 0.95);
+  border: 2.5px solid rgba(180, 83, 9, 0.58);
+  background: rgba(254, 243, 199, 0.55);
+}
+.bc-field-stamp.not-avail{
+  color: rgba(220, 38, 38, 0.95);
+  border: 2.5px solid rgba(220, 38, 38, 0.58);
+  background: rgba(254, 226, 226, 0.55);
+}
+[data-bc-field].bc-stamped > :not(.bc-field-stamp){
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+/* Status checklist UI (at bottom of buyer criteria page) */
+.bc-status-section{
+  margin-top: 14px;
+  border-top: 3px double #cbd5e1;
+  background: linear-gradient(180deg,#fafbff,#f8fafc);
+  border-radius: 0 0 8px 8px;
+}
+.bc-status-toggle{
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: 14px 22px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  color: #1e40af;
+  text-align: left;
+}
+.bc-status-toggle:hover{ background: rgba(30,64,175,0.04); }
+.bc-status-counts{
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 700;
+}
+.bc-count-pill{
+  padding: 2px 8px;
+  border-radius: 99px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.bc-count-pill.collected{ background: #dcfce7; color: #15803d; }
+.bc-count-pill.no-pref  { background: #fef3c7; color: #92400e; }
+.bc-count-pill.not-avail{ background: #fee2e2; color: #991b1b; }
+.bc-status-body{
+  padding: 14px 22px 20px;
+  display: none;
+}
+.bc-status-body.open{ display: block; }
+.bc-status-intro{
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 12px;
+  color: #1e3a8a;
+  margin-bottom: 12px;
+  line-height: 1.6;
+}
+.bc-status-bulk{
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.bc-status-bulk-label{
+  font-size: 10px;
+  color: #94a3b8;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-right: 4px;
+}
+.bc-status-bulk button{
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  color: #475569;
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.bc-status-bulk button:hover{ background: #f1f5f9; }
+.bc-status-row{
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  padding: 6px 2px;
+  align-items: center;
+  border-bottom: 1px solid #f1f5f9;
+}
+.bc-status-row:last-child{ border-bottom: none; }
+.bc-status-row-name{ font-size: 12px; color: #0f172a; font-weight: 500; }
+.bc-status-selector{
+  display: flex;
+  gap: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 5px;
+  overflow: hidden;
+  font-size: 10px;
+  font-weight: 600;
+}
+.bc-status-selector button{
+  background: #fff;
+  color: #475569;
+  border: none;
+  padding: 4px 9px;
+  cursor: pointer;
+  border-right: 1px solid #e2e8f0;
+  min-width: 76px;
+  white-space: nowrap;
+}
+.bc-status-selector button:last-child{ border-right: none; }
+.bc-status-selector button.active.collected{ background: #15803d; color: #fff; }
+.bc-status-selector button.active.no-pref  { background: #b45309; color: #fff; }
+.bc-status-selector button.active.not-avail{ background: #991b1b; color: #fff; }
+.bc-status-subgroup{ margin-bottom: 14px; }
+.bc-status-subhdr{
+  font-size: 10px;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid #e2e8f0;
+}
 </style>
 </head>
 <body>
@@ -1732,7 +1899,9 @@ const SB_BC_MAP = {
   shopping_max_sf:'Shopping Max SF',
   shopping_min_tenants:'Shopping Min Tenants',
   // v102.17: agent attribution for dashboard scoping
-  fub_assigned_to:'Assigned Agent'
+  fub_assigned_to:'Assigned Agent',
+  // v111: per-field status JSONB (Collected / No Preference / Not Available)
+  field_status:'Field Status'
 };
 
 // Tasks map (ace_tasks)
@@ -22257,6 +22426,20 @@ async function bcOpenExpanded(recordId){
 
               <!-- COUNTIES — searchable pill input -->
               <div class="bc-label" style="margin-bottom:6px;">Counties <span style="color:#888;font-weight:400;">(click ✕ to remove)</span></div>
+
+              <!-- v110.3: NJ Region quick-add chips. Clicking a region adds all
+                   counties in that region to the pill list. Ocean (South+Central)
+                   and Hunterdon (North+Central) are handled by _countyRegions. -->
+              <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;align-items:center;">
+                <span style="font-size:10px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-right:4px;">Quick add:</span>
+                <button type="button" onclick="_bcAddRegionCounties('All NJ')" style="background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;padding:3px 10px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;">🗽 All NJ</button>
+                <button type="button" onclick="_bcAddRegionCounties('North NJ')" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;padding:3px 10px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;">⬆ North NJ</button>
+                <button type="button" onclick="_bcAddRegionCounties('Central NJ')" style="background:#ecfccb;color:#3f6212;border:1px solid #d9f99d;padding:3px 10px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;">▬ Central NJ</button>
+                <button type="button" onclick="_bcAddRegionCounties('South NJ')" style="background:#fce7f3;color:#9d174d;border:1px solid #fbcfe8;padding:3px 10px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;">⬇ South NJ</button>
+                <button type="button" onclick="_bcAddRegionCounties('Tri-State')" style="background:#e0e7ff;color:#3730a3;border:1px solid #c7d2fe;padding:3px 10px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;" title="Adds all NJ counties + enables NY/PA states">🗺 Tri-State</button>
+                <button type="button" onclick="_bcClearCounties()" style="background:#fef2f2;color:#991b1b;border:1px solid #fecaca;padding:3px 10px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;margin-left:4px;">✕ Clear all</button>
+              </div>
+
               <div id="bcf_county_pills" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px;min-height:28px;padding:4px;background:#f8faff;border:1px solid #c0d0e8;border-radius:5px;">
                 ${(() => {
                   // v102.15: Read both the legacy Simple Area Preference field
@@ -22356,12 +22539,20 @@ async function bcOpenExpanded(recordId){
           </div>
         </div>
 
+        <!-- v111: Field Status Checklist — auto-populated, only shows currently-visible fields -->
+        <div id="bcFieldStatusSection"></div>
+
       </div>
     </div>`;
   // v102.39: sync the "+ Add to Workbench" button on the BC card with the
   // warm-cache state so it paints in its already-added form when this
   // contact is already on the agent's Workbench.
   if(typeof _wbSyncContactAddButtons === 'function') _wbSyncContactAddButtons(contactId);
+  // v111: initialize field status after DOM paints. rAF waits for layout.
+  requestAnimationFrame(() => {
+    if(typeof _bcFieldStatusInit === 'function') _bcFieldStatusInit(record);
+    if(typeof _bcAttachFieldStatusListeners === 'function') _bcAttachFieldStatusListeners();
+  });
 }
 
 function bcExpandedAssetSection(asset, f){
@@ -22508,6 +22699,459 @@ function _bcGetPillTexts(containerId){
 function _bcSyncAssets(){ document.getElementById('bcf_assets_hidden').value = _bcGetPillTexts('bcf_asset_pills').join(', '); }
 function _bcSyncCounties(){ document.getElementById('bcf_counties_hidden').value = _bcGetPillTexts('bcf_county_pills').join(', '); }
 function _bcSyncCities(){ document.getElementById('bcf_cities_hidden').value = _bcGetPillTexts('bcf_city_pills').join(', '); }
+
+// v110.3: NJ Region quick-add for buyer criteria counties. Adds every
+// county in the named region as a pill. Dedupes against existing pills.
+// For 'Tri-State', also adds NY/PA to the states field.
+function _bcAddRegionCounties(regionName){
+  // Look up counties for this region. Maps region → array of county NAMES
+  // (without "County" suffix) derived from the constants declared earlier:
+  //   NJ_NORTH_COUNTIES, NJ_CENTRAL_COUNTIES, NJ_SOUTH_COUNTIES
+  let counties = [];
+  if(regionName === 'All NJ'){
+    counties = [...new Set([...NJ_NORTH_COUNTIES, ...NJ_CENTRAL_COUNTIES, ...NJ_SOUTH_COUNTIES])];
+  } else if(regionName === 'North NJ'){
+    counties = [...NJ_NORTH_COUNTIES];
+  } else if(regionName === 'Central NJ'){
+    // Central intentionally includes Ocean (per Ricky's rule in _countyRegions)
+    counties = [...NJ_CENTRAL_COUNTIES];
+  } else if(regionName === 'South NJ'){
+    counties = [...NJ_SOUTH_COUNTIES];
+    // Ocean is nominally Central, but per Ricky's rule it also belongs to South
+    if(!counties.includes('Ocean')) counties.push('Ocean');
+  } else if(regionName === 'Tri-State'){
+    // All NJ counties PLUS auto-add NY and PA to the states pills
+    counties = [...new Set([...NJ_NORTH_COUNTIES, ...NJ_CENTRAL_COUNTIES, ...NJ_SOUTH_COUNTIES])];
+    // Also add NY, PA to the states section if not already there.
+    // Uses _bcAddState to get the proper "NY — New York" pill format.
+    const stateNames = { 'NY': 'New York', 'PA': 'Pennsylvania' };
+    Object.entries(stateNames).forEach(([code, name]) => {
+      const existingStates = _bcGetPillTexts('bcf_state_pills');
+      const already = existingStates.some(s => s.startsWith(code + ' '));
+      if(!already && typeof _bcAddState === 'function'){
+        _bcAddState(code, name);
+      }
+    });
+  }
+
+  if(!counties.length){
+    console.warn('_bcAddRegionCounties: unknown region', regionName);
+    return;
+  }
+
+  // Add each county as a pill if not already present
+  let added = 0;
+  counties.forEach(bare => {
+    // Existing pills may include the full "X County" form or just "X"; be tolerant
+    const existing = _bcGetPillTexts('bcf_county_pills').map(s => s.replace(/\s+County$/i,'').trim().toLowerCase());
+    if(existing.includes(bare.toLowerCase())) return;
+    // Use bare form (e.g. "Bergen") to match existing county-search results pattern
+    _bcAddPill('bcf_county_pills', bare, '#0ea5e9', _bcSyncCounties);
+    added++;
+  });
+
+  // Sync + trigger autosave so the change persists
+  _bcSyncCounties();
+  if(typeof _bcAutoSave === 'function') _bcAutoSave();
+}
+
+// v110.3: Clear all county pills at once. Useful when switching regions
+// (e.g., you added North NJ, then realized you meant South NJ).
+function _bcClearCounties(){
+  const container = document.getElementById('bcf_county_pills');
+  if(!container) return;
+  const pillCount = container.querySelectorAll('span').length;
+  if(pillCount === 0) return;
+  if(pillCount > 3 && !confirm('Clear all ' + pillCount + ' counties from this buyer\'s preferences?')) return;
+  container.innerHTML = '';
+  _bcSyncCounties();
+  if(typeof _bcAutoSave === 'function') _bcAutoSave();
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// v111: BUYER CRITERIA FIELD STATUS SYSTEM
+// Per-field classification: Collected / No Preference / Not Available.
+// Checklist sits at bottom of page; only shows fields currently visible
+// in the DOM (so asset-type-specific fields only appear when that asset
+// is selected).
+// ═══════════════════════════════════════════════════════════════════════
+
+// Central registry of all "classifiable" fields. Each entry:
+//   id       → target DOM element id (form input or wrapper div)
+//   label    → display name in the checklist
+//   group    → section header for grouping in the checklist
+//   wrapId   → (optional) id of the visual wrapper to stamp over. If not
+//              set, the stamp targets the input's immediate parent.
+//   assetType → (optional) asset-type key. If set, this field is only
+//              shown in the checklist when that asset-type is selected.
+//              Core fields leave this undefined → always shown.
+//
+// Asset-type keys match what bcExpandedAssetSection checks with lc.includes():
+//   'multifamily', 'warehouse', 'shopping', 'retail', 'office', 'land',
+//   'hotel', 'mixed', 'medical', 'auto', 'restaurant', 'mobile'
+const _BC_FIELD_REGISTRY = [
+  // ── Core section: What They're Looking For ───────────────────────
+  { id: 'bcf_assets_hidden',  label: 'Asset Types',          group: "What They're Looking For", wrapId: 'bcf_asset_pills' },
+  { id: 'bcf_states_hidden',  label: 'Preferred States',     group: "What They're Looking For", wrapId: 'bcf_state_pills' },
+  { id: 'bcf_counties_hidden',label: 'Preferred Counties',   group: "What They're Looking For", wrapId: 'bcf_county_pills' },
+  { id: 'bcf_cities_hidden',  label: 'Preferred Cities',     group: "What They're Looking For", wrapId: 'bcf_city_pills' },
+  { id: 'bcf_location',       label: 'Location Notes',       group: "What They're Looking For" },
+  { id: 'bcf_caprate',        label: 'Minimum CAP Rate',     group: "What They're Looking For" },
+  { id: 'bcf_minprice',       label: 'Min Purchase Price',   group: "What They're Looking For" },
+  { id: 'bcf_maxprice',       label: 'Max Purchase Price',   group: "What They're Looking For" },
+  { id: 'bcf_dateadded',      label: 'Date Added',           group: "What They're Looking For" },
+  { id: 'bcf_deal_dependent', label: 'Deal Dependent Budget',group: "What They're Looking For" },
+  { id: 'bcf_financing',      label: 'Financing Type',       group: "What They're Looking For" },
+
+  // ── Notes ──────────────────────────────────────────────────────────
+  { id: 'bcf_requirements',   label: 'Other Requirements',   group: 'Notes' },
+  { id: 'bcf_dealsnotes',     label: 'Deals Sent Notes',     group: 'Notes' },
+
+  // ── Asset-specific fields (populated in turn 2; bootstrap now) ────
+  // Multifamily
+  { id: 'bcf_minunits',    label: 'Min # of Units',       group: 'Multifamily Requirements', assetType: 'multifamily' },
+  { id: 'bcf_maxunits',    label: 'Max # of Units',       group: 'Multifamily Requirements', assetType: 'multifamily' },
+  { id: 'bcf_mf_class',    label: 'MF Class',             group: 'Multifamily Requirements', assetType: 'multifamily' },
+  { id: 'bcf_mf_profile',  label: 'Deal Profile',         group: 'Multifamily Requirements', assetType: 'multifamily' },
+  { id: 'bcf_mf_style',    label: 'Style Preference',     group: 'Multifamily Requirements', assetType: 'multifamily' },
+  { id: 'bcf_mf_maxppu',   label: 'Max Price Per Unit',   group: 'Multifamily Requirements', assetType: 'multifamily' },
+  // Warehouse / Industrial
+  { id: 'bcf_minSF',       label: 'Min SF',               group: 'Warehouse Requirements', assetType: 'warehouse' },
+  { id: 'bcf_maxSF',       label: 'Max SF',               group: 'Warehouse Requirements', assetType: 'warehouse' },
+  { id: 'bcf_wh_height',   label: 'Min Clear Height',     group: 'Warehouse Requirements', assetType: 'warehouse' },
+  { id: 'bcf_wh_docks',    label: 'Min Loading Docks',    group: 'Warehouse Requirements', assetType: 'warehouse' },
+  { id: 'bcf_wh_invown',   label: 'Investor or Owner',    group: 'Warehouse Requirements', assetType: 'warehouse' },
+  { id: 'bcf_wh_profile',  label: 'Warehouse Profile',    group: 'Warehouse Requirements', assetType: 'warehouse' },
+  { id: 'bcf_wh_features', label: 'Features / Docks',     group: 'Warehouse Requirements', assetType: 'warehouse' },
+  // Shopping Center
+  { id: 'bcf_shop_minSF',      label: 'Min SF',            group: 'Shopping Requirements',  assetType: 'shopping' },
+  { id: 'bcf_shop_maxSF',      label: 'Max SF',            group: 'Shopping Requirements',  assetType: 'shopping' },
+  { id: 'bcf_shop_mintenants', label: 'Min # Tenants',     group: 'Shopping Requirements',  assetType: 'shopping' },
+  // NOTE: turn 2 will fill in remaining asset types (retail, office, land, hotel, etc.)
+];
+
+// In-memory cache of current field_status for the loaded BC record.
+// Shape: { "bcf_caprate": "no_preference", "bcf_maxprice": "not_available", ... }
+let _bcFieldStatus = {};
+
+// Which field-status section groups are open right now (remember across renders)
+let _bcStatusOpen = false;
+
+// Called by renderExpanded after the form DOM is painted. Loads stored
+// status from the record's field_status column, applies stamps, renders
+// the bottom checklist.
+function _bcFieldStatusInit(record){
+  const fs = record?.fields?.['Field Status'] || record?.field_status || {};
+  _bcFieldStatus = (typeof fs === 'object' && fs !== null) ? { ...fs } : {};
+  _bcFieldStatusApplyStamps();
+  _bcFieldStatusRenderChecklist();
+}
+
+// Applies the 'bc-stamped' class + stamp element to every field with
+// a non-default status. Removes stamps from fields with no status set.
+function _bcFieldStatusApplyStamps(){
+  _BC_FIELD_REGISTRY.forEach(def => {
+    const el = document.getElementById(def.id);
+    if(!el) return;
+    // Decide which DOM node gets the stamp — prefer the explicit wrapper
+    // id if given, else the input's direct parent
+    const wrap = def.wrapId ? document.getElementById(def.wrapId) : el.parentElement;
+    if(!wrap) return;
+
+    // Ensure wrap has position:relative so the absolute stamp anchors to it
+    if(getComputedStyle(wrap).position === 'static'){
+      wrap.style.position = 'relative';
+    }
+
+    // Remove any existing stamp
+    const prev = wrap.querySelector(':scope > .bc-field-stamp');
+    if(prev) prev.remove();
+    wrap.classList.remove('bc-stamped');
+
+    const status = _bcFieldStatus[def.id];
+    if(status === 'no_preference' || status === 'not_available'){
+      const stamp = document.createElement('div');
+      stamp.className = 'bc-field-stamp ' + (status === 'no_preference' ? 'no-pref' : 'not-avail');
+      stamp.textContent = status === 'no_preference' ? 'No Preference' : 'Not Available';
+      stamp.style.display = 'flex';
+      wrap.appendChild(stamp);
+      wrap.classList.add('bc-stamped');
+    }
+  });
+}
+
+// Returns the list of field defs that should appear in the checklist
+// RIGHT NOW — i.e., core fields + asset-type-gated fields whose anchor
+// element is currently in the DOM.
+function _bcGetVisibleFields(){
+  return _BC_FIELD_REGISTRY.filter(def => {
+    const el = document.getElementById(def.id);
+    return !!el;
+  });
+}
+
+// Change the status of a single field and re-render
+function _bcFieldStatusSet(fieldId, newStatus){
+  // newStatus is one of: 'collected' (default), 'no_preference', 'not_available'
+  if(newStatus === 'collected'){
+    delete _bcFieldStatus[fieldId];
+  } else {
+    _bcFieldStatus[fieldId] = newStatus;
+  }
+  _bcFieldStatusApplyStamps();
+  _bcFieldStatusRenderChecklist();
+  if(typeof _bcAutoSave === 'function') _bcAutoSave();
+}
+
+// Bulk: set every currently-visible empty field to the given status
+function _bcFieldStatusBulk(newStatus){
+  const visible = _bcGetVisibleFields();
+  let changed = 0;
+  visible.forEach(def => {
+    // Only affect fields that don't have a value set
+    if(_bcFieldHasValue(def.id)) return;
+    if(newStatus === 'collected'){
+      if(_bcFieldStatus[def.id] !== undefined){
+        delete _bcFieldStatus[def.id];
+        changed++;
+      }
+    } else {
+      if(_bcFieldStatus[def.id] !== newStatus){
+        _bcFieldStatus[def.id] = newStatus;
+        changed++;
+      }
+    }
+  });
+  _bcFieldStatusApplyStamps();
+  _bcFieldStatusRenderChecklist();
+  if(typeof _bcAutoSave === 'function') _bcAutoSave();
+  return changed;
+}
+
+// Reset EVERY field status (including fields that have values) back to Collected
+function _bcFieldStatusResetAll(){
+  const keyCount = Object.keys(_bcFieldStatus).length;
+  if(keyCount === 0) return;
+  if(!confirm('Reset all ' + keyCount + ' field statuses back to Collected? (Values typed into the form are kept.)')) return;
+  _bcFieldStatus = {};
+  _bcFieldStatusApplyStamps();
+  _bcFieldStatusRenderChecklist();
+  if(typeof _bcAutoSave === 'function') _bcAutoSave();
+}
+
+// Heuristic: does this field have a "real" value?
+function _bcFieldHasValue(fieldId){
+  const el = document.getElementById(fieldId);
+  if(!el) return false;
+  // Hidden inputs store pill-aggregated values
+  if(el.type === 'hidden'){
+    const v = (el.value || '').trim();
+    return v !== '' && v !== '0';
+  }
+  // Checkboxes
+  if(el.type === 'checkbox'){
+    return el.checked;
+  }
+  // Select
+  if(el.tagName === 'SELECT'){
+    const v = el.value;
+    return v !== '' && v !== null;
+  }
+  // Text / number / textarea
+  return (el.value || '').trim() !== '';
+}
+
+function _bcGetFieldState(fieldId){
+  const explicit = _bcFieldStatus[fieldId];
+  if(explicit === 'no_preference') return 'no_preference';
+  if(explicit === 'not_available') return 'not_available';
+  // No explicit status → derive from value
+  return _bcFieldHasValue(fieldId) ? 'collected' : 'not_available_default';
+}
+
+// Render the bottom checklist: only visible fields, grouped by section.
+function _bcFieldStatusRenderChecklist(){
+  const host = document.getElementById('bcFieldStatusSection');
+  if(!host) return;
+
+  const visible = _bcGetVisibleFields();
+
+  // Count stats (ignore 'not_available_default' for the stats — only
+  // count explicitly marked no_pref / not_avail vs collected)
+  let collected = 0, noPref = 0, notAvail = 0;
+  visible.forEach(def => {
+    const s = _bcGetFieldState(def.id);
+    if(s === 'collected') collected++;
+    else if(s === 'no_preference') noPref++;
+    else notAvail++; // covers both explicit not_available and default-empty
+  });
+
+  // Group by section header
+  const groups = {};
+  visible.forEach(def => {
+    if(!groups[def.group]) groups[def.group] = [];
+    groups[def.group].push(def);
+  });
+
+  const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/'/g,'&#39;');
+
+  const rowFor = (def) => {
+    const state = _bcGetFieldState(def.id);
+    const isCollected = state === 'collected';
+    const isNoPref    = state === 'no_preference';
+    const isNotAvail  = state === 'not_available' || state === 'not_available_default';
+    return `
+      <div class="bc-status-row">
+        <span class="bc-status-row-name">${esc(def.label)}</span>
+        <div class="bc-status-selector">
+          <button class="${isCollected?'active collected':''}" onclick="_bcFieldStatusSet('${def.id}','collected')">✓ Collected</button>
+          <button class="${isNoPref?'active no-pref':''}" onclick="_bcFieldStatusSet('${def.id}','no_preference')">⊘ No Pref</button>
+          <button class="${isNotAvail?'active not-avail':''}" onclick="_bcFieldStatusSet('${def.id}','not_available')">? Not Avail</button>
+        </div>
+      </div>
+    `;
+  };
+
+  const groupsHtml = Object.entries(groups).map(([groupName, defs]) => `
+    <div class="bc-status-subgroup">
+      <div class="bc-status-subhdr">${esc(groupName)}</div>
+      ${defs.map(rowFor).join('')}
+    </div>
+  `).join('');
+
+  const openClass = _bcStatusOpen ? 'open' : '';
+  const arrow = _bcStatusOpen ? '▼' : '▶';
+
+  host.innerHTML = `
+    <div class="bc-status-section">
+      <button class="bc-status-toggle" onclick="_bcFieldStatusToggle()">
+        <span>📋 Field Status Checklist — classify every field as Collected / No Pref / Not Available</span>
+        <span class="bc-status-counts">
+          <span class="bc-count-pill collected">✓ ${collected} Collected</span>
+          <span class="bc-count-pill no-pref">⊘ ${noPref} No Pref</span>
+          <span class="bc-count-pill not-avail">? ${notAvail} Not Avail</span>
+          <span style="color:#94a3b8;font-weight:400;font-size:14px;margin-left:6px;">${arrow}</span>
+        </span>
+      </button>
+      <div class="bc-status-body ${openClass}">
+        <div class="bc-status-intro">
+          💡 Fields here reflect what's currently on this buyer's form (only the asset types they've selected show their specific requirements). Mark each blank field as <strong>No Preference</strong> (they don't care) or <strong>Not Available</strong> (we haven't asked yet). Typing a value into a field auto-flips it to Collected.
+        </div>
+        <div class="bc-status-bulk">
+          <span class="bc-status-bulk-label">Bulk:</span>
+          <button onclick="_bcFieldStatusBulkConfirmed('not_available')">Mark empty as Not Available</button>
+          <button onclick="_bcFieldStatusBulkConfirmed('no_preference')">Mark empty as No Preference</button>
+          <button onclick="_bcFieldStatusResetAll()">Reset all to Collected</button>
+        </div>
+        ${groupsHtml || '<div style="padding:16px;text-align:center;color:#94a3b8;font-size:12px;">No fields on this form yet.</div>'}
+      </div>
+    </div>
+  `;
+}
+
+function _bcFieldStatusToggle(){
+  _bcStatusOpen = !_bcStatusOpen;
+  _bcFieldStatusRenderChecklist();
+}
+
+function _bcFieldStatusBulkConfirmed(status){
+  const label = status === 'no_preference' ? 'No Preference' : 'Not Available';
+  const visible = _bcGetVisibleFields();
+  const empty = visible.filter(def => !_bcFieldHasValue(def.id));
+  if(empty.length === 0){ alert('No empty fields to classify.'); return; }
+  if(!confirm(`Mark ${empty.length} empty field${empty.length>1?'s':''} as ${label}?`)) return;
+  _bcFieldStatusBulk(status);
+}
+
+// v111: delegated listener. When the user types into any registered field,
+// auto-flip its status to 'collected' (clears any explicit no_pref/not_avail)
+// and re-render the checklist so counts stay accurate.
+function _bcAttachFieldStatusListeners(){
+  const root = document.getElementById('mainArea');
+  if(!root || root.dataset.bcStatusListenersAttached === '1') return;
+  root.dataset.bcStatusListenersAttached = '1';
+
+  const handler = (e) => {
+    const target = e.target;
+    if(!target || !target.id) return;
+    // Only care about fields in our registry
+    const def = _BC_FIELD_REGISTRY.find(d => d.id === target.id);
+    if(!def) return;
+    // If user typed a value, clear any explicit status marker
+    if(_bcFieldHasValue(def.id) && _bcFieldStatus[def.id]){
+      delete _bcFieldStatus[def.id];
+      _bcFieldStatusApplyStamps();
+    }
+    _bcFieldStatusRenderChecklist();
+  };
+  root.addEventListener('input', handler);
+  root.addEventListener('change', handler);
+
+  // Pill-based fields don't fire input events when pills are added/removed.
+  // Watch for mutations on the 4 pill container divs and re-render when
+  // their contents change.
+  const pillContainers = ['bcf_asset_pills','bcf_county_pills','bcf_state_pills','bcf_city_pills']
+    .map(id => document.getElementById(id))
+    .filter(Boolean);
+  if(pillContainers.length){
+    const mo = new MutationObserver(() => {
+      // Any pill add/remove might have changed the has-value status of the
+      // corresponding hidden input. Sync first, then re-render.
+      if(typeof _bcSyncAssets === 'function') _bcSyncAssets();
+      if(typeof _bcSyncCounties === 'function') _bcSyncCounties();
+      if(typeof _bcSyncCities === 'function') _bcSyncCities();
+      if(typeof _bcSyncStates === 'function') _bcSyncStates();
+      _bcFieldStatusApplyStamps();
+      _bcFieldStatusRenderChecklist();
+    });
+    pillContainers.forEach(el => mo.observe(el, { childList: true, subtree: false }));
+  }
+}
+
+// v111 extension: additional asset-type fields in the registry.
+// Loaded lazily (pushed to _BC_FIELD_REGISTRY at module init time) so the
+// main registry block stays readable. These cover retail, office, land,
+// hotel, mixed-use, medical, auto, restaurant, mobile home park.
+(function _bcExtendFieldRegistry(){
+  if(typeof _BC_FIELD_REGISTRY === 'undefined') return;
+  const more = [
+    // Retail
+    { id: 'bcf_retail_minSF',      label: 'Min SF',             group: 'Retail Requirements', assetType: 'retail' },
+    { id: 'bcf_retail_maxSF',      label: 'Max SF',             group: 'Retail Requirements', assetType: 'retail' },
+    { id: 'bcf_retail_mintenants', label: 'Min # Tenants',      group: 'Retail Requirements', assetType: 'retail' },
+    { id: 'bcf_retail_tenant_type',label: 'Tenant Type',        group: 'Retail Requirements', assetType: 'retail' },
+    { id: 'bcf_retail_occupancy',  label: 'Min Occupancy (%)',  group: 'Retail Requirements', assetType: 'retail' },
+    { id: 'bcf_retail_anchor',     label: 'Anchor Preference',  group: 'Retail Requirements', assetType: 'retail' },
+    { id: 'bcf_retail_lease',      label: 'Lease Preference',   group: 'Retail Requirements', assetType: 'retail' },
+    // Office
+    { id: 'bcf_office_minSF',      label: 'Min SF',             group: 'Office Requirements', assetType: 'office' },
+    { id: 'bcf_office_maxSF',      label: 'Max SF',             group: 'Office Requirements', assetType: 'office' },
+    { id: 'bcf_office_class',      label: 'Class Preference',   group: 'Office Requirements', assetType: 'office' },
+    { id: 'bcf_office_mintenants', label: 'Min # Tenants',      group: 'Office Requirements', assetType: 'office' },
+    { id: 'bcf_office_maxtenants', label: 'Max # Tenants',      group: 'Office Requirements', assetType: 'office' },
+    // Land
+    { id: 'bcf_land_minacres',     label: 'Min Acres',          group: 'Land Requirements',   assetType: 'land' },
+    { id: 'bcf_land_maxacres',     label: 'Max Acres',          group: 'Land Requirements',   assetType: 'land' },
+    { id: 'bcf_land_zoning',       label: 'Zoning Preference',  group: 'Land Requirements',   assetType: 'land' },
+    { id: 'bcf_land_use',          label: 'Intended Use',       group: 'Land Requirements',   assetType: 'land' },
+    // Hotel & Motel
+    { id: 'bcf_hotel_minrooms',    label: 'Min Rooms',          group: 'Hotel Requirements',  assetType: 'hotel' },
+    { id: 'bcf_hotel_maxrooms',    label: 'Max Rooms',          group: 'Hotel Requirements',  assetType: 'hotel' },
+    { id: 'bcf_hotel_flag',        label: 'Flag Preference',    group: 'Hotel Requirements',  assetType: 'hotel' },
+    // Mixed Use
+    { id: 'bcf_mu_minres',         label: 'Min Residential Units', group: 'Mixed Use Requirements', assetType: 'mixed' },
+    { id: 'bcf_mu_mincom',         label: 'Min Commercial Units',  group: 'Mixed Use Requirements', assetType: 'mixed' },
+    { id: 'bcf_mu_minSF',          label: 'Min SF',             group: 'Mixed Use Requirements', assetType: 'mixed' },
+    // Automotive
+    { id: 'bcf_auto_minbays',      label: 'Min Bays',           group: 'Automotive Requirements', assetType: 'auto' },
+    { id: 'bcf_auto_gas',          label: 'Gas Preference',     group: 'Automotive Requirements', assetType: 'auto' },
+    { id: 'bcf_auto_type',         label: 'Auto Type',          group: 'Automotive Requirements', assetType: 'auto' },
+    // Medical, Restaurant, Mobile home park — add if/when those field ids appear
+  ];
+  // Avoid double-push (happens if the file is reloaded in dev)
+  const existingIds = new Set(_BC_FIELD_REGISTRY.map(d => d.id));
+  more.forEach(d => { if(!existingIds.has(d.id)) _BC_FIELD_REGISTRY.push(d); });
+})();
 
 function _bcAddPill(containerId, text, color, syncFn){
   text = text.trim().replace(/,$/,'').trim();
@@ -22916,6 +23560,12 @@ async function bcSaveExpanded(recordId, isAuto=false){
   const ddEl = document.getElementById('bcf_deal_dependent');
   if(ddEl) fields['Budget Deal Dependent'] = ddEl.checked === true;
   sv('Financing Type',                   gv('bcf_financing'));
+
+  // v111: persist field_status map (object of field_id → 'no_preference' | 'not_available')
+  // Always include it in saves so the DB matches the UI state, even if empty.
+  if(typeof _bcFieldStatus !== 'undefined'){
+    fields['Field Status'] = { ..._bcFieldStatus };
+  }
 
   if(!Object.keys(fields).length){ return; }
 

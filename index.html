@@ -34409,6 +34409,199 @@ document.addEventListener('DOMContentLoaded', ()=>{
   }
 });
 
+// ═══════════════════════════════════════════════════════════════════════
+// v104: ACE AI ASSISTANT — floating chat widget
+// ═══════════════════════════════════════════════════════════════════════
+let _aiOpen = false;
+let _aiMessages = [];
+let _aiPendingResult = null;
+
+function _aiToggle(){
+  _aiOpen = !_aiOpen;
+  const panel = document.getElementById('aiAssistPanel');
+  const fab = document.getElementById('aiAssistFab');
+  if(panel) panel.style.display = _aiOpen ? 'flex' : 'none';
+  if(fab){ fab.style.transform = _aiOpen ? 'rotate(45deg)' : ''; fab.textContent = _aiOpen ? '×' : '✦'; }
+  if(_aiOpen && _aiMessages.length === 0){
+    _aiAddBotMessage('Hey! Paste call notes, describe a seller lead or buyer, or tell me about pitches.\n\nExamples:\n• "Spoke with John at 201-555-1234, 12-unit in Bayonne asking 2.5M..."\n• "New buyer: Mike Jones, wants warehouses in Bergen, budget 1-5M, cash"\n• "Pitched 45 Park Ave to Joseph Haim, he was interested"');
+  }
+  if(_aiOpen) document.getElementById('aiAssistInput')?.focus();
+}
+function _aiClearChat(){ _aiMessages=[]; _aiPendingResult=null; const el=document.getElementById('aiAssistMessages'); if(el) el.innerHTML=''; _aiAddBotMessage('Cleared. What can I help with?'); }
+function _aiAddBotMessage(text, isHtml){ const el=document.getElementById('aiAssistMessages'); if(!el) return; const div=document.createElement('div'); div.style.cssText='margin-bottom:12px;display:flex;gap:8px;align-items:flex-start;'; const safe=isHtml?text:text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\n/g,'<br>'); div.innerHTML='<div style="width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,#7c3aed,#4f46e5);color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0;margin-top:2px;">✦</div><div style="flex:1;min-width:0;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:10px 14px;font-size:13px;color:#0f172a;line-height:1.5;">'+safe+'</div>'; el.appendChild(div); el.scrollTop=el.scrollHeight; }
+function _aiAddUserMessage(text){ const el=document.getElementById('aiAssistMessages'); if(!el) return; const div=document.createElement('div'); div.style.cssText='margin-bottom:12px;display:flex;gap:8px;align-items:flex-start;justify-content:flex-end;'; div.innerHTML='<div style="max-width:85%;background:#eef2fb;border:1px solid #c7d2fe;border-radius:12px;padding:10px 14px;font-size:13px;color:#0f172a;line-height:1.5;">'+text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\n/g,'<br>')+'</div>'; el.appendChild(div); el.scrollTop=el.scrollHeight; }
+
+async function _aiSend(){
+  const input=document.getElementById('aiAssistInput'); const text=(input?.value||'').trim(); if(!text) return; input.value='';
+  _aiAddUserMessage(text); _aiMessages.push({role:'user',content:text});
+  if(!document.getElementById('aiPulseStyle')){ const s=document.createElement('style'); s.id='aiPulseStyle'; s.textContent='@keyframes aipulse{0%,100%{opacity:0.3}50%{opacity:1}}'; document.head.appendChild(s); }
+  const tId='_aiT'+Date.now();
+  _aiAddBotMessage('<div id="'+tId+'" style="display:flex;gap:4px;padding:4px 0;"><div style="width:8px;height:8px;border-radius:50%;background:#94a3b8;animation:aipulse 1s infinite;"></div><div style="width:8px;height:8px;border-radius:50%;background:#94a3b8;animation:aipulse 1s infinite 0.2s;"></div><div style="width:8px;height:8px;border-radius:50%;background:#94a3b8;animation:aipulse 1s infinite 0.4s;"></div></div>',true);
+  const btn=document.getElementById('aiAssistSendBtn'); if(btn) btn.disabled=true;
+  try{
+    const cfg=getConfig(); const res=await fetch(cfg.url+'/functions/v1/crm-ai-assist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messages:_aiMessages})});
+    const data=await res.json();
+    document.getElementById(tId)?.closest('div[style*="margin-bottom"]')?.remove();
+    if(data.error){ _aiAddBotMessage('Error: '+data.error); return; }
+    const r=data.result; if(!r){ _aiAddBotMessage('No response. Try again.'); return; }
+    _aiMessages.push({role:'assistant',content:JSON.stringify(r)});
+    if(r.intent==='clarify'||(r.clarifying_questions?.length&&!r.data)){ _aiAddBotMessage('I need more info:<br>• '+(r.clarifying_questions||[]).join('<br>• '),true); }
+    else if(r.intent==='seller_lead'){ _aiPendingResult=r; _aiShowSellerPreview(r); }
+    else if(r.intent==='buyer_criteria'){ _aiPendingResult=r; _aiShowBuyerPreview(r); }
+    else if(r.intent==='pitch_log'){ _aiPendingResult=r; _aiShowPitchPreview(r); }
+    else { _aiAddBotMessage(r.summary||'Not sure what to do with that. Try pasting call notes.'); if(r.clarifying_questions?.length) _aiAddBotMessage('• '+r.clarifying_questions.join('<br>• '),true); }
+    if(data.usage) console.log('AI cost: $'+((data.usage.input_tokens*0.25+data.usage.output_tokens*1.25)/1e6).toFixed(6));
+  }catch(e){ document.getElementById(tId)?.closest('div[style*="margin-bottom"]')?.remove(); _aiAddBotMessage('Error: '+(e.message||'unknown')); }
+  finally{ if(btn) btn.disabled=false; }
+}
+
+function _aiShowSellerPreview(r){
+  const d=r.data||{},c=d.contact||{},p=d.property||{},esc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const fm=n=>{const v=Number(n);if(!v)return'';return v>=1e6?'$'+(v/1e6).toFixed(2).replace(/\.?0+$/,'')+'M':v>=1e3?'$'+Math.round(v/1e3)+'K':'$'+v;};
+  let h='<div style="font-size:12px;font-weight:700;color:#1e3a8a;margin-bottom:8px;">📋 Seller Lead Preview</div><div style="background:#f0fdf4;border:1px solid #a7f3d0;border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.6;">';
+  if(c.name) h+='<div><strong>Contact:</strong> '+esc(c.name)+'</div>';
+  if(c.phone_number) h+='<div><strong>Phone:</strong> '+esc(c.phone_number)+'</div>';
+  if(c.email) h+='<div><strong>Email:</strong> '+esc(c.email)+'</div>';
+  if(c.company) h+='<div><strong>Company:</strong> '+esc(c.company)+'</div>';
+  if(p.address) h+='<div style="margin-top:6px;"><strong>Property:</strong> '+esc(p.address)+(p.municipality?', '+esc(p.municipality):'')+(p.state?', '+p.state:'')+'</div>';
+  if(p.crm_asset_classification) h+='<div><strong>Type:</strong> '+esc(p.crm_asset_classification)+'</div>';
+  if(p.asking_price) h+='<div><strong>Asking:</strong> '+fm(p.asking_price)+'</div>';
+  if(p.noi) h+='<div><strong>NOI:</strong> '+fm(p.noi)+'</div>';
+  if(p.number_of_units||p.no_of_units) h+='<div><strong>Units:</strong> '+(p.number_of_units||p.no_of_units)+'</div>';
+  if(p.square_footage) h+='<div><strong>SF:</strong> '+Number(p.square_footage).toLocaleString()+'</div>';
+  if(p.why_selling) h+='<div><strong>Why selling:</strong> '+esc(p.why_selling)+'</div>';
+  if(p.pipeline_stage) h+='<div><strong>Stage:</strong> '+esc(p.pipeline_stage)+'</div>';
+  h+='</div>';
+  if(r.summary) h+='<div style="font-size:11px;color:#475569;margin-top:6px;font-style:italic;">'+esc(r.summary)+'</div>';
+  if(r.clarifying_questions?.length) h+='<div style="margin-top:6px;font-size:11px;color:#b45309;">⚠ '+r.clarifying_questions.map(esc).join('<br>⚠ ')+'</div>';
+  h+='<div style="display:flex;gap:8px;margin-top:10px;"><button onclick="_aiCommitSellerLead()" style="background:#16a34a;color:#fff;border:none;padding:7px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">✓ Create in CRM</button><button onclick="_aiAddBotMessage(\'Skipped.\')" style="background:#fff;color:#475569;border:1px solid #cbd5e1;padding:7px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Skip</button></div>';
+  _aiAddBotMessage(h,true);
+}
+function _aiShowBuyerPreview(r){
+  const d=r.data||{},c=d.contact||{},bc=d.buyer_criteria||{},esc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const fm=n=>{const v=Number(n);if(!v)return'';return v>=1e6?'$'+(v/1e6).toFixed(2).replace(/\.?0+$/,'')+'M':v>=1e3?'$'+Math.round(v/1e3)+'K':'$'+v;};
+  let h='<div style="font-size:12px;font-weight:700;color:#1e3a8a;margin-bottom:8px;">🎯 Buyer Criteria Preview</div><div style="background:#eef2fb;border:1px solid #c7d2fe;border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.6;">';
+  if(c.name) h+='<div><strong>Buyer:</strong> '+esc(c.name)+'</div>';
+  if(c.phone_number) h+='<div><strong>Phone:</strong> '+esc(c.phone_number)+'</div>';
+  if(c.email) h+='<div><strong>Email:</strong> '+esc(c.email)+'</div>';
+  if(bc.desired_property_types) h+='<div style="margin-top:6px;"><strong>Asset types:</strong> '+esc(bc.desired_property_types)+'</div>';
+  const rng=(bc.min_purchase_price||bc.max_purchase_price)?(fm(bc.min_purchase_price)||'?')+' – '+(fm(bc.max_purchase_price)||'?'):'';
+  if(rng) h+='<div><strong>Price range:</strong> '+rng+'</div>';
+  if(bc.preferred_counties) h+='<div><strong>Counties:</strong> '+esc(bc.preferred_counties)+'</div>';
+  if(bc.financing_type) h+='<div><strong>Financing:</strong> '+esc(bc.financing_type)+'</div>';
+  if(bc.minimum_cap_rate) h+='<div><strong>Min cap:</strong> '+bc.minimum_cap_rate+'%</div>';
+  if(bc.other_requirements) h+='<div><strong>Other:</strong> '+esc(bc.other_requirements)+'</div>';
+  h+='</div>';
+  if(r.summary) h+='<div style="font-size:11px;color:#475569;margin-top:6px;font-style:italic;">'+esc(r.summary)+'</div>';
+  h+='<div style="display:flex;gap:8px;margin-top:10px;"><button onclick="_aiCommitBuyerCriteria()" style="background:#16a34a;color:#fff;border:none;padding:7px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">✓ Create in CRM</button><button onclick="_aiAddBotMessage(\'Skipped.\')" style="background:#fff;color:#475569;border:1px solid #cbd5e1;padding:7px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Skip</button></div>';
+  _aiAddBotMessage(h,true);
+}
+function _aiShowPitchPreview(r){
+  const d=r.data||{},esc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  let h='<div style="font-size:12px;font-weight:700;color:#1e3a8a;margin-bottom:8px;">📊 Pitch Log Preview</div><div style="background:#fef3c7;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.6;">';
+  if(d.buyer_name) h+='<div><strong>Buyer:</strong> '+esc(d.buyer_name)+'</div>';
+  if(d.pitches?.length) d.pitches.forEach((p,i)=>{ h+='<div style="margin-top:4px;padding-left:10px;border-left:3px solid #f59e0b;"><strong>'+esc(p.property_address||'Deal '+(i+1))+'</strong>'+(p.response?' — <em>'+esc(p.response)+'</em>':'')+(p.notes?'<br><span style="color:#64748b;">'+esc(p.notes)+'</span>':'')+'</div>'; });
+  h+='</div>';
+  h+='<div style="font-size:11px;color:#b45309;margin-top:8px;">⚠ Pitch logging requires resolving names to CRM records. Coming in v105 — for now use the Buyer Pitch tab.</div>';
+  _aiAddBotMessage(h,true);
+}
+
+async function _aiCommitSellerLead(){
+  if(!_aiPendingResult?.data){ _aiAddBotMessage('Nothing to commit.'); return; }
+  const d=_aiPendingResult.data, c=d.contact||{}, p=d.property||{};
+  _aiAddBotMessage('Creating records…');
+  try{
+    let existing=null;
+    if(c.phone_number){ const s=await _sbGet('ace_contacts','select=id,name,phone_number,email,type,contact_notes&phone_number=ilike.*'+c.phone_number.slice(-7)+'*&deleted_at=is.null&limit=1'); if(Array.isArray(s)&&s.length) existing=s[0]; }
+    if(!existing&&c.email){ const s=await _sbGet('ace_contacts','select=id,name,phone_number,email,type,contact_notes&email=ilike.*'+encodeURIComponent(c.email)+'*&deleted_at=is.null&limit=1'); if(Array.isArray(s)&&s.length) existing=s[0]; }
+    let cid;
+    if(existing){
+      cid=existing.id;
+      const patch={}; if(c.phone_number&&!existing.phone_number) patch.phone_number=c.phone_number; if(c.email&&!existing.email) patch.email=c.email; if(c.company) patch.company=c.company;
+      if(c.contact_notes) patch.contact_notes=((existing.contact_notes||'')+'\n---\n'+c.contact_notes).trim();
+      patch.type=[...new Set([...(existing.type||[]),'Seller'])];
+      if(Object.keys(patch).length) await _sbPatch('ace_contacts',cid,patch);
+      _aiAddBotMessage('Found existing contact <strong>'+(existing.name||'')+'</strong> — updated.',true);
+    }else{
+      const row={name:c.name||'(unnamed)',phone_number:c.phone_number||null,secondary_phone:c.secondary_phone||null,email:c.email||null,secondary_email:c.secondary_email||null,company:c.company||null,contact_notes:c.contact_notes||null,type:c.type||['Seller'],date_added:new Date().toISOString().split('T')[0]};
+      const cr=await _sbPost('ace_contacts',row); cid=cr?.id; if(!cid) throw new Error('Contact creation failed');
+      _aiAddBotMessage('Created contact <strong>'+(c.name||'')+'</strong>.',true);
+    }
+    if(p.address||p.municipality){
+      const row={address:[p.address,p.municipality,p.state].filter(Boolean).join(', ')||p.address, municipality:p.municipality||null, state:p.state||'NJ', owner_contact_id:cid, crm_asset_classification:p.crm_asset_classification||null, pipeline_stage:p.pipeline_stage||'New Lead', asking_price:p.asking_price||null, noi:p.noi||null, number_of_units:p.number_of_units||p.no_of_units||null, square_footage:p.square_footage||null, deal_notes:p.deal_notes||null, general_property_notes:p.general_property_notes||null, why_selling:p.why_selling||null, gross_revenue_yearly:p.gross_revenue_yearly||null, expenses_yearly:p.expenses_yearly||null, date_added:new Date().toISOString().split('T')[0]};
+      const pr=await _sbPost('ace_properties',row);
+      if(pr?.id) _aiAddBotMessage('Created deal <strong>'+(row.address||'')+'</strong> linked to '+(c.name||'contact')+'.',true);
+      if(typeof loadDataAndRender==='function') loadDataAndRender();
+    }else{ _aiAddBotMessage('No property address found — contact created without a deal.'); }
+    _aiAddBotMessage('✅ Done! Continue with more leads or close this chat.'); _aiPendingResult=null;
+  }catch(e){ _aiAddBotMessage('❌ Error: '+(e.message||'unknown')); }
+}
+
+async function _aiCommitBuyerCriteria(){
+  if(!_aiPendingResult?.data){ _aiAddBotMessage('Nothing to commit.'); return; }
+  const d=_aiPendingResult.data, c=d.contact||{}, bc=d.buyer_criteria||{};
+  _aiAddBotMessage('Creating records…');
+  try{
+    let existing=null;
+    if(c.phone_number){ const s=await _sbGet('ace_contacts','select=id,name,phone_number,email,type&phone_number=ilike.*'+c.phone_number.slice(-7)+'*&deleted_at=is.null&limit=1'); if(Array.isArray(s)&&s.length) existing=s[0]; }
+    if(!existing&&c.email){ const s=await _sbGet('ace_contacts','select=id,name,phone_number,email,type&email=ilike.*'+encodeURIComponent(c.email)+'*&deleted_at=is.null&limit=1'); if(Array.isArray(s)&&s.length) existing=s[0]; }
+    let cid;
+    if(existing){
+      cid=existing.id;
+      const patch={}; if(c.phone_number&&!existing.phone_number) patch.phone_number=c.phone_number; if(c.email&&!existing.email) patch.email=c.email; if(c.company) patch.company=c.company;
+      patch.type=[...new Set([...(existing.type||[]),'Buyer'])];
+      if(Object.keys(patch).length) await _sbPatch('ace_contacts',cid,patch);
+      _aiAddBotMessage('Found existing contact <strong>'+(existing.name||'')+'</strong> — updated.',true);
+    }else{
+      const row={name:c.name||'(unnamed)',phone_number:c.phone_number||null,email:c.email||null,company:c.company||null,contact_notes:c.contact_notes||null,type:c.type||['Buyer'],date_added:new Date().toISOString().split('T')[0]};
+      const cr=await _sbPost('ace_contacts',row); cid=cr?.id; if(!cid) throw new Error('Contact creation failed');
+      _aiAddBotMessage('Created contact <strong>'+(c.name||'')+'</strong>.',true);
+    }
+    const exBc=await _sbGet('ace_buyer_criteria','select=id&contact_id=eq.'+cid+'&limit=1');
+    if(Array.isArray(exBc)&&exBc.length){
+      const patch={}; if(bc.desired_property_types) patch.desired_property_types=bc.desired_property_types; if(bc.min_purchase_price) patch.min_purchase_price=bc.min_purchase_price; if(bc.max_purchase_price) patch.max_purchase_price=bc.max_purchase_price; if(bc.preferred_counties) patch.preferred_counties=bc.preferred_counties; if(bc.simple_area_preference) patch.simple_area_preference=bc.simple_area_preference; if(bc.financing_type) patch.financing_type=bc.financing_type; if(bc.other_requirements) patch.other_requirements=bc.other_requirements;
+      await _sbPatch('ace_buyer_criteria',exBc[0].id,patch);
+      _aiAddBotMessage('Updated existing buyer criteria.',true);
+    }else{
+      await _sbPost('ace_buyer_criteria',{contact_id:cid, desired_property_types:bc.desired_property_types||null, min_purchase_price:bc.min_purchase_price||null, max_purchase_price:bc.max_purchase_price||null, preferred_counties:bc.preferred_counties||null, simple_area_preference:bc.simple_area_preference||null, financing_type:bc.financing_type||null, minimum_cap_rate:bc.minimum_cap_rate||null, other_requirements:bc.other_requirements||null, date_added:new Date().toISOString().split('T')[0]});
+      _aiAddBotMessage('Created buyer criteria for <strong>'+(c.name||'')+'</strong>.',true);
+    }
+    if(typeof loadDataAndRender==='function') loadDataAndRender();
+    _aiAddBotMessage('✅ Done! Buyer is in the system.'); _aiPendingResult=null;
+  }catch(e){ _aiAddBotMessage('❌ Error: '+(e.message||'unknown')); }
+}
+
 </script>
+
+<!-- v104: AI Assistant floating widget -->
+<div id="aiAssistWidget" style="position:fixed;bottom:24px;right:24px;z-index:8000;font-family:'Inter',system-ui,sans-serif;">
+  <!-- FAB button -->
+  <button id="aiAssistFab" onclick="_aiToggle()" style="width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#7c3aed,#4f46e5);color:#fff;border:none;box-shadow:0 4px 20px rgba(79,70,229,0.4);cursor:pointer;font-size:24px;display:flex;align-items:center;justify-content:center;transition:transform 0.2s;">
+    ✦
+  </button>
+  <!-- Chat panel (hidden by default) -->
+  <div id="aiAssistPanel" style="display:none;position:absolute;bottom:68px;right:0;width:420px;max-width:calc(100vw - 40px);height:540px;max-height:calc(100vh - 120px);background:#fff;border-radius:16px;box-shadow:0 12px 50px rgba(0,0,0,0.2);border:1px solid #e2e8f0;overflow:hidden;display:none;flex-direction:column;">
+    <!-- Header -->
+    <div style="background:linear-gradient(135deg,#0f172a,#1e3a8a);color:#fff;padding:16px 18px;display:flex;align-items:center;gap:10px;flex-shrink:0;">
+      <div style="font-size:20px;">✦</div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:14px;font-weight:700;">Ace AI Assistant</div>
+        <div style="font-size:10px;color:#93c5fd;margin-top:1px;">Paste call notes, describe a buyer, log pitches</div>
+      </div>
+      <button onclick="_aiClearChat()" title="Clear conversation" style="background:rgba(255,255,255,0.12);border:none;color:#fff;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;">↻</button>
+      <button onclick="_aiToggle()" style="background:transparent;border:none;color:#fff;font-size:18px;cursor:pointer;padding:4px;">×</button>
+    </div>
+    <!-- Messages -->
+    <div id="aiAssistMessages" style="flex:1;overflow-y:auto;padding:14px 16px;background:#f8fafc;"></div>
+    <!-- Input -->
+    <div style="border-top:1px solid #e2e8f0;padding:12px 14px;background:#fff;flex-shrink:0;">
+      <div style="display:flex;gap:8px;">
+        <textarea id="aiAssistInput" rows="2" placeholder="Paste call notes, describe a lead, or log pitches..." style="flex:1;border:1px solid #cbd5e1;border-radius:8px;padding:10px 12px;font-size:13px;font-family:inherit;resize:none;line-height:1.4;outline:none;" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();_aiSend();}"></textarea>
+        <button onclick="_aiSend()" id="aiAssistSendBtn" style="background:linear-gradient(135deg,#7c3aed,#4f46e5);color:#fff;border:none;width:42px;height:42px;border-radius:10px;cursor:pointer;font-size:18px;flex-shrink:0;display:flex;align-items:center;justify-content:center;">↑</button>
+      </div>
+    </div>
+  </div>
+</div>
+
 </body>
 </html>

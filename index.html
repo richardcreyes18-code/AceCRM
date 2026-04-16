@@ -32869,11 +32869,14 @@ function saveFinInputs(dealId){
   // ── Income ───────────────────────────────────────────────────
   const aGRI_mo = get('fin_aGrossRent_mo');
   const pGRI_mo = get('fin_pGrossRent_mo');
-  if(aGRI_mo) fields['Gross Rental Income (Monthly)']  = aGRI_mo;
+  // v107: always send GRI even when 0 — otherwise clearing the input
+  // field never writes to the DB and the old value persists forever.
+  // Send null instead of 0 so the DB column is actually cleared.
+  fields['Gross Rental Income (Monthly)']  = aGRI_mo || null;
   if(get('fin_aVacancy'))   fields['Vacancy Rate (%)']            = get('fin_aVacancy');
   if(get('fin_aOI_mo'))     fields['Other Income (Monthly)']      = get('fin_aOI_mo');
   if(get('fin_aRUBS_mo'))   fields['RUBS/CAM Income (Monthly)']   = get('fin_aRUBS_mo');
-  if(pGRI_mo) fields['Proforma Gross Rent (Monthly)']  = pGRI_mo;
+  fields['Proforma Gross Rent (Monthly)']  = pGRI_mo || null;
   if(get('fin_pVacancy'))   fields['Vacancy Rate Proforma (%)']   = get('fin_pVacancy');
   if(get('fin_pOI_mo'))     fields['Proforma Other Income (Monthly)'] = get('fin_pOI_mo');
   if(get('fin_pRUBS_mo'))   fields['Proforma RUBS/CAM (Monthly)'] = get('fin_pRUBS_mo');

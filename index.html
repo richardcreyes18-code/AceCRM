@@ -20150,17 +20150,6 @@ function showSettingsPage(){
             </div>
             <button onclick="if(confirm('Reset AI usage tracking?')){localStorage.removeItem('ai_cost_tracker');location.reload();}" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:7px 14px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;">Reset counter</button>
           </div>
-          <script>
-            (function(){
-              const el=document.getElementById('aiCostDisplay');
-              if(!el) return;
-              try{
-                const s=JSON.parse(localStorage.getItem('ai_cost_tracker')||'{}');
-                const cost=((s.total_input||0)*0.25+(s.total_output||0)*1.25)/1e6;
-                el.innerHTML='<strong>'+(s.call_count||0)+'</strong> API calls · <strong>'+(s.total_input||0).toLocaleString()+'</strong> input tokens · <strong>'+(s.total_output||0).toLocaleString()+'</strong> output tokens · Total cost: <strong>$'+cost.toFixed(4)+'</strong>'+(s.last_call?' · Last call: '+new Date(s.last_call).toLocaleString():'');
-              }catch(e){ el.textContent='No usage recorded yet.'; }
-            })();
-          </script>
         </section>
 
         <!-- v102.42: Dedupe entry tile -->
@@ -20328,6 +20317,17 @@ function showSettingsPage(){
       _appListRender('preferred_cities');
     }catch(e){ console.warn('app list render failed:', e.message); }
   }, 60);
+
+  // v105: populate AI cost display
+  setTimeout(() => {
+    const el = document.getElementById('aiCostDisplay');
+    if(!el) return;
+    try{
+      const s = JSON.parse(localStorage.getItem('ai_cost_tracker') || '{}');
+      const cost = ((s.total_input||0) * 0.25 + (s.total_output||0) * 1.25) / 1e6;
+      el.innerHTML = '<strong>' + (s.call_count||0) + '</strong> API calls · <strong>' + (s.total_input||0).toLocaleString() + '</strong> input tokens · <strong>' + (s.total_output||0).toLocaleString() + '</strong> output tokens · Total cost: <strong>$' + cost.toFixed(4) + '</strong>' + (s.last_call ? ' · Last call: ' + new Date(s.last_call).toLocaleString() : '');
+    }catch(e){ el.textContent = 'No usage recorded yet.'; }
+  }, 100);
 }
 
 // ═══════════════════════════════════════════════════════════════

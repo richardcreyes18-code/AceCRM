@@ -20182,6 +20182,16 @@ function showSettingsPage(){
           <button onclick="setNav(null,'dedupe')" style="background:#0f172a;color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Open dedupe queue →</button>
         </section>
 
+        <!-- v108: FUB Import tile -->
+        <section style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
+          <div style="font-size:28px;flex-shrink:0;">📥</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:15px;font-weight:700;color:#0f172a;">FUB data import</div>
+            <div style="font-size:12px;color:#64748b;margin-top:3px;line-height:1.5;">Analyze and import remaining contacts from Follow Up Boss. Auto-skips records already matched by phone or email. Preview-only analysis for now.</div>
+          </div>
+          <button onclick="_fubImportOpen()" style="background:#0f172a;color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Open import →</button>
+        </section>
+
         <!-- CONNECTION -->
         <section style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
           <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:4px;">
@@ -33014,6 +33024,208 @@ function saveFinInputs(dealId){
         _finUpdateStamp();
       }
     });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// v108: FUB IMPORT PREVIEW — analyzer-driven, read-only for now.
+// ═══════════════════════════════════════════════════════════════════════
+// Opens a full-page view inside mainArea. Shows the 5 categories from
+// the analyze_fub_import() RPC, with drill-down tables for each.
+// Ship 1: preview only. Ship 2 will add the actual import execution.
+
+let _fubAnalysisSummary = null; // { total_fub, already_matched, new_to_import, name_only_ambiguous, no_contact_info, analysis_duration_ms }
+let _fubCurrentTab = 'summary'; // 'summary' | 'new' | 'matched' | 'ambiguous'
+let _fubRowsCache = {};
+
+function _fubImportOpen(){
+  const main = document.getElementById('mainArea');
+  if(!main) return;
+  main.innerHTML = `
+    <div style="padding:16px 22px;max-width:1100px;margin:0 auto;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <div>
+          <div style="font-size:20px;font-weight:700;color:#0f172a;">📥 FUB Data Import</div>
+          <div style="font-size:12px;color:#64748b;margin-top:3px;">Read-only preview of overlap between FUB records and your CRM. No data is written yet.</div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button onclick="setNav(null,'settings')" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:8px 14px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;">← Back to Settings</button>
+          <button id="fubRunAnalysisBtn" onclick="_fubRunAnalysis()" style="background:#0f172a;color:#fff;border:none;padding:8px 16px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;">🔄 Run analysis</button>
+        </div>
+      </div>
+      <div id="fubImportBody">
+        <div style="padding:40px;text-align:center;color:#64748b;font-size:13px;">Click <strong>Run analysis</strong> to scan 26,695 FUB contacts against your current ${(allContacts||[]).length} CRM contacts. Takes ~2 seconds.</div>
+      </div>
+    </div>`;
+  // Auto-run on first open if we haven't analyzed recently
+  _fubLoadLastAnalysis();
+}
+
+async function _fubLoadLastAnalysis(){
+  // Check if we have a previous analysis — read summary from the table
+  try{
+    const rows = await _sbGet('ace_fub_import_analysis',
+      'select=match_status&limit=1');
+    if(Array.isArray(rows) && rows.length){
+      // Table has data — re-compute counts on the client
+      await _fubRefreshCounts();
+    }
+  }catch(e){}
+}
+
+async function _fubRunAnalysis(){
+  const btn = document.getElementById('fubRunAnalysisBtn');
+  const body = document.getElementById('fubImportBody');
+  if(btn){ btn.disabled = true; btn.textContent = '⏳ Analyzing...'; }
+  if(body) body.innerHTML = '<div style="padding:40px;text-align:center;color:#64748b;font-size:13px;">⏳ Analyzing 26,695 FUB records against your CRM... takes a few seconds.</div>';
+  try{
+    const result = await _sbRpc('analyze_fub_import');
+    if(Array.isArray(result) && result.length){
+      _fubAnalysisSummary = result[0];
+      _fubRowsCache = {};
+      _fubRenderSummary();
+    } else {
+      if(body) body.innerHTML = '<div style="padding:40px;text-align:center;color:#dc2626;font-size:13px;">Analysis returned no results. Check console for errors.</div>';
+    }
+  }catch(e){
+    if(body) body.innerHTML = '<div style="padding:40px;text-align:center;color:#dc2626;font-size:13px;">Error: ' + (e.message||'unknown') + '</div>';
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '🔄 Re-run analysis'; }
+  }
+}
+
+async function _fubRefreshCounts(){
+  // Used when reopening the page — re-compute counts from the analysis table
+  try{
+    const [newRows, matchedRows, ambigRows] = await Promise.all([
+      _sbGet('ace_fub_import_analysis', 'select=fub_contact_id&match_status=eq.new&limit=1'),
+      _sbGet('ace_fub_import_analysis', 'select=fub_contact_id&match_status=in.(matched_phone,matched_email)&limit=1'),
+      _sbGet('ace_fub_import_analysis', 'select=fub_contact_id&match_status=eq.matched_name_only&limit=1')
+    ]);
+    // If anything returned, we have data — but we don't have exact counts without a RPC.
+    // Just prompt user to re-run analysis for fresh counts
+    const body = document.getElementById('fubImportBody');
+    if(body) body.innerHTML = '<div style="padding:30px;text-align:center;color:#64748b;font-size:13px;">Previous analysis is available. Click <strong>Run analysis</strong> to refresh with current data.</div>';
+  }catch(e){}
+}
+
+function _fubRenderSummary(){
+  const s = _fubAnalysisSummary;
+  if(!s){ return; }
+  const body = document.getElementById('fubImportBody');
+  if(!body) return;
+
+  const card = (icon, label, count, color, desc, tab) => `
+    <div onclick="${tab?`_fubShowDetail('${tab}')`:''}" style="flex:1;min-width:200px;background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px 18px;${tab?'cursor:pointer;transition:transform 0.15s,box-shadow 0.15s;':''}" ${tab?`onmouseenter="this.style.transform='translateY(-2px)';this.style.boxShadow='0 4px 12px rgba(0,0,0,0.08)';" onmouseleave="this.style.transform='';this.style.boxShadow='';"`:''}>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+        <div style="font-size:22px;">${icon}</div>
+        <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;">${label}</div>
+      </div>
+      <div style="font-size:28px;font-weight:800;color:${color};line-height:1;">${count.toLocaleString()}</div>
+      <div style="font-size:11px;color:#64748b;margin-top:6px;line-height:1.5;">${desc}</div>
+      ${tab?`<div style="font-size:10px;color:#2563eb;font-weight:600;margin-top:8px;">View rows →</div>`:''}
+    </div>`;
+
+  body.innerHTML = `
+    <div style="background:#eef2fb;border:1px solid #c7d2fe;border-radius:10px;padding:14px 18px;margin-bottom:16px;font-size:12px;color:#1e3a8a;">
+      <strong>Analyzed ${s.total_fub.toLocaleString()} FUB contacts</strong> in ${s.analysis_duration_ms}ms. Results below show what would happen if you ran the full import.
+    </div>
+
+    <div style="display:flex;flex-wrap:wrap;gap:12px;margin-bottom:18px;">
+      ${card('✅', 'Already in CRM', s.already_matched, '#16a34a', 'Matched by phone or email. Would be <strong>skipped</strong> on import.', 'matched')}
+      ${card('🆕', 'New to import', s.new_to_import, '#2563eb', 'No overlap with your CRM. Would be <strong>imported</strong>.', 'new')}
+      ${card('⚠️', 'Name-only match', s.name_only_ambiguous, '#b45309', 'Name matches but phone/email don\'t. <strong>Needs review</strong>.', 'ambiguous')}
+      ${card('🚫', 'No contact info', s.no_contact_info, '#6b7280', 'No phone, email, or name. Would be <strong>skipped</strong>.', null)}
+    </div>
+
+    <div style="background:#fefce8;border:1px solid #fde68a;border-radius:10px;padding:14px 18px;font-size:12px;color:#713f12;">
+      <div style="font-weight:700;margin-bottom:6px;">📋 Next steps</div>
+      <ol style="margin:0;padding-left:20px;line-height:1.7;">
+        <li><strong>Review the name-only matches</strong> (${s.name_only_ambiguous.toLocaleString()}) — these are likely duplicates but need your eyes before merging</li>
+        <li><strong>Run Ship 2 (coming next)</strong> — will insert the ${s.new_to_import.toLocaleString()} new contacts + their deals</li>
+        <li><strong>Run existing dedupe</strong> — will catch any remaining duplicates in your CRM</li>
+        <li><strong>Ship 3 AI enrichment</strong> — will parse FUB notes to fill buyer criteria / seller details</li>
+      </ol>
+    </div>
+  `;
+}
+
+async function _fubShowDetail(tab){
+  _fubCurrentTab = tab;
+  const body = document.getElementById('fubImportBody');
+  if(!body) return;
+
+  const statusFilter = {
+    'new': 'eq.new',
+    'matched': 'in.(matched_phone,matched_email)',
+    'ambiguous': 'eq.matched_name_only'
+  }[tab];
+  const labels = {
+    'new': { title: '🆕 New contacts to import', color: '#2563eb' },
+    'matched': { title: '✅ Already in CRM (would skip)', color: '#16a34a' },
+    'ambiguous': { title: '⚠️ Name-only matches (review)', color: '#b45309' }
+  };
+  const lbl = labels[tab];
+
+  body.innerHTML = `
+    <div style="margin-bottom:12px;">
+      <button onclick="_fubRenderSummary()" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:6px 14px;font-size:11px;font-weight:600;border-radius:6px;cursor:pointer;">← Back to summary</button>
+    </div>
+    <div style="font-size:16px;font-weight:700;color:${lbl.color};margin-bottom:10px;">${lbl.title}</div>
+    <div id="fubDetailTable" style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
+      <div style="padding:30px;text-align:center;color:#64748b;font-size:12px;">⏳ Loading...</div>
+    </div>
+  `;
+
+  try{
+    // Fetch first 100 rows
+    const rows = await _sbGet('ace_fub_import_analysis',
+      `select=fub_contact_id,fub_name,fub_type,fub_primary_phone,fub_primary_email,fub_has_deal,fub_deal_name,matched_ace_name,matched_on&match_status=${statusFilter}&limit=100`);
+    const tbl = document.getElementById('fubDetailTable');
+    if(!tbl) return;
+    if(!Array.isArray(rows) || !rows.length){
+      tbl.innerHTML = '<div style="padding:30px;text-align:center;color:#64748b;font-size:12px;">No rows in this category.</div>';
+      return;
+    }
+
+    const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+    const showMatch = tab !== 'new';
+    tbl.innerHTML = `
+      <div style="padding:10px 14px;background:#f8fafc;border-bottom:1px solid #e2e8f0;font-size:11px;color:#64748b;">
+        Showing first <strong>${rows.length}</strong> rows. ${tab==='new' ? 'These will be imported.' : tab==='matched' ? 'These are already in your CRM and will be skipped.' : 'These need manual review.'}
+      </div>
+      <div style="max-height:600px;overflow:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:11px;">
+          <thead style="position:sticky;top:0;background:linear-gradient(180deg,#1a3a6e,#0e2244);color:#fff;z-index:2;">
+            <tr>
+              <th style="padding:8px 10px;text-align:left;border-right:1px solid #334;font-weight:600;">FUB Name</th>
+              <th style="padding:8px 10px;text-align:left;border-right:1px solid #334;font-weight:600;">Type</th>
+              <th style="padding:8px 10px;text-align:left;border-right:1px solid #334;font-weight:600;">Phone</th>
+              <th style="padding:8px 10px;text-align:left;border-right:1px solid #334;font-weight:600;">Email</th>
+              <th style="padding:8px 10px;text-align:left;border-right:1px solid #334;font-weight:600;">Deal</th>
+              ${showMatch?`<th style="padding:8px 10px;text-align:left;border-right:1px solid #334;font-weight:600;">Matched Ace Contact</th>`:''}
+              ${showMatch?`<th style="padding:8px 10px;text-align:left;font-weight:600;">Matched On</th>`:''}
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map((r,i)=>`
+              <tr style="background:${i%2?'#f8fafc':'#fff'};border-bottom:1px solid #f1f5f9;">
+                <td style="padding:7px 10px;font-weight:600;color:#0f172a;">${esc(r.fub_name)}</td>
+                <td style="padding:7px 10px;"><span style="background:${r.fub_type==='Buyer'?'#dbeafe':r.fub_type==='Seller'?'#fef3c7':'#f1f5f9'};color:${r.fub_type==='Buyer'?'#1e40af':r.fub_type==='Seller'?'#b45309':'#475569'};padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;">${esc(r.fub_type||'—')}</span></td>
+                <td style="padding:7px 10px;color:#334155;">${esc(r.fub_primary_phone)||'<span style="color:#cbd5e1;">—</span>'}</td>
+                <td style="padding:7px 10px;color:#334155;">${esc(r.fub_primary_email)||'<span style="color:#cbd5e1;">—</span>'}</td>
+                <td style="padding:7px 10px;color:#64748b;font-size:10px;max-width:180px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;" title="${esc(r.fub_deal_name)}">${r.fub_has_deal?esc(r.fub_deal_name):'<span style="color:#cbd5e1;">—</span>'}</td>
+                ${showMatch?`<td style="padding:7px 10px;font-weight:600;color:#0f172a;">${esc(r.matched_ace_name)||'—'}</td>`:''}
+                ${showMatch?`<td style="padding:7px 10px;color:#64748b;font-family:monospace;font-size:10px;">${esc(r.matched_on)||'—'}</td>`:''}
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>
+    `;
+  }catch(e){
+    const tbl = document.getElementById('fubDetailTable');
+    if(tbl) tbl.innerHTML = '<div style="padding:30px;text-align:center;color:#dc2626;font-size:12px;">Error: '+(e.message||'unknown')+'</div>';
   }
 }
 

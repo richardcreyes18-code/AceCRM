@@ -23051,6 +23051,10 @@ let _ddContactCache = {}; // contact_id -> full ace_contacts row, populated lazi
 let _ddOpenMergeId = null; // currently-open merge dialog candidate id
 let _ddMergePicks = {};   // field name -> picked value (or '__combine__' for notes)
 let _ddTagPicks = null;   // v102.42.5: Set<string> of tags chosen for the survivor
+// v102.43: property merge sub-section state
+let _ddPropertyGroups = [];      // [{ key, addrHint, properties[] }, ...]
+let _ddPropertyExpanded = null;  // Set<groupKey> currently expanded
+let _ddPropertyPicks = null;     // { groupKey: { surviving_id, address, asking_price, ... } }
 
 async function showDedupePage(){
   const main = document.getElementById('mainArea');
@@ -23207,6 +23211,9 @@ async function _ddOpenMerge(candidateId){
   _ddOpenMergeId = candidateId;
   _ddMergePicks = {};
   _ddTagPicks = null;
+  _ddPropertyGroups = [];
+  _ddPropertyExpanded = null;
+  _ddPropertyPicks = null;
 
   const overlay = document.getElementById('ddMergeOverlay');
   if(!overlay) return;
@@ -23288,7 +23295,7 @@ async function _ddOpenMerge(candidateId){
   try{
     const [propRows, bcRows, pitchRows, commRows] = await Promise.all([
       _sbGet('ace_properties',
-        'select=id,address,asking_price,pipeline_stage,deal_tag,owner_contact_id'
+        'select=id,address,property_name,asking_price,offer_price,pipeline_stage,deal_tag,owner_contact_id,deal_notes,next_steps,general_property_notes,crm_asset_classification,date_added,deleted_at'
         + '&owner_contact_id=' + idFilter + '&limit=2000').catch(e=>{console.warn('detail props:',e.message); return [];}),
       _sbGet('ace_buyer_criteria',
         'select=id,contact_id,desired_property_types,min_purchase_price,max_purchase_price,preferred_counties,simple_area_preference,financing_type,date_added'
@@ -23301,6 +23308,7 @@ async function _ddOpenMerge(candidateId){
         + '&contact_id=' + idFilter + '&limit=5000').catch(e=>{console.warn('detail comms:',e.message); return [];})
     ]);
     (Array.isArray(propRows)  ? propRows  : []).forEach(p => {
+      if(p.deleted_at) return;
       if(detail.byContact[p.owner_contact_id]) detail.byContact[p.owner_contact_id].properties.push(p);
     });
     (Array.isArray(bcRows)    ? bcRows    : []).forEach(bc => {
@@ -23315,6 +23323,15 @@ async function _ddOpenMerge(candidateId){
     });
   }catch(e){ console.warn('detail batch fetch failed (non-fatal):', e.message); }
   _ddDialogDetailCache = detail;
+
+  // v102.43: detect duplicate properties across the contacts being merged.
+  // Group by normalized address (lowercase, alphanumeric only, first 20
+  // chars). This catches "78 Stevens Ave, Jersey City, NJ 07305, USA"
+  // matching "78 Stevens AveJersey City, NJ -AA" — both normalize to
+  // the same prefix.
+  _ddPropertyGroups = _ddDetectPropertyGroups(detail);
+  _ddPropertyExpanded = new Set();
+  _ddPropertyPicks = {};
 
   _ddRenderMergeDialog(cand, contacts, dealCounts);
 }
@@ -23339,6 +23356,9 @@ function _ddCloseMerge(){
   _ddOpenMergeId = null;
   _ddMergePicks = {};
   _ddTagPicks = null;
+  _ddPropertyGroups = [];
+  _ddPropertyExpanded = null;
+  _ddPropertyPicks = null;
 }
 
 function _ddRenderMergeDialog(cand, contacts, dealCounts){
@@ -23528,9 +23548,9 @@ function _ddRenderMergeBody(cand, contacts, dealCounts, fields){
       </div>
       ${fields.map(f => fieldRow(f)).join('')}
     </div>
+    ${_ddRenderPropertyGroups()}
   `;
 }
-
 // v102.42.6: Live preview row showing what the surviving contact will
 // look like after merge. Computed from _ddMergePicks (per-field winners)
 // and _ddTagPicks (curated type set). Re-renders on every radio click
@@ -23758,6 +23778,252 @@ function _ddRenderInspectionRows(contacts){
 
 // "→" affordance on a property row in the inspection grid. Closes the
 // merge dialog (so the user isn't blocked) and opens the deal page.
+// ═══════════════════════════════════════════════════════════════════════
+// v102.43: PROPERTY MERGE SUB-SECTION inside the contact merge dialog.
+// ═══════════════════════════════════════════════════════════════════════
+// When 2+ contacts in the merge group own properties at the same address,
+// the user gets a collapsible "Properties found across these contacts"
+// section below the contact field grid. Expanding a group shows the
+// same side-by-side picker UI as contacts but with property fields, and
+// the user picks a surviving property + winning values per field. On
+// submit, each property merge is committed via the merge_properties RPC
+// BEFORE the contact merge runs, so contact merge sees a clean property
+// landscape (no stale FK targets).
+
+// Normalize an address for fuzzy grouping. Lowercase, strip everything
+// that isn't a letter or digit, take first 20 chars. So
+// "78 Stevens Ave, Jersey City, NJ 07305, USA" → "78stevensavejerseycit"
+// "78 Stevens AveJersey City, NJ -AA" → "78stevensavejerseycit" (match!)
+function _ddNormalizeAddr(addr){
+  return String(addr||'').toLowerCase().replace(/[^a-z0-9]/g,'').substring(0, 20);
+}
+
+// Scan all contacts' properties and group by normalized address. Returns
+// an array of groups with 2+ properties (single-property groups don't
+// need merging). Each group has a stable key derived from the address
+// hint so DOM state survives re-renders.
+function _ddDetectPropertyGroups(detail){
+  const byAddr = {};
+  Object.keys(detail.byContact || {}).forEach(contactId => {
+    const props = (detail.byContact[contactId] || {}).properties || [];
+    props.forEach(p => {
+      const key = _ddNormalizeAddr(p.address);
+      if(!key || key.length < 5) return; // skip empty/junk addresses
+      if(!byAddr[key]) byAddr[key] = { key, addrHint: p.address, properties: [] };
+      byAddr[key].properties.push(p);
+    });
+  });
+  // Only keep groups with 2+ properties (potential dupes)
+  return Object.values(byAddr).filter(g => g.properties.length >= 2);
+}
+
+// Render the property merge sub-section. One collapsible card per group.
+// Returns empty string if no duplicate property groups detected.
+function _ddRenderPropertyGroups(){
+  if(!_ddPropertyGroups || !_ddPropertyGroups.length) return '';
+  const sections = _ddPropertyGroups.map(g => _ddRenderPropertyGroupCard(g)).join('');
+  return `
+    <div style="margin-top:18px;border-top:2px solid #e2e8f0;padding-top:16px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+        <div style="font-size:14px;font-weight:700;color:#0f172a;">🏠 Duplicate properties detected (${_ddPropertyGroups.length} group${_ddPropertyGroups.length===1?'':'s'})</div>
+      </div>
+      <div style="font-size:11px;color:#64748b;margin-bottom:12px;line-height:1.5;">
+        These properties share the same address across the contacts being merged.
+        Expand each group to compare and merge them — otherwise after the contact merge you'll have multiple deal entries for the same address.
+      </div>
+      ${sections}
+    </div>
+  `;
+}
+
+function _ddRenderPropertyGroupCard(group){
+  const isExpanded = _ddPropertyExpanded && _ddPropertyExpanded.has(group.key);
+  const safeAddr = String(group.addrHint||'(no address)').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const willMergeBadge = (_ddPropertyPicks && _ddPropertyPicks[group.key])
+    ? '<span style="display:inline-block;font-size:10px;padding:2px 8px;border-radius:6px;background:#16a34a;color:#fff;font-weight:700;margin-left:8px;">WILL MERGE ✓</span>'
+    : '<span style="display:inline-block;font-size:10px;padding:2px 8px;border-radius:6px;background:#fef3c7;color:#92400e;font-weight:600;margin-left:8px;">NOT MERGED</span>';
+  const skipBtn = (_ddPropertyPicks && _ddPropertyPicks[group.key])
+    ? `<button onclick="event.stopPropagation();_ddSkipPropertyMerge('${group.key}')" style="background:transparent;border:none;color:#64748b;font-size:11px;cursor:pointer;text-decoration:underline;margin-left:8px;">Don't merge these</button>`
+    : '';
+  return `
+    <div style="border:1px solid #e2e8f0;border-radius:8px;margin-bottom:10px;background:#fff;overflow:hidden;">
+      <div onclick="_ddTogglePropertyGroup('${group.key}')" style="padding:12px 16px;background:#f8fafc;display:flex;align-items:center;gap:10px;cursor:pointer;border-bottom:${isExpanded?'1px solid #e2e8f0':'none'};">
+        <div style="font-size:14px;color:#475569;width:14px;flex-shrink:0;">${isExpanded?'▾':'▸'}</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13px;font-weight:600;color:#0f172a;">${safeAddr}</div>
+          <div style="font-size:11px;color:#64748b;margin-top:2px;">${group.properties.length} property records${willMergeBadge}${skipBtn}</div>
+        </div>
+      </div>
+      ${isExpanded ? _ddRenderPropertyGroupBody(group) : ''}
+    </div>
+  `;
+}
+
+// The expanded body — same grid pattern as contact field picker, but for
+// property fields. The user picks a surviving property + per-field winners.
+function _ddRenderPropertyGroupBody(group){
+  const props = group.properties;
+  const cols = props.length;
+  const groupKey = group.key;
+  const picks = (_ddPropertyPicks && _ddPropertyPicks[groupKey]) || {};
+
+  // Default surviving property = the one with the most fields filled in
+  // (best signal of "this is the canonical record"). Could also use
+  // "most recent" but field-density tends to be a better proxy for "the
+  // one the user actually worked on".
+  if(!picks.surviving_id){
+    let best = props[0].id;
+    let bestScore = -1;
+    props.forEach(p => {
+      const score = ['address','property_name','asking_price','offer_price',
+                     'pipeline_stage','deal_tag','deal_notes','next_steps',
+                     'general_property_notes','crm_asset_classification']
+        .filter(f => p[f] !== null && p[f] !== undefined && String(p[f]).trim() !== '').length;
+      if(score > bestScore){ bestScore = score; best = p.id; }
+    });
+    picks.surviving_id = best;
+  }
+  const survId = picks.surviving_id;
+
+  // Property fields the user can pick from. Subset of ace_properties columns
+  // — the high-signal ones the user actually edits manually. Numeric fields
+  // are accepted as strings; the RPC casts them.
+  const fields = [
+    { key: 'address',                  label: 'Address'           },
+    { key: 'property_name',            label: 'Property name'     },
+    { key: 'pipeline_stage',           label: 'Stage'             },
+    { key: 'deal_tag',                 label: 'Deal tag'          },
+    { key: 'asking_price',             label: 'Asking price',     fmt: 'money' },
+    { key: 'offer_price',              label: 'Offer price',      fmt: 'money' },
+    { key: 'crm_asset_classification', label: 'Asset class'       },
+    { key: 'deal_notes',               label: 'Deal notes'        },
+    { key: 'next_steps',               label: 'Next steps'        },
+    { key: 'general_property_notes',   label: 'General notes'     }
+  ];
+
+  // Default per-field picks (only on first expand of this group)
+  fields.forEach(f => {
+    if(picks[f.key] !== undefined) return;
+    const survVal = (props.find(p => p.id === survId) || {})[f.key];
+    if(survVal !== null && survVal !== undefined && String(survVal).trim() !== ''){
+      picks[f.key] = survId; return;
+    }
+    const fallback = props.find(p => p[f.key] !== null && p[f.key] !== undefined && String(p[f.key]).trim() !== '');
+    picks[f.key] = fallback ? fallback.id : survId;
+  });
+
+  // Persist picks back so re-renders see them
+  if(!_ddPropertyPicks) _ddPropertyPicks = {};
+  _ddPropertyPicks[groupKey] = picks;
+
+  const fmtMoney = n => {
+    const v = Number(n); if(!v||isNaN(v)) return '';
+    if(v >= 1000000) return '$' + (v/1000000).toFixed(2).replace(/\.?0+$/,'') + 'M';
+    if(v >= 1000)    return '$' + Math.round(v/1000) + 'K';
+    return '$' + v;
+  };
+  const escape = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const renderVal = (v, fmt) => {
+    if(v === null || v === undefined || String(v).trim() === '') return '';
+    if(fmt === 'money') return fmtMoney(v);
+    return escape(v);
+  };
+
+  // Property header row (mirror of contact colHeader)
+  const propHeader = (p, idx) => {
+    const isSurv = p.id === survId;
+    return `
+      <div style="padding:12px 14px;border-left:${idx===0?'none':'1px solid #f1f5f9'};background:${isSurv?'#eef2fb':'#fff'};">
+        <label style="display:flex;align-items:flex-start;gap:8px;cursor:pointer;">
+          <input type="radio" name="ddp_surv_${groupKey}" value="${p.id}" ${isSurv?'checked':''} onchange="_ddPickPropertySurvivor('${groupKey}','${p.id}')" style="margin-top:3px;flex-shrink:0;"/>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:11px;font-weight:700;color:#0f172a;">${escape((p.address||'').substring(0, 40))}${(p.address||'').length>40?'…':''}</div>
+            <div style="font-size:10px;color:#64748b;margin-top:3px;">${p.pipeline_stage||'?'} · added ${p.date_added||'?'}
+              ${isSurv?'<span style="display:inline-block;margin-left:4px;background:#1e3a8a;color:#fff;padding:1px 6px;border-radius:8px;font-weight:600;">Surviving</span>':''}
+            </div>
+            <a href="javascript:void(0)" onclick="event.stopPropagation();_ddOpenDealFromMerge('${p.id}')" style="font-size:10px;color:#1e40af;text-decoration:underline;">Open deal →</a>
+          </div>
+        </label>
+      </div>`;
+  };
+
+  // Field row (mirror of contact fieldRow with winner treatment)
+  const fieldRow = (f) => {
+    const cells = props.map((p, idx) => {
+      const rawVal = p[f.key];
+      const display = renderVal(rawVal, f.fmt);
+      const isEmpty = !display.trim();
+      const isPicked = picks[f.key] === p.id && !isEmpty;
+      const cellBg = isPicked ? '#ecfdf5' : '#fff';
+      const cellBorder = isPicked
+        ? 'border-left:4px solid #16a34a;'
+        : (idx===0 ? 'border-left:none;' : 'border-left:1px solid #f1f5f9;');
+      const valStyle = isEmpty
+        ? 'color:#cbd5e1;font-style:italic;'
+        : (isPicked ? 'color:#04342c;font-weight:600;' : 'color:#0f172a;');
+      const showVal = isEmpty ? '(empty)' : display;
+      const winnerBadge = isPicked
+        ? '<span style="display:inline-block;font-size:9px;padding:1px 5px;border-radius:8px;background:#16a34a;color:#fff;font-weight:700;margin-left:6px;letter-spacing:0.04em;">WINNER ✓</span>'
+        : '';
+      return `
+        <label style="padding:10px 14px;${cellBorder}background:${cellBg};cursor:${isEmpty?'default':'pointer'};display:flex;align-items:flex-start;gap:8px;${isEmpty?'opacity:0.7;':''}">
+          <input type="radio" name="ddp_f_${groupKey}_${f.key}" value="${p.id}" ${isPicked?'checked':''} ${isEmpty?'disabled':''} onchange="_ddPickPropertyField('${groupKey}','${f.key}','${p.id}')" style="margin-top:3px;flex-shrink:0;"/>
+          <span style="font-size:12px;${valStyle}line-height:1.5;word-break:break-word;flex:1;min-width:0;">${showVal}${winnerBadge}</span>
+        </label>`;
+    }).join('');
+    return `
+      <div style="display:grid;grid-template-columns:140px repeat(${cols}, minmax(0, 1fr));border-bottom:1px solid #f1f5f9;">
+        <div style="padding:12px 14px;font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;display:flex;align-items:flex-start;">${f.label}</div>
+        ${cells}
+      </div>`;
+  };
+
+  return `
+    <div style="padding:12px 16px;background:#fff;">
+      <div style="border:1px solid #e2e8f0;border-radius:6px;overflow:hidden;">
+        <div style="display:grid;grid-template-columns:140px repeat(${cols}, minmax(0, 1fr));border-bottom:1px solid #e2e8f0;background:#f8fafc;">
+          <div style="padding:10px 14px;font-size:11px;color:#475569;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;">Property</div>
+          ${props.map((p,i) => propHeader(p,i)).join('')}
+        </div>
+        ${fields.map(f => fieldRow(f)).join('')}
+      </div>
+      <div style="margin-top:10px;font-size:11px;color:#64748b;font-style:italic;">
+        After merge, the surviving property keeps these values. The other property record(s) are soft-deleted (recoverable from Settings for 30 days). All pitches, offers, documents, tasks, and workbench entries re-point to the surviving property.
+      </div>
+    </div>
+  `;
+}
+
+function _ddTogglePropertyGroup(groupKey){
+  if(!_ddPropertyExpanded) _ddPropertyExpanded = new Set();
+  if(_ddPropertyExpanded.has(groupKey)) _ddPropertyExpanded.delete(groupKey);
+  else                                  _ddPropertyExpanded.add(groupKey);
+  _ddReRenderDialog();
+}
+
+function _ddPickPropertySurvivor(groupKey, propertyId){
+  if(!_ddPropertyPicks) _ddPropertyPicks = {};
+  if(!_ddPropertyPicks[groupKey]) _ddPropertyPicks[groupKey] = {};
+  _ddPropertyPicks[groupKey].surviving_id = propertyId;
+  _ddReRenderDialog();
+}
+
+function _ddPickPropertyField(groupKey, fieldKey, propertyId){
+  if(!_ddPropertyPicks) _ddPropertyPicks = {};
+  if(!_ddPropertyPicks[groupKey]) _ddPropertyPicks[groupKey] = {};
+  _ddPropertyPicks[groupKey][fieldKey] = propertyId;
+  _ddReRenderDialog();
+}
+
+// Skip the merge for this property group — clears picks so the contact
+// merge proceeds without merging these properties (they'll all re-point
+// to the surviving contact and remain as separate deal entries).
+function _ddSkipPropertyMerge(groupKey){
+  if(!_ddPropertyPicks) return;
+  delete _ddPropertyPicks[groupKey];
+  _ddReRenderDialog();
+}
+
 function _ddOpenDealFromMerge(propertyId){
   _ddCloseMerge();
   const deal = (allDeals || []).find(x => x && x.id === propertyId);
@@ -23850,7 +24116,14 @@ function _ddReRenderDialog(){
   if(!cand) return;
   // Cheap re-render — refetch contacts is wasteful, so cache them on first render
   if(!_ddDialogContactsCache || _ddDialogContactsCacheKey !== _ddOpenMergeId){ return; }
+  // v102.42.9: preserve scroll position. innerHTML replacement resets the
+  // scrollTop of the body; without this, every radio click jumps the user
+  // back to the top of the dialog.
+  const body = document.getElementById('ddMergeBody');
+  const savedScroll = body ? body.scrollTop : 0;
   _ddRenderMergeDialog(cand, _ddDialogContactsCache, _ddDialogDealCountsCache);
+  const newBody = document.getElementById('ddMergeBody');
+  if(newBody) newBody.scrollTop = savedScroll;
 }
 
 // We need to cache contacts + dealCounts so re-renders (after radio
@@ -23906,6 +24179,55 @@ async function _ddSubmitMerge(candidateId){
 
   try{
     const userId = (_currentUser && _currentUser.id) || null;
+
+    // v102.43: do property merges FIRST (before contact merge). Each
+    // property merge group with picks gets committed via merge_properties.
+    // Doing this first means the contact merge sees a clean property
+    // landscape (each merged property is now soft-deleted, surviving
+    // properties already own all the FK-attached children). Failure
+    // mid-loop bails out before the contact merge so we don't leave a
+    // partially-merged state.
+    let propMergeCount = 0;
+    let propRepointCount = 0;
+    if(_ddPropertyPicks){
+      for(const groupKey of Object.keys(_ddPropertyPicks)){
+        const picks = _ddPropertyPicks[groupKey];
+        if(!picks || !picks.surviving_id) continue;
+        const group = _ddPropertyGroups.find(g => g.key === groupKey);
+        if(!group) continue;
+        const propSurv = picks.surviving_id;
+        const propLosers = group.properties.filter(p => p.id !== propSurv).map(p => p.id);
+        if(propLosers.length === 0) continue;
+        // Build property field_values from picks. Same pattern as contacts.
+        const propsById = {};
+        group.properties.forEach(p => { propsById[p.id] = p; });
+        const propFieldValues = {};
+        ['address','property_name','pipeline_stage','deal_tag','asking_price',
+         'offer_price','crm_asset_classification','deal_notes','next_steps',
+         'general_property_notes'].forEach(f => {
+          const pickedId = picks[f];
+          if(pickedId && propsById[pickedId]){
+            const v = propsById[pickedId][f];
+            if(v !== null && v !== undefined) propFieldValues[f] = String(v);
+          }
+        });
+        const pres = await _sbRpc('merge_properties', {
+          p_surviving_id: propSurv,
+          p_loser_ids:    propLosers,
+          p_field_values: propFieldValues,
+          p_user_id:      userId,
+          p_parent_contact_merge_id: null  // not yet — contact merge runs after
+        });
+        if(pres && pres.error){
+          showSaveConfirm('Property merge failed for "' + (group.addrHint||'(no address)') + '": ' + pres.error);
+          if(btn){ btn.disabled = false; btn.textContent = 'Merge into 1 contact'; }
+          return;
+        }
+        propMergeCount++;
+        propRepointCount += (pres.fk_repointed_count || 0);
+      }
+    }
+
     const res = await _sbRpc('merge_contacts', {
       p_surviving_id: survivingId,
       p_loser_ids:    loserIds,
@@ -23917,7 +24239,10 @@ async function _ddSubmitMerge(candidateId){
       if(btn){ btn.disabled = false; btn.textContent = 'Merge into 1 contact'; }
       return;
     }
-    showSaveConfirm('✓ Merged ' + (loserIds.length+1) + ' contacts into 1 (' + (res.fk_repointed_count||0) + ' related rows re-pointed)');
+    const propMsg = propMergeCount > 0
+      ? ' + ' + propMergeCount + ' property group' + (propMergeCount===1?'':'s') + ' merged (' + propRepointCount + ' rows re-pointed)'
+      : '';
+    showSaveConfirm('✓ Merged ' + (loserIds.length+1) + ' contacts into 1 (' + (res.fk_repointed_count||0) + ' related rows re-pointed)' + propMsg);
     _ddCloseMerge();
     // Refresh the queue so the merged candidate (and any subsumed groups)
     // disappear immediately.

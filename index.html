@@ -8704,9 +8704,7 @@ function renderFinancialTab(d){
       /* Simple mode hides advanced sections — inputs stay in DOM so calcs work */
       .fin-simple .fin-hide-simple{display:none !important;}
       .fin-simple .fin-simplify-grid{grid-template-columns:1fr !important;}
-      /* v106: NO FINANCIALS stamp overlay */
-      .fin-no-financials-wrap{position:relative;}
-      .fin-no-financials-wrap .fin-stamp-target{opacity:0.3;pointer-events:none;filter:grayscale(0.5);}
+      /* v106: NO FINANCIALS stamp overlay — always in DOM, toggled via JS */
       .fin-no-financials-stamp{
         position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-18deg);
         font-size:64px;font-weight:900;color:rgba(220,38,38,0.35);
@@ -8720,12 +8718,10 @@ function renderFinancialTab(d){
 
     <div class="fin-${_finMode}">
 
-    ${(!aGrossRent && !noiAt && !aExpenses) ? `
-    <!-- v106: NO FINANCIALS stamp — auto-shown when no income/NOI/expenses data -->
-    <div class="fin-no-financials-wrap">
-      <div class="fin-no-financials-stamp">No Financials</div>
-      <div class="fin-stamp-target">
-    ` : ''}
+    <!-- v106/v107.2: NO FINANCIALS stamp — always rendered, visibility set by initial state + toggled live -->
+    <div id="finStampWrap" style="position:relative;">
+      <div id="finStampLabel" class="fin-no-financials-stamp" style="display:${(!aGrossRent && !noiAt && !aExpenses)?'':'none'};">No Financials</div>
+      <div id="finStampTarget" style="${(!aGrossRent && !noiAt && !aExpenses)?'opacity:0.3;pointer-events:none;filter:grayscale(0.5);':''}">
 
     <!-- RESULTS SUMMARY ──────────────────────────────────────── -->
     <div class="info-box">
@@ -9032,10 +9028,8 @@ function renderFinancialTab(d){
     </div>
     ` : ''}
 
-    ${(!aGrossRent && !noiAt && !aExpenses) ? `
-    </div><!-- close .fin-stamp-target -->
-    </div><!-- close .fin-no-financials-wrap -->
-    ` : ''}
+    </div><!-- close #finStampTarget -->
+    </div><!-- close #finStampWrap -->
 
     <!-- INCOME TABLE ─────────────────────────────────────────── -->
     ${(()=>{
@@ -33016,9 +33010,28 @@ function saveFinInputs(dealId){
         // rapid typing.
         // v102.2: pulse the green dot to indicate a real save fired
         if(typeof _finPulseSaveDot === 'function') _finPulseSaveDot();
+        // v107.2: toggle NO FINANCIALS stamp based on live input values
+        _finUpdateStamp();
       }
     });
   }
+}
+
+// v107.2: dynamically toggle the NO FINANCIALS stamp.
+// Reads live DOM input values so it works immediately after typing/saving.
+function _finUpdateStamp(){
+  const stamp = document.getElementById('finStampLabel');
+  const target = document.getElementById('finStampTarget');
+  if(!stamp || !target) return;
+  const griMo = Number(String(document.getElementById('fin_aGrossRent_mo')?.value||'').replace(/,/g,''))||0;
+  const noiVal = Number(currentDeal?.['NOI']||0);
+  const expEl = document.getElementById('exp_totalOpEx_a_yr');
+  const expVal = expEl ? Number(String(expEl.textContent||'').replace(/[$,]/g,''))||0 : 0;
+  const hasData = !!(griMo || noiVal || expVal);
+  stamp.style.display = hasData ? 'none' : '';
+  target.style.opacity = hasData ? '1' : '0.3';
+  target.style.pointerEvents = hasData ? 'auto' : 'none';
+  target.style.filter = hasData ? 'none' : 'grayscale(0.5)';
 }
 
 function saveNotes(dealId){

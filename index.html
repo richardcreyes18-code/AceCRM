@@ -15986,6 +15986,10 @@ function renderDealBoard(){
   if(!deals.length){
     tbody.innerHTML = '<tr><td colspan="15" style="text-align:center;padding:30px;color:#888;">No deals match your filters.</td></tr>';
   }
+
+  // v103: enable column resizing on the deal board table
+  const _dbTbl = tbody.closest('table');
+  if(_dbTbl) _makeColumnsResizable(_dbTbl, 'dealBoard');
 }
 
 async function deleteDeal(dealId, addr){
@@ -16219,8 +16223,8 @@ async function showContactsPage(){
   const idleStyle   = 'background:transparent;color:#1a3a6e;border-color:#cbd5e1;';
 
   document.getElementById('mainArea').innerHTML = `
-    <div style="padding:16px;">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+    <div style="padding:16px;display:flex;flex-direction:column;height:100%;min-height:0;box-sizing:border-box;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-shrink:0;">
         <div style="font-size:16px;font-weight:bold;color:#1a3a6e;">👥 Contacts</div>
         <div style="display:flex;gap:8px;align-items:center;">
           <div style="display:flex;">
@@ -16240,7 +16244,7 @@ async function showContactsPage(){
           <button class="save-btn" onclick="_contactsLastLoadMs=0;showContactsPage()" style="padding:5px 10px;" title="Force reload from database">↻</button>
         </div>
       </div>
-      <div id="contactsTableWrap">
+      <div id="contactsTableWrap" style="flex:1;overflow:auto;min-height:0;">
         <div style="text-align:center;padding:30px;color:#888;font-size:12px;">⏳ Loading contacts...</div>
       </div>
     </div>`;
@@ -16578,6 +16582,24 @@ function filterContacts(){
     const matchSrc = !selSources || selSources.includes(f['Import Source'] || '(none)');
     return matchQ && matchT && matchScope && matchSrc;
   });
+
+  // v103: apply sort
+  const sortKey = {
+    name:    r => (r.fields.Name||'').toLowerCase(),
+    type:    r => (r.fields.Type||[]).join(',').toLowerCase(),
+    phone:   r => (r.fields['Phone Number']||'').toLowerCase(),
+    email:   r => (r.fields.Email||'').toLowerCase(),
+    company: r => (r.fields.Company||'').toLowerCase(),
+    notes:   r => (r.fields['Contact Notes']||'').toLowerCase(),
+    date:    r => r.fields['Date Added']||''
+  }[_contactsSort.col] || (r => (r.fields.Name||'').toLowerCase());
+  filtered.sort((a, b) => {
+    const av = sortKey(a), bv = sortKey(b);
+    if(av < bv) return _contactsSort.dir === 'asc' ? -1 : 1;
+    if(av > bv) return _contactsSort.dir === 'asc' ? 1 : -1;
+    return 0;
+  });
+
   renderContactsTable(filtered);
 }
 
@@ -16588,12 +16610,26 @@ const TYPE_COLORS = {
   Other:  'background:#e2e3e5;color:#383d41;border:1px solid #adb5bd;'
 };
 
-// v102.44: cached deal/contact-to-deal maps. Recomputing these on every
+// v103: cached deal/contact-to-deal maps. Recomputing these on every
 // keystroke (over 5000 deals) was burning ~50ms per render. Cached at
 // allDeals length + version so re-renders are instant. Invalidates if
 // allDeals is mutated (length change is a cheap heuristic).
 let _contactsDealMapCache = null;
 let _contactsDealMapCacheKey = null;
+
+// v103: sortable contacts table. Click any header to sort by that column;
+// click again to flip direction. Persists across re-renders within the
+// session (not localStorage — sort prefs reset on reload, like other table sorts).
+let _contactsSort = { col: 'name', dir: 'asc' };
+function _contactsToggleSort(col){
+  if(_contactsSort.col === col){
+    _contactsSort.dir = _contactsSort.dir === 'asc' ? 'desc' : 'asc';
+  } else {
+    _contactsSort.col = col;
+    _contactsSort.dir = 'asc';
+  }
+  filterContacts();
+}
 function _getContactsDealMaps(){
   const key = (allDeals||[]).length + ':' + (typeof _contactsDataVersion !== 'undefined' ? _contactsDataVersion : 0);
   if(_contactsDealMapCache && _contactsDealMapCacheKey === key) return _contactsDealMapCache;
@@ -16636,14 +16672,19 @@ function renderContactsTable(records){
       <thead>
         <tr style="background:linear-gradient(180deg,#1a3a6e,#0e2244);color:#fff;">
           <th style="padding:7px 6px;text-align:center;border:1px solid #0e2244;width:34px;" title="Your personal relationships">★</th>
-          <th style="padding:7px 10px;text-align:left;border:1px solid #0e2244;">Name</th>
-          <th style="padding:7px 10px;text-align:left;border:1px solid #0e2244;">Type</th>
-          <th style="padding:7px 10px;text-align:left;border:1px solid #0e2244;">Phone</th>
-          <th style="padding:7px 10px;text-align:left;border:1px solid #0e2244;">Email</th>
-          <th style="padding:7px 10px;text-align:left;border:1px solid #0e2244;">Company</th>
+          ${[
+            ['name','Name'],
+            ['type','Type'],
+            ['phone','Phone'],
+            ['email','Email'],
+            ['company','Company']
+          ].map(([col,label]) => {
+            const arrow = _contactsSort.col === col ? (_contactsSort.dir === 'asc' ? ' ▲' : ' ▼') : '';
+            return `<th onclick="_contactsToggleSort('${col}')" style="padding:7px 10px;text-align:left;border:1px solid #0e2244;cursor:pointer;user-select:none;${_contactsSort.col===col?'background:rgba(255,255,255,0.08);':''}" title="Click to sort by ${label}">${label}${arrow}</th>`;
+          }).join('')}
           <th style="padding:7px 10px;text-align:left;border:1px solid #0e2244;">Linked Properties</th>
-          <th style="padding:7px 10px;text-align:left;border:1px solid #0e2244;">Contact Notes</th>
-          <th style="padding:7px 10px;text-align:left;border:1px solid #0e2244;">Date Added</th>
+          <th onclick="_contactsToggleSort('notes')" style="padding:7px 10px;text-align:left;border:1px solid #0e2244;cursor:pointer;user-select:none;${_contactsSort.col==='notes'?'background:rgba(255,255,255,0.08);':''}" title="Click to sort by Notes">Contact Notes${_contactsSort.col==='notes'?(_contactsSort.dir==='asc'?' ▲':' ▼'):''}</th>
+          <th onclick="_contactsToggleSort('date')" style="padding:7px 10px;text-align:left;border:1px solid #0e2244;cursor:pointer;user-select:none;${_contactsSort.col==='date'?'background:rgba(255,255,255,0.08);':''}" title="Click to sort by Date Added">Date Added${_contactsSort.col==='date'?(_contactsSort.dir==='asc'?' ▲':' ▼'):''}</th>
           <th style="padding:7px 10px;text-align:center;border:1px solid #0e2244;">Edit</th>
         </tr>
       </thead>
@@ -16692,6 +16733,10 @@ function renderContactsTable(records){
         }).join('')}
       </tbody>
     </table>`;
+
+  // v103: enable column resizing on the contacts table
+  const tbl = wrap.querySelector('table');
+  if(tbl) _makeColumnsResizable(tbl, 'contacts');
 }
 
 function navigateToDeal(dealId){
@@ -21272,7 +21317,7 @@ function renderBuyerCriteriaTable(records){
         <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${company}</div>
       </td>
       <td style="padding:6px 8px;border-right:1px solid #e8ecf4;font-size:11px;color:#333;">${phone}</td>
-      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;max-width:160px;">${getBcTypeBadge(assetStr)}</td>
+      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;width:160px;max-width:160px;overflow:hidden;"><div style="display:flex;flex-wrap:wrap;gap:2px;align-items:flex-start;">${getBcTypeBadge(assetStr)}</div></td>
       <td style="padding:6px 8px;border-right:1px solid #e8ecf4;font-size:10px;color:#444;max-width:175px;" title="${areas}">
         <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${areaShort}</div>
       </td>
@@ -21293,6 +21338,10 @@ function renderBuyerCriteriaTable(records){
       </td>
     </tr>`;
   }).join('');
+
+  // v103: enable column resizing on the buyer criteria table
+  const bcTbl = wrap.closest('table');
+  if(bcTbl) _makeColumnsResizable(bcTbl, 'buyercriteria');
 }
 function bcOpenContact(contactId){
   if(!contactId){ return; }
@@ -23098,6 +23147,93 @@ function _clkUnlockFields(prefix){
 
 // ═══════════════════════════════════════════════════════════════════════
 // ═══════════════════════════════════════════════════════════════════════
+// ═══════════════════════════════════════════════════════════════════════
+// v103: RESIZABLE TABLE COLUMNS — shared utility used by Pipeline,
+// Deal Board, Contacts, and Buyer Criteria tables.
+// ═══════════════════════════════════════════════════════════════════════
+// Usage: after rendering a table, call:
+//   _makeColumnsResizable(tableEl, 'storage-key')
+// Each <th> gets a 5px-wide drag handle on its right edge. Drag the handle
+// to resize that column. Widths persist to localStorage per storageKey,
+// so reloads + re-renders restore the user's sizing. Skips the FIRST
+// column when it's a tiny icon column (≤40px wide) to avoid resizing the
+// star/checkbox columns which are intentionally narrow.
+
+function _makeColumnsResizable(tableEl, storageKey){
+  if(!tableEl || !storageKey) return;
+  const ths = tableEl.querySelectorAll('thead th');
+  if(!ths || !ths.length) return;
+
+  // Restore saved widths before adding handles
+  const saved = (() => {
+    try { return JSON.parse(localStorage.getItem('colWidths:' + storageKey) || '{}'); }
+    catch(e){ return {}; }
+  })();
+  ths.forEach((th, idx) => {
+    const w = saved[idx];
+    if(w && w > 30){
+      th.style.width = w + 'px';
+      th.style.minWidth = w + 'px';
+      th.style.maxWidth = w + 'px';
+    }
+  });
+
+  // Need position:relative on each <th> so the absolutely-positioned handle
+  // anchors correctly. The user already styles <th>s heavily so add this
+  // non-destructively.
+  ths.forEach((th, idx) => {
+    if(th.dataset.resizableInited === '1') return;
+    const computedPos = getComputedStyle(th).position;
+    if(computedPos === 'static') th.style.position = 'relative';
+
+    // Don't add handle to the LAST column (nothing to the right to take
+    // space from) or to known tiny icon columns.
+    const isLast = idx === ths.length - 1;
+    const w = th.offsetWidth;
+    if(isLast || w < 36) { th.dataset.resizableInited = '1'; return; }
+
+    const handle = document.createElement('div');
+    handle.className = 'col-resize-handle';
+    handle.style.cssText = 'position:absolute;top:0;right:0;width:5px;height:100%;cursor:col-resize;user-select:none;background:transparent;z-index:5;';
+    // Subtle hover so the handle is discoverable
+    handle.addEventListener('mouseenter', () => { handle.style.background = 'rgba(59,130,246,0.45)'; });
+    handle.addEventListener('mouseleave', () => { if(!handle.dataset.dragging) handle.style.background = 'transparent'; });
+
+    handle.addEventListener('mousedown', (e) => {
+      e.preventDefault();
+      e.stopPropagation();
+      handle.dataset.dragging = '1';
+      handle.style.background = 'rgba(59,130,246,0.7)';
+      const startX = e.clientX;
+      const startW = th.offsetWidth;
+      const onMove = (ev) => {
+        const dx = ev.clientX - startX;
+        const newW = Math.max(40, startW + dx);
+        th.style.width = newW + 'px';
+        th.style.minWidth = newW + 'px';
+        th.style.maxWidth = newW + 'px';
+      };
+      const onUp = () => {
+        document.removeEventListener('mousemove', onMove);
+        document.removeEventListener('mouseup', onUp);
+        delete handle.dataset.dragging;
+        handle.style.background = 'transparent';
+        // Persist the full width map (so restoring works for all columns)
+        try {
+          const map = {};
+          ths.forEach((t, i) => { map[i] = t.offsetWidth; });
+          localStorage.setItem('colWidths:' + storageKey, JSON.stringify(map));
+        } catch(e){ console.warn('save colWidths failed:', e.message); }
+      };
+      document.addEventListener('mousemove', onMove);
+      document.addEventListener('mouseup', onUp);
+    });
+
+    th.appendChild(handle);
+    th.dataset.resizableInited = '1';
+  });
+}
+
 // v102.42: CONTACT DEDUPE — queue + merge dialog
 // ═══════════════════════════════════════════════════════════════════════
 // Reads candidate match groups from ace_contact_dedupe_candidates,
@@ -31020,6 +31156,9 @@ function _refreshPipelineBody(){
   // Table view
   if(getPipelineViewMode() === 'table'){
     body.innerHTML = _buildPipelineTableHTML(filteredDeals);
+    // v103: enable column resizing
+    const _ptbl = body.querySelector('table');
+    if(_ptbl) _makeColumnsResizable(_ptbl, 'pipelineTable');
   } else {
     body.innerHTML = `
     <div style="display:flex;gap:12px;padding-bottom:10px;">
@@ -31733,6 +31872,12 @@ function showPipelineView(){
         💡 <strong>Tip:</strong> Click any card for a snapshot, drag cards between columns to change stage, toggle between Board and Table views, use 🔍 Filters to narrow down.
       </div>
     </div>`;
+
+  // v103: enable column resizing on the pipeline table view
+  if(viewMode === 'table'){
+    const _ptbl = document.querySelector('#pipelineBody table');
+    if(_ptbl) _makeColumnsResizable(_ptbl, 'pipelineTable');
+  }
 }
 
 // ─── PIPELINE DRAG & DROP ────────────────────────────────────────

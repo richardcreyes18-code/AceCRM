@@ -1393,7 +1393,7 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
       <span class="plus">+</span> Add New Deal
     </button>
     <div class="search-box">
-      <input type="text" id="sideSearch" placeholder="Search Name or ID" oninput="sideFilter()"/>
+      <input type="text" id="sideSearch" placeholder="Search Name or ID" oninput="sideFilter()" style="width:100%;"/>
       <button onclick="sideFilter()">🔍</button>
     </div>
     <div class="adv-search"><a onclick="sideFilter()">Advanced Search</a></div>
@@ -3073,7 +3073,10 @@ function buildSidebar(filter=''){
     if(f){
       const addr = (d['Address']||'').toLowerCase();
       const id   = (d.id||'').toLowerCase();
-      if(!addr.includes(f) && !id.includes(f)) return false;
+      // v105: also search by owner name + cleaned address for better matching
+      const ownerName = (d._ownerName || d['Owner Name'] || '').toLowerCase();
+      const cleanAddr = cleanAddress(d['Address']||'').toLowerCase();
+      if(!addr.includes(f) && !id.includes(f) && !ownerName.includes(f) && !cleanAddr.includes(f)) return false;
     }
     if(_sideView==='archived') return !!d['Is Archived'];
     if(_sideView==='starred') return !!d['Top Priority'] && !d['Is Archived'];
@@ -20137,6 +20140,29 @@ function showSettingsPage(){
       <div style="max-width:900px;margin:22px auto;padding:0 22px 60px;">
         <div id="settingsSaveMsg" style="min-height:18px;font-size:12px;color:#16a34a;font-weight:600;margin-bottom:12px;"></div>
 
+        <!-- v105: AI Assistant cost tracking -->
+        <section style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
+          <div style="display:flex;align-items:center;gap:16px;">
+            <div style="font-size:28px;flex-shrink:0;">✦</div>
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:15px;font-weight:700;color:#0f172a;">AI Assistant usage</div>
+              <div id="aiCostDisplay" style="font-size:12px;color:#64748b;margin-top:3px;line-height:1.5;"></div>
+            </div>
+            <button onclick="if(confirm('Reset AI usage tracking?')){localStorage.removeItem('ai_cost_tracker');location.reload();}" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:7px 14px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;">Reset counter</button>
+          </div>
+          <script>
+            (function(){
+              const el=document.getElementById('aiCostDisplay');
+              if(!el) return;
+              try{
+                const s=JSON.parse(localStorage.getItem('ai_cost_tracker')||'{}');
+                const cost=((s.total_input||0)*0.25+(s.total_output||0)*1.25)/1e6;
+                el.innerHTML='<strong>'+(s.call_count||0)+'</strong> API calls · <strong>'+(s.total_input||0).toLocaleString()+'</strong> input tokens · <strong>'+(s.total_output||0).toLocaleString()+'</strong> output tokens · Total cost: <strong>$'+cost.toFixed(4)+'</strong>'+(s.last_call?' · Last call: '+new Date(s.last_call).toLocaleString():'');
+              }catch(e){ el.textContent='No usage recorded yet.'; }
+            })();
+          </script>
+        </section>
+
         <!-- v102.42: Dedupe entry tile -->
         <section style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
           <div style="font-size:28px;flex-shrink:0;">🧹</div>
@@ -34410,6 +34436,76 @@ document.addEventListener('DOMContentLoaded', ()=>{
 });
 
 // ═══════════════════════════════════════════════════════════════════════
+// v105: lightweight data refresh. Re-fetches allDeals + allContacts from
+// DB and rebuilds the sidebar without a full page reload. Called after
+// the AI assistant creates or updates records.
+async function _quickRefreshData(){
+  try{
+    if(!isSupabase()) return;
+    // Refresh deals
+    const mapRows = (rows) => { rows.forEach(r => records.push({id:r.id,...r})); };
+    let records = [];
+    let from = 0, batchSize = 1000;
+    const agentFilter = (_currentUser && _currentUser.role !== 'admin')
+      ? '&owner_user_id=eq.' + encodeURIComponent(_currentUser.id) : '';
+    while(true){
+      const rows = await _sbGet(SB_TABLES.deals,
+        `select=*&order=created_at.desc&limit=${batchSize}&offset=${from}${agentFilter}`);
+      if(!rows || !rows.length) break;
+      mapRows(rows);
+      if(rows.length < batchSize) break;
+      from += batchSize;
+    }
+    allDeals = records;
+    allDeals.forEach(d => _lf.loadOnto(d));
+    try{ await _bulkLoadOwnerContacts(); }catch(e){}
+    // Refresh contacts
+    try{
+      let cRows = [], cFrom = 0;
+      while(true){
+        const batch = await _sbGet(SB_TABLES.contacts,
+          `select=*&deleted_at=is.null&order=name.asc&limit=1000&offset=${cFrom}`);
+        if(!batch || !batch.length) break;
+        cRows = cRows.concat(batch);
+        if(batch.length < 1000) break;
+        cFrom += 1000;
+      }
+      allContacts = cRows.map(r => ({
+        id: r.id,
+        fields: {
+          Name: r.name, 'Phone Number': r.phone_number, Email: r.email,
+          Company: r.company, 'Contact Notes': r.contact_notes,
+          Type: r.type, 'Date Added': r.date_added,
+          'Import Source': r.import_source || null
+        }
+      }));
+    }catch(e){ console.warn('contacts refresh failed:', e.message); }
+    // Invalidate deal map cache
+    _contactsDealMapCache = null;
+    buildSidebar(document.getElementById('sideSearch')?.value || '');
+  }catch(e){ console.warn('quick refresh failed:', e.message); }
+}
+
+// v105: AI cost tracking. Accumulates token usage in localStorage.
+function _aiTrackCost(usage){
+  if(!usage) return;
+  try{
+    const stored = JSON.parse(localStorage.getItem('ai_cost_tracker') || '{}');
+    stored.total_input  = (stored.total_input  || 0) + (usage.input_tokens  || 0);
+    stored.total_output = (stored.total_output || 0) + (usage.output_tokens || 0);
+    stored.call_count   = (stored.call_count   || 0) + 1;
+    stored.last_call    = new Date().toISOString();
+    localStorage.setItem('ai_cost_tracker', JSON.stringify(stored));
+  }catch(e){}
+}
+function _aiGetCostSummary(){
+  try{
+    const s = JSON.parse(localStorage.getItem('ai_cost_tracker') || '{}');
+    const totalCost = ((s.total_input||0) * 0.25 + (s.total_output||0) * 1.25) / 1e6;
+    return { calls: s.call_count||0, inputTokens: s.total_input||0, outputTokens: s.total_output||0, totalCost, lastCall: s.last_call||null };
+  }catch(e){ return { calls:0, inputTokens:0, outputTokens:0, totalCost:0, lastCall:null }; }
+}
+
 // v104: ACE AI ASSISTANT — floating chat widget
 // ═══════════════════════════════════════════════════════════════════════
 let _aiOpen = false;
@@ -34449,8 +34545,9 @@ async function _aiSend(){
     else if(r.intent==='seller_lead'){ _aiPendingResult=r; _aiShowSellerPreview(r); }
     else if(r.intent==='buyer_criteria'){ _aiPendingResult=r; _aiShowBuyerPreview(r); }
     else if(r.intent==='pitch_log'){ _aiPendingResult=r; _aiShowPitchPreview(r); }
+    else if(r.intent==='update_deal'){ _aiPendingResult=r; _aiShowDealUpdatePreview(r); }
     else { _aiAddBotMessage(r.summary||'Not sure what to do with that. Try pasting call notes.'); if(r.clarifying_questions?.length) _aiAddBotMessage('• '+r.clarifying_questions.join('<br>• '),true); }
-    if(data.usage) console.log('AI cost: $'+((data.usage.input_tokens*0.25+data.usage.output_tokens*1.25)/1e6).toFixed(6));
+    if(data.usage){ _aiTrackCost(data.usage); console.log('AI cost: $'+((data.usage.input_tokens*0.25+data.usage.output_tokens*1.25)/1e6).toFixed(6)); }
   }catch(e){ document.getElementById(tId)?.closest('div[style*="margin-bottom"]')?.remove(); _aiAddBotMessage('Error: '+(e.message||'unknown')); }
   finally{ if(btn) btn.disabled=false; }
 }
@@ -34531,7 +34628,7 @@ async function _aiCommitSellerLead(){
       const row={address:[p.address,p.municipality,p.state].filter(Boolean).join(', ')||p.address, municipality:p.municipality||null, state:p.state||'NJ', owner_contact_id:cid, crm_asset_classification:p.crm_asset_classification||null, pipeline_stage:p.pipeline_stage||'New Lead', asking_price:p.asking_price||null, noi:p.noi||null, number_of_units:p.number_of_units||p.no_of_units||null, square_footage:p.square_footage||null, deal_notes:p.deal_notes||null, general_property_notes:p.general_property_notes||null, why_selling:p.why_selling||null, gross_revenue_yearly:p.gross_revenue_yearly||null, expenses_yearly:p.expenses_yearly||null, date_added:new Date().toISOString().split('T')[0]};
       const pr=await _sbPost('ace_properties',row);
       if(pr?.id) _aiAddBotMessage('Created deal <strong>'+(row.address||'')+'</strong> linked to '+(c.name||'contact')+'.',true);
-      if(typeof loadDataAndRender==='function') loadDataAndRender();
+      await _quickRefreshData();
     }else{ _aiAddBotMessage('No property address found — contact created without a deal.'); }
     _aiAddBotMessage('✅ Done! Continue with more leads or close this chat.'); _aiPendingResult=null;
   }catch(e){ _aiAddBotMessage('❌ Error: '+(e.message||'unknown')); }
@@ -34566,9 +34663,139 @@ async function _aiCommitBuyerCriteria(){
       await _sbPost('ace_buyer_criteria',{contact_id:cid, desired_property_types:bc.desired_property_types||null, min_purchase_price:bc.min_purchase_price||null, max_purchase_price:bc.max_purchase_price||null, preferred_counties:bc.preferred_counties||null, simple_area_preference:bc.simple_area_preference||null, financing_type:bc.financing_type||null, minimum_cap_rate:bc.minimum_cap_rate||null, other_requirements:bc.other_requirements||null, date_added:new Date().toISOString().split('T')[0]});
       _aiAddBotMessage('Created buyer criteria for <strong>'+(c.name||'')+'</strong>.',true);
     }
-    if(typeof loadDataAndRender==='function') loadDataAndRender();
+    await _quickRefreshData();
     _aiAddBotMessage('✅ Done! Buyer is in the system.'); _aiPendingResult=null;
   }catch(e){ _aiAddBotMessage('❌ Error: '+(e.message||'unknown')); }
+}
+
+// v105: deal update preview + commit
+function _aiShowDealUpdatePreview(r){
+  const d=r.data||{}, esc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const fm=n=>{const v=Number(n);if(!v)return String(n);return v>=1e6?'$'+(v/1e6).toFixed(2).replace(/\.?0+$/,'')+'M':v>=1e3?'$'+Math.round(v/1e3)+'K':'$'+v;};
+  let h='<div style="font-size:12px;font-weight:700;color:#1e3a8a;margin-bottom:8px;">📝 Deal Update Preview</div>';
+  h+='<div style="background:#fef3c7;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.6;">';
+  h+='<div><strong>Find deal:</strong> '+esc(d.search_address||'(no address)')+'</div>';
+  if(d.updates && Object.keys(d.updates).length){
+    h+='<div style="margin-top:6px;font-weight:600;">Changes:</div>';
+    Object.entries(d.updates).forEach(([k,v])=>{
+      const label = k.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());
+      const display = (k.includes('price')||k==='noi'||k.includes('revenue')||k.includes('expenses')) ? fm(v) : esc(String(v));
+      h+='<div style="padding-left:10px;">• <strong>'+esc(label)+'</strong> → '+display+'</div>';
+    });
+  }
+  h+='</div>';
+  if(r.summary) h+='<div style="font-size:11px;color:#475569;margin-top:6px;font-style:italic;">'+esc(r.summary)+'</div>';
+  if(r.clarifying_questions?.length) h+='<div style="margin-top:6px;font-size:11px;color:#b45309;">⚠ '+r.clarifying_questions.map(esc).join('<br>⚠ ')+'</div>';
+  h+='<div style="display:flex;gap:8px;margin-top:10px;">';
+  h+='<button onclick="_aiCommitDealUpdate()" style="background:#16a34a;color:#fff;border:none;padding:7px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">✓ Apply update</button>';
+  h+='<button onclick="_aiAddBotMessage(\'Skipped.\')" style="background:#fff;color:#475569;border:1px solid #cbd5e1;padding:7px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Skip</button>';
+  h+='</div>';
+  _aiAddBotMessage(h,true);
+}
+
+async function _aiCommitDealUpdate(){
+  if(!_aiPendingResult?.data){ _aiAddBotMessage('Nothing to commit.'); return; }
+  const d=_aiPendingResult.data;
+  const searchAddr = (d.search_address||'').toLowerCase().trim();
+  const updates = d.updates||{};
+  if(!searchAddr){ _aiAddBotMessage('No address to search for.'); return; }
+  if(!Object.keys(updates).length){ _aiAddBotMessage('No updates specified.'); return; }
+
+  _aiAddBotMessage('Searching for deal…');
+
+  try{
+    // Find the deal by address (fuzzy match — search cleaned + raw)
+    const cleanSearch = searchAddr.replace(/[^a-z0-9]/g,'');
+    let match = null;
+    for(const deal of (allDeals||[])){
+      const addr = (deal['Address']||'').toLowerCase();
+      const cleanDeal = addr.replace(/[^a-z0-9]/g,'');
+      if(addr.includes(searchAddr) || cleanDeal.includes(cleanSearch)){
+        match = deal;
+        break;
+      }
+    }
+    if(!match){
+      // Try server-side search as fallback
+      const rows = await _sbGet('ace_properties',
+        'select=id,address&address=ilike.*'+encodeURIComponent(searchAddr)+'*&limit=5');
+      if(Array.isArray(rows) && rows.length){
+        if(rows.length === 1){
+          match = { id: rows[0].id, 'Address': rows[0].address };
+        } else {
+          let h = 'Found multiple matches. Which one?<br>';
+          rows.forEach((r,i) => {
+            h += '<button onclick="_aiSelectDealForUpdate(\''+r.id+'\')" style="display:block;margin:4px 0;background:#eef2fb;border:1px solid #c7d2fe;padding:6px 12px;border-radius:6px;font-size:12px;cursor:pointer;text-align:left;width:100%;">'+String(r.address||'').replace(/&/g,'&amp;').replace(/</g,'&lt;')+'</button>';
+          });
+          _aiAddBotMessage(h, true);
+          return;
+        }
+      }
+    }
+    if(!match){
+      _aiAddBotMessage('Could not find a deal matching "' + d.search_address + '". Try a more specific address or check the deal board.');
+      return;
+    }
+
+    // Apply updates
+    const patch = {};
+    const numericFields = ['asking_price','offer_price','noi','gross_revenue_yearly','expenses_yearly','square_footage','number_of_units','no_of_units'];
+    const boolFields = ['is_archived','top_priority','discuss_in_meeting'];
+    Object.entries(updates).forEach(([k,v])=>{
+      if(k === 'deal_notes'){
+        // Append to existing notes with separator
+        const existing = match['Deal Notes'] || match.deal_notes || '';
+        patch.deal_notes = existing ? existing + '\n---\n' + v : String(v);
+      } else if(numericFields.includes(k)){
+        patch[k] = Number(v) || null;
+      } else if(boolFields.includes(k)){
+        patch[k] = !!v;
+      } else {
+        patch[k] = v;
+      }
+    });
+
+    await _sbPatch('ace_properties', match.id, patch);
+    _aiAddBotMessage('✅ Updated <strong>'+(match['Address']||match.address||'deal')+'</strong> with '+Object.keys(updates).length+' change'+(Object.keys(updates).length===1?'':'s')+'.', true);
+    await _quickRefreshData();
+    _aiPendingResult = null;
+  }catch(e){
+    _aiAddBotMessage('❌ Error: '+(e.message||'unknown'));
+  }
+}
+
+// Helper for when multiple deals match — user clicks one to proceed
+function _aiSelectDealForUpdate(dealId){
+  if(!_aiPendingResult?.data) return;
+  const d = _aiPendingResult.data;
+  const updates = d.updates || {};
+  const match = (allDeals||[]).find(x => x.id === dealId);
+  if(!match){
+    _aiAddBotMessage('Deal not found in local cache. Applying directly…');
+  }
+  (async()=>{
+    try{
+      const patch = {};
+      const numericFields = ['asking_price','offer_price','noi','gross_revenue_yearly','expenses_yearly','square_footage','number_of_units'];
+      const boolFields = ['is_archived','top_priority','discuss_in_meeting'];
+      Object.entries(updates).forEach(([k,v])=>{
+        if(k === 'deal_notes'){
+          const existing = match ? (match['Deal Notes']||match.deal_notes||'') : '';
+          patch.deal_notes = existing ? existing + '\n---\n' + v : String(v);
+        } else if(numericFields.includes(k)){
+          patch[k] = Number(v) || null;
+        } else if(boolFields.includes(k)){
+          patch[k] = !!v;
+        } else {
+          patch[k] = v;
+        }
+      });
+      await _sbPatch('ace_properties', dealId, patch);
+      _aiAddBotMessage('✅ Updated deal with '+Object.keys(updates).length+' change'+(Object.keys(updates).length===1?'':'s')+'.', true);
+      await _quickRefreshData();
+      _aiPendingResult = null;
+    }catch(e){ _aiAddBotMessage('❌ Error: '+(e.message||'unknown')); }
+  })();
 }
 
 </script>

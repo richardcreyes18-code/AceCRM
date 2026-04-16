@@ -34715,21 +34715,47 @@ async function _aiCommitDealUpdate(){
   _aiAddBotMessage('Searching for deal…');
 
   try{
-    // Find the deal by address (fuzzy match — search cleaned + raw)
-    const cleanSearch = searchAddr.replace(/[^a-z0-9]/g,'');
+    // v105.3: normalize common street suffixes so "Main Street" matches
+    // "Main St", "Avenue" matches "Ave", etc. Also try matching against
+    // the currently-open deal first (most likely target).
+    const normAddr = (s) => s.toLowerCase()
+      .replace(/\bstreet\b/g,'st').replace(/\bavenue\b/g,'ave')
+      .replace(/\bboulevard\b/g,'blvd').replace(/\bdrive\b/g,'dr')
+      .replace(/\broad\b/g,'rd').replace(/\blane\b/g,'ln')
+      .replace(/\bcourt\b/g,'ct').replace(/\bplace\b/g,'pl')
+      .replace(/\bhighway\b/g,'hwy').replace(/\bparkway\b/g,'pkwy')
+      .replace(/[^a-z0-9]/g,'');
+    const cleanSearch = normAddr(searchAddr);
+
     let match = null;
-    for(const deal of (allDeals||[])){
-      const addr = (deal['Address']||'').toLowerCase();
-      const cleanDeal = addr.replace(/[^a-z0-9]/g,'');
-      if(addr.includes(searchAddr) || cleanDeal.includes(cleanSearch)){
-        match = deal;
-        break;
+
+    // Try currentDeal first — if the user is looking at a deal, they're
+    // almost certainly updating THAT deal
+    if(currentDeal && currentDeal.id){
+      const curAddr = normAddr(currentDeal['Address']||'');
+      if(curAddr.includes(cleanSearch) || cleanSearch.includes(curAddr)){
+        match = currentDeal;
+      }
+    }
+
+    // Scan allDeals
+    if(!match){
+      for(const deal of (allDeals||[])){
+        const addr = (deal['Address']||'').toLowerCase();
+        const cleanDeal = normAddr(addr);
+        if(addr.includes(searchAddr) || cleanDeal.includes(cleanSearch) || cleanSearch.includes(cleanDeal)){
+          match = deal;
+          break;
+        }
       }
     }
     if(!match){
-      // Try server-side search as fallback
+      // Try server-side search as fallback — use a short prefix (street
+      // number + first word) for broader matching since ilike can't do
+      // suffix normalization
+      const shortSearch = searchAddr.split(/[,\s]+/).slice(0, 3).join(' ');
       const rows = await _sbGet('ace_properties',
-        'select=id,address&address=ilike.*'+encodeURIComponent(searchAddr)+'*&limit=5');
+        'select=id,address&address=ilike.*'+encodeURIComponent(shortSearch)+'*&limit=5');
       if(Array.isArray(rows) && rows.length){
         if(rows.length === 1){
           match = { id: rows[0].id, 'Address': rows[0].address };

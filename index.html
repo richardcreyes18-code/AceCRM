@@ -4094,16 +4094,15 @@ const _recentStore = {
 };
 
 // ── Google Maps opener ───────────────────────────────────────────
-// v110.1: open Google Maps in a named popup WINDOW instead of a tab.
-// Passing window features (width/height) forces Chrome to create a popup
-// instead of a tab, and the named target ('aceMapsPopup') means repeated
-// clicks reuse the same popup window — it just navigates to the new
-// address and comes to the foreground. If the user closed the popup,
-// a fresh one opens automatically on the next click.
+// v110.2: "popup=yes" is the magic flag that forces Chrome to open a
+// true popup WINDOW (not a tab). Without it, modern Chrome ignores
+// width/height/menubar/toolbar features and just opens a tab anyway.
+// The named target ('aceMapsPopup') means repeated clicks reuse the
+// same popup and bring it to focus.
 function openGoogleMaps(addr){
   if(!addr){ alert('No address available.'); return; }
   const url = 'https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(addr);
-  const features = 'width=1280,height=900,menubar=no,toolbar=no,location=no,status=no';
+  const features = 'popup=yes,width=1280,height=900,left=100,top=100,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes';
   const w = window.open(url, 'aceMapsPopup', features);
   if(w && w.focus) w.focus();
 }

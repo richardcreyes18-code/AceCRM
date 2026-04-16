@@ -8701,10 +8701,28 @@ function renderFinancialTab(d){
       /* Simple mode hides advanced sections — inputs stay in DOM so calcs work */
       .fin-simple .fin-hide-simple{display:none !important;}
       .fin-simple .fin-simplify-grid{grid-template-columns:1fr !important;}
+      /* v106: NO FINANCIALS stamp overlay */
+      .fin-no-financials-wrap{position:relative;}
+      .fin-no-financials-wrap .fin-stamp-target{opacity:0.3;pointer-events:none;filter:grayscale(0.5);}
+      .fin-no-financials-stamp{
+        position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-18deg);
+        font-size:64px;font-weight:900;color:rgba(220,38,38,0.35);
+        letter-spacing:8px;text-transform:uppercase;white-space:nowrap;
+        border:8px solid rgba(220,38,38,0.35);border-radius:16px;padding:16px 40px;
+        font-family:'Georgia',serif;z-index:5;pointer-events:none;
+        text-shadow:2px 2px 0 rgba(220,38,38,0.08);
+      }
     </style>
     <div class="fin-tipbox" id="finTipBox"></div>
 
     <div class="fin-${_finMode}">
+
+    ${(!aGrossRent && !noiAt && !aExpenses) ? `
+    <!-- v106: NO FINANCIALS stamp — auto-shown when no income/NOI/expenses data -->
+    <div class="fin-no-financials-wrap">
+      <div class="fin-no-financials-stamp">No Financials</div>
+      <div class="fin-stamp-target">
+    ` : ''}
 
     <!-- RESULTS SUMMARY ──────────────────────────────────────── -->
     <div class="info-box">
@@ -9009,6 +9027,11 @@ function renderFinancialTab(d){
         ℹ️ Simple mode: enter total rent and total expenses. For detailed breakdowns (vacancy, RUBS, utilities, taxes, etc.), switch to Detailed view.
       </div>
     </div>
+    ` : ''}
+
+    ${(!aGrossRent && !noiAt && !aExpenses) ? `
+    </div><!-- close .fin-stamp-target -->
+    </div><!-- close .fin-no-financials-wrap -->
     ` : ''}
 
     <!-- INCOME TABLE ─────────────────────────────────────────── -->
@@ -20807,9 +20830,9 @@ function _companyRenderSystemHelp(){
     </details>`;
 
   const cmdRow = (cmd, desc) =>
-    `<div style="display:flex;gap:12px;padding:8px 0;border-bottom:1px solid #f1f5f9;">
-      <code style="flex-shrink:0;background:#eef2fb;color:#1e3a8a;padding:4px 10px;border-radius:6px;font-size:12px;font-weight:600;white-space:nowrap;">${cmd}</code>
-      <div style="flex:1;min-width:0;color:#475569;font-size:12px;">${desc}</div>
+    `<div style="display:flex;gap:12px;padding:8px 0;border-bottom:1px solid #f1f5f9;align-items:flex-start;">
+      <code style="flex:1;min-width:0;background:#eef2fb;color:#1e3a8a;padding:6px 10px;border-radius:6px;font-size:11px;font-weight:600;white-space:pre-wrap;word-break:break-word;line-height:1.5;">${cmd}</code>
+      <div style="flex:1;min-width:0;color:#475569;font-size:12px;line-height:1.5;">${desc}</div>
     </div>`;
 
   const aiCost = (() => {

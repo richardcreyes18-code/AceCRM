@@ -4094,9 +4094,17 @@ const _recentStore = {
 };
 
 // ── Google Maps opener ───────────────────────────────────────────
+// v110.2: "popup=yes" is the magic flag that forces Chrome to open a
+// true popup WINDOW (not a tab). Without it, modern Chrome ignores
+// width/height/menubar/toolbar features and just opens a tab anyway.
+// The named target ('aceMapsPopup') means repeated clicks reuse the
+// same popup and bring it to focus.
 function openGoogleMaps(addr){
   if(!addr){ alert('No address available.'); return; }
-  window.open('https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(addr),'_blank');
+  const url = 'https://www.google.com/maps/search/?api=1&query='+encodeURIComponent(addr);
+  const features = 'popup=yes,width=1280,height=900,left=100,top=100,menubar=no,toolbar=no,location=no,status=no,resizable=yes,scrollbars=yes';
+  const w = window.open(url, 'aceMapsPopup', features);
+  if(w && w.focus) w.focus();
 }
 
 // ── Live header address update ───────────────────────────────────
@@ -5335,13 +5343,13 @@ function switchTab(name, btn){
   if(name==='calendar') initCalendar();
   if(name==='documents' && currentDeal?.id) loadPropertyDocs(currentDeal.id);
   if(name==='property' && currentDeal?.id) loadSellerContact(currentDeal.id);
-  if(name==='contacts' && currentDeal?.id){ loadSellerContact(currentDeal.id); loadBuyerPitches(currentDeal.id); }
+  if(name==='contacts' && currentDeal?.id){ loadSellerContact(currentDeal.id); loadBuyerPitches(currentDeal.id); loadDealPitches(currentDeal.id); }
   if(name==='aicomm' && currentDeal?.id) loadAICommTab(currentDeal.id);
   if(name==='buyermatch' && currentDeal?.id) loadBuyerMatchTab(currentDeal.id);
   if(name==='tenantmix'  && currentDeal?.id) loadTenantMixTab(currentDeal.id);
   if(name==='pitchout'   && currentDeal?.id) loadPitchOutTab(currentDeal.id);
   if(name==='offers'     && currentDeal?.id) loadOffersTab(currentDeal.id);
-  if(name==='contacts' && currentDeal?.id) loadBuyerPitches(currentDeal.id);
+  if(name==='contacts' && currentDeal?.id) { loadBuyerPitches(currentDeal.id); loadDealPitches(currentDeal.id); }
   if(name==='brochure' && currentDeal?.id) {
     loadBrochurePhotos(currentDeal.id);
     // v100: check required fields so OM buttons are correctly enabled/disabled
@@ -9880,6 +9888,9 @@ function renderDocumentsTab(d){
           📤 Upload Photos
         </label>
         <input type="file" id="photoFileInput" accept="image/*" multiple style="display:none;" onchange="uploadPropertyPhotos('${d.id}')"/>
+        <button onclick="pullStreetViewPhoto('${d.id}')" id="streetViewBtn_${d.id}" style="background:linear-gradient(180deg,#059669,#047857);color:#fff;padding:6px 14px;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;border:none;" title="Automatically grab Street View photo from Google for this property address">
+          📸 Pull Street View
+        </button>
         <span style="font-size:11px;color:var(--text3);">or drag &amp; drop images onto the gallery below</span>
         <span id="photoUploadStatus" style="font-size:11px;color:#2060b0;display:none;margin-left:4px;"></span>
         <button onclick="refreshPropertyPhotos('${d.id}')" style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--text2);padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;">↻ Refresh</button>
@@ -17674,6 +17685,12 @@ let _pitchEditingId = null;
 let _pitchTargetContactId = null;
 let _pitchMode = 'onsystem'; // 'onsystem' | 'offsystem'
 let _pitchSelectedDealId = null;
+// v109: when opened from the deal card (not the contact card), we flip
+// the modal to pick a BUYER instead of a deal. Submit uses currentDeal
+// as the deal_id and the picked buyer as contact_id.
+let _pitchFromDeal = false;
+let _pitchSelectedBuyerId = null;
+let _pitchFromDealId = null; // the deal we're logging against
 
 function openPitchModal(contactId, pitchId){
   if(!contactId) return;
@@ -17681,6 +17698,14 @@ function openPitchModal(contactId, pitchId){
   _pitchEditingId = pitchId || null;
   _pitchMode = 'onsystem';
   _pitchSelectedDealId = null;
+  // v109: coming from contact side, not deal side
+  _pitchFromDeal = false;
+  _pitchFromDealId = null;
+  _pitchSelectedBuyerId = null;
+
+  // v109: if the modal was previously mutated by the deal-side flow,
+  // restore the original deal-search layout
+  _pitchConfigureForContactSide();
 
   const modal = document.getElementById('pitchModal');
   const title = document.getElementById('pitchModalTitle');
@@ -17688,15 +17713,18 @@ function openPitchModal(contactId, pitchId){
   const deleteBtn = document.getElementById('pitchDeleteBtn');
   if(err){ err.style.display = 'none'; err.textContent = ''; }
 
-  // Reset form fields
-  document.getElementById('pitchDate').value    = new Date().toISOString().slice(0,10);
-  document.getElementById('pitchChannel').value = '';
-  document.getElementById('pitchReaction').value = '';
-  document.getElementById('pitchNotes').value   = '';
-  document.getElementById('pitchDealSearch').value = '';
-  document.getElementById('pitchOffAddress').value = '';
-  document.getElementById('pitchOffAgent').value   = '';
-  document.getElementById('pitchOffSource').value  = '';
+  // Reset form fields (use optional chaining since the DOM may have just
+  // been rebuilt by _pitchConfigureForContactSide — elements exist, but
+  // belt and suspenders)
+  const setVal = (id, v) => { const el = document.getElementById(id); if(el) el.value = v; };
+  setVal('pitchDate',    new Date().toISOString().slice(0,10));
+  setVal('pitchChannel', '');
+  setVal('pitchReaction','');
+  setVal('pitchNotes',   '');
+  setVal('pitchDealSearch', '');
+  setVal('pitchOffAddress', '');
+  setVal('pitchOffAgent',   '');
+  setVal('pitchOffSource',  '');
   _pitchClearDealSearch();
 
   if(pitchId){
@@ -17704,25 +17732,25 @@ function openPitchModal(contactId, pitchId){
     const p = (_currentContactPitches || []).find(x => x.id === pitchId);
     if(!p){ alert('Pitch not found.'); return; }
     if(title) title.textContent = '✏️ Edit Pitch';
-    document.getElementById('pitchDate').value     = p.pitch_date     || '';
-    document.getElementById('pitchChannel').value  = p.pitch_channel  || '';
-    document.getElementById('pitchReaction').value = p.reaction       || '';
-    document.getElementById('pitchNotes').value    = p.notes          || '';
+    setVal('pitchDate',     p.pitch_date     || '');
+    setVal('pitchChannel',  p.pitch_channel  || '');
+    setVal('pitchReaction', p.reaction       || '');
+    setVal('pitchNotes',    p.notes          || '');
     if(p.deal_id){
       _pitchMode = 'onsystem';
       _pitchSelectedDealId = p.deal_id;
       const d = (allDeals || []).find(x => x.id === p.deal_id);
       if(d){
-        document.getElementById('pitchDealSearch').value =
-          (d['Address'] || 'Unnamed') + (d['Asking Price'] ? ' · $'+Number(d['Asking Price']).toLocaleString() : '');
+        setVal('pitchDealSearch',
+          (d['Address'] || 'Unnamed') + (d['Asking Price'] ? ' · $'+Number(d['Asking Price']).toLocaleString() : ''));
       } else {
-        document.getElementById('pitchDealSearch').value = '(Deal not in current view)';
+        setVal('pitchDealSearch', '(Deal not in current view)');
       }
     } else {
       _pitchMode = 'offsystem';
-      document.getElementById('pitchOffAddress').value = p.offsystem_address     || '';
-      document.getElementById('pitchOffAgent').value   = p.offsystem_agent_name  || '';
-      document.getElementById('pitchOffSource').value  = p.offsystem_source      || '';
+      setVal('pitchOffAddress', p.offsystem_address     || '');
+      setVal('pitchOffAgent',   p.offsystem_agent_name  || '');
+      setVal('pitchOffSource',  p.offsystem_source      || '');
     }
     if(deleteBtn) deleteBtn.style.display = 'inline-block';
   } else {
@@ -17744,7 +17772,11 @@ function closePitchModal(){
   _pitchEditingId = null;
   _pitchTargetContactId = null;
   _pitchSelectedDealId = null;
+  _pitchFromDeal = false;
+  _pitchSelectedBuyerId = null;
+  _pitchFromDealId = null;
   _pitchClearDealSearch();
+  _pitchClearBuyerSearch();
 }
 
 // Toggle between in-system and off-system modes. Hides/shows the
@@ -17833,12 +17865,238 @@ function _pitchClearDealSearch(){
   }
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// v109: DEAL-SIDE PITCH ENTRY POINT
+// Opens the existing pitch modal but in "deal-locked" mode: the deal is
+// pre-chosen (it's currentDeal), and instead of picking a deal, the user
+// picks a BUYER (contact with type containing "Buyer"). Submit writes
+// to the same ace_buyer_pitches table so both the contact Pitches tab
+// and the deal Buyer Activity section show the row automatically.
+// ═══════════════════════════════════════════════════════════════════════
+function openPitchModalForDeal(dealId, pitchId){
+  if(!dealId) return;
+  _pitchFromDeal = true;
+  _pitchFromDealId = dealId;
+  _pitchEditingId = pitchId || null;
+  _pitchSelectedBuyerId = null;
+  _pitchTargetContactId = null;     // will be set when user picks a buyer
+  _pitchSelectedDealId = dealId;     // locked to this deal
+  _pitchMode = 'onsystem';           // off-system doesn't make sense on deal side
+
+  const modal = document.getElementById('pitchModal');
+  const title = document.getElementById('pitchModalTitle');
+  const err = document.getElementById('pitchError');
+  const deleteBtn = document.getElementById('pitchDeleteBtn');
+  if(err){ err.style.display = 'none'; err.textContent = ''; }
+
+  // Reset form
+  document.getElementById('pitchDate').value    = new Date().toISOString().slice(0,10);
+  document.getElementById('pitchChannel').value = '';
+  document.getElementById('pitchReaction').value = '';
+  document.getElementById('pitchNotes').value   = '';
+  document.getElementById('pitchOffAddress').value = '';
+  document.getElementById('pitchOffAgent').value   = '';
+  document.getElementById('pitchOffSource').value  = '';
+
+  // If editing, prefill from existing row (which we'll have fetched)
+  if(pitchId){
+    const p = (_dealPitches || []).find(x => x.id === pitchId);
+    if(!p){ alert('Pitch not found.'); return; }
+    if(title) title.textContent = '✏️ Edit Buyer Pitch';
+    document.getElementById('pitchDate').value     = p.pitch_date || '';
+    document.getElementById('pitchChannel').value  = p.pitch_channel || '';
+    document.getElementById('pitchReaction').value = p.reaction || '';
+    document.getElementById('pitchNotes').value    = p.notes || '';
+    _pitchSelectedBuyerId = p.contact_id;
+    _pitchTargetContactId = p.contact_id;
+    if(deleteBtn) deleteBtn.style.display = 'inline-block';
+  } else {
+    if(title) title.textContent = '📨 Log Buyer Pitch';
+    if(deleteBtn) deleteBtn.style.display = 'none';
+  }
+
+  // Reconfigure the modal body for "deal-locked, pick buyer" mode
+  _pitchConfigureForDealSide();
+
+  if(modal){
+    modal.style.display = 'flex';
+    modal.style.alignItems = 'center';
+    modal.style.justifyContent = 'center';
+  }
+  setTimeout(() => {
+    document.getElementById('pitchBuyerSearch')?.focus();
+  }, 50);
+}
+
+// Swap the "pick a deal" UI for a "pick a buyer" UI without editing the
+// static modal HTML. Hides the deal-source toggle (no off-system here),
+// hides the deal search input, and injects a buyer search input.
+function _pitchConfigureForDealSide(){
+  // Hide the deal-source toggle (always onsystem-with-this-deal)
+  const modeToggle = document.getElementById('pitchModeOn')?.parentElement?.parentElement;
+  if(modeToggle) modeToggle.style.display = 'none';
+
+  // Hide off-system section entirely
+  const offSection = document.getElementById('pitchOffSystemSection');
+  if(offSection) offSection.style.display = 'none';
+
+  // Transform the "on-system" section into a "pick buyer" section
+  const onSection = document.getElementById('pitchOnSystemSection');
+  if(!onSection) return;
+  onSection.style.display = 'block';
+
+  // Show which deal this pitch is locked to
+  const d = (allDeals || []).find(x => x.id === _pitchFromDealId);
+  const dealLabel = d ? ((d['Address'] || 'Unnamed') + (d['Asking Price'] ? ' · $'+Number(d['Asking Price']).toLocaleString() : '')) : '(current deal)';
+
+  onSection.innerHTML = `
+    <div style="margin-bottom:12px;padding:10px 12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;font-size:12px;">
+      <div style="font-size:10px;font-weight:700;color:#1e40af;text-transform:uppercase;letter-spacing:0.04em;margin-bottom:3px;">Pitching this deal</div>
+      <div style="font-weight:600;color:#0f172a;">${(dealLabel || '').replace(/</g,'&lt;')}</div>
+    </div>
+    <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Pick Contact *</label>
+    <div style="position:relative;">
+      <input id="pitchBuyerSearch" type="text" placeholder="Search contact name, company, phone, or email..."
+        oninput="_pitchBuyerSearchInput()"
+        autocomplete="off"
+        style="width:100%;padding:10px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:14px;box-sizing:border-box;" />
+      <div id="pitchBuyerResults" style="display:none;position:absolute;left:0;right:0;top:100%;margin-top:2px;background:#fff;border:1px solid #cbd5e1;border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,0.12);max-height:260px;overflow-y:auto;z-index:50;"></div>
+    </div>
+    <div style="font-size:10px;color:#94a3b8;margin-top:4px;">Type at least 2 characters. Searches all contacts — Buyers, Sellers, and others.</div>
+  `;
+
+  // If editing, pre-populate the buyer input
+  if(_pitchSelectedBuyerId){
+    const c = (allContacts || []).find(x => x.id === _pitchSelectedBuyerId);
+    const input = document.getElementById('pitchBuyerSearch');
+    if(c && input){
+      const name = c['Name'] || c.name || 'Unknown';
+      const co = c['Company'] || c.company || '';
+      input.value = name + (co ? ' · ' + co : '');
+    }
+  }
+}
+
+// Reset the modal body back to its original "pick deal" layout. Called
+// when opening from the contact side after it was previously opened
+// from the deal side (or vice versa).
+function _pitchConfigureForContactSide(){
+  const modeToggle = document.getElementById('pitchModeOn')?.parentElement?.parentElement;
+  if(modeToggle) modeToggle.style.display = 'block';
+
+  const onSection = document.getElementById('pitchOnSystemSection');
+  if(!onSection) return;
+  // Restore the original HTML for deal search (the innerHTML we replaced
+  // above can be rebuilt from the template — it matches the static markup)
+  onSection.innerHTML = `
+    <label style="font-size:11px;font-weight:700;color:#475569;display:block;margin-bottom:5px;text-transform:uppercase;letter-spacing:0.04em;">Search Deal *</label>
+    <input id="pitchDealSearch" type="text" placeholder="Search by address, county, or lead ID..."
+      oninput="_pitchDealSearchInput()"
+      autocomplete="off"
+      style="width:100%;padding:10px 12px;border-radius:6px;border:1px solid #cbd5e1;font-size:14px;box-sizing:border-box;" />
+    <div id="pitchDealResults" style="display:none;position:absolute;left:0;right:0;top:100%;margin-top:2px;background:#fff;border:1px solid #cbd5e1;border-radius:6px;box-shadow:0 4px 16px rgba(0,0,0,0.12);max-height:260px;overflow-y:auto;z-index:50;"></div>
+    <div style="font-size:10px;color:#94a3b8;margin-top:4px;">Type at least 2 characters. Click a result to select.</div>
+  `;
+}
+
+// Live-filter allContacts for buyers matching the search term.
+function _pitchBuyerSearchInput(){
+  const q = (document.getElementById('pitchBuyerSearch')?.value || '').trim().toLowerCase();
+  const results = document.getElementById('pitchBuyerResults');
+  if(!results) return;
+  if(_pitchSelectedBuyerId){ _pitchSelectedBuyerId = null; _pitchTargetContactId = null; }
+  if(!q || q.length < 2){
+    results.innerHTML = '';
+    results.style.display = 'none';
+    return;
+  }
+  const matches = (allContacts || [])
+    .filter(c => {
+      // v109.1: search all contacts (Buyers, Sellers, Other) — not just Buyers
+      if(c.deleted_at) return false;
+      const name = String(c['Name'] || c.name || '').toLowerCase();
+      const co = String(c['Company'] || c.company || '').toLowerCase();
+      const ph = String(c['Phone Number'] || c.phone_number || '').toLowerCase();
+      const em = String(c['Email'] || c.email || '').toLowerCase();
+      return name.includes(q) || co.includes(q) || ph.includes(q) || em.includes(q);
+    })
+    .slice(0, 15);
+
+  if(matches.length === 0){
+    results.innerHTML = '<div style="padding:10px 12px;font-size:11px;color:#94a3b8;font-style:italic;">No contacts match. Try a different search.</div>';
+    results.style.display = 'block';
+    return;
+  }
+  results.innerHTML = matches.map(c => {
+    const name = String(c['Name'] || c.name || 'Unknown').replace(/</g,'&lt;');
+    const co = String(c['Company'] || c.company || '').replace(/</g,'&lt;');
+    const ph = String(c['Phone Number'] || c.phone_number || '').replace(/</g,'&lt;');
+    const em = String(c['Email'] || c.email || '').replace(/</g,'&lt;');
+    // Type badge — show so the user can tell buyers from sellers at a glance
+    const rawType = String(c['Type'] || c.type || '').trim();
+    const tLc = rawType.toLowerCase();
+    let badge = '';
+    if(tLc.includes('buyer')){
+      badge = '<span style="background:#dbeafe;color:#1e40af;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:6px;">BUYER</span>';
+    } else if(tLc.includes('seller')){
+      badge = '<span style="background:#fef3c7;color:#b45309;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:6px;">SELLER</span>';
+    } else if(rawType){
+      badge = `<span style="background:#f1f5f9;color:#475569;padding:1px 6px;border-radius:3px;font-size:9px;font-weight:700;margin-left:6px;">${rawType.toUpperCase().replace(/</g,'&lt;').slice(0,20)}</span>`;
+    }
+    const meta = [co, ph, em].filter(Boolean).join(' · ');
+    return `
+      <div onclick="_pitchPickBuyer('${c.id}')"
+        style="padding:10px 12px;cursor:pointer;border-bottom:1px solid #f1f5f9;transition:background 0.1s;"
+        onmouseover="this.style.background='#eff6ff';"
+        onmouseout="this.style.background='';">
+        <div style="font-size:13px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${name}${badge}</div>
+        <div style="font-size:10px;color:#64748b;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${meta || '&nbsp;'}</div>
+      </div>`;
+  }).join('');
+  results.style.display = 'block';
+}
+
+function _pitchPickBuyer(contactId){
+  const c = (allContacts || []).find(x => x.id === contactId);
+  if(!c) return;
+  _pitchSelectedBuyerId = contactId;
+  _pitchTargetContactId = contactId;
+  const input = document.getElementById('pitchBuyerSearch');
+  if(input){
+    const name = c['Name'] || c.name || 'Unknown';
+    const co = c['Company'] || c.company || '';
+    input.value = name + (co ? ' · ' + co : '');
+  }
+  _pitchClearBuyerSearch();
+}
+
+function _pitchClearBuyerSearch(){
+  const results = document.getElementById('pitchBuyerResults');
+  if(results){
+    results.innerHTML = '';
+    results.style.display = 'none';
+  }
+}
+
 async function submitPitch(){
   const err = document.getElementById('pitchError');
   const btn = document.getElementById('pitchSubmitBtn');
   const showErr = (msg) => { if(err){ err.textContent = msg; err.style.display='block'; } };
 
-  if(!_pitchTargetContactId){ showErr('Contact missing.'); return; }
+  // v109: deal-side flow — contact_id comes from the picked BUYER, not
+  // from _pitchTargetContactId which is set on the contact detail page.
+  if(_pitchFromDeal){
+    if(!_pitchSelectedBuyerId){
+      showErr('Pick a buyer from the search results.');
+      return;
+    }
+    if(!_pitchFromDealId){
+      showErr('No deal context. Close and try again from the deal card.');
+      return;
+    }
+  } else {
+    if(!_pitchTargetContactId){ showErr('Contact missing.'); return; }
+  }
 
   const pitchDate = document.getElementById('pitchDate')?.value || null;
   const channel   = document.getElementById('pitchChannel')?.value || null;
@@ -17846,14 +18104,20 @@ async function submitPitch(){
   const notes     = document.getElementById('pitchNotes')?.value?.trim() || null;
 
   const payload = {
-    contact_id:    _pitchTargetContactId,
+    contact_id:    _pitchFromDeal ? _pitchSelectedBuyerId : _pitchTargetContactId,
     pitch_date:    pitchDate,
     pitch_channel: channel || null,
     reaction:      reaction || null,
     notes:         notes || null
   };
 
-  if(_pitchMode === 'onsystem'){
+  if(_pitchFromDeal){
+    // Always onsystem with this specific deal
+    payload.deal_id              = _pitchFromDealId;
+    payload.offsystem_address    = null;
+    payload.offsystem_agent_name = null;
+    payload.offsystem_source     = null;
+  } else if(_pitchMode === 'onsystem'){
     if(!_pitchSelectedDealId){
       showErr('Pick a deal from the search results, or switch to Off-System.');
       return;
@@ -17883,8 +18147,18 @@ async function submitPitch(){
     } else {
       await _pitchCreate(payload);
     }
-    await _contactLoadPitches(_pitchTargetContactId);
+    // v109: refresh BOTH sides so either view is up-to-date
+    const dealIdToRefresh = _pitchFromDeal ? _pitchFromDealId : _pitchSelectedDealId;
+    const contactIdToRefresh = payload.contact_id;
     closePitchModal();
+    // Contact-side refresh if the contact detail is open
+    if(contactIdToRefresh && document.getElementById('contactPitchesList')){
+      await _contactLoadPitches(contactIdToRefresh);
+    }
+    // Deal-side refresh if the deal card is open
+    if(dealIdToRefresh && document.getElementById('dealPitchList')){
+      await loadDealPitches(dealIdToRefresh);
+    }
   } catch(e) {
     showErr('Failed to save: ' + (e.message || 'unknown error'));
     if(btn){ btn.disabled = false; btn.textContent = 'Save Pitch'; }
@@ -17896,9 +18170,15 @@ async function _pitchDeleteFromModal(){
   if(!confirm('Delete this pitch entry?\n\nThis will soft-delete the pitch — it won\'t appear in the list but the row is kept for audit.')) return;
   try {
     await _pitchDelete(_pitchEditingId);
-    const contactId = _pitchTargetContactId;
+    const contactId = _pitchTargetContactId || _pitchSelectedBuyerId;
+    const dealId = _pitchFromDeal ? _pitchFromDealId : _pitchSelectedDealId;
     closePitchModal();
-    await _contactLoadPitches(contactId);
+    if(contactId && document.getElementById('contactPitchesList')){
+      await _contactLoadPitches(contactId);
+    }
+    if(dealId && document.getElementById('dealPitchList')){
+      await loadDealPitches(dealId);
+    }
   } catch(e) {
     alert('Failed to delete: ' + (e.message || 'unknown error'));
   }
@@ -18283,64 +18563,155 @@ function renderContactsTab(d){
     </div>`;
 }
 
+// v109: legacy loadBuyerPitches repointed to ace_buyer_pitches (canonical
+// table). This keeps the Summary tab's #buyerPitchList in sync with the
+// deal Contacts/Buyers tab and the contact Pitches tab.
 async function loadBuyerPitches(dealId){
   const listEl = document.getElementById('buyerPitchList');
   if(!listEl || !dealId) return;
-  const cfg = getConfig();
-  if(!cfg.key && !isSupabase()) return;
+  if(!isSupabase()){ listEl.innerHTML='<span style="color:#888;">Pitch log requires Supabase mode.</span>'; return; }
 
-  try{
-    let interests = [], buyerMap = {};
-
-    if(isSupabase()){
-      const rows = await _sbGet(SB_TABLES.buyerInterests, `property_id=eq.${dealId}&select=*`);
-      if(!rows?.length){ listEl.innerHTML='<span style="color:#888;">No buyers pitched on this deal yet.</span>'; return; }
-      const contactIds = [...new Set(rows.map(r=>r.contact_id).filter(Boolean))];
-      if(contactIds.length){
-        const contacts = await _sbGet(SB_TABLES.contacts, `id=in.(${contactIds.join(',')})&select=id,name,phone_number,email,company,contact_notes`);
-        contacts.forEach(c=>{ buyerMap[c.id]={ Name:c.name, 'Phone Number':c.phone_number, Email:c.email, Company:c.company, 'Contact Notes':c.contact_notes }; });
-      }
-      interests = rows.map(r=>({ fields:{ 'Buyer':[r.contact_id], notes: r.interest_notes } }));
-    } else {
-      const d = currentDeal;
-      const interestIds = d['Buyer Interests']||[];
-      if(!interestIds.length){ listEl.innerHTML='<span style="color:#888;">No buyers pitched on this deal yet.</span>'; return; }
-      const formula = encodeURIComponent(`OR(${interestIds.map(id=>`RECORD_ID()="${id}"`).join(',')})`);
-      const res = await fetch(`https://api.airtable.com/v0/${cfg.base}/tblBjWDPQkXIrONuR?filterByFormula=${formula}`,{headers:{Authorization:`Bearer ${cfg.key}`}});
-      const data = await res.json();
-      interests = data.records||[];
-      if(!interests.length){ listEl.innerHTML='<span style="color:#888;">No buyer details found.</span>'; return; }
-      const buyerContactIds = [...new Set(interests.flatMap(r=>r.fields['Buyer']||[]))];
-      if(buyerContactIds.length){
-        const bFormula = encodeURIComponent(`OR(${buyerContactIds.map(id=>`RECORD_ID()="${id}"`).join(',')})`);
-        const bRes = await fetch(`https://api.airtable.com/v0/${cfg.base}/tblpTluzDlrvMCaca?filterByFormula=${bFormula}`,{headers:{Authorization:`Bearer ${cfg.key}`}});
-        const bData = await bRes.json();
-        (bData.records||[]).forEach(r=>{ buyerMap[r.id]=r.fields; });
-      }
+  try {
+    const rows = await _sbGet(SB_TABLES.buyerPitches,
+      `deal_id=eq.${dealId}&deleted_at=is.null&select=id,contact_id,pitch_date,reaction,notes,pitch_channel&order=pitch_date.desc.nullslast,created_at.desc&limit=50`);
+    if(!rows || !rows.length){
+      listEl.innerHTML = '<span style="color:#888;">No buyers pitched on this deal yet.</span>';
+      return;
     }
+    // Map contact ids → buyer display info from allContacts in memory
+    const buyerIds = [...new Set(rows.map(r => r.contact_id).filter(Boolean))];
+    const buyerMap = {};
+    buyerIds.forEach(id => {
+      const c = (allContacts || []).find(x => x.id === id);
+      if(c){
+        buyerMap[id] = {
+          name: c['Name'] || c.name || 'Unknown',
+          phone: c['Phone Number'] || c.phone_number || '—',
+          email: c['Email'] || c.email || '—',
+          company: c['Company'] || c.company || '—'
+        };
+      }
+    });
 
+    const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
     listEl.innerHTML = `<table style="width:100%;border-collapse:collapse;font-size:11px;">
       <thead><tr style="background:#1a3a6e;color:#fff;">
         <th style="padding:5px 8px;border:1px solid #0e2244;text-align:left;">Buyer Name</th>
         <th style="padding:5px 8px;border:1px solid #0e2244;text-align:left;">Phone</th>
         <th style="padding:5px 8px;border:1px solid #0e2244;text-align:left;">Email</th>
         <th style="padding:5px 8px;border:1px solid #0e2244;text-align:left;">Company</th>
-        <th style="padding:5px 8px;border:1px solid #0e2244;text-align:left;">Notes</th>
+        <th style="padding:5px 8px;border:1px solid #0e2244;text-align:left;">Pitched</th>
+        <th style="padding:5px 8px;border:1px solid #0e2244;text-align:left;">Reaction</th>
       </tr></thead><tbody>
-      ${interests.map((r,i)=>{
-        const buyerIds = r.fields['Buyer']||[];
-        const buyer = buyerIds[0] ? buyerMap[buyerIds[0]] : null;
-        const name = buyer?.Name||'Unknown Buyer'; const phone=buyer?.['Phone Number']||'—';
-        const email=buyer?.Email||'—'; const company=buyer?.Company||'—';
-        const notes=(buyer?.['Contact Notes']||'—').substring(0,60);
+      ${rows.map((r,i)=>{
+        const b = buyerMap[r.contact_id] || { name:'(contact removed)', phone:'—', email:'—', company:'—' };
+        const reactLbl = { interested:'✅ Interested', maybe:'🤔 Maybe', not_interested:'❌ Not interested', no_response:'— No response' }[r.reaction] || (r.reaction||'—');
         return `<tr style="background:${i%2===0?'#fff':'#f8f8f8'};">
-          <td style="padding:5px 8px;border:1px solid #ddd;font-weight:bold;">${name}</td>
-          <td style="padding:5px 8px;border:1px solid #ddd;">${phone}</td>
-          <td style="padding:5px 8px;border:1px solid #ddd;">${email}</td>
-          <td style="padding:5px 8px;border:1px solid #ddd;">${company}</td>
-          <td style="padding:5px 8px;border:1px solid #ddd;color:#555;">${notes}</td></tr>`;
+          <td style="padding:5px 8px;border:1px solid #ddd;font-weight:bold;">${esc(b.name)}</td>
+          <td style="padding:5px 8px;border:1px solid #ddd;">${esc(b.phone)}</td>
+          <td style="padding:5px 8px;border:1px solid #ddd;">${esc(b.email)}</td>
+          <td style="padding:5px 8px;border:1px solid #ddd;">${esc(b.company)}</td>
+          <td style="padding:5px 8px;border:1px solid #ddd;">${esc(r.pitch_date || '—')}</td>
+          <td style="padding:5px 8px;border:1px solid #ddd;color:#555;">${esc(reactLbl)}</td></tr>`;
       }).join('')}</tbody></table>`;
-  }catch(e){ listEl.innerHTML=`<span style="color:#c00;">Error: ${e.message}</span>`; }
+  } catch(e){
+    listEl.innerHTML=`<span style="color:#c00;">Error: ${e.message}</span>`;
+  }
+}
+
+// v109: deal-side pitch list for the Contacts/Buyers tab. Cached so
+// the modal can read existing pitches when editing.
+let _dealPitches = [];
+
+async function loadDealPitches(dealId){
+  const listEl = document.getElementById('dealPitchList');
+  if(!listEl || !dealId) return;
+  if(!isSupabase()){
+    listEl.innerHTML = '<div style="padding:20px;color:#94a3b8;font-size:12px;text-align:center;">Pitch log requires Supabase mode.</div>';
+    return;
+  }
+
+  try {
+    const rows = await _sbGet(SB_TABLES.buyerPitches,
+      `deal_id=eq.${dealId}&deleted_at=is.null&select=*&order=pitch_date.desc.nullslast,created_at.desc&limit=200`);
+    _dealPitches = rows || [];
+    _renderDealPitches(dealId);
+  } catch(e) {
+    listEl.innerHTML = '<div style="padding:14px;color:#dc2626;font-size:12px;">Error loading pitches: '+e.message+'</div>';
+  }
+}
+
+function _renderDealPitches(dealId){
+  const listEl = document.getElementById('dealPitchList');
+  if(!listEl) return;
+  const pitches = _dealPitches || [];
+  const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const count = pitches.length;
+
+  if(count === 0){
+    listEl.innerHTML = `
+      <div style="font-size:28px;font-weight:bold;color:#cbd5e1;text-align:center;padding:10px 0;">0</div>
+      <div style="text-align:center;font-size:11px;color:#555;margin-bottom:12px;">Buyers Pitched on This Deal</div>
+      <div style="text-align:center;color:#888;padding:12px;font-size:11px;">No buyers pitched yet — use the button below.</div>
+    `;
+    return;
+  }
+
+  const reactMeta = {
+    interested:     { lbl: '✅ Interested',     color: '#15803d', bg: '#dcfce7' },
+    maybe:          { lbl: '🤔 Maybe',          color: '#b45309', bg: '#fef3c7' },
+    not_interested: { lbl: '❌ Not interested', color: '#991b1b', bg: '#fee2e2' },
+    no_response:    { lbl: '— No response',     color: '#64748b', bg: '#f1f5f9' }
+  };
+  const channelIcon = { email:'✉', call:'📞', text:'💬', in_person:'👥', other:'·' };
+
+  listEl.innerHTML = `
+    <div style="font-size:28px;font-weight:bold;color:#2060b0;text-align:center;padding:10px 0;">${count}</div>
+    <div style="text-align:center;font-size:11px;color:#555;margin-bottom:12px;">Buyers Pitched on This Deal</div>
+    <table class="data-table" style="width:100%;border-collapse:collapse;font-size:11px;">
+      <thead>
+        <tr style="background:#1a3a6e;color:#fff;">
+          <th style="padding:5px 8px;border:1px solid #0e2244;text-align:left;">#</th>
+          <th style="padding:5px 8px;border:1px solid #0e2244;text-align:left;">Buyer Name</th>
+          <th style="padding:5px 8px;border:1px solid #0e2244;text-align:left;">Date</th>
+          <th style="padding:5px 8px;border:1px solid #0e2244;text-align:left;">Via</th>
+          <th style="padding:5px 8px;border:1px solid #0e2244;text-align:left;">Reaction</th>
+          <th style="padding:5px 8px;border:1px solid #0e2244;text-align:left;">Notes</th>
+          <th style="padding:5px 8px;border:1px solid #0e2244;text-align:left;">Action</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${pitches.map((p, i) => {
+          const c = (allContacts || []).find(x => x.id === p.contact_id);
+          const name = c ? (c['Name'] || c.name || 'Unknown') : '(contact removed)';
+          const react = reactMeta[p.reaction] || { lbl: (p.reaction || '—'), color:'#64748b', bg:'#f1f5f9' };
+          const ch = p.pitch_channel ? (channelIcon[p.pitch_channel] || '·') + ' ' + p.pitch_channel : '—';
+          const notes = (p.notes || '').slice(0, 80);
+          const bg = i % 2 === 0 ? '#fff' : '#f8f8f8';
+          return `<tr style="background:${bg};">
+            <td style="padding:5px 8px;border:1px solid #ddd;color:#94a3b8;">${i+1}</td>
+            <td style="padding:5px 8px;border:1px solid #ddd;font-weight:600;">
+              ${c ? `<a href="#" onclick="event.preventDefault();openContactModal('${p.contact_id}');" style="color:#1e40af;text-decoration:none;">${esc(name)}</a>` : esc(name)}
+            </td>
+            <td style="padding:5px 8px;border:1px solid #ddd;">${esc(p.pitch_date || '—')}</td>
+            <td style="padding:5px 8px;border:1px solid #ddd;">${esc(ch)}</td>
+            <td style="padding:5px 8px;border:1px solid #ddd;">
+              <span style="background:${react.bg};color:${react.color};padding:2px 7px;border-radius:4px;font-size:10px;font-weight:600;">${esc(react.lbl)}</span>
+            </td>
+            <td style="padding:5px 8px;border:1px solid #ddd;color:#555;" title="${esc(p.notes||'')}">${esc(notes)}${(p.notes||'').length > 80 ? '…' : ''}</td>
+            <td style="padding:5px 8px;border:1px solid #ddd;">
+              <button onclick="openPitchModalForDeal('${dealId}', '${p.id}')" style="font-size:10px;padding:3px 8px;background:#f1f5f9;color:#1e40af;border:1px solid #cbd5e1;border-radius:4px;font-weight:600;cursor:pointer;">Edit</button>
+            </td>
+          </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
+  `;
+}
+
+async function loadBuyerPitchesLegacyAirtable_DISABLED(dealId){
+  // Preserved for reference — Airtable version of loadBuyerPitches.
+  // The canonical version above now reads from ace_buyer_pitches.
 }
 
 // ─── TAB: BROCHURE CREATOR ────────────────────────────────────
@@ -20189,6 +20560,19 @@ function showSettingsPage(){
             <div style="font-size:12px;color:#64748b;margin-top:3px;line-height:1.5;">Analyze and import remaining contacts from Follow Up Boss. Auto-skips records already matched by phone or email. Preview-only analysis for now.</div>
           </div>
           <button onclick="_fubImportOpen()" style="background:#0f172a;color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Open import →</button>
+        </section>
+
+        <!-- v110: Bulk Street View fill tile -->
+        <section style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
+          <div style="font-size:28px;flex-shrink:0;">📸</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:15px;font-weight:700;color:#0f172a;">Auto-fill Street View photos</div>
+            <div style="font-size:12px;color:#64748b;margin-top:3px;line-height:1.5;">
+              Grab Google Street View images for every active deal that doesn't already have a photo.
+              Cost: about $7 per 1,000 deals (well within Google's $200/mo free credit). Deals without Street View imagery are skipped.
+            </div>
+          </div>
+          <button onclick="_streetViewBulkOpen()" style="background:#059669;color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Bulk fill →</button>
         </section>
 
         <!-- CONNECTION -->
@@ -30084,6 +30468,147 @@ async function uploadPropertyPhotos(dealId){
   if(uploaded > 0) refreshPropertyPhotos(dealId);
 }
 
+// v110: Pull a Google Street View image for a property using the address.
+// Uses the existing Google Maps API key stored in localStorage (same key
+// used for Places autocomplete + Geocoding). Costs ~$0.007 per pull via
+// Street View Static API; well under Google's $200/mo free tier for
+// normal usage.
+//
+// Flow:
+//   1. Read deal's address (Address field)
+//   2. GET https://maps.googleapis.com/maps/api/streetview?... → JPEG blob
+//   3. Detect "no imagery" response (returns a default generic image)
+//   4. Upload JPEG to Supabase Storage (same bucket/path pattern as photos)
+//   5. Append to photo_attachments JSONB + set main_photo_attachment_id
+//      if there's no main yet
+//   6. Refresh the gallery
+async function pullStreetViewPhoto(dealId){
+  if(!isSupabase()){
+    alert('Street View requires Supabase mode.');
+    return;
+  }
+  const key = _store.get('google_places_key');
+  if(!key){
+    alert('Google Maps API key missing. Set it in Settings.');
+    return;
+  }
+  // Find the deal — try currentDeal first, then allDeals
+  let deal = (currentDeal?.id === dealId) ? currentDeal : null;
+  if(!deal) deal = (allDeals || []).find(d => d.id === dealId);
+  if(!deal){
+    alert('Could not find deal.');
+    return;
+  }
+  const addr = deal['Address'] || '';
+  if(!addr || addr.trim().length < 5){
+    alert('This deal has no address set — cannot fetch Street View.');
+    return;
+  }
+
+  const btn = document.getElementById('streetViewBtn_' + dealId);
+  const status = document.getElementById('photoUploadStatus');
+  const setBtn = (txt, disabled) => { if(btn){ btn.textContent = txt; btn.disabled = !!disabled; } };
+  const setStatus = (txt) => { if(status){ status.style.display = 'inline'; status.textContent = txt; } };
+  const clearStatus = () => { if(status){ setTimeout(() => { status.style.display = 'none'; }, 4000); } };
+
+  setBtn('⏳ Fetching…', true);
+  setStatus('📸 Fetching Street View…');
+
+  try {
+    // First: check metadata endpoint — tells us if imagery is available
+    // without burning a billed request. The "metadata" endpoint is FREE.
+    const metaUrl = `https://maps.googleapis.com/maps/api/streetview/metadata?size=640x400&location=${encodeURIComponent(addr)}&source=outdoor&key=${encodeURIComponent(key)}`;
+    const metaRes = await fetch(metaUrl);
+    const meta = await metaRes.json();
+    if(meta.status !== 'OK'){
+      // ZERO_RESULTS means no Street View available at that address
+      const reason = {
+        ZERO_RESULTS: 'No Street View imagery available at this address. Try a nearby landmark or drag-drop a photo instead.',
+        NOT_FOUND: 'Address not found by Google. Check the address.',
+        OVER_QUERY_LIMIT: 'Google API quota exceeded. Check your billing.',
+        REQUEST_DENIED: 'Google API request denied. The key may need Street View Static API enabled, or the key restrictions are too tight.',
+        INVALID_REQUEST: 'Invalid address format.',
+        UNKNOWN_ERROR: 'Google API temporary error. Try again.'
+      }[meta.status] || `Google API status: ${meta.status}`;
+      alert('Street View unavailable — ' + reason);
+      setBtn('📸 Pull Street View', false);
+      setStatus('✕ ' + meta.status);
+      clearStatus();
+      return;
+    }
+
+    // OK — fetch the actual image. 640x400 is the sweet spot for OM covers.
+    // Pitch 10° so you look slightly up (most buildings look better with a
+    // small uptilt than dead-flat).
+    setStatus('📸 Downloading image…');
+    const imgUrl = `https://maps.googleapis.com/maps/api/streetview?size=640x400&location=${encodeURIComponent(addr)}&fov=90&pitch=10&source=outdoor&key=${encodeURIComponent(key)}`;
+    const imgRes = await fetch(imgUrl);
+    if(!imgRes.ok) throw new Error('Fetch failed: HTTP ' + imgRes.status);
+    const blob = await imgRes.blob();
+    if(blob.size < 1000){
+      throw new Error('Image too small — probably an error response. Size: ' + blob.size + ' bytes.');
+    }
+
+    // Upload to Supabase Storage using the same path pattern as uploadPropertyPhotos
+    const ts = Date.now();
+    const safeAddr = addr.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g,'').slice(0, 50);
+    const filename = `streetview_${safeAddr || 'property'}_${ts}.jpg`;
+    const path = `properties/${dealId}/photos/${ts}_${filename}`;
+
+    setStatus('📸 Saving to storage…');
+    // Create a File from the blob so _sbUpload treats it right
+    const file = new File([blob], filename, { type: 'image/jpeg' });
+    const { publicUrl } = await _sbUpload(path, file, () => {});
+
+    const newPhoto = {
+      id: 'ph_' + ts + '_' + Math.random().toString(36).slice(2),
+      url: publicUrl,
+      filename: filename,
+      type: 'image/jpeg',
+      size: blob.size,
+      storage_path: path,
+      uploaded_at: new Date().toISOString(),
+      source: 'google_streetview'  // v110: track origin for reporting
+    };
+
+    // Merge into photo_attachments. If no main photo is set yet, mark this
+    // one as main so every deal ends up with a cover image automatically.
+    const existing = Array.isArray(deal['PHOTO']) ? deal['PHOTO'] : [];
+    const merged = [...existing, newPhoto];
+    const currentMain = deal['main_photo_attachment_id'] || deal['Main Photo Attachment ID'] || null;
+    const patch = { photo_attachments: merged };
+    if(!currentMain){
+      patch.main_photo_attachment_id = newPhoto.id;
+    }
+    await _sbPatch(SB_TABLES.properties, dealId, patch);
+
+    // Update in-memory
+    deal['PHOTO'] = merged;
+    if(!currentMain){
+      deal['main_photo_attachment_id'] = newPhoto.id;
+      deal['Main Photo Attachment ID'] = newPhoto.id;
+    }
+    if(currentDeal?.id === dealId){
+      currentDeal['PHOTO'] = merged;
+      if(!currentMain){
+        currentDeal['main_photo_attachment_id'] = newPhoto.id;
+        currentDeal['Main Photo Attachment ID'] = newPhoto.id;
+      }
+    }
+
+    setBtn('📸 Pull Street View', false);
+    setStatus(`✓ Street View saved${!currentMain ? ' (set as main photo)' : ''}`);
+    clearStatus();
+    refreshPropertyPhotos(dealId);
+  } catch(e){
+    console.error('Street View pull failed:', e);
+    alert('Street View pull failed: ' + (e.message || e));
+    setBtn('📸 Pull Street View', false);
+    setStatus('✕ Failed');
+    clearStatus();
+  }
+}
+
 async function dropPhotosOnGallery(event, dealId){
   event.preventDefault();
   const gallery = document.getElementById('photoGallery');
@@ -30627,22 +31152,11 @@ function renderContactsTab(d){
       <div>
         <div class="info-box">
           <div class="info-box-title">Buyer Activity</div>
-          <div style="font-size:28px;font-weight:bold;color:#2060b0;text-align:center;padding:10px 0;">${pitched}</div>
-          <div style="text-align:center;font-size:11px;color:#555;margin-bottom:12px;">Buyers Pitched on This Deal</div>
-          <table class="data-table">
-            <tr><th>#</th><th>Buyer Name</th><th>Pitched Date</th><th>Response</th><th>Action</th></tr>
-            ${pitched>0
-              ? Array.from({length:Math.min(pitched,5)},(_,i)=>`
-                <tr>
-                  <td>${i+1}</td>
-                  <td>Buyer ${i+1}</td>
-                  <td>—</td>
-                  <td><span style="color:#888;">No response</span></td>
-                  <td><button class="save-btn" style="padding:2px 6px;">Follow Up</button></td>
-                </tr>`).join('')
-              : '<tr><td colspan="5" style="text-align:center;color:#888;padding:12px;">No buyers pitched yet</td></tr>'}
-          </table>
-          <button class="save-btn" style="margin-top:8px;" onclick="alert('Buyer pitch tracker coming soon')">+ Log Buyer Pitch</button>
+          <!-- v109: live-loaded from ace_buyer_pitches; syncs with contact Pitches tab -->
+          <div id="dealPitchList" style="font-size:12px;color:#64748b;">
+            <div style="text-align:center;padding:20px;color:#94a3b8;">⏳ Loading pitches…</div>
+          </div>
+          <button class="save-btn" style="margin-top:8px;" onclick="openPitchModalForDeal('${d.id}')">+ Log Buyer Pitch</button>
         </div>
       </div>
     </div>`;
@@ -33036,6 +33550,227 @@ function saveFinInputs(dealId){
 let _fubAnalysisSummary = null; // { total_fub, already_matched, new_to_import, name_only_ambiguous, no_contact_info, analysis_duration_ms }
 let _fubCurrentTab = 'summary'; // 'summary' | 'new' | 'matched' | 'ambiguous'
 let _fubRowsCache = {};
+
+// ═══════════════════════════════════════════════════════════════════════
+// v110: BULK STREET VIEW FILL
+// Pulls Google Street View images for every active deal without a photo.
+// Sequential with a 200ms delay between calls to avoid hammering Google.
+// Cancelable; shows live progress.
+// ═══════════════════════════════════════════════════════════════════════
+let _svBulkCancel = false;
+let _svBulkState = { total: 0, done: 0, ok: 0, skipped: 0, failed: 0, current: '' };
+
+function _streetViewBulkOpen(){
+  const main = document.getElementById('mainArea');
+  if(!main) return;
+  main.innerHTML = `
+    <div style="padding:16px 22px;max-width:900px;margin:0 auto;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;gap:12px;flex-wrap:wrap;">
+        <div>
+          <div style="font-size:20px;font-weight:700;color:#0f172a;">📸 Bulk Street View Fill</div>
+          <div style="font-size:12px;color:#64748b;margin-top:3px;">Pulls Google Street View images for active deals that don't have a main photo yet.</div>
+        </div>
+        <button onclick="setNav(null,'settings')" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:8px 14px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;">← Back to Settings</button>
+      </div>
+      <div id="svBulkBody">
+        <div style="text-align:center;padding:40px;color:#64748b;font-size:13px;">⏳ Scanning deals…</div>
+      </div>
+    </div>`;
+  _streetViewBulkScan();
+}
+
+async function _streetViewBulkScan(){
+  const body = document.getElementById('svBulkBody');
+  if(!body) return;
+  if(!isSupabase()){
+    body.innerHTML = '<div style="padding:40px;text-align:center;color:#dc2626;">Supabase mode required.</div>';
+    return;
+  }
+  const key = _store.get('google_places_key');
+  if(!key){
+    body.innerHTML = '<div style="padding:40px;text-align:center;color:#dc2626;">Google Maps API key missing. Set it in Settings first.</div>';
+    return;
+  }
+  try {
+    // Find active deals without a main photo AND without any photo_attachments
+    // Limit to realistic active pipeline stages — skip Clean Up, Closed, archived
+    const excludeStages = ['Clean Up','Closed','Closed 2025','Closed 2026'];
+    const stageFilter = excludeStages.map(s => `pipeline_stage.neq.${encodeURIComponent(s)}`).join(',');
+    // PostgREST: fetch deals needing photos; cap at 5000 for safety
+    const query = `select=id,address,pipeline_stage,main_photo_attachment_id,photo_attachments&deleted_at=is.null&address=not.is.null&and=(${stageFilter})&or=(main_photo_attachment_id.is.null,photo_attachments.is.null)&limit=5000`;
+    const rows = await _sbGet(SB_TABLES.properties, query);
+    // Filter client-side to also exclude deals that already have photos (even if no main set)
+    const needPhoto = (rows || []).filter(r => {
+      const addr = r.address || '';
+      if(!addr || addr.trim().length < 5) return false;
+      const photos = Array.isArray(r.photo_attachments) ? r.photo_attachments : [];
+      return photos.length === 0; // zero photos = needs fill
+    });
+
+    body.innerHTML = `
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:20px;margin-bottom:16px;">
+        <div style="display:flex;gap:20px;flex-wrap:wrap;">
+          <div style="flex:1;min-width:180px;">
+            <div style="font-size:11px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Deals needing photo</div>
+            <div style="font-size:32px;font-weight:800;color:#059669;">${needPhoto.length.toLocaleString()}</div>
+          </div>
+          <div style="flex:1;min-width:180px;">
+            <div style="font-size:11px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Estimated cost</div>
+            <div style="font-size:32px;font-weight:800;color:#0f172a;">$${(needPhoto.length * 0.007).toFixed(2)}</div>
+            <div style="font-size:11px;color:#94a3b8;margin-top:2px;">(Under $200/mo free tier)</div>
+          </div>
+          <div style="flex:1;min-width:180px;">
+            <div style="font-size:11px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Estimated time</div>
+            <div style="font-size:32px;font-weight:800;color:#0f172a;">~${Math.ceil(needPhoto.length * 0.8 / 60)}m</div>
+            <div style="font-size:11px;color:#94a3b8;margin-top:2px;">(0.8s per deal)</div>
+          </div>
+        </div>
+      </div>
+      <div style="background:#fefce8;border:1px solid #fde68a;border-radius:10px;padding:14px 18px;font-size:12px;color:#713f12;margin-bottom:16px;">
+        <div style="font-weight:700;margin-bottom:4px;">⚠ Before you start</div>
+        <ul style="margin:0;padding-left:20px;line-height:1.7;">
+          <li>Keep this tab open — cancels if you close or navigate away.</li>
+          <li>Deals without Street View coverage (~5-15%) are skipped silently.</li>
+          <li>You can cancel at any time; already-pulled photos are kept.</li>
+          <li>Stages "Clean Up", "Closed", "Closed 2025", "Closed 2026" are excluded.</li>
+        </ul>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center;">
+        <button id="svBulkStartBtn" onclick="_streetViewBulkStart()" style="background:#059669;color:#fff;border:none;padding:12px 22px;font-size:14px;font-weight:700;border-radius:8px;cursor:pointer;" ${needPhoto.length===0?'disabled':''}>
+          ${needPhoto.length===0 ? '✓ All deals have photos' : `📸 Start — fetch ${needPhoto.length.toLocaleString()} photos`}
+        </button>
+      </div>
+      <div id="svBulkProgress" style="display:none;margin-top:20px;"></div>
+    `;
+    // Stash the target list for the start handler (avoids huge inline JSON)
+    _svBulkState.targetIds = needPhoto.map(r => r.id);
+    _svBulkState.targetAddrMap = Object.fromEntries(needPhoto.map(r => [r.id, r.address || '']));
+  } catch(e){
+    body.innerHTML = '<div style="padding:40px;text-align:center;color:#dc2626;">Error scanning deals: ' + (e.message || 'unknown') + '</div>';
+  }
+}
+
+async function _streetViewBulkStart(){
+  const ids = _svBulkState.targetIds || [];
+  if(!ids.length){ alert('No deals to process.'); return; }
+  const key = _store.get('google_places_key');
+  if(!key){ alert('Google Maps API key missing.'); return; }
+
+  _svBulkCancel = false;
+  _svBulkState = { ..._svBulkState, total: ids.length, done: 0, ok: 0, skipped: 0, failed: 0, current: '' };
+
+  // Hide start button, show progress panel
+  const startBtn = document.getElementById('svBulkStartBtn');
+  if(startBtn) startBtn.style.display = 'none';
+  const progress = document.getElementById('svBulkProgress');
+  if(progress){
+    progress.style.display = 'block';
+    progress.innerHTML = `
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:18px 22px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+          <div style="font-size:14px;font-weight:700;color:#0f172a;">⚡ Processing…</div>
+          <button onclick="_svBulkCancel=true" id="svBulkCancelBtn" style="background:#fef2f2;color:#dc2626;border:1px solid #fecaca;padding:6px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Cancel</button>
+        </div>
+        <div id="svBulkBar" style="height:10px;background:#f1f5f9;border-radius:5px;overflow:hidden;margin-bottom:10px;">
+          <div id="svBulkBarFill" style="height:100%;width:0%;background:linear-gradient(90deg,#059669,#10b981);transition:width 0.2s;"></div>
+        </div>
+        <div id="svBulkStats" style="font-size:12px;color:#64748b;line-height:1.7;"></div>
+      </div>
+    `;
+  }
+
+  const updateUI = () => {
+    const s = _svBulkState;
+    const pct = s.total ? Math.round((s.done / s.total) * 100) : 0;
+    const fill = document.getElementById('svBulkBarFill');
+    if(fill) fill.style.width = pct + '%';
+    const stats = document.getElementById('svBulkStats');
+    if(stats){
+      stats.innerHTML = `
+        <div><strong>${s.done.toLocaleString()}/${s.total.toLocaleString()}</strong> processed (${pct}%) · ✓ ${s.ok.toLocaleString()} saved · ⏭ ${s.skipped.toLocaleString()} skipped · ✕ ${s.failed.toLocaleString()} failed</div>
+        <div style="margin-top:4px;font-family:monospace;font-size:11px;color:#94a3b8;">Current: ${(s.current || '').replace(/</g,'&lt;').slice(0, 80)}</div>
+      `;
+    }
+  };
+
+  for(let i = 0; i < ids.length; i++){
+    if(_svBulkCancel) break;
+    const dealId = ids[i];
+    const addr = _svBulkState.targetAddrMap[dealId] || '';
+    _svBulkState.current = addr || dealId;
+    updateUI();
+    try {
+      const result = await _pullStreetViewInternal(dealId, addr, key);
+      if(result === 'ok') _svBulkState.ok++;
+      else if(result === 'skipped') _svBulkState.skipped++;
+      else _svBulkState.failed++;
+    } catch(e){
+      _svBulkState.failed++;
+      console.warn('Street View failed for', dealId, addr, e);
+    }
+    _svBulkState.done++;
+    updateUI();
+    // Polite delay between calls — 200ms = 5 req/sec max
+    await new Promise(r => setTimeout(r, 200));
+  }
+
+  // Final state
+  _svBulkState.current = '';
+  updateUI();
+  const progressEl = document.getElementById('svBulkProgress');
+  if(progressEl){
+    const cancelBtn = document.getElementById('svBulkCancelBtn');
+    if(cancelBtn) cancelBtn.style.display = 'none';
+    const s = _svBulkState;
+    progressEl.insertAdjacentHTML('beforeend', `
+      <div style="margin-top:16px;padding:14px 18px;background:${_svBulkCancel ? '#fef2f2' : '#dcfce7'};border:1px solid ${_svBulkCancel ? '#fca5a5' : '#86efac'};border-radius:10px;font-size:13px;color:${_svBulkCancel ? '#991b1b' : '#14532d'};">
+        <strong>${_svBulkCancel ? '⚠ Cancelled' : '✓ Complete'}</strong> — ${s.ok.toLocaleString()} saved, ${s.skipped.toLocaleString()} skipped (no Street View), ${s.failed.toLocaleString()} failed.
+      </div>
+    `);
+  }
+}
+
+// Core helper shared with single-deal pull. Returns 'ok', 'skipped', or 'failed'.
+async function _pullStreetViewInternal(dealId, addr, key){
+  // Metadata check
+  const metaUrl = `https://maps.googleapis.com/maps/api/streetview/metadata?size=640x400&location=${encodeURIComponent(addr)}&source=outdoor&key=${encodeURIComponent(key)}`;
+  const metaRes = await fetch(metaUrl);
+  const meta = await metaRes.json();
+  if(meta.status !== 'OK') return 'skipped';
+
+  // Image
+  const imgUrl = `https://maps.googleapis.com/maps/api/streetview?size=640x400&location=${encodeURIComponent(addr)}&fov=90&pitch=10&source=outdoor&key=${encodeURIComponent(key)}`;
+  const imgRes = await fetch(imgUrl);
+  if(!imgRes.ok) return 'failed';
+  const blob = await imgRes.blob();
+  if(blob.size < 1000) return 'failed';
+
+  // Upload
+  const ts = Date.now();
+  const safeAddr = addr.replace(/[^a-z0-9]+/gi, '_').replace(/^_+|_+$/g,'').slice(0, 50);
+  const filename = `streetview_${safeAddr || 'property'}_${ts}.jpg`;
+  const path = `properties/${dealId}/photos/${ts}_${filename}`;
+  const file = new File([blob], filename, { type: 'image/jpeg' });
+  const { publicUrl } = await _sbUpload(path, file, () => {});
+
+  const newPhoto = {
+    id: 'ph_' + ts + '_' + Math.random().toString(36).slice(2),
+    url: publicUrl,
+    filename: filename,
+    type: 'image/jpeg',
+    size: blob.size,
+    storage_path: path,
+    uploaded_at: new Date().toISOString(),
+    source: 'google_streetview'
+  };
+
+  // Merge
+  await _sbPatch(SB_TABLES.properties, dealId, {
+    photo_attachments: [newPhoto],
+    main_photo_attachment_id: newPhoto.id
+  });
+  return 'ok';
+}
 
 function _fubImportOpen(){
   const main = document.getElementById('mainArea');

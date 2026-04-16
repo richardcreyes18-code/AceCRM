@@ -34638,8 +34638,17 @@ async function _aiCommitSellerLead(){
     if(p.address||p.municipality){
       const row={address:[p.address,p.municipality,p.state].filter(Boolean).join(', ')||p.address, municipality:p.municipality||null, state:p.state||'NJ', owner_contact_id:cid, crm_asset_classification:p.crm_asset_classification||null, pipeline_stage:p.pipeline_stage||'New Lead', asking_price:p.asking_price||null, noi:p.noi||null, number_of_units:p.number_of_units||p.no_of_units||null, square_footage:p.square_footage||null, deal_notes:p.deal_notes||null, general_property_notes:p.general_property_notes||null, why_selling:p.why_selling||null, gross_revenue_yearly:p.gross_revenue_yearly||null, expenses_yearly:p.expenses_yearly||null, date_added:new Date().toISOString().split('T')[0]};
       const pr=await _sbPost('ace_properties',row);
-      if(pr?.id) _aiAddBotMessage('Created deal <strong>'+(row.address||'')+'</strong> linked to '+(c.name||'contact')+'.',true);
-      await _quickRefreshData();
+      if(pr?.id){
+        // v105.4: instantly add to allDeals and open the new deal card
+        const newDeal = { id: pr.id, ...pr };
+        if(typeof _lf === 'object' && _lf.loadOnto) _lf.loadOnto(newDeal);
+        allDeals.unshift(newDeal);
+        buildSidebar(document.getElementById('sideSearch')?.value || '');
+        if(typeof openDeal === 'function') openDeal(newDeal);
+        _aiAddBotMessage('Created deal <strong>'+(row.address||'')+'</strong> linked to '+(c.name||'contact')+'. Opened it for you.',true);
+      }
+      // Background refresh for full consistency
+      _quickRefreshData().catch(e => console.warn('bg refresh:', e.message));
     }else{ _aiAddBotMessage('No property address found — contact created without a deal.'); }
     _aiAddBotMessage('✅ Done! Continue with more leads or close this chat.'); _aiPendingResult=null;
   }catch(e){ _aiAddBotMessage('❌ Error: '+(e.message||'unknown')); }
@@ -34793,8 +34802,42 @@ async function _aiCommitDealUpdate(){
     });
 
     await _sbPatch('ace_properties', match.id, patch);
+
+    // v105.4: INSTANT visual update. Patch the in-memory deal object
+    // directly so the card re-renders immediately — no waiting for the
+    // full 5700-deal re-fetch. The allDeals array holds references, so
+    // mutating `match` updates the array in place.
+    Object.entries(patch).forEach(([k, v]) => {
+      match[k] = v;
+      // Also update the Airtable-style field names that openDeal reads
+      const fieldMap = {
+        asking_price: 'Asking Price', offer_price: 'Offer Price',
+        pipeline_stage: 'Pipeline Stage', deal_tag: 'Deal Tag',
+        deal_notes: 'Deal Notes', next_steps: 'Next Steps',
+        general_property_notes: 'General Property Notes',
+        crm_asset_classification: 'CRM Asset Classification',
+        why_selling: 'Why Selling', noi: 'NOI',
+        gross_revenue_yearly: 'Gross Revenue (Yearly)',
+        expenses_yearly: 'Expenses (Yearly)',
+        number_of_units: 'Number of Units', no_of_units: '# of Units',
+        square_footage: 'Square Footage',
+        is_archived: 'Is Archived', top_priority: 'Top Priority',
+        discuss_in_meeting: 'Discuss In Meeting'
+      };
+      if(fieldMap[k]) match[fieldMap[k]] = v;
+    });
+    // Recalculate derived fields (cap rate, commission, etc.)
+    if(typeof _lf === 'object' && _lf.loadOnto) _lf.loadOnto(match);
+    // Re-render the deal card instantly if it's the one being viewed
+    if(currentDeal && currentDeal.id === match.id && typeof openDeal === 'function'){
+      openDeal(match);
+    }
+    // Also update sidebar immediately
+    buildSidebar(document.getElementById('sideSearch')?.value || '');
+
     _aiAddBotMessage('✅ Updated <strong>'+(match['Address']||match.address||'deal')+'</strong> with '+Object.keys(updates).length+' change'+(Object.keys(updates).length===1?'':'s')+'.', true);
-    await _quickRefreshData();
+    // Background: full refresh to sync everything else (contacts, other deals)
+    _quickRefreshData().catch(e => console.warn('bg refresh:', e.message));
     _aiPendingResult = null;
   }catch(e){
     _aiAddBotMessage('❌ Error: '+(e.message||'unknown'));

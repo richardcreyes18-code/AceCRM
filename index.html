@@ -23387,9 +23387,10 @@ function _ddRenderMergeDialog(cand, contacts, dealCounts){
   // non-empty value if surviving's field is empty).
   const fields = [
     { key: 'name',            label: 'Name'            },
-    { key: 'phone_number',    label: 'Phone'           },
+    { key: 'phone_number',    label: 'Phone',           secondaryKey: 'secondary_phone' },
     { key: 'secondary_phone', label: 'Secondary phone' },
-    { key: 'email',           label: 'Email'           },
+    { key: 'email',           label: 'Email',           secondaryKey: 'secondary_email' },
+    { key: 'secondary_email', label: 'Secondary email' },
     { key: 'company',         label: 'Company'         },
     { key: 'contact_notes',   label: 'Notes'           }
   ];
@@ -23477,19 +23478,24 @@ function _ddRenderMergeBody(cand, contacts, dealCounts, fields){
   };
   // Field row: per-contact value with radio
   const fieldRow = (f) => {
+    // v102.43.1: detect if THIS field is itself a secondary slot whose
+    // current pick is "__from_primary:<contactId>:<sourceField>". In that
+    // case, no contact's own value is the winner — instead the cell whose
+    // primary value is being routed here gets the WINNER badge.
+    const isSecondarySlot = (f.key === 'secondary_phone' || f.key === 'secondary_email');
+    const fromPrimaryPick = (typeof _ddMergePicks[f.key] === 'string' && _ddMergePicks[f.key].startsWith('__from_primary:'))
+      ? _ddMergePicks[f.key]
+      : null;
+
     const cells = contacts.map((c, idx) => {
       const val = (c[f.key]||'').toString();
       const safeVal = val.replace(/&/g,'&amp;').replace(/</g,'&lt;');
       const isEmpty = !val.trim();
-      // v102.42.7: A cell is the WINNER only if it's both picked AND
-      // non-empty. Empty cells can't win — there's nothing to save.
-      // Previously empty cells in the survivor column got marked WINNER
-      // ✓ which made it look like every empty field was "decided" when
-      // it was actually just the survivor's empty value defaulting in.
-      const isPicked = _ddMergePicks[f.key] === c.id && !isEmpty;
-      // Visual treatments — winner gets the dramatic green look,
-      // everything else stays neutral so the right column reads as
-      // clickable, not "already decided".
+      // A cell is the WINNER for this row if it's picked AND non-empty.
+      // For secondary slots: if a __from_primary pick is active, no own-
+      // value cell wins (the value comes from another row).
+      const isPicked = !isEmpty && _ddMergePicks[f.key] === c.id && !fromPrimaryPick;
+
       const cellBg = isPicked ? '#ecfdf5' : '#fff';
       const cellBorder = isPicked
         ? 'border-left:4px solid #16a34a;'
@@ -23501,15 +23507,27 @@ function _ddRenderMergeBody(cand, contacts, dealCounts, fields){
       const winnerBadge = isPicked
         ? '<span style="display:inline-block;font-size:9px;padding:1px 5px;border-radius:8px;background:#16a34a;color:#fff;font-weight:700;margin-left:6px;letter-spacing:0.04em;">WINNER ✓</span>'
         : '';
-      // Make non-empty, non-winning cells visibly clickable so it's
-      // obvious you can pick from any column. Subtle hover hint via
-      // the data-* attribute + a light background change on :hover.
-      const isClickable = !isEmpty && !isPicked;
-      const hoverHint = isClickable ? 'onmouseover="this.style.background=\'#f8fafc\'" onmouseout="this.style.background=\'#fff\'"' : '';
+
+      // v102.43.1: "↓ to secondary" button on primary phone/email cells.
+      // Visible whenever this field has a secondaryKey + this cell has a
+      // value. Click → set the secondary slot's pick to "__from_primary:
+      // <thisContactId>:<thisField>". Shown to the right of the value
+      // text. If THIS cell is already the source of the secondary's
+      // current pick, show a "→ AS 2°" badge instead of the action button.
+      let toSecondaryControl = '';
+      if(f.secondaryKey && !isEmpty){
+        const isCurrentSecondarySource = _ddMergePicks[f.secondaryKey] === '__from_primary:'+c.id+':'+f.key;
+        if(isCurrentSecondarySource){
+          toSecondaryControl = '<span style="display:inline-block;font-size:9px;padding:1px 5px;border-radius:8px;background:#1e3a8a;color:#fff;font-weight:700;margin-left:4px;letter-spacing:0.04em;" title="This value goes to the secondary slot">→ AS 2°</span>';
+        } else {
+          toSecondaryControl = '<button onclick="event.preventDefault();event.stopPropagation();_ddPickFromPrimary(\''+f.secondaryKey+'\',\''+c.id+'\',\''+f.key+'\')" style="background:transparent;border:1px solid #cbd5e1;color:#475569;font-size:9px;padding:1px 5px;border-radius:6px;cursor:pointer;margin-left:4px;font-weight:600;white-space:nowrap;" title="Use this value as the surviving contact\'s secondary '+(f.key==='phone_number'?'phone':'email')+'">↓ to 2°</button>';
+        }
+      }
+
       return `
-        <label ${hoverHint} style="padding:10px 14px;${cellBorder}background:${cellBg};cursor:${isEmpty?'default':'pointer'};display:flex;align-items:flex-start;gap:8px;${isEmpty?'opacity:0.7;':''}transition:background 0.1s;">
+        <label style="padding:10px 14px;${cellBorder}background:${cellBg};cursor:${isEmpty?'default':'pointer'};display:flex;align-items:flex-start;gap:8px;${isEmpty?'opacity:0.7;':''}">
           <input type="radio" name="dd_f_${f.key}" value="${c.id}" ${isPicked?'checked':''} ${isEmpty?'disabled':''} onchange="_ddPickField('${f.key}','${c.id}')" style="margin-top:3px;flex-shrink:0;"/>
-          <span style="font-size:12px;${valStyle}line-height:1.5;word-break:break-word;flex:1;min-width:0;">${display}${winnerBadge}</span>
+          <span style="font-size:12px;${valStyle}line-height:1.5;word-break:break-word;flex:1;min-width:0;">${display}${winnerBadge}${toSecondaryControl}</span>
         </label>`;
     }).join('');
     // For notes, also offer "combine all" as a fourth option
@@ -23527,12 +23545,34 @@ function _ddRenderMergeBody(cand, contacts, dealCounts, fields){
           <span style="font-size:12px;color:#04342c;font-weight:${isPicked?'700':'500'};">Combine all notes (recommended) — preserves history with "[From X]" labels${isPicked?' <span style=\"display:inline-block;font-size:9px;padding:1px 5px;border-radius:8px;background:#16a34a;color:#fff;font-weight:700;margin-left:6px;letter-spacing:0.04em;\">WINNER ✓</span>':''}</span>
         </label>`;
     }
+    // v102.43.1: when this is a secondary slot with a __from_primary
+    // pick active, show a green banner row noting which contact's
+    // primary value will be used. Click to clear and revert to the
+    // contact's own (likely empty) secondary value.
+    let fromPrimaryNote = '';
+    if(isSecondarySlot && fromPrimaryPick){
+      const parts = fromPrimaryPick.split(':');
+      const sourceContact = contacts.find(cc => cc.id === parts[1]);
+      const sourceFieldKey = parts[2];
+      const sourceVal = sourceContact ? (sourceContact[sourceFieldKey] || '') : '';
+      const safeSrc = String(sourceVal).replace(/&/g,'&amp;').replace(/</g,'&lt;');
+      const safeName = String(sourceContact ? (sourceContact.name||'(no name)') : '?').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+      fromPrimaryNote = `
+        <div style="display:grid;grid-template-columns:140px 1fr;border-bottom:1px solid #f1f5f9;">
+          <div></div>
+          <div style="padding:8px 14px;background:#ecfdf5;border-left:4px solid #16a34a;font-size:11px;color:#04342c;display:flex;align-items:center;gap:8px;">
+            <span><strong>${safeSrc}</strong> will be saved as the surviving contact's secondary ${f.key==='secondary_phone'?'phone':'email'} (from ${safeName}'s primary).</span>
+            <button onclick="event.preventDefault();_ddClearFromPrimary('${f.key}')" style="background:transparent;border:1px solid #16a34a;color:#04342c;font-size:10px;padding:2px 8px;border-radius:5px;cursor:pointer;font-weight:600;">Clear</button>
+          </div>
+        </div>`;
+    }
     return `
       <div style="display:grid;grid-template-columns:140px repeat(${contacts.length}, minmax(0, 1fr));border-bottom:1px solid #f1f5f9;">
         <div style="padding:12px 14px;font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.04em;display:flex;align-items:flex-start;">${f.label}</div>
         ${cells}
         ${combineCell}
-      </div>`;
+      </div>
+      ${fromPrimaryNote}`;
   };
 
   return `
@@ -24110,6 +24150,24 @@ function _ddPickField(fieldKey, contactIdOrCombine){
   _ddReRenderDialog();
 }
 
+// v102.43.1: route a primary value (phone or email from one contact) to
+// the surviving contact's secondary slot. Stored as a marker string so
+// the submit handler can resolve it back to the actual value at the time
+// of the merge call.
+function _ddPickFromPrimary(secondaryFieldKey, sourceContactId, sourceFieldKey){
+  _ddMergePicks[secondaryFieldKey] = '__from_primary:' + sourceContactId + ':' + sourceFieldKey;
+  _ddReRenderDialog();
+}
+
+// Clear a __from_primary pick. Reverts to the field's normal default
+// (whichever contact's own secondary value the picker would have chosen
+// before the user clicked ↓ to 2°). Removing the key entirely lets the
+// "set defaults" loop on next render assign a sensible default.
+function _ddClearFromPrimary(secondaryFieldKey){
+  delete _ddMergePicks[secondaryFieldKey];
+  _ddReRenderDialog();
+}
+
 function _ddReRenderDialog(){
   if(!_ddOpenMergeId) return;
   const cand = _ddCandidates.find(c => c.id === _ddOpenMergeId);
@@ -24151,11 +24209,26 @@ async function _ddSubmitMerge(candidateId){
   const contactsById = {};
   _ddDialogContactsCache.forEach(c => { contactsById[c.id] = c; });
   const fieldValues = {};
-  ['name','phone_number','secondary_phone','email','company'].forEach(f => {
-    const pickedId = _ddMergePicks[f];
-    if(pickedId && contactsById[pickedId]){
-      fieldValues[f] = contactsById[pickedId][f] || '';
+  // v102.43.1: resolve picks. A pick is normally a contact id meaning
+  // "use that contact's value for this column". A pick can also be the
+  // special form "__from_primary:<contactId>:<sourceField>" which means
+  // "take that contact's value for sourceField and write it into this
+  // column" — used when copying a primary phone/email down to the
+  // surviving contact's secondary slot.
+  const resolvePick = (pick, defaultField) => {
+    if(!pick) return undefined;
+    if(typeof pick === 'string' && pick.startsWith('__from_primary:')){
+      const parts = pick.split(':');
+      const cid = parts[1], srcField = parts[2];
+      if(contactsById[cid]) return contactsById[cid][srcField] || '';
+      return undefined;
     }
+    if(contactsById[pick]) return contactsById[pick][defaultField] || '';
+    return undefined;
+  };
+  ['name','phone_number','secondary_phone','email','secondary_email','company'].forEach(f => {
+    const v = resolvePick(_ddMergePicks[f], f);
+    if(v !== undefined) fieldValues[f] = v;
   });
   // Notes special case: '__combine__' joins all non-empty notes with provenance
   const notesPick = _ddMergePicks.contact_notes;

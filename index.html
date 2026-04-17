@@ -2656,7 +2656,11 @@ function applyToken(){
 
 // Stage buckets — which pipeline_stage values count as each category
 const DASHBOARD_STAGE_BUCKETS = {
-  leads:         ['Lead','Top G Review','Attempted Contact','GHL'],
+  // v111.5: "New Lead" is the default stage for seller leads created via the
+  // Lead Intake form (line ~27490). It was missing from this bucket, causing
+  // the dashboard's "New Seller Leads" cards to always show 0 even when agents
+  // had active intake activity.
+  leads:         ['New Lead','Lead','Top G Review','Attempted Contact','GHL'],
   active:        ['Market Price Active','Active Listing','Lease Listing'],
   hot:           ['Hot Active Listing'],
   underContract: ['Under Contract','In Negotiations','Attorney Review'],
@@ -26565,6 +26569,15 @@ function _dcRefreshContactsTab(){
 
 function _liRenderSellerForm(){
   const main = document.getElementById('mainArea');
+  // v111.7: reset multi-property state when the form opens. Tab navigation
+  // between forms could otherwise leave stale _liExtraProps slots or a high
+  // _liSellerPropCount, which would cause ghost property cards.
+  _liSellerPropCount = 1;
+  _liExtraProps = [];
+  _li.assetTypes = [];
+  _li.assetKeys = [];
+  _liSellerFinState = { sellerFinancing: false, mfOccMode: 'pct' };
+  _liMuTenants = [];
   // v102.27: If prefill context is set, we came from a contact detail page
   // and should route the back button there instead of the lead intake hub.
   const prefillCtx = _liPrefillContext;
@@ -26599,58 +26612,88 @@ function _liRenderSellerForm(){
         ${_liTextarea('Contact Notes','li_s_cnotes','Any notes about this contact...',2)}
       `)}
 
-      <!-- PROPERTY INFO -->
-      ${_liSection('📍 Property Information', `
-        <div style="display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-bottom:14px;">
-          ${_liField('Property Address *','li_s_address','text','123 Main St, Ridgefield Park, NJ','2fr')}
-          ${_liField('County *','li_s_county','text','Bergen County','1fr')}
-        </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;">
-          ${_liNumField('Asking Price','li_s_price','e.g. 1,500,000')}
-          ${_liNumField('Square Footage','li_s_sf','e.g. 5,000')}
-          <div><label style="${_liLabelStyle()}">Seller Motivation</label><select id="li_s_motivation" style="${_liInputStyle()}">
-            <option value="">Select...</option>
-            <option>Highly Motivated</option><option>Motivated</option><option>Somewhat Motivated</option><option>Testing Market</option><option>Not Motivated</option>
-          </select></div>
-        </div>
-      `)}
+      <!-- v111.6: Property card #1. In v111.7+, clicking "+ Add Another Property"
+           will clone this block with suffixed IDs so multiple properties can be
+           captured in a single seller lead submission, auto-bundled into a
+           portfolio record in ace_portfolios. For now the card is visually
+           scoped with a subtle header so agents see the structure, but there's
+           still only one property per submit. -->
+      <!-- v111.7: container holding all property cards. Property #1 has
+           un-suffixed IDs (preserves existing submit path); properties #2+
+           are appended here with namespaced IDs (li_s_p2_*, li_s_p3_*, etc.) -->
+      <div id="li_s_properties_container">
+        <div id="li_s_property_card_1" style="position:relative;">
+          <div id="li_s_property_header_1" style="display:flex;align-items:center;gap:10px;margin:8px 0 8px;padding:6px 14px;background:linear-gradient(90deg,#eff6ff,#fff);border-left:3px solid #1e3a8a;border-radius:6px;">
+            <span style="font-size:13px;font-weight:700;color:#1e3a8a;">🏠 Property #1</span>
+            <span style="font-size:11px;color:#64748b;">— fill in the details for this property below</span>
+          </div>
 
-      <!-- ASSET TYPE SELECTION -->
-      ${_liSection('🏗️ Asset Type *', `
-        ${_liAssetSelector('s')}
-        <div id="li_s_conditional"></div>
-      `)}
-
-      <!-- FINANCIALS -->
-      ${_liSection('💰 Financial Information', `
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
-          ${_liNumField('Gross Monthly Revenue','li_s_gri_mo','e.g. 12,000',"_liSellerFinSync('gri_mo')")}
-          ${_liNumField('Gross Yearly Revenue','li_s_gri_yr','e.g. 144,000',"_liSellerFinSync('gri_yr')")}
-          ${_liNumField('Monthly Expenses','li_s_exp_mo','e.g. 4,500',"_liSellerFinSync('exp_mo')")}
-          ${_liNumField('Yearly Expenses','li_s_exp_yr','e.g. 54,000',"_liSellerFinSync('exp_yr')")}
-        </div>
-        <div style="margin-top:16px;padding:14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
-          <div style="display:flex;align-items:center;gap:12px;">
-            <label style="font-size:13px;font-weight:600;color:#374151;">Open to Seller Financing?</label>
-            <div style="display:flex;gap:0;border:1px solid #cbd5e1;border-radius:6px;overflow:hidden;">
-              <button type="button" id="li_s_sf_btn_no" onclick="_liSellerFinToggle(false)" style="padding:6px 18px;font-size:12px;font-weight:600;border:none;cursor:pointer;background:#fff;color:#475569;">No</button>
-              <button type="button" id="li_s_sf_btn_yes" onclick="_liSellerFinToggle(true)" style="padding:6px 18px;font-size:12px;font-weight:600;border:none;cursor:pointer;background:#fff;color:#475569;border-left:1px solid #cbd5e1;">Yes</button>
+          <!-- PROPERTY INFO -->
+          ${_liSection('📍 Property Information', `
+            <div style="display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-bottom:14px;">
+              ${_liField('Property Address *','li_s_address','text','123 Main St, Ridgefield Park, NJ','2fr')}
+              ${_liField('County *','li_s_county','text','Bergen County','1fr')}
             </div>
-          </div>
-          <div id="li_s_sf_notes_wrap" style="display:none;margin-top:12px;">
-            <label style="${_liLabelStyle()}">Seller Financing Notes</label>
-            <textarea id="li_s_sf_notes" rows="3" placeholder="Down payment expectations, interest rate, term, amortization, balloon, credit requirements, etc." style="${_liInputStyle()}height:auto;resize:vertical;"></textarea>
-          </div>
-        </div>
-        ${_liTextarea('General Notes','li_s_notes','Property notes, condition, highlights, access roads, zoning, etc.',4)}
-        ${_liTextarea('Financial Notes','li_s_fnotes','Rent roll details, tenant info, lease expirations, etc.',3)}
-        ${_liTextarea('Motivation / Why Selling','li_s_why','e.g. Estate sale, relocating, 1031 exchange...',2)}
-      `)}
+            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;">
+              ${_liNumField('Asking Price','li_s_price','e.g. 1,500,000')}
+              ${_liNumField('Square Footage','li_s_sf','e.g. 5,000')}
+              <div><label style="${_liLabelStyle()}">Seller Motivation</label><select id="li_s_motivation" style="${_liInputStyle()}">
+                <option value="">Select...</option>
+                <option>Highly Motivated</option><option>Motivated</option><option>Somewhat Motivated</option><option>Testing Market</option><option>Not Motivated</option>
+              </select></div>
+            </div>
+          `)}
 
-      <!-- Asking Price Words -->
-      ${_liSection('🏷️ Asking Price in Words (Optional)', `
-        ${_liTextarea('e.g. "Seller wants $1.5M, firm. Open to seller financing for qualified buyer."','li_s_pricewords','',2)}
-      `)}
+          <!-- ASSET TYPE SELECTION -->
+          ${_liSection('🏗️ Asset Type *', `
+            ${_liAssetSelector('s')}
+            <div id="li_s_conditional"></div>
+          `)}
+
+          <!-- FINANCIALS -->
+          ${_liSection('💰 Financial Information', `
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+              ${_liNumField('Gross Monthly Revenue','li_s_gri_mo','e.g. 12,000',"_liSellerFinSync('gri_mo')")}
+              ${_liNumField('Gross Yearly Revenue','li_s_gri_yr','e.g. 144,000',"_liSellerFinSync('gri_yr')")}
+              ${_liNumField('Monthly Expenses','li_s_exp_mo','e.g. 4,500',"_liSellerFinSync('exp_mo')")}
+              ${_liNumField('Yearly Expenses','li_s_exp_yr','e.g. 54,000',"_liSellerFinSync('exp_yr')")}
+            </div>
+            <div style="margin-top:16px;padding:14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
+              <div style="display:flex;align-items:center;gap:12px;">
+                <label style="font-size:13px;font-weight:600;color:#374151;">Open to Seller Financing?</label>
+                <div style="display:flex;gap:0;border:1px solid #cbd5e1;border-radius:6px;overflow:hidden;">
+                  <button type="button" id="li_s_sf_btn_no" onclick="_liSellerFinToggle(false)" style="padding:6px 18px;font-size:12px;font-weight:600;border:none;cursor:pointer;background:#fff;color:#475569;">No</button>
+                  <button type="button" id="li_s_sf_btn_yes" onclick="_liSellerFinToggle(true)" style="padding:6px 18px;font-size:12px;font-weight:600;border:none;cursor:pointer;background:#fff;color:#475569;border-left:1px solid #cbd5e1;">Yes</button>
+                </div>
+              </div>
+              <div id="li_s_sf_notes_wrap" style="display:none;margin-top:12px;">
+                <label style="${_liLabelStyle()}">Seller Financing Notes</label>
+                <textarea id="li_s_sf_notes" rows="3" placeholder="Down payment expectations, interest rate, term, amortization, balloon, credit requirements, etc." style="${_liInputStyle()}height:auto;resize:vertical;"></textarea>
+              </div>
+            </div>
+            ${_liTextarea('General Notes','li_s_notes','Property notes, condition, highlights, access roads, zoning, etc.',4)}
+            ${_liTextarea('Financial Notes','li_s_fnotes','Rent roll details, tenant info, lease expirations, etc.',3)}
+            ${_liTextarea('Motivation / Why Selling','li_s_why','e.g. Estate sale, relocating, 1031 exchange...',2)}
+          `)}
+
+          <!-- Asking Price Words -->
+          ${_liSection('🏷️ Asking Price in Words (Optional)', `
+            ${_liTextarea('e.g. "Seller wants $1.5M, firm. Open to seller financing for qualified buyer."','li_s_pricewords','',2)}
+          `)}
+        </div><!-- /li_s_property_card_1 -->
+      </div><!-- /li_s_properties_container -->
+
+      <!-- v111.7: '+ Add Another Property' button actually works now.
+           Clicking appends a new full-fat property card with namespaced IDs
+           (li_s_p2_*, li_s_p3_*). When count >= 2, the Portfolio Details
+           section below auto-appears. -->
+      <div id="li_s_add_property_wrap" style="margin:12px 0 16px;padding:14px 16px;background:#faf5ff;border:1px dashed #c084fc;border-radius:10px;text-align:center;">
+        <button type="button" onclick="_liAddPropertyClick()" style="background:#fff;color:#7c3aed;border:1.5px solid #7c3aed;padding:9px 18px;font-size:13px;font-weight:700;border-radius:8px;cursor:pointer;">+ Add Another Property</button>
+        <div style="font-size:11px;color:#7c3aed;margin-top:6px;">For portfolio sellers with multiple addresses. Contact will own all properties, auto-linked as a portfolio.</div>
+      </div>
+
+      <!-- v111.7: Portfolio Details section — auto-shown when property count >= 2 -->
+      <div id="li_s_portfolio_wrap" style="display:none;"></div>
 
       <div id="li_s_error" style="background:#fee2e2;border:1px solid #fca5a5;border-radius:8px;padding:12px 16px;color:#dc2626;font-size:13px;margin-bottom:16px;display:none;"></div>
 
@@ -26752,14 +26795,14 @@ function _liAtSelect(mode, type, sub){
   const fullType = sub ? `${type}: ${sub}` : type;
   // Map to asset section key
   const assetKey = _liTypeToKey(type);
-  if(!_li.assetTypes) _li.assetTypes = [];
-  if(!_li.assetKeys) _li.assetKeys = [];
-  if(_li.assetTypes.includes(fullType)) return; // already added
-  _li.assetTypes.push(fullType);
-  if(assetKey && !_li.assetKeys.includes(assetKey)) _li.assetKeys.push(assetKey);
+  // v111.7: route to correct slot (legacy global for mode='s', or _liExtraProps[N-1] for mode='s_p<N>')
+  const state = _liGetAssetState(mode);
+  if(state.assetTypes.includes(fullType)) return; // already added
+  state.assetTypes.push(fullType);
+  if(assetKey && !state.assetKeys.includes(assetKey)) state.assetKeys.push(assetKey);
   _liRenderSelectedTypes(mode);
   // Trigger conditional fields
-  if(mode==='s') _liRenderSellerConditional();
+  if(mode==='s' || /^s_p\d+$/.test(mode)) _liRenderSellerConditional(mode);
   else _liRenderBuyerConditional();
 }
 
@@ -26778,28 +26821,37 @@ function _liTypeToKey(type){
 
 function _liRenderSelectedTypes(mode){
   const el = document.getElementById(`li_${mode}_selected`); if(!el) return;
-  if(!_li.assetTypes||!_li.assetTypes.length){ el.innerHTML='<span style="font-size:11px;color:#aaa;align-self:center;">None selected yet</span>'; return; }
-  el.innerHTML = _li.assetTypes.map((t,i)=>`<span style="display:inline-flex;align-items:center;gap:5px;background:#1a3a6e;color:#fff;padding:4px 10px;border-radius:99px;font-size:11px;font-weight:600;">${t}<button onclick="_liRemoveType('${mode}',${i})" style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:14px;padding:0;line-height:1;">✕</button></span>`).join('');
+  // v111.7: per-mode state
+  const state = _liGetAssetState(mode);
+  if(!state.assetTypes||!state.assetTypes.length){ el.innerHTML='<span style="font-size:11px;color:#aaa;align-self:center;">None selected yet</span>'; return; }
+  el.innerHTML = state.assetTypes.map((t,i)=>`<span style="display:inline-flex;align-items:center;gap:5px;background:#1a3a6e;color:#fff;padding:4px 10px;border-radius:99px;font-size:11px;font-weight:600;">${t}<button onclick="_liRemoveType('${mode}',${i})" style="background:none;border:none;color:#94a3b8;cursor:pointer;font-size:14px;padding:0;line-height:1;">✕</button></span>`).join('');
 }
 
 function _liRemoveType(mode, idx){
-  if(!_li.assetTypes) return;
-  const removed = _li.assetTypes.splice(idx,1)[0];
-  // Rebuild assetKeys
-  _li.assetKeys = [...new Set((_li.assetTypes||[]).map(t=>_liTypeToKey(t.split(':')[0].trim())).filter(Boolean))];
+  // v111.7: per-mode state
+  const state = _liGetAssetState(mode);
+  if(!state.assetTypes) return;
+  state.assetTypes.splice(idx,1);
+  // Rebuild assetKeys from remaining types
+  const rebuilt = [...new Set((state.assetTypes||[]).map(t=>_liTypeToKey(t.split(':')[0].trim())).filter(Boolean))];
+  state.assetKeys.length = 0;
+  rebuilt.forEach(k => state.assetKeys.push(k));
   _liRenderSelectedTypes(mode);
-  if(mode==='s') _liRenderSellerConditional();
+  if(mode==='s' || /^s_p\d+$/.test(mode)) _liRenderSellerConditional(mode);
   else _liRenderBuyerConditional();
 }
 
-function _liRenderSellerConditional(){
-  const el = document.getElementById('li_s_conditional'); if(!el) return;
-  const keys = [...new Set(_li.assetKeys||[])];
+function _liRenderSellerConditional(mode){
+  // v111.7: default to 's' for back-compat with any callers that don't pass mode
+  mode = mode || 's';
+  const el = document.getElementById(`li_${mode}_conditional`); if(!el) return;
+  const state = _liGetAssetState(mode);
+  const keys = [...new Set(state.assetKeys||[])];
   el.innerHTML = keys.map(id => {
     const a = LI_ASSET_TYPES.find(x=>x.id===id)||{color:'#475569',icon:'🏗️',label:id};
     return `<div style="border:1px solid ${a.color}40;border-radius:10px;padding:18px;margin-top:14px;background:${a.color}08;">
       <div style="font-size:13px;font-weight:700;color:${a.color};margin-bottom:14px;">${a.icon} ${a.label} Details</div>
-      ${_liSellerAssetFields(id)}
+      ${_liSellerAssetFields(id, mode)}
     </div>`;
   }).join('');
 }
@@ -26816,7 +26868,12 @@ function _liRenderBuyerConditional(){
   }).join('');
 }
 
-function _liSellerAssetFields(id){
+// v111.7: the raw asset-fields template. Emits IDs like `li_s_multifamily_units`,
+// onclick handlers like `_liMfOccMode('pct','multifamily')`, etc. These are the
+// legacy IDs used by Property #1. For Properties #2+, `_liSellerAssetFields`
+// (the wrapper below) post-processes the output to rewrite IDs + handler
+// prefixes so they're scoped to that property.
+function _liSellerAssetFieldsRaw(id){
   const g = (lbl,fid,type,ph) => _liField(lbl,'li_s_'+id+'_'+fid,type,ph,'1fr');
   const gNum = (lbl,fid,ph) => _liNumField(lbl,'li_s_'+id+'_'+fid,ph);
   const gYear = (lbl,fid,ph) => _liYearField(lbl,'li_s_'+id+'_'+fid,ph);
@@ -27003,6 +27060,40 @@ function _liSellerAssetFields(id){
   return `<div style="font-size:12px;color:#666;">Use the General Notes section to describe this property.</div>`;
 }
 
+// v111.7: mode-aware wrapper. For mode='s' (property #1) returns the raw template
+// unchanged. For mode='s_p2', 's_p3' etc., rewrites all DOM IDs, document.getElementById
+// references, and MF/MU subform prefix arguments so they're scoped to that property
+// and don't collide with property #1.
+function _liSellerAssetFields(id, mode){
+  mode = mode || 's';
+  const raw = _liSellerAssetFieldsRaw(id);
+  if(mode === 's') return raw;
+  // Extract property index from mode like 's_p2' → 2, 's_p3' → 3
+  const m = /^s_p(\d+)$/.exec(mode);
+  if(!m) return raw;
+  const pN = m[1];
+  // Rewrite all li_s_ prefixes (in id="...", document.getElementById('...'), etc.) to li_s_pN_
+  // The only literals that start with "li_s_" are field IDs — safe bulk replace.
+  let out = raw.split('li_s_').join('li_s_p' + pN + '_');
+  // Rewrite MF/MU helper prefix arguments: 'multifamily' and 'mixeduse_res' are
+  // passed as prefix args to _liMfOccMode / _liMfOccCalcPct / _liMfUnitMixCalc
+  // and need to become 'p2_multifamily' / 'p2_mixeduse_res' so their DOM lookups
+  // find the scoped inputs. We only want to rewrite them when they appear as
+  // quoted arguments inside onclick/oninput handlers. Fortunately the raw
+  // template only ever writes those strings inside handler attributes.
+  out = out.replace(/'multifamily'/g, `'p${pN}_multifamily'`);
+  out = out.replace(/'mixeduse_res'/g, `'p${pN}_mixeduse_res'`);
+  // v102.26 Mixed Use tenant host / _liMuOnCountChange / _liMuRenderTenants calls
+  // also need to be scoped. Rewrite the default call _liMuOnCountChange() to
+  // _liMuOnCountChange('s_p2'), etc. Same for _liMuRenderTenants if it appears.
+  out = out.replace(/_liMuOnCountChange\(\)/g, `_liMuOnCountChange('${mode}')`);
+  out = out.replace(/_liMuRenderTenants\(\)/g, `_liMuRenderTenants('${mode}')`);
+  // The 'li_mu_tenants_host' host div id isn't scoped to li_s_ in the raw, so
+  // rewrite it explicitly to avoid collisions when multiple Mixed Use properties
+  // exist in the same lead.
+  out = out.split('"li_mu_tenants_host"').join(`"li_mu_p${pN}_tenants_host"`);
+  return out;
+}
 // ── Seller intake helpers (MF occupancy, unit mix calc, fin sync, seller financing) ──
 let _liSellerFinState = { sellerFinancing: false, mfOccMode: 'pct' };
 
@@ -27013,6 +27104,84 @@ let _liSellerFinState = { sellerFinancing: false, mfOccMode: 'pct' };
 // A per-prefix state bag tracks each occupancy toggle independently so
 // selecting BOTH Multifamily and Mixed Use doesn't cross-contaminate.
 const _liMfOccState = { multifamily: 'pct', mixeduse_res: 'pct' };
+
+// ═══════════════════════════════════════════════════════════════════
+// v111.7: MULTI-PROPERTY SELLER LEAD INTAKE — state routing infrastructure
+// ═══════════════════════════════════════════════════════════════════
+// When a seller pitches a portfolio, agents capture one contact + N
+// properties on a single intake form. Property #1 uses the existing
+// un-suffixed field IDs (preserves v111.5/6 submit path). Properties
+// #2+ get IDs like `li_s_p2_address`, `li_s_p3_multifamily_units`, etc.
+//
+// To avoid threading `propIdx` through 15+ helper functions, we overload
+// the existing `mode` parameter: mode="s" = property #1 (legacy); mode
+// like "s_p2", "s_p3" = extra properties. All helpers that receive a
+// `mode` string are routed via _liGetAssetState(mode) below so they
+// write to the right shadow-state slot.
+let _liExtraProps = [];   // index 0 = property #2, index 1 = property #3, etc.
+                          // Each entry: { assetTypes:[], assetKeys:[], sellerFin:{sellerFinancing:false, mfOccMode:'pct'}, muTenants:[] }
+
+function _liParseExtraMode(mode){
+  // Returns propIdx (0 for legacy, 1 for p2, 2 for p3...) or 0 if not an extra
+  const m = /^s_p(\d+)$/.exec(String(mode||''));
+  if(!m) return 0;
+  const n = parseInt(m[1], 10);
+  return (n >= 2) ? (n - 1) : 0;
+}
+
+function _liEnsureExtraSlot(propIdx){
+  while(_liExtraProps.length < propIdx){
+    _liExtraProps.push({
+      assetTypes: [],
+      assetKeys: [],
+      sellerFin: { sellerFinancing: false, mfOccMode: 'pct' },
+      muTenants: []
+    });
+  }
+}
+
+// Get the asset state for a given mode string. For mode="s", returns the
+// legacy global _li{assetTypes,assetKeys}. For "s_p2", "s_p3"... returns
+// the corresponding _liExtraProps[idx-1] slot, creating it lazily.
+function _liGetAssetState(mode){
+  const pIdx = _liParseExtraMode(mode);
+  if(pIdx === 0){
+    if(!_li.assetTypes) _li.assetTypes = [];
+    if(!_li.assetKeys)  _li.assetKeys  = [];
+    return { assetTypes: _li.assetTypes, assetKeys: _li.assetKeys, isExtra: false };
+  }
+  _liEnsureExtraSlot(pIdx);
+  const slot = _liExtraProps[pIdx - 1];
+  return { assetTypes: slot.assetTypes, assetKeys: slot.assetKeys, isExtra: true, pIdx };
+}
+
+// Same for seller-financing state (sellerFinancing bool + mfOccMode)
+function _liGetSellerFinState(mode){
+  const pIdx = _liParseExtraMode(mode);
+  if(pIdx === 0) return _liSellerFinState;
+  _liEnsureExtraSlot(pIdx);
+  return _liExtraProps[pIdx - 1].sellerFin;
+}
+
+// And for Mixed Use commercial tenants
+function _liGetMuTenants(mode){
+  const pIdx = _liParseExtraMode(mode);
+  if(pIdx === 0) return _liMuTenants;
+  _liEnsureExtraSlot(pIdx);
+  return _liExtraProps[pIdx - 1].muTenants;
+}
+function _liSetMuTenants(mode, arr){
+  const pIdx = _liParseExtraMode(mode);
+  if(pIdx === 0){ _liMuTenants = arr; return; }
+  _liEnsureExtraSlot(pIdx);
+  _liExtraProps[pIdx - 1].muTenants = arr;
+}
+
+// Compute the field-ID prefix used by _liSellerAssetFields for this mode.
+// Property #1 uses "li_s_..." (mode "s"); property #2 uses "li_s_p2_..." etc.
+function _liFieldPrefix(mode){
+  return 'li_' + String(mode || 's');
+}
 
 // ─── v102.26: MIXED-USE COMMERCIAL TENANTS ─────────────────────────
 // On the Mixed Use seller-intake subform, as the user types into the
@@ -27031,8 +27200,14 @@ const _LI_MU_LEASE_TYPES = ['NNN','Modified Gross','Gross','Absolute NNN','Perce
 
 // Snapshot whatever the user has typed into the tenant forms back into
 // _liMuTenants so we don't lose it on re-render.
-function _liMuSyncTenantsFromDOM(){
-  const rows = document.querySelectorAll('.li-mu-tenant-row');
+function _liMuSyncTenantsFromDOM(mode){
+  // v111.7: scope to the property's tenant host when mode is provided
+  mode = mode || 's';
+  const hostId = (mode === 's') ? 'li_mu_tenants_host' : `li_mu_p${_liParseExtraMode(mode)+1}_tenants_host`;
+  const host = document.getElementById(hostId);
+  const rows = host
+    ? host.querySelectorAll('.li-mu-tenant-row')
+    : document.querySelectorAll('.li-mu-tenant-row');  // fallback
   const snap = [];
   rows.forEach(row => {
     const get = sel => row.querySelector(sel)?.value?.trim() || '';
@@ -27046,60 +27221,72 @@ function _liMuSyncTenantsFromDOM(){
       leaseType: get('.li-mu-t-leasetype'),
     });
   });
-  _liMuTenants = snap;
+  _liSetMuTenants(mode, snap);
 }
 
 // Grow/shrink the tenant array to match the desired length. Existing
 // entries are preserved by index; new ones are empty objects; trimmed
 // entries are discarded (silently — the user asked for fewer).
-function _liMuResizeTenants(n){
+function _liMuResizeTenants(n, mode){
+  mode = mode || 's';
   n = Math.max(0, Math.min(50, Math.round(n)||0));  // sanity clamp
-  _liMuSyncTenantsFromDOM();
-  if(_liMuTenants.length < n){
-    while(_liMuTenants.length < n){
-      _liMuTenants.push({name:'',industry:'',unit:'',sf:'',rent:'',leaseEnd:'',leaseType:''});
+  _liMuSyncTenantsFromDOM(mode);
+  let tenants = _liGetMuTenants(mode);
+  if(tenants.length < n){
+    while(tenants.length < n){
+      tenants.push({name:'',industry:'',unit:'',sf:'',rent:'',leaseEnd:'',leaseType:''});
     }
-  } else if(_liMuTenants.length > n){
-    _liMuTenants = _liMuTenants.slice(0, n);
+  } else if(tenants.length > n){
+    tenants = tenants.slice(0, n);
   }
-  _liMuRenderTenants();
+  _liSetMuTenants(mode, tenants);
+  _liMuRenderTenants(mode);
 }
 
 // Called from the onblur of the # Commercial Spaces input. Parses the
 // current value and resizes.
-function _liMuOnCountChange(){
-  const raw = document.getElementById('li_s_mixeduse_comspaces')?.value || '';
+function _liMuOnCountChange(mode){
+  mode = mode || 's';
+  const fieldId = (mode === 's') ? 'li_s_mixeduse_comspaces' : `li_s_p${_liParseExtraMode(mode)+1}_mixeduse_comspaces`;
+  const raw = document.getElementById(fieldId)?.value || '';
   const n = parseInt(String(raw).replace(/,/g,''), 10) || 0;
-  _liMuResizeTenants(n);
+  _liMuResizeTenants(n, mode);
 }
 
 // Remove a single tenant by index. Decrements the count field so the
 // two stay in sync.
-function _liMuRemoveTenant(idx){
-  _liMuSyncTenantsFromDOM();
-  if(idx < 0 || idx >= _liMuTenants.length) return;
-  _liMuTenants.splice(idx, 1);
+function _liMuRemoveTenant(idx, mode){
+  mode = mode || 's';
+  _liMuSyncTenantsFromDOM(mode);
+  const tenants = _liGetMuTenants(mode);
+  if(idx < 0 || idx >= tenants.length) return;
+  tenants.splice(idx, 1);
+  _liSetMuTenants(mode, tenants);
   // Sync count field so the input mirrors the new length
-  const cnt = document.getElementById('li_s_mixeduse_comspaces');
-  if(cnt) cnt.value = _liMuTenants.length ? String(_liMuTenants.length) : '';
-  _liMuRenderTenants();
+  const fieldId = (mode === 's') ? 'li_s_mixeduse_comspaces' : `li_s_p${_liParseExtraMode(mode)+1}_mixeduse_comspaces`;
+  const cnt = document.getElementById(fieldId);
+  if(cnt) cnt.value = tenants.length ? String(tenants.length) : '';
+  _liMuRenderTenants(mode);
 }
 
-function _liMuRenderTenants(){
-  const host = document.getElementById('li_mu_tenants_host');
+function _liMuRenderTenants(mode){
+  mode = mode || 's';
+  const hostId = (mode === 's') ? 'li_mu_tenants_host' : `li_mu_p${_liParseExtraMode(mode)+1}_tenants_host`;
+  const host = document.getElementById(hostId);
   if(!host) return;
-  if(_liMuTenants.length === 0){
+  const tenants = _liGetMuTenants(mode);
+  if(tenants.length === 0){
     host.innerHTML = '';
     return;
   }
   // Inline styles match the seller-intake form look
   const lblS = _liLabelStyle();
   const inpS = _liInputStyle();
-  const rows = _liMuTenants.map((t, i) => `
+  const rows = tenants.map((t, i) => `
     <div class="li-mu-tenant-row" style="background:#fff;border:1px solid #fde68a;border-left:4px solid #f59e0b;border-radius:10px;padding:14px 16px;margin-bottom:10px;">
       <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
         <div style="font-size:11px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:.06em;">🏪 Commercial Tenant ${i+1}</div>
-        <button type="button" onclick="_liMuRemoveTenant(${i})" title="Remove this tenant" style="background:#fef2f2;color:#dc2626;border:1px solid #fecaca;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;">× Remove</button>
+        <button type="button" onclick="_liMuRemoveTenant(${i}, '${mode}')" title="Remove this tenant" style="background:#fef2f2;color:#dc2626;border:1px solid #fecaca;border-radius:6px;padding:3px 10px;font-size:11px;font-weight:600;cursor:pointer;">× Remove</button>
       </div>
       <div style="display:grid;grid-template-columns:2fr 1fr;gap:10px;margin-bottom:8px;">
         <div>
@@ -27143,7 +27330,7 @@ function _liMuRenderTenants(){
   host.innerHTML = `
     <div style="margin-top:14px;padding:14px;background:#fffbeb;border:1px solid #fde68a;border-radius:10px;">
       <div style="font-size:12px;font-weight:700;color:#92400e;text-transform:uppercase;letter-spacing:.06em;margin-bottom:10px;">
-        🏪 Commercial Tenants — ${_liMuTenants.length} tenant${_liMuTenants.length===1?'':'s'}
+        🏪 Commercial Tenants — ${tenants.length} tenant${tenants.length===1?'':'s'}
       </div>
       ${rows}
       <div style="font-size:10px;color:#92400e;margin-top:4px;">
@@ -27155,10 +27342,19 @@ function _liMuRenderTenants(){
 
 function _liMfOccMode(mode, prefix){
   prefix = prefix || 'multifamily';
+  // v111.7: auto-init for extra-property prefixes like 'p2_multifamily'
+  if(_liMfOccState[prefix] === undefined) _liMfOccState[prefix] = 'pct';
   _liMfOccState[prefix] = mode;
   // Keep the legacy state field in sync for the multifamily case — the
   // original submit path reads _liSellerFinState.mfOccMode.
   if(prefix === 'multifamily') _liSellerFinState.mfOccMode = mode;
+  // v111.7: sync for extra-property multifamily
+  const extraMatch = /^p(\d+)_multifamily$/.exec(prefix);
+  if(extraMatch){
+    const pIdx = parseInt(extraMatch[1], 10) - 1;
+    _liEnsureExtraSlot(pIdx + 1);
+    _liExtraProps[pIdx].sellerFin.mfOccMode = mode;
+  }
   const pctWrap   = document.getElementById(`li_s_${prefix}_occ_pct_wrap`);
   const unitsWrap = document.getElementById(`li_s_${prefix}_occ_units_wrap`);
   const btnPct    = document.getElementById(`li_s_${prefix}_occmode_pct`);
@@ -27208,7 +27404,10 @@ function _liMfUnitMixCalc(prefix){
 }
 
 // Monthly <-> yearly sync for seller intake financial section (GRI + expenses)
-function _liSellerFinSync(source){
+// v111.7: mode param scopes to a property. Default 's' = property #1.
+function _liSellerFinSync(source, mode){
+  mode = mode || 's';
+  const prefix = (mode === 's') ? 'li_s' : `li_s_p${_liParseExtraMode(mode)+1}`;
   const get = id => {
     const el = document.getElementById(id);
     if(!el) return 0;
@@ -27221,18 +27420,22 @@ function _liSellerFinSync(source){
     if(val === '' || val == null || val === 0){ el.value = ''; return; }
     el.value = Number(val).toLocaleString('en-US');
   };
-  if(source === 'gri_mo')      set('li_s_gri_yr', Math.round(get('li_s_gri_mo') * 12));
-  else if(source === 'gri_yr') set('li_s_gri_mo', Math.round(get('li_s_gri_yr') / 12));
-  else if(source === 'exp_mo') set('li_s_exp_yr', Math.round(get('li_s_exp_mo') * 12));
-  else if(source === 'exp_yr') set('li_s_exp_mo', Math.round(get('li_s_exp_yr') / 12));
+  if(source === 'gri_mo')      set(`${prefix}_gri_yr`, Math.round(get(`${prefix}_gri_mo`) * 12));
+  else if(source === 'gri_yr') set(`${prefix}_gri_mo`, Math.round(get(`${prefix}_gri_yr`) / 12));
+  else if(source === 'exp_mo') set(`${prefix}_exp_yr`, Math.round(get(`${prefix}_exp_mo`) * 12));
+  else if(source === 'exp_yr') set(`${prefix}_exp_mo`, Math.round(get(`${prefix}_exp_yr`) / 12));
 }
 
 // Seller financing yes/no toggle — shows/hides the notes textarea
-function _liSellerFinToggle(on){
-  _liSellerFinState.sellerFinancing = on;
-  const btnYes = document.getElementById('li_s_sf_btn_yes');
-  const btnNo  = document.getElementById('li_s_sf_btn_no');
-  const notes  = document.getElementById('li_s_sf_notes_wrap');
+// v111.7: mode param scopes to a property.
+function _liSellerFinToggle(on, mode){
+  mode = mode || 's';
+  const finState = _liGetSellerFinState(mode);
+  finState.sellerFinancing = on;
+  const prefix = (mode === 's') ? 'li_s' : `li_s_p${_liParseExtraMode(mode)+1}`;
+  const btnYes = document.getElementById(`${prefix}_sf_btn_yes`);
+  const btnNo  = document.getElementById(`${prefix}_sf_btn_no`);
+  const notes  = document.getElementById(`${prefix}_sf_notes_wrap`);
   if(btnYes){
     btnYes.style.background = on ? '#1a3a6e' : '#fff';
     btnYes.style.color = on ? '#fff' : '#475569';
@@ -27244,82 +27447,343 @@ function _liSellerFinToggle(on){
   if(notes) notes.style.display = on ? 'block' : 'none';
 }
 
-async function _liSubmitSeller(){
+// v111.7: build the full-fat property card HTML for property #propIdx (1-indexed).
+// propIdx === 1 is the legacy un-suffixed IDs (li_s_address etc.). propIdx >= 2
+// emits suffixed IDs (li_s_p2_address etc.) and wires all handlers with the
+// mode string 's_p<N>' so state routing via _liGetAssetState/_liGetSellerFinState
+// reaches the right per-property slot.
+function _liBuildPropertyCardHTML(propIdx){
+  const mode = propIdx === 1 ? 's' : `s_p${propIdx}`;
+  // ID prefix for fields that live directly in the card (property info, financials)
+  const pfx = propIdx === 1 ? 'li_s' : `li_s_p${propIdx}`;
+  const sfSync = (field) => `_liSellerFinSync('${field}', '${mode}')`;
+  const sfToggle = (v) => `_liSellerFinToggle(${v}, '${mode}')`;
+  const headerGrad = propIdx === 1
+    ? 'linear-gradient(90deg,#eff6ff,#fff)'
+    : 'linear-gradient(90deg,#faf5ff,#fff)';
+  const headerColor = propIdx === 1 ? '#1e3a8a' : '#7c3aed';
+  const removeBtn = propIdx === 1
+    ? ''
+    : `<button type="button" onclick="_liRemovePropertyCard(${propIdx})" style="margin-left:auto;background:#fef2f2;color:#dc2626;border:1px solid #fecaca;border-radius:6px;padding:4px 12px;font-size:11px;font-weight:700;cursor:pointer;">× Remove this property</button>`;
+
+  return `
+    <div id="li_s_property_card_${propIdx}" style="position:relative;${propIdx>1?'margin-top:24px;border-top:2px dashed #e2e8f0;padding-top:16px;':''}">
+      <div id="li_s_property_header_${propIdx}" style="display:flex;align-items:center;gap:10px;margin:8px 0 8px;padding:6px 14px;background:${headerGrad};border-left:3px solid ${headerColor};border-radius:6px;">
+        <span style="font-size:13px;font-weight:700;color:${headerColor};">🏠 Property #${propIdx}</span>
+        <span style="font-size:11px;color:#64748b;">— fill in the details for this property below</span>
+        ${removeBtn}
+      </div>
+
+      <!-- PROPERTY INFO -->
+      ${_liSection('📍 Property Information', `
+        <div style="display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-bottom:14px;">
+          ${_liField('Property Address *',`${pfx}_address`,'text','123 Main St, Ridgefield Park, NJ','2fr')}
+          ${_liField('County *',`${pfx}_county`,'text','Bergen County','1fr')}
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;">
+          ${_liNumField('Asking Price',`${pfx}_price`,'e.g. 1,500,000')}
+          ${_liNumField('Square Footage',`${pfx}_sf`,'e.g. 5,000')}
+          <div><label style="${_liLabelStyle()}">Seller Motivation</label><select id="${pfx}_motivation" style="${_liInputStyle()}">
+            <option value="">Select...</option>
+            <option>Highly Motivated</option><option>Motivated</option><option>Somewhat Motivated</option><option>Testing Market</option><option>Not Motivated</option>
+          </select></div>
+        </div>
+      `)}
+
+      <!-- ASSET TYPE SELECTION -->
+      ${_liSection('🏗️ Asset Type *', `
+        ${_liAssetSelector(mode)}
+        <div id="${pfx}_conditional"></div>
+      `)}
+
+      <!-- FINANCIALS -->
+      ${_liSection('💰 Financial Information', `
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+          ${_liNumField('Gross Monthly Revenue',`${pfx}_gri_mo`,'e.g. 12,000',sfSync('gri_mo'))}
+          ${_liNumField('Gross Yearly Revenue',`${pfx}_gri_yr`,'e.g. 144,000',sfSync('gri_yr'))}
+          ${_liNumField('Monthly Expenses',`${pfx}_exp_mo`,'e.g. 4,500',sfSync('exp_mo'))}
+          ${_liNumField('Yearly Expenses',`${pfx}_exp_yr`,'e.g. 54,000',sfSync('exp_yr'))}
+        </div>
+        <div style="margin-top:16px;padding:14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
+          <div style="display:flex;align-items:center;gap:12px;">
+            <label style="font-size:13px;font-weight:600;color:#374151;">Open to Seller Financing?</label>
+            <div style="display:flex;gap:0;border:1px solid #cbd5e1;border-radius:6px;overflow:hidden;">
+              <button type="button" id="${pfx}_sf_btn_no" onclick="${sfToggle(false)}" style="padding:6px 18px;font-size:12px;font-weight:600;border:none;cursor:pointer;background:#fff;color:#475569;">No</button>
+              <button type="button" id="${pfx}_sf_btn_yes" onclick="${sfToggle(true)}" style="padding:6px 18px;font-size:12px;font-weight:600;border:none;cursor:pointer;background:#fff;color:#475569;border-left:1px solid #cbd5e1;">Yes</button>
+            </div>
+          </div>
+          <div id="${pfx}_sf_notes_wrap" style="display:none;margin-top:12px;">
+            <label style="${_liLabelStyle()}">Seller Financing Notes</label>
+            <textarea id="${pfx}_sf_notes" rows="3" placeholder="Down payment expectations, interest rate, term, amortization, balloon, credit requirements, etc." style="${_liInputStyle()}height:auto;resize:vertical;"></textarea>
+          </div>
+        </div>
+        ${_liTextarea('General Notes',`${pfx}_notes`,'Property notes, condition, highlights, access roads, zoning, etc.',4)}
+        ${_liTextarea('Financial Notes',`${pfx}_fnotes`,'Rent roll details, tenant info, lease expirations, etc.',3)}
+        ${_liTextarea('Motivation / Why Selling',`${pfx}_why`,'e.g. Estate sale, relocating, 1031 exchange...',2)}
+      `)}
+
+      <!-- Asking Price Words -->
+      ${_liSection('🏷️ Asking Price in Words (Optional)', `
+        ${_liTextarea('e.g. "Seller wants $1.5M, firm. Open to seller financing for qualified buyer."',`${pfx}_pricewords`,'',2)}
+      `)}
+    </div><!-- /li_s_property_card_${propIdx} -->
+  `;
+}
+
+// v111.7: state — how many property cards exist on the current seller lead form.
+// Starts at 1 (Property #1 is rendered statically in the form HTML). Each call
+// to _liAddPropertyClick bumps this and appends a new card.
+let _liSellerPropCount = 1;
+
+function _liAddPropertyClick(){
+  const container = document.getElementById('li_s_properties_container');
+  if(!container) return;
+  _liSellerPropCount += 1;
+  const newIdx = _liSellerPropCount;
+  // Ensure shadow state slot exists for this property
+  _liEnsureExtraSlot(newIdx - 1);  // index 0 = property #2; so newIdx-1 for "pN" is the right slot
+  // Render the card HTML and append to container
+  container.insertAdjacentHTML('beforeend', _liBuildPropertyCardHTML(newIdx));
+  // Wire Google Places autocomplete for the new address field
+  const addrId = `li_s_p${newIdx}_address`;
+  if(typeof attachPlacesAutocomplete === 'function' && _store.get('google_places_key')){
+    attachPlacesAutocomplete(addrId, (c) => {
+      const addrEl = document.getElementById(addrId);
+      if(addrEl){
+        const newAddr = c.formatted || c.street || '';
+        if(newAddr) addrEl.value = newAddr;
+      }
+      const countyEl = document.getElementById(`li_s_p${newIdx}_county`);
+      if(countyEl && c.county){
+        const bareName = c.county.replace(/\s+County$/i,'').trim();
+        const match = (typeof NJ_COUNTIES !== 'undefined')
+          ? NJ_COUNTIES.find(n => n.toLowerCase() === bareName.toLowerCase())
+          : null;
+        countyEl.value = match ? (match + ' County') : (bareName + ' County');
+      }
+    });
+  }
+  // Scroll the new card into view
+  setTimeout(() => {
+    const card = document.getElementById(`li_s_property_card_${newIdx}`);
+    if(card) card.scrollIntoView({ behavior: 'smooth', block: 'start' });
+  }, 50);
+  // Update portfolio section visibility
+  _liUpdatePortfolioSection();
+}
+window._liAddPropertyClick = _liAddPropertyClick;
+
+// v111.7: Remove property card (only works for extras, since #1 is static)
+function _liRemovePropertyCard(propIdx){
+  if(propIdx < 2) return; // can't remove the first
+  const card = document.getElementById(`li_s_property_card_${propIdx}`);
+  if(!card) return;
+  if(!confirm(`Remove Property #${propIdx}? Any data entered for it will be lost.`)) return;
+  card.remove();
+  // Compact shadow state: delete the slot at this index (pIdx-1 since index 0 = property #2)
+  const slotIdx = propIdx - 2;
+  if(slotIdx >= 0 && slotIdx < _liExtraProps.length){
+    _liExtraProps.splice(slotIdx, 1);
+  }
+  // Renumber subsequent cards (if any) to fill the gap. We find all remaining
+  // extra cards (indexes > propIdx) and rewrite their IDs + mode strings.
+  // Simpler approach: rebuild the entire extras stack from scratch based on
+  // what's still in _liExtraProps.
+  _liRebuildExtraPropertyCards();
+  _liSellerPropCount = 1 + _liExtraProps.length;
+  _liUpdatePortfolioSection();
+}
+window._liRemovePropertyCard = _liRemovePropertyCard;
+
+// Rebuild properties #2+ from the current _liExtraProps array. Called after
+// a remove to keep card numbering contiguous. Preserves no form-input data
+// for shifted cards — acceptable since removes should be rare and user is
+// typically mid-entry when removing #2 (no data yet in #3+).
+function _liRebuildExtraPropertyCards(){
+  const container = document.getElementById('li_s_properties_container');
+  if(!container) return;
+  // Remove all extra cards (keep #1 intact)
+  container.querySelectorAll('[id^="li_s_property_card_"]').forEach(el => {
+    if(el.id !== 'li_s_property_card_1') el.remove();
+  });
+  // Re-render each remaining extra slot
+  for(let i = 0; i < _liExtraProps.length; i++){
+    const newIdx = i + 2;
+    container.insertAdjacentHTML('beforeend', _liBuildPropertyCardHTML(newIdx));
+    // Re-render the "selected asset types" chips for each rebuilt card so the
+    // state → DOM matches (state was preserved in _liExtraProps[i])
+    _liRenderSelectedTypes(`s_p${newIdx}`);
+    _liRenderSellerConditional(`s_p${newIdx}`);
+  }
+}
+
+// v111.7: Portfolio Details section — shown when property count >= 2
+function _liUpdatePortfolioSection(){
+  const wrap = document.getElementById('li_s_portfolio_wrap');
+  if(!wrap) return;
+  const count = _liSellerPropCount;
+  if(count < 2){
+    wrap.style.display = 'none';
+    wrap.innerHTML = '';
+    return;
+  }
+  // Auto-fill portfolio name from contact name + county of Property #1 if available
+  const contactName = document.getElementById('li_s_name')?.value?.trim() || '';
+  const county1 = document.getElementById('li_s_county')?.value?.trim() || '';
+  const countyShort = county1.replace(/\s*County$/i, '').trim();
+  const defaultName = [
+    contactName || 'New',
+    countyShort ? `${countyShort}` : '',
+    `Portfolio (${count})`
+  ].filter(Boolean).join(' — ');
+
+  wrap.style.display = 'block';
+  wrap.innerHTML = `
+    ${_liSection('📂 Portfolio Details', `
+      <div style="padding:10px 12px;background:#faf5ff;border:1px solid #c084fc;border-radius:8px;font-size:11px;color:#6b21a8;margin-bottom:14px;">
+        ${count} properties entered — these will be bundled into a portfolio record in the CRM so you can track them as a package deal.
+      </div>
+      <div style="display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-bottom:14px;">
+        <div><label style="${_liLabelStyle()}">Portfolio Name</label><input id="li_s_pf_name" type="text" value="${defaultName.replace(/"/g,'&quot;')}" placeholder="e.g. Smith NJ Warehouses" style="${_liInputStyle()}" /></div>
+        ${_liNumField('Package Asking Price (Optional)','li_s_pf_price','e.g. 12,000,000')}
+      </div>
+      <div style="margin-bottom:14px;padding:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
+        <label style="font-size:13px;font-weight:600;color:#374151;display:block;margin-bottom:8px;">Will the seller sell individual properties, or package only?</label>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;padding:6px 14px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;">
+            <input type="radio" name="li_s_pf_sellmode" value="individual"/>
+            <span>Open to individual offers</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;padding:6px 14px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;">
+            <input type="radio" name="li_s_pf_sellmode" value="package"/>
+            <span>Package only (must buy all)</span>
+          </label>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;cursor:pointer;padding:6px 14px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;">
+            <input type="radio" name="li_s_pf_sellmode" value="" checked/>
+            <span>Unspecified / TBD</span>
+          </label>
+        </div>
+      </div>
+      ${_liTextarea('Portfolio Notes','li_s_pf_notes','Package discount, bulk financing terms, 1031 exchange context, or anything else that affects the portfolio as a whole.',3)}
+      ${_liTextarea('Package Asking in Words (Optional)','li_s_pf_askwords','e.g. "All 4 buildings package: $12M firm. Seller open to owner-financing $3M at 6% for 5 years."',2)}
+    `)}
+  `;
+  // Note: each call re-renders so stale values from previous renders (when count
+  // changed) are blown away. That's acceptable because we preserve _liSellerPropCount
+  // across add/remove, so the section only re-renders when transitioning from
+  // hidden → visible (count 1→2) or when the count changes (2→3 adds a property).
+}
+window._liUpdatePortfolioSection = _liUpdatePortfolioSection;
+
+
+// ═══════════════════════════════════════════════════════════════════
+// v111.7: MULTI-PROPERTY SELLER SUBMIT
+// ═══════════════════════════════════════════════════════════════════
+// Extracts the per-property dealFields-building logic into a helper so we
+// can loop N properties (1 = un-suffixed IDs for property #1, 2+ = `li_s_pN_*`
+// IDs for extras). The contact creation / lookup still runs once at the top
+// level; each property is inserted in turn; and when N >= 2 we create a
+// portfolio row and link all properties to it via portfolio_id.
+
+// Per-property helpers — take a propIdx (1..N) and return values read from the
+// correct ID namespace. propIdx=1 uses the legacy un-suffixed IDs (li_s_*),
+// matching v111.5/6 behavior exactly. propIdx>=2 uses `li_s_pN_*`.
+function _liPropFieldPrefix(propIdx){
+  return propIdx === 1 ? 'li_s' : `li_s_p${propIdx}`;
+}
+function _liPropMode(propIdx){
+  return propIdx === 1 ? 's' : `s_p${propIdx}`;
+}
+// Asset-fields prefix used inside _liSellerAssetFields: for propIdx=1 the raw
+// template emits IDs like `li_s_multifamily_units`. For propIdx>=2 the wrapper
+// rewrites those to `li_s_pN_multifamily_units`. We read accordingly.
+function _liPropAssetFieldId(propIdx, assetId, fieldId){
+  return propIdx === 1
+    ? `li_s_${assetId}_${fieldId}`
+    : `li_s_p${propIdx}_${assetId}_${fieldId}`;
+}
+// MF/MU helpers use a `prefix` arg like 'multifamily' or 'mixeduse_res'. For
+// propIdx>=2 it becomes 'pN_multifamily' / 'pN_mixeduse_res'.
+function _liPropMfPrefix(propIdx, baseKey){
+  return propIdx === 1 ? baseKey : `p${propIdx}_${baseKey}`;
+}
+
+// Build the dealFields object for one property. Returns { ok, error, dealFields, address }.
+// On validation error, returns { ok:false, error:'...', propIdx }.
+function _liBuildDealForProperty(propIdx){
+  const pfx = _liPropFieldPrefix(propIdx);
+  const mode = _liPropMode(propIdx);
   const gv = id => document.getElementById(id)?.value?.trim()||'';
-  // gn: reads a numeric field, strips commas (works for both num-input and regular number fields)
   const gn = id => {
     const raw = document.getElementById(id)?.value;
     if(raw == null || raw === '') return null;
     const v = Number(String(raw).replace(/,/g,''));
     return isNaN(v) || v===0 ? null : v;
   };
-  const errEl = document.getElementById('li_s_error');
-  const btn = document.getElementById('li_s_submit');
 
-  // Validate required
-  if(!gv('li_s_name')){ errEl.textContent='Name is required.'; errEl.style.display='block'; return; }
-  if(!gv('li_s_phone')){ errEl.textContent='Phone number is required.'; errEl.style.display='block'; return; }
-  if(!gv('li_s_address')){ errEl.textContent='Property address is required.'; errEl.style.display='block'; return; }
-
-  // v102.26: Multifamily and Mixed Use can't both be selected on the same
-  // lead. They write to the same mf_unit_rent_data column with incompatible
-  // shapes, and the business logic is: a deal is one or the other, not both.
-  const _preKeys = [...new Set(_li.assetKeys||[])];
-  if(_preKeys.includes('multifamily') && _preKeys.includes('mixeduse')){
-    errEl.textContent = 'A lead can\'t be both Multifamily and Mixed Use. Please pick one — if the building has commercial spaces, use Mixed Use; if it\'s purely residential, use Multifamily.';
-    errEl.style.display = 'block';
-    return;
+  // Address is required for each property
+  const address = gv(`${pfx}_address`);
+  if(!address){
+    return { ok: false, error: `Property #${propIdx}: address is required.`, propIdx };
   }
-  errEl.style.display='none';
 
-  const cfg=getConfig();
-  if(!cfg.key){ errEl.textContent='Connect Supabase first (Settings).'; errEl.style.display='block'; return; }
+  // Asset state for this property (from legacy globals if propIdx=1, else _liExtraProps slot)
+  const assetState = _liGetAssetState(mode);
+  const selectedAssetTypes = assetState.assetTypes || [];
+  const selectedKeys = [...new Set(assetState.assetKeys || [])];
 
-  if(btn){ btn.disabled=true; btn.textContent='⏳ Submitting...'; }
+  // Per-property seller-financing state (for MF occupancy mode)
+  const finState = _liGetSellerFinState(mode);
 
-  // Build asset-specific notes to append to General Notes
-  // AND collect structured data for writing to real ace_properties columns
+  // MF + Mixed Use mutual exclusion per property
+  if(selectedKeys.includes('multifamily') && selectedKeys.includes('mixeduse')){
+    return { ok: false, propIdx, error: `Property #${propIdx}: can't be both Multifamily and Mixed Use. Pick one — if the building has commercial spaces, use Mixed Use; if it's purely residential, use Multifamily.` };
+  }
+
+  // Build asset-specific notes + collect structured data
   let assetNotes = '';
-  let _liMfData = null; // structured MF data if multifamily is selected
-  let _liMuTenantsToWrite = null; // v102.26: commercial tenants array for Mixed Use
-  const selectedAssetTypes = _li.assetTypes||[];
-  const selectedKeys = [...new Set(_li.assetKeys||[])];
-  selectedKeys.forEach(id=>{
-    const a = LI_ASSET_TYPES.find(x=>x.id===id)||{label:id};
-    // g: raw field read, strips commas so num-input values like "12,000" show as "12000" in notes
-    const g = fid => (document.getElementById(`li_s_${id}_${fid}`)?.value||'').replace(/,/g,'').trim();
+  let _liMfData = null;
+  let _liMuTenantsToWrite = null;
+
+  selectedKeys.forEach(id => {
+    const a = LI_ASSET_TYPES.find(x=>x.id===id) || { label: id };
+    // g: raw asset-field read (no comma stripping for numeric display in notes)
+    const g = fid => (document.getElementById(_liPropAssetFieldId(propIdx, id, fid))?.value||'').replace(/,/g,'').trim();
+    // gFid: get numeric from asset-field
+    const gFidN = fid => gn(_liPropAssetFieldId(propIdx, id, fid));
     let lines = [`\n--- ${a.label.toUpperCase()} ---`];
+
     if(id==='multifamily'){
-      // Collect structured data for the deal record (not just notes)
       _liMfData = {
         units: null, yearBuilt: null, occPct: null, mfClass: null,
         byType: {}, counts: {}, unitMixNotes: ''
       };
-      const units=gn('li_s_multifamily_units');
+      const units = gFidN('units');
       if(units){ lines.push(`Units: ${units}`); _liMfData.units = units; }
-      // Occupancy: pct mode OR units-of-total mode
-      if(_liSellerFinState.mfOccMode === 'units'){
-        const occUnits = gn('li_s_multifamily_occ_units');
-        const occTotal = gn('li_s_multifamily_occ_total');
+      // Occupancy: pct mode OR units-of-total mode. Read from per-property state.
+      const mfKey = _liPropMfPrefix(propIdx, 'multifamily');
+      const occMode = _liMfOccState[mfKey] || finState.mfOccMode || 'pct';
+      if(occMode === 'units'){
+        const occUnits = gFidN('occ_units');
+        const occTotal = gFidN('occ_total');
         if(occUnits && occTotal){
           const pct = Math.round((occUnits/occTotal)*1000)/10;
           lines.push(`Occupancy: ${occUnits} of ${occTotal} units (${pct}%)`);
           _liMfData.occPct = pct;
         }
       } else {
-        const occPct = gn('li_s_multifamily_occ');
+        const occPct = gFidN('occ');
         if(occPct){ lines.push(`Occupancy: ${occPct}%`); _liMfData.occPct = occPct; }
       }
-      const yb=gn('li_s_multifamily_yearbuilt');
+      const yb = gFidN('yearbuilt');
       if(yb){ lines.push(`Year Built: ${yb}`); _liMfData.yearBuilt = yb; }
-      const cls=document.getElementById('li_s_multifamily_class')?.value;
+      const cls = document.getElementById(_liPropAssetFieldId(propIdx, 'multifamily', 'class'))?.value;
       if(cls) _liMfData.mfClass = cls;
-      // Unit mix: rent × count per bedroom type, plus grand total GRI
       const rentRows = [['Studio/Eff','eff'],['1BR','1br'],['2BR','2br'],['3BR','3br'],['4BR','4br']];
       let mfGriMo = 0;
-      rentRows.forEach(([lbl,key])=>{
-        const rent = gn(`li_s_multifamily_rent_${key}`);
-        const cnt  = gn(`li_s_multifamily_cnt_${key}`);
+      rentRows.forEach(([lbl, key]) => {
+        const rent = gFidN(`rent_${key}`);
+        const cnt  = gFidN(`cnt_${key}`);
         if(rent || cnt){
           const rowTot = (rent||0) * (cnt||0);
           if(rowTot > 0) mfGriMo += rowTot;
@@ -27332,7 +27796,7 @@ async function _liSubmitSeller(){
         lines.push(`Total Unit Mix GRI: $${mfGriMo.toLocaleString()}/mo · $${(mfGriMo*12).toLocaleString()}/yr`);
         _liMfData.mfGriMo = mfGriMo;
       }
-      const um=document.getElementById('li_s_multifamily_unitmix')?.value?.trim();
+      const um = document.getElementById(_liPropAssetFieldId(propIdx, 'multifamily', 'unitmix'))?.value?.trim();
       if(um){ lines.push(`Notes: ${um}`); _liMfData.unitMixNotes = um; }
     } else if(id==='warehouse'){
       if(g('sf')) lines.push(`SF: ${g('sf')}`);
@@ -27341,82 +27805,76 @@ async function _liSubmitSeller(){
       if(g('driveins')) lines.push(`Drive-In Doors: ${g('driveins')}`);
       if(g('power')) lines.push(`Power: ${g('power')}`);
       if(g('tenants')) lines.push(`Tenants: ${g('tenants')}`);
-    } else if(id==='retail'||id==='shopping'){
+    } else if(id==='retail' || id==='shopping'){
       if(g('sf')) lines.push(`SF: ${g('sf')}`);
       if(g('tenants')) lines.push(`Tenants: ${g('tenants')}`);
       if(g('occ')) lines.push(`Occupancy: ${g('occ')}%`);
       if(g('anchor')) lines.push(`Anchor: ${g('anchor')}`);
       if(g('psfrent')) lines.push(`Rent PSF/yr: $${g('psfrent')}`);
-      const lt=document.getElementById(`li_s_${id}_leasetype`)?.value; if(lt) lines.push(`Lease: ${lt}`);
+      const lt = document.getElementById(_liPropAssetFieldId(propIdx, id, 'leasetype'))?.value;
+      if(lt) lines.push(`Lease: ${lt}`);
     } else if(id==='office'){
       if(g('sf')) lines.push(`SF: ${g('sf')}`);
       if(g('suites')) lines.push(`Suites: ${g('suites')}`);
       if(g('occ')) lines.push(`Occupancy: ${g('occ')}%`);
-      const cls=document.getElementById('li_s_office_class')?.value; if(cls) lines.push(`Class: ${cls}`);
+      const cls = document.getElementById(_liPropAssetFieldId(propIdx, 'office', 'class'))?.value;
+      if(cls) lines.push(`Class: ${cls}`);
     } else if(id==='land'){
       if(g('acres')) lines.push(`Acres: ${g('acres')}`);
       if(g('zoning')) lines.push(`Zoning: ${g('zoning')}`);
-      const ut=document.getElementById('li_s_land_utilities')?.value; if(ut) lines.push(`Utilities: ${ut}`);
+      const ut = document.getElementById(_liPropAssetFieldId(propIdx, 'land', 'utilities'))?.value;
+      if(ut) lines.push(`Utilities: ${ut}`);
       if(g('devnotes')) lines.push(g('devnotes'));
     } else if(id==='mixeduse'){
       if(g('resunits')) lines.push(`Residential Units: ${g('resunits')}`);
       if(g('comspaces')) lines.push(`Commercial Spaces: ${g('comspaces')}`);
       if(g('sf')) lines.push(`Total SF: ${g('sf')}`);
-      // v102.25: tenant/occupancy notes — previously dropped on submit
       if(g('mixnotes')) lines.push(`Tenant / Occupancy Notes: ${g('mixnotes')}`);
 
-      // v102.25: Residential side (mirrors the Multifamily block with
-      // the 'mixeduse_res' prefix). Collected into assetNotes so the
-      // data lands in General Property Notes and flows through to the
-      // Text Message Maker's General Notes section.
-      // Note: unit count comes from the top-row 'resunits' field above,
-      // so we don't duplicate it here.
-      const muResYb = gn('li_s_mixeduse_res_yearbuilt');
+      const muResYb = gFidN('res_yearbuilt');
       if(muResYb) lines.push(`Residential Year Built: ${muResYb}`);
-      const muResClass = document.getElementById('li_s_mixeduse_res_class')?.value;
+      const muResClass = document.getElementById(_liPropAssetFieldId(propIdx, 'mixeduse', 'res_class'))?.value;
       if(muResClass) lines.push(`Residential Class: ${muResClass}`);
-      // Occupancy: honor the per-prefix mode state
-      if(_liMfOccState.mixeduse_res === 'units'){
-        const occU = gn('li_s_mixeduse_res_occ_units');
-        const occT = gn('li_s_mixeduse_res_occ_total');
+      // Occupancy: per-property MF occ state for mixeduse_res
+      const muKey = _liPropMfPrefix(propIdx, 'mixeduse_res');
+      const muOccMode = _liMfOccState[muKey] || 'pct';
+      if(muOccMode === 'units'){
+        const occU = gFidN('res_occ_units');
+        const occT = gFidN('res_occ_total');
         if(occU && occT){
           const pct = Math.round((occU/occT)*1000)/10;
           lines.push(`Residential Occupancy: ${occU} of ${occT} units (${pct}%)`);
         }
       } else {
-        const occPct = gn('li_s_mixeduse_res_occ');
+        const occPct = gFidN('res_occ');
         if(occPct) lines.push(`Residential Occupancy: ${occPct}%`);
       }
-      // Bedroom unit mix rent table
       const muRentRows = [['Studio/Eff','eff'],['1BR','1br'],['2BR','2br'],['3BR','3br'],['4BR','4br']];
       let muGriMo = 0;
-      muRentRows.forEach(([lbl,key])=>{
-        const rent = gn(`li_s_mixeduse_res_rent_${key}`);
-        const cnt  = gn(`li_s_mixeduse_res_cnt_${key}`);
+      muRentRows.forEach(([lbl, key]) => {
+        const rent = gFidN(`res_rent_${key}`);
+        const cnt  = gFidN(`res_cnt_${key}`);
         if(rent || cnt){
           const rowTot = (rent||0) * (cnt||0);
           if(rowTot > 0) muGriMo += rowTot;
           lines.push(`Residential ${lbl}: ${cnt||'?'}x units @ $${rent?rent.toLocaleString():'?'}/mo${rowTot?' = $'+rowTot.toLocaleString()+'/mo':''}`);
         }
       });
-      if(muGriMo > 0){
-        lines.push(`Total Residential Unit Mix GRI: $${muGriMo.toLocaleString()}/mo · $${(muGriMo*12).toLocaleString()}/yr`);
-      }
-      const muUm = document.getElementById('li_s_mixeduse_res_unitmix')?.value?.trim();
+      if(muGriMo > 0) lines.push(`Total Residential Unit Mix GRI: $${muGriMo.toLocaleString()}/mo · $${(muGriMo*12).toLocaleString()}/yr`);
+      const muUm = document.getElementById(_liPropAssetFieldId(propIdx, 'mixeduse', 'res_unitmix'))?.value?.trim();
       if(muUm) lines.push(`Residential Unit Mix Notes: ${muUm}`);
 
-      // v102.26: Commercial tenants. Sync from DOM to _liMuTenants, filter
-      // empty rows, shape each into the format loadTenantMixTab expects
-      // so they appear on the new deal's Tenant Mix tab after submit.
-      _liMuSyncTenantsFromDOM();
-      const _muTenantsShaped = _liMuTenants
+      // Mixed Use commercial tenants — per-property
+      _liMuSyncTenantsFromDOM(mode);
+      const tenants = _liGetMuTenants(mode);
+      const _muTenantsShaped = tenants
         .filter(t => (t.name && t.name.trim()) || (t.unit && t.unit.trim()))
         .map((t, i) => {
           const sfN   = t.sf   ? parseFloat(String(t.sf).replace(/,/g,'')) || null : null;
           const rentN = t.rent ? parseFloat(String(t.rent).replace(/,/g,'')) || null : null;
           const psf = (sfN && rentN) ? parseFloat(((rentN*12)/sfN).toFixed(4)) : null;
           const row = {
-            id: 'tm_intake_' + Date.now() + '_' + i,
+            id: 'tm_intake_' + Date.now() + '_p' + propIdx + '_' + i,
             'Tenant Name':     t.name || '',
             'Unit / Suite':    t.unit || '',
           };
@@ -27447,172 +27905,169 @@ async function _liSubmitSeller(){
       if(g('lifts')) lines.push(`Lifts: ${g('lifts')}`);
       if(g('lot')) lines.push(`Lot: ${g('lot')} acres`);
     }
-    if(lines.length>1) assetNotes += lines.join('\n');
+    if(lines.length > 1) assetNotes += lines.join('\n');
   });
 
   const assetTypeText = selectedAssetTypes.join(', ') || '';
 
-  const sellerFields = {
-    'Name': gv('li_s_name'),
-    'Buyer or Seller': 'Seller',
-    'Phone Number': gv('li_s_phone'),
-    'Email': gv('li_s_email')||null,
-    'Company': gv('li_s_company')||null,
-    'Contact Notes': gv('li_s_cnotes')||null,
-    'Address': gv('li_s_address'),
-    'Location': gv('li_s_county')||null,
-    'General Notes': ((gv('li_s_notes')||'')+assetNotes).trim()||null,
-    'Financial Notes': gv('li_s_fnotes')||null,
-    'Motivation': (document.getElementById('li_s_motivation')?.value ? document.getElementById('li_s_motivation').value+'\n':'')+(gv('li_s_why')||'')||null,
-    'Asking Price Words': gv('li_s_pricewords')||null,
-    // Note: 'Property Type' is a linked field — we store type text in notes instead
-  };
-  const price=gn('li_s_price'); if(price) sellerFields['Asking Price']=price;
-  // SF: primary Property Info input. Asset-specific SF (warehouse, retail, office, etc.) falls back if the main one is empty.
-  const sf=gn('li_s_sf')||gn('li_s_warehouse_sf')||gn('li_s_retail_sf')||gn('li_s_office_sf')||gn('li_s_shopping_sf')||gn('li_s_mixeduse_sf')||gn('li_s_automotive_sf');
-  if(sf) sellerFields['Square Footage']=sf;
-  const griMo=gn('li_s_gri_mo'); if(griMo) sellerFields['Gross Monthly Revenue (Optional)']=griMo;
-  const griYr=gn('li_s_gri_yr'); if(griYr) sellerFields['Gross Yearly Revenue (Optional)']=griYr;
-  const expMo=gn('li_s_exp_mo'); if(expMo) sellerFields['Monthly Expenses (Optional)']=expMo;
-  const expYr=gn('li_s_exp_yr'); if(expYr) sellerFields['Yearly Expenses (Optional)']=expYr;
-  if(assetTypeText) sellerFields['General Notes'] = (sellerFields['General Notes']||'') + `\nAsset Type: ${assetTypeText}`;
+  // Property-level fields
+  const price  = gn(`${pfx}_price`);
+  const sf = gn(`${pfx}_sf`)
+          || gn(_liPropAssetFieldId(propIdx, 'warehouse', 'sf'))
+          || gn(_liPropAssetFieldId(propIdx, 'retail',    'sf'))
+          || gn(_liPropAssetFieldId(propIdx, 'office',    'sf'))
+          || gn(_liPropAssetFieldId(propIdx, 'shopping',  'sf'))
+          || gn(_liPropAssetFieldId(propIdx, 'mixeduse',  'sf'))
+          || gn(_liPropAssetFieldId(propIdx, 'automotive','sf'));
+  const griMo = gn(`${pfx}_gri_mo`);
+  const griYr = gn(`${pfx}_gri_yr`);
+  const expMo = gn(`${pfx}_exp_mo`);
+  const expYr = gn(`${pfx}_exp_yr`);
+  const userGeneralNotes = gv(`${pfx}_notes`);
+  const userFinNotes     = gv(`${pfx}_fnotes`);
+  const whySelling       = gv(`${pfx}_why`);
+  const motivationVal    = document.getElementById(`${pfx}_motivation`)?.value || '';
+  const priceWords       = gv(`${pfx}_pricewords`);
+  const sfNotes          = gv(`${pfx}_sf_notes`);
 
-  Object.keys(sellerFields).forEach(k=>{ if(sellerFields[k]===null||sellerFields[k]===undefined||sellerFields[k]==='') delete sellerFields[k]; });
+  const dealFields = {
+    'Address': address,
+    'Pipeline Stage': 'New Lead',
+    'Date Added': new Date().toISOString().slice(0,10),
+    'General Property Notes': userGeneralNotes || '',
+    'Simple County': gv(`${pfx}_county`) || '',
+    'CRM Asset Classification': assetTypeText || '',
+    'Simple Text Property Type': assetTypeText.split(',')[0].split(':')[0].trim() || '',
+  };
+  if(price) dealFields['Asking Price'] = price;
+  if(sf){
+    dealFields['Square Footage'] = sf;
+    dealFields['Total Building SF'] = sf;
+  }
+  if(griMo) dealFields['Gross Rental Income (Monthly)'] = griMo;
+  else if(griYr) dealFields['Gross Rental Income (Monthly)'] = Math.round(griYr/12);
+  if(expMo) dealFields['Expenses Monthly'] = expMo;
+  else if(expYr) dealFields['Expenses Monthly'] = Math.round(expYr/12);
+  if(expMo)      dealFields['Maintenance & Repair Costs (Monthly)'] = expMo;
+  else if(expYr) dealFields['Maintenance & Repair Costs (Monthly)'] = Math.round(expYr/12);
+
+  // Asset-type-specific top-level fields on ace_properties
+  const autoGas  = document.getElementById(_liPropAssetFieldId(propIdx, 'automotive', 'gas'))?.value;
+  const autoWash = document.getElementById(_liPropAssetFieldId(propIdx, 'automotive', 'wash'))?.value;
+  const retLease = document.getElementById(_liPropAssetFieldId(propIdx, 'retail', 'leasetype'))?.value;
+  const shopLease= document.getElementById(_liPropAssetFieldId(propIdx, 'shopping', 'leasetype'))?.value;
+  if(autoGas)   dealFields['Automotive Gas Type']  = autoGas;
+  if(autoWash)  dealFields['Automotive Wash Type'] = autoWash;
+  if(retLease)  dealFields['Retail Lease Type']   = retLease;
+  if(shopLease) dealFields['Shopping Lease Type'] = shopLease;
+
+  // Multifamily structured columns
+  if(_liMfData){
+    if(_liMfData.units){
+      dealFields['Number of Units'] = _liMfData.units;
+      dealFields['No. of Units']    = _liMfData.units;
+    }
+    if(_liMfData.yearBuilt) dealFields['Year Built']   = _liMfData.yearBuilt;
+    if(_liMfData.occPct != null) dealFields['Occupancy (%)'] = _liMfData.occPct;
+    if(_liMfData.mfClass) dealFields['Property Class'] = _liMfData.mfClass;
+    const countFieldMap = {
+      eff: 'Units Efficiency', '1br': 'Units 1 Bedroom', '2br': 'Units 2 Bedroom',
+      '3br': 'Units 3 Bedroom', '4br': 'Units 4 Bedroom'
+    };
+    Object.entries(_liMfData.counts||{}).forEach(([key, cnt]) => {
+      if(countFieldMap[key]) dealFields[countFieldMap[key]] = cnt;
+    });
+    if(Object.keys(_liMfData.byType||{}).length > 0){
+      const rentJson = { mode: 'byType', byType: _liMfData.byType, units: [] };
+      dealFields['MF Unit Rent Data'] = JSON.stringify(rentJson);
+    }
+    if(_liMfData.unitMixNotes) dealFields['Unit Mix'] = _liMfData.unitMixNotes;
+  }
+  if(_liMuTenantsToWrite && _liMuTenantsToWrite.length > 0){
+    dealFields['MF Unit Rent Data'] = JSON.stringify(_liMuTenantsToWrite);
+  }
+
+  if(whySelling) dealFields['Why Selling'] = whySelling;
+  if(motivationVal) dealFields['Seller Motivation Level'] = motivationVal;
+  // v111.7: 'Asking Price Explanation' is the Airtable-style label that maps
+  // to the asking_price_explanation column via SB_PROP_MAP. The old code
+  // dropped priceWords onto sellerFields only (never reached ace_properties).
+  // Now we write it to the deal so it lands on the property record.
+  if(priceWords) dealFields['Asking Price Explanation'] = priceWords;
+
+  // Financial Property Notes: asset summary + user fin notes + seller financing
+  const finNotesBlocks = [];
+  if(userFinNotes) finNotesBlocks.push(userFinNotes);
+  if(assetNotes.trim()) finNotesBlocks.push(assetNotes.trim());
+  if(finState.sellerFinancing){
+    finNotesBlocks.push(sfNotes
+      ? `--- SELLER FINANCING ---\nOpen to seller financing. ${sfNotes}`
+      : `--- SELLER FINANCING ---\nOpen to seller financing (no additional details provided).`);
+  }
+  if(finNotesBlocks.length > 0){
+    dealFields['Financial Property Notes'] = finNotesBlocks.join('\n\n');
+  }
+
+  // Append asset type to General Notes for compatibility with legacy fields
+  if(assetTypeText){
+    dealFields['General Property Notes'] = (dealFields['General Property Notes']||'') + `\nAsset Type: ${assetTypeText}`;
+  }
+
+  // Strip nulls/empty
+  Object.keys(dealFields).forEach(k => { if(!dealFields[k] && dealFields[k]!==0) delete dealFields[k]; });
+
+  return { ok: true, propIdx, dealFields, address };
+}
+
+async function _liSubmitSeller(){
+  const gv = id => document.getElementById(id)?.value?.trim()||'';
+  const errEl = document.getElementById('li_s_error');
+  const btn = document.getElementById('li_s_submit');
+  // v111.7: clear any stale multi-property results from the previous submit
+  window._liLastSubmitResults = null;
+
+  // Validate top-level contact fields
+  if(!gv('li_s_name')){ errEl.textContent='Name is required.'; errEl.style.display='block'; return; }
+  if(!gv('li_s_phone')){ errEl.textContent='Phone number is required.'; errEl.style.display='block'; return; }
+
+  // v111.7: validate and build fields for ALL properties BEFORE doing any DB writes.
+  // Fails fast with a clear property-numbered error if anything's off, so we never
+  // create a contact + partial portfolio if property #3 is missing an address.
+  const totalProps = _liSellerPropCount || 1;
+  const perProp = [];
+  for(let i = 1; i <= totalProps; i++){
+    const result = _liBuildDealForProperty(i);
+    if(!result.ok){
+      errEl.textContent = result.error;
+      errEl.style.display = 'block';
+      return;
+    }
+    perProp.push(result);
+  }
+  errEl.style.display='none';
+
+  const cfg=getConfig();
+  if(!cfg.key){ errEl.textContent='Connect Supabase first (Settings).'; errEl.style.display='block'; return; }
+
+  if(btn){ btn.disabled=true; btn.textContent='⏳ Submitting...'; }
 
   try{
-    // NOTES ROUTING:
-    // - General Property Notes (shown as "Property Description" on Deal Card): ONLY user's free-text "General Notes" input
-    // - Financial Property Notes: auto-generated asset details + financial notes + seller financing block
-    // - Why Selling: from the Motivation/Why Selling textarea
-    // - Seller contact info: lives on ace_contacts via owner_contact_id — not repeated in notes
-    const userGeneralNotes = gv('li_s_notes');
-    const dealFields = {
-      'Address': gv('li_s_address'), 'Pipeline Stage': 'New Lead',
-      // v102.18: explicitly set Date Added so the dashboard "New Leads"
-      // counter increments immediately on submission. Without this, the
-      // column was null and only created_at provided the fallback —
-      // which worked for legacy queries but is cleaner this way.
-      'Date Added': new Date().toISOString().slice(0,10),
-      'General Property Notes': userGeneralNotes || '',
-      'Simple County': gv('li_s_county')||'',
-      'CRM Asset Classification': assetTypeText||'',
-      'Simple Text Property Type': assetTypeText.split(',')[0].split(':')[0].trim()||'',
-    };
-    if(price) dealFields['Asking Price'] = price;
-    // Square footage: write to both Square Footage and Total Building SF
-    // (Property Details reads from Total Building SF for the MF/warehouse SF display)
-    if(sf){
-      dealFields['Square Footage'] = sf;
-      dealFields['Total Building SF'] = sf;
-    }
-    // Financial fields: correctly map monthly/yearly to their respective fields
-    // v107: write to canonical monthly fields only (legacy fields migrated + nulled)
-    if(griMo) dealFields['Gross Rental Income (Monthly)'] = griMo;
-    else if(griYr) dealFields['Gross Rental Income (Monthly)'] = Math.round(griYr/12);
-    if(expMo) dealFields['Expenses Monthly'] = expMo;
-    else if(expYr) dealFields['Expenses Monthly'] = Math.round(expYr/12);
-    // Per Ricky: the intake expense should land in Maintenance & Repair Costs on the
-    // Financial Analysis tab. That field stores monthly dollars.
-    if(expMo)      dealFields['Maintenance & Repair Costs (Monthly)'] = expMo;
-    else if(expYr) dealFields['Maintenance & Repair Costs (Monthly)'] = Math.round(expYr/12);
-
-    // v102.9: asset-type-specific fields that were previously dropped on submit.
-    // Each only appears in the UI when the corresponding asset type is selected,
-    // so we just pick up whichever was filled.
-    const autoGas  = gv('li_s_automotive_gas');  if(autoGas)  dealFields['Automotive Gas Type']  = autoGas;
-    const autoWash = gv('li_s_automotive_wash'); if(autoWash) dealFields['Automotive Wash Type'] = autoWash;
-    const retLease = gv('li_s_retail_leasetype');   if(retLease) dealFields['Retail Lease Type']   = retLease;
-    const shopLease= gv('li_s_shopping_leasetype'); if(shopLease) dealFields['Shopping Lease Type']= shopLease;
-
-    // Multifamily: write structured data into actual ace_properties columns
-    // so the Unit Mix / Property Info sections populate on the deal card.
-    if(_liMfData){
-      if(_liMfData.units){
-        dealFields['Number of Units'] = _liMfData.units;
-        dealFields['No. of Units']    = _liMfData.units;
-      }
-      if(_liMfData.yearBuilt) dealFields['Year Built']   = _liMfData.yearBuilt;
-      if(_liMfData.occPct!=null) dealFields['Occupancy (%)'] = _liMfData.occPct;
-      if(_liMfData.mfClass) dealFields['Property Class'] = _liMfData.mfClass;
-      // Per-bedroom unit counts
-      const countFieldMap = {
-        eff: 'Units Efficiency', '1br': 'Units 1 Bedroom', '2br': 'Units 2 Bedroom',
-        '3br': 'Units 3 Bedroom', '4br': 'Units 4 Bedroom'
-      };
-      Object.entries(_liMfData.counts||{}).forEach(([key, cnt])=>{
-        if(countFieldMap[key]) dealFields[countFieldMap[key]] = cnt;
-      });
-      // MF Unit Rent Data: stored as JSONB, matches the shape _mfRentLoad expects.
-      // byType keys must match what the Property Details page reads: eff, 1br, 2br, 3br, 4br
-      if(Object.keys(_liMfData.byType||{}).length > 0){
-        const rentJson = { mode: 'byType', byType: _liMfData.byType, units: [] };
-        dealFields['MF Unit Rent Data'] = JSON.stringify(rentJson);
-      }
-      if(_liMfData.unitMixNotes) dealFields['Unit Mix'] = _liMfData.unitMixNotes;
-    }
-
-    // v102.26: Mixed Use commercial tenants — write as JSONB array to
-    // MF Unit Rent Data so they appear on the new deal's Tenant Mix tab.
-    // Safe to unconditionally set here because the mutual-exclusion guard
-    // at the top of this function rules out Multifamily + Mixed Use on
-    // the same lead, so _liMfData and _liMuTenantsToWrite are never both
-    // truthy in one submission.
-    if(_liMuTenantsToWrite && _liMuTenantsToWrite.length > 0){
-      dealFields['MF Unit Rent Data'] = JSON.stringify(_liMuTenantsToWrite);
-    }
-
-    // Why Selling: dedicated column on ace_properties (shown in Property Details → Seller Info → Why Selling)
-    const whySelling = gv('li_s_why');
-    if(whySelling) dealFields['Why Selling'] = whySelling;
-
-    // Motivation Level: dropdown
-    const motivationVal = document.getElementById('li_s_motivation')?.value;
-    if(motivationVal) dealFields['Seller Motivation Level'] = motivationVal;
-
-    // Financial Property Notes: auto-generated asset summary + user's financial notes + seller financing
-    const finNotesBlocks = [];
-    const userFinNotes = gv('li_s_fnotes');
-    if(userFinNotes) finNotesBlocks.push(userFinNotes);
-    if(assetNotes.trim()) finNotesBlocks.push(assetNotes.trim());
-    if(_liSellerFinState.sellerFinancing){
-      const sfNotes = gv('li_s_sf_notes');
-      finNotesBlocks.push(sfNotes
-        ? `--- SELLER FINANCING ---\nOpen to seller financing. ${sfNotes}`
-        : `--- SELLER FINANCING ---\nOpen to seller financing (no additional details provided).`);
-    }
-    if(finNotesBlocks.length > 0){
-      dealFields['Financial Property Notes'] = finNotesBlocks.join('\n\n');
-    }
-
-    Object.keys(dealFields).forEach(k=>{ if(!dealFields[k]&&dealFields[k]!==0) delete dealFields[k]; });
-
-    // Contact info is only on ace_contacts via owner_contact_id — capture for later use
+    // Contact info — one contact per lead submission, owns all properties
     const contactName  = gv('li_s_name');
-    // Normalize phone to digits only so all contacts have a consistent format in the DB
     const contactPhone = _phoneDigits(gv('li_s_phone'));
     const contactEmail = gv('li_s_email');
     const contactCo    = gv('li_s_company');
     const contactNotes = gv('li_s_cnotes');
 
     if(isSupabase()){
-      // v102.17: capture the current agent's fub_name so new leads count on
-      // the submitting agent's dashboard (Today / This Week / This Month).
-      // Falls back to null if no user is logged in or no fub_name is set —
-      // those edge cases just won't be agent-attributed, which matches the
-      // existing dashboard fallback behavior of "showing all deals".
       const agentFub = (typeof _currentUser !== 'undefined' && _currentUser && _currentUser.fub_name) || null;
 
-      // 1. Create (or reuse existing) contact in ace_contacts
+      // 1. Create (or reuse existing) contact
       let contactId = null;
-      // v102.27: If we arrived via "+ Add Property" from a contact detail page,
-      // _liPrefillContext.contactId is already set — skip the create/lookup path
-      // entirely and use it directly. This avoids any risk of duplicate contact
-      // rows and makes the "adding to existing contact" semantics explicit.
       if(_liPrefillContext && _liPrefillContext.contactId){
         contactId = _liPrefillContext.contactId;
       } else {
         try{
-          // Check for existing contact by phone to avoid duplicates
           const existing = contactPhone
             ? await _sbGet(SB_TABLES.contacts, `phone_number=eq.${encodeURIComponent(contactPhone)}&select=id&limit=1`)
             : [];
@@ -27627,7 +28082,7 @@ async function _liSubmitSeller(){
               contact_notes: contactNotes || null,
               type: ['Seller'],
               date_added: new Date().toISOString().slice(0,10),
-              fub_assigned_to: agentFub  // v102.17: agent attribution
+              fub_assigned_to: agentFub
             };
             const createdContact = await _sbPost(SB_TABLES.contacts, contactRow);
             contactId = createdContact?.id || null;
@@ -27637,50 +28092,123 @@ async function _liSubmitSeller(){
         }
       }
 
-      // v102.9: Removed the legacy ace_submissions_seller write. The table
-      // is write-only — nothing in the CRM reads from it, and the "kept for
-      // backwards compat for boss/legacy tools" comment no longer applies
-      // since the boss's tools now read from ace_properties directly.
-      // Seller leads go straight to ace_contacts + ace_properties.
+      // 2. Create each property via _sbPost. Collect their IDs for portfolio linking.
+      const createdDealIds = [];
+      for(const p of perProp){
+        const propData = _atToSb(p.dealFields, SB_PROP_MAP);
+        if(contactId) propData.owner_contact_id = contactId;
+        if(agentFub) propData.fub_assigned_to = agentFub;
+        const createdDeal = await _sbPost(SB_TABLES.properties, propData);
+        if(createdDeal && createdDeal.id){
+          createdDealIds.push({ id: createdDeal.id, address: p.address, propIdx: p.propIdx });
+        }
+      }
 
-      // 3. Create deal in ace_properties, linking the contact as owner
-      const propData = _atToSb(dealFields, SB_PROP_MAP);
-      if(contactId) propData.owner_contact_id = contactId;
-      // v102.17: agent attribution — must be set BEFORE _sbPost so the new
-      // property shows up on the submitting agent's dashboard immediately.
-      if(agentFub) propData.fub_assigned_to = agentFub;
-      const createdDeal = await _sbPost(SB_TABLES.properties, propData);
-      // v102.6: No more localStorage seeding. Any GRI / expense data from
-      // the intake form is already in dealFields → propData → Supabase.
-      // When the user opens this deal in the Financial Analysis tab, the
-      // values flow from the database directly into fi via _dbExpSeed.
+      // 3. If N >= 2, create a portfolio row and link all created properties to it.
+      let createdPortfolio = null;
+      if(totalProps >= 2){
+        const pfName = gv('li_s_pf_name') || `${contactName || 'New'} — Portfolio (${totalProps})`;
+        const pfPriceRaw = document.getElementById('li_s_pf_price')?.value;
+        const pfPrice = pfPriceRaw ? Number(String(pfPriceRaw).replace(/,/g,'')) : null;
+        const pfNotes = gv('li_s_pf_notes');
+        const pfAskWords = gv('li_s_pf_askwords');
+        // Radio: 'individual' | 'package' | '' (unspecified)
+        const sellmodeRadio = document.querySelector('input[name="li_s_pf_sellmode"]:checked');
+        const sellmodeVal = sellmodeRadio ? sellmodeRadio.value : '';
+        let sellIndividually = null;
+        if(sellmodeVal === 'individual') sellIndividually = true;
+        else if(sellmodeVal === 'package') sellIndividually = false;
+
+        const pfRow = {
+          name: pfName,
+          description: null,
+          status: 'Active',
+          pipeline_stage: 'New Lead',
+          is_archived: false,
+          portfolio_notes: pfNotes || null,
+          package_asking_notes: pfAskWords || null,
+          assigned_agent: agentFub || null,
+          date_listed: new Date().toISOString().slice(0,10),
+        };
+        if(pfPrice && !isNaN(pfPrice) && pfPrice > 0) pfRow.package_price = pfPrice;
+        if(sellIndividually !== null) pfRow.sell_individually = sellIndividually;
+
+        try{
+          createdPortfolio = await _sbPost(SB_TABLES.portfolios, pfRow);
+          if(createdPortfolio && createdPortfolio.id){
+            // Link each property to the portfolio
+            for(const d of createdDealIds){
+              try{
+                await _sbPatch(SB_TABLES.properties, d.id, { portfolio_id: createdPortfolio.id });
+              } catch(e){
+                console.warn('Failed to link property to portfolio:', d.address, e.message);
+              }
+            }
+          }
+        } catch(e){
+          console.warn('Portfolio create failed (deals still created standalone):', e.message);
+          // Don't fail the whole submission — the deals are still valid individually.
+        }
+      }
+
+      // Pass results to success page
+      window._liLastSubmitResults = {
+        contactName,
+        properties: createdDealIds,
+        portfolio: createdPortfolio,
+      };
     }
-    // v102.12: Airtable fallback else branch removed. Ace CRM is
-    // Supabase-only; there is no Airtable code path for new deals anymore.
-    // v102.18: await syncData so allDeals contains the new lead before
-    // _liShowSuccess fires. Without await, the user can navigate to the
-    // dashboard before the refresh completes and see stale counts.
+
     await syncData();
-    // v102.19: broadcast the lead-created event so any open dashboard
-    // (or other live counter) refreshes itself automatically. The dashboard
-    // listener at the bottom of showDashboard re-runs the render whenever
-    // this fires, so the "Today" counter increments without manual nav.
     try {
       window.dispatchEvent(new CustomEvent('crm:lead-created', { detail: { type: 'seller' } }));
-    } catch(e) { /* CustomEvent unsupported — extremely old browser, ignore */ }
-    // v102.27: If we came from a contact detail page, return to it so the
-    // user sees the new property in the Properties tab immediately. The
-    // normal success-page flow is skipped in prefill mode.
+    } catch(e) { /* ignore */ }
+
     if(_liPrefillContext && _liPrefillContext.contactId){
       _liPrefillReturnToContact();
       return;
     }
-    _liShowSuccess('seller', gv('li_s_name'), gv('li_s_address'));
+    // Show success — multi-property-aware
+    if(totalProps >= 2 && window._liLastSubmitResults && (window._liLastSubmitResults.properties||[]).length){
+      _liShowSuccessMulti(window._liLastSubmitResults);
+    } else {
+      _liShowSuccess('seller', gv('li_s_name'), gv('li_s_address'));
+    }
   }catch(e){
     if(btn){btn.disabled=false;btn.textContent='✓ Submit Seller Lead';}
     errEl.textContent='Submission failed: '+e.message; errEl.style.display='block';
   }
 }
+
+// v111.7: success page for multi-property submissions — lists all addresses + portfolio name
+function _liShowSuccessMulti(result){
+  const { contactName, properties, portfolio } = result;
+  const pfLine = portfolio
+    ? `<div style="font-size:13px;color:#7c3aed;margin:10px 0 18px;padding:10px 14px;background:#faf5ff;border:1px solid #c084fc;border-radius:8px;display:inline-block;max-width:100%;">📂 Bundled into portfolio: <strong>${portfolio.name||'Portfolio'}</strong></div>`
+    : '';
+  const addrList = properties.length
+    ? `<div style="text-align:left;max-width:420px;margin:0 auto 20px;">
+         <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:8px;">${properties.length} properties created</div>
+         <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;">
+           ${properties.map(p => `<div style="font-size:12px;color:#374151;padding:4px 0;">🏠 <strong>#${p.propIdx}</strong> — ${p.address}</div>`).join('')}
+         </div>
+       </div>`
+    : '';
+  document.getElementById('mainArea').innerHTML = `
+    <div style="max-width:560px;margin:60px auto;text-align:center;padding:20px;">
+      <div style="font-size:64px;margin-bottom:16px;">✅</div>
+      <div style="font-size:24px;font-weight:800;color:#0f172a;margin-bottom:8px;">Portfolio Lead Submitted!</div>
+      <div style="font-size:14px;color:#64748b;margin-bottom:6px;"><strong>${contactName||'Seller'}</strong> added as a Seller lead with ${properties.length} properties.</div>
+      ${pfLine}
+      ${addrList}
+      <div style="display:flex;gap:12px;justify-content:center;flex-wrap:wrap;">
+        <button onclick="showLeadIntakePage()" style="background:#1a3a6e;color:#fff;border:none;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">+ Add Another Lead</button>
+        <button onclick="setNav(document.querySelectorAll('.nav-btn')[1],'pipeline')" style="background:#f1f5f9;color:#1a3a6e;border:none;padding:12px 24px;border-radius:8px;font-size:14px;font-weight:600;cursor:pointer;">View Deals →</button>
+      </div>
+    </div>`;
+}
+window._liShowSuccessMulti = _liShowSuccessMulti;
+
 
 // ── BUYER FORM ─────────────────────────────────────────────────
 function _liRenderBuyerForm(){

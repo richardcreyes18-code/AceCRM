@@ -15598,6 +15598,11 @@ function dbMapSetColor(mode){
 
 function dbRefreshMapPins(){
   if(_dbLeafletMap) initDealMap();
+  // v111.3: if side panel is open, keep its contents in sync with filters
+  if(_dbSidePanelOpen) _dbRenderSidePanel();
+  // Also refresh the banner count if a shape is active (count changes when
+  // other filters change)
+  if(_dbDrawnShape) _dbUpdateShapeBanner();
 }
 
 function _dbCountyFilterSearch(q){
@@ -15761,6 +15766,8 @@ function _dbUpdateShapeBanner(){
   if(!_dbDrawnShape){
     el.style.display = 'none';
     el.innerHTML = '';
+    // Also close the side panel if it's open — shape gone, panel loses its reason
+    _dbCloseSidePanel();
     return;
   }
   // Count matches = deals with coords that pass _dealInsideShape (ignoring
@@ -15778,9 +15785,256 @@ function _dbUpdateShapeBanner(){
   el.innerHTML = `
     <span style="font-size:16px;line-height:1;">🎯</span>
     <span style="flex:1;"><strong>${matchCount.toLocaleString()} propert${matchCount===1?'y':'ies'}</strong> inside your ${shapeName} <span style="color:#64748b;font-weight:400;">(combined with your other filters — see count above)</span></span>
-    <button onclick="_dbClearShape()" style="background:#fff;border:1px solid #7c3aed;color:#7c3aed;font-size:11px;font-weight:700;padding:5px 12px;border-radius:4px;cursor:pointer;">✕ Clear shape</button>
+    <button onclick="_dbToggleSidePanel()" style="background:#fff;border:1px solid #7c3aed;color:#7c3aed;font-size:11px;font-weight:700;padding:5px 12px;border-radius:4px;cursor:pointer;" title="Show a slide-out list next to the map">📑 Side panel</button>
+    <button onclick="_dbViewAsList()" style="background:#fff;border:1px solid #7c3aed;color:#7c3aed;font-size:11px;font-weight:700;padding:5px 12px;border-radius:4px;cursor:pointer;" title="Switch to the full List view with your shape filter intact">📋 View as list</button>
+    <button onclick="_dbExportShapeCSV()" style="background:#fff;border:1px solid #7c3aed;color:#7c3aed;font-size:11px;font-weight:700;padding:5px 12px;border-radius:4px;cursor:pointer;" title="Download the filtered deals as CSV">⬇ Export CSV</button>
+    <button onclick="_dbClearShape()" style="background:#7c3aed;border:1px solid #7c3aed;color:#fff;font-size:11px;font-weight:700;padding:5px 12px;border-radius:4px;cursor:pointer;">✕ Clear shape</button>
   `;
+  // If the side panel is open, refresh its contents so counts + rows stay in sync
+  if(_dbSidePanelOpen) _dbRenderSidePanel();
 }
+
+// ═══════════════════════════════════════════════════════════════════
+// v111.3 extension: "View as list" — switch tabs with shape filter intact
+// ═══════════════════════════════════════════════════════════════════
+// Because list + map share the same filter pipeline (including _dbDrawnShape),
+// switching views is just a call to dbSetView('list'). The shape filter is
+// automatically applied because renderDealBoard reads _dbDrawnShape.
+function _dbViewAsList(){
+  if(typeof dbSetView === 'function') dbSetView('list');
+}
+window._dbViewAsList = _dbViewAsList;
+
+// ═══════════════════════════════════════════════════════════════════
+// v111.3 extension: Slide-out side panel list
+// ═══════════════════════════════════════════════════════════════════
+// Panel slides in from the right side of the map. Shows a compact list of
+// deals matching the full filter stack (shape + top-bar filters). Click any
+// row → opens the deal card.
+let _dbSidePanelOpen = false;
+
+function _dbToggleSidePanel(){
+  if(_dbSidePanelOpen) _dbCloseSidePanel();
+  else _dbOpenSidePanel();
+}
+window._dbToggleSidePanel = _dbToggleSidePanel;
+
+function _dbOpenSidePanel(){
+  let el = document.getElementById('db_side_panel');
+  if(!el){
+    el = document.createElement('div');
+    el.id = 'db_side_panel';
+    // Anchored to the right edge of the map view. The Deal Board's #db_mapView
+    // is the parent container; if it's not `position:relative`, the panel
+    // falls back to fixed positioning against the viewport.
+    el.style.cssText = `
+      position:absolute;top:0;right:0;bottom:0;width:420px;
+      background:#fff;border-left:1px solid #d8b4fe;
+      box-shadow:-4px 0 14px rgba(0,0,0,0.08);
+      display:flex;flex-direction:column;z-index:1500;
+      font-family:'Inter',system-ui,sans-serif;
+    `;
+    // Find the map view container to anchor against
+    const mapView = document.getElementById('db_mapView');
+    if(mapView){
+      // Ensure the parent can host absolute children
+      if(getComputedStyle(mapView).position === 'static'){
+        mapView.style.position = 'relative';
+      }
+      mapView.appendChild(el);
+    } else {
+      // Fallback — attach to body as fixed overlay
+      el.style.position = 'fixed';
+      document.body.appendChild(el);
+    }
+  }
+  _dbSidePanelOpen = true;
+  _dbRenderSidePanel();
+  // Poke the map so tiles re-render into the reduced width cleanly
+  setTimeout(() => { try { _dbLeafletMap && _dbLeafletMap.invalidateSize(); } catch(e){} }, 50);
+}
+window._dbOpenSidePanel = _dbOpenSidePanel;
+
+function _dbCloseSidePanel(){
+  const el = document.getElementById('db_side_panel');
+  if(el) el.remove();
+  _dbSidePanelOpen = false;
+  setTimeout(() => { try { _dbLeafletMap && _dbLeafletMap.invalidateSize(); } catch(e){} }, 50);
+}
+window._dbCloseSidePanel = _dbCloseSidePanel;
+
+// Compute the fully-filtered deal set (shape + top-bar filters). Shared by
+// the side panel render and the CSV export so the numbers always match.
+function _dbComputeFilteredDeals(){
+  const search   = (document.getElementById('db_search')?.value||'').toLowerCase();
+  const priority = document.getElementById('db_priority')?.checked||false;
+  const selStages   = _dbMultiGetSelected('stage');
+  const selStates   = _dbMultiGetSelected('state');
+  const selRegions  = _dbMultiGetSelected('region');
+  const selCounties = _dbMultiGetSelected('county');
+  const selCities   = _dbMultiGetSelected('city');
+  const selTypes    = _dbMultiGetSelected('type');
+  const selSources  = _dbMultiGetSelected('source');
+
+  return (allDeals||[]).filter(d => {
+    if(d['Is Archived']) return false;
+    const s = getStage(d);
+    const c = (d['Simple County']||'').replace(/\s*county\s*/i,'').trim();
+    const tFull = _dealAssetTypeFull(d);
+    const addr = (d['Address']||'').toLowerCase();
+    const notes = (d['Next Steps']||'').toLowerCase();
+    if(search && !(addr.includes(search) || c.toLowerCase().includes(search) || notes.includes(search) || tFull.toLowerCase().includes(search) || (d.id||'').toLowerCase().includes(search))) return false;
+    if(selStages   && !selStages.includes(s)) return false;
+    if(selCounties && !selCounties.includes(c)) return false;
+    if(!_dealAssetTypeMatches(d, selTypes)) return false;
+    if(selSources  && !selSources.includes(d['Import Source']||'(none)')) return false;
+    if(selRegions  && !selRegions.some(r => _dealMatchesRegion(d, r))) return false;
+    if(selStates   && !selStates.includes(_stateFromAddress(d['Address']||''))) return false;
+    if(selCities   && !selCities.includes(_locCityFromAddress(d['Address']||''))) return false;
+    if(priority && !d['Top Priority']) return false;
+    if(_dbDrawnShape && !_dealInsideShape(d)) return false;
+    return true;
+  });
+}
+
+function _dbRenderSidePanel(){
+  const el = document.getElementById('db_side_panel');
+  if(!el) return;
+  const deals = _dbComputeFilteredDeals();
+  // Sort by asking price desc so the biggest deals surface first
+  deals.sort((a,b) => (Number(b['Asking Price'])||0) - (Number(a['Asking Price'])||0));
+
+  const esc = x => String(x||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const fmtMoney = v => {
+    const n = Number(v);
+    if(!n || isNaN(n)) return '—';
+    if(n >= 1e6) return '$' + (n/1e6).toFixed(n >= 1e7 ? 1 : 2) + 'M';
+    if(n >= 1e3) return '$' + Math.round(n/1e3) + 'K';
+    return '$' + n.toLocaleString();
+  };
+  const fmtCap = d => {
+    const c = _dealCapRate(d);
+    return (c && c > 0) ? c.toFixed(2) + '%' : '—';
+  };
+
+  const rows = deals.slice(0, 500).map(d => {
+    const addr   = esc(d['Address'] || '—');
+    const owner  = esc(d['_ownerName'] || d['_sellerName'] || d['Owner Name'] || '');
+    const agent  = esc(d['Assigned Agent'] || '');
+    const county = esc((d['Simple County']||'').replace(/\s*county\s*/i,'').trim() || '—');
+    const ask    = fmtMoney(d['Asking Price']);
+    const cap    = fmtCap(d);
+    const type   = esc(_dealAssetTypeFull(d) || '—');
+    const pri    = d['Top Priority'];
+    return `
+      <div class="db-sp-row" data-dealid="${esc(d.id)}" style="padding:10px 14px;border-bottom:1px solid #f1f5f9;cursor:pointer;transition:background 0.1s;" onmouseover="this.style.background='#faf5ff'" onmouseout="this.style.background=''">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:6px;margin-bottom:3px;">
+          <div style="font-size:12px;font-weight:700;color:#0f172a;flex:1;line-height:1.3;">${pri?'⭐ ':''}${addr}</div>
+          <div style="font-size:12px;font-weight:700;color:#15803d;white-space:nowrap;">${ask}</div>
+        </div>
+        <div style="font-size:10px;color:#64748b;display:flex;gap:8px;flex-wrap:wrap;">
+          ${owner ? `<span>👤 ${owner}</span>` : ''}
+          ${agent ? `<span>🧑‍💼 ${agent}</span>` : ''}
+          <span>📍 ${county}</span>
+          <span>🏷 ${type}</span>
+          <span>📊 Cap ${cap}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+
+  const tooMany = deals.length > 500
+    ? `<div style="padding:10px 14px;text-align:center;font-size:10px;color:#94a3b8;font-style:italic;border-top:1px solid #e2e8f0;">Showing first 500 of ${deals.length.toLocaleString()}. Export CSV to get the full list.</div>`
+    : '';
+
+  el.innerHTML = `
+    <div style="padding:12px 14px;background:linear-gradient(135deg,#0f172a,#1e3a8a);color:#fff;display:flex;align-items:center;justify-content:space-between;gap:10px;">
+      <div>
+        <div style="font-size:13px;font-weight:700;">📑 Deals in your area</div>
+        <div style="font-size:10px;color:#93c5fd;margin-top:2px;">${deals.length.toLocaleString()} match your filters · sorted by ask</div>
+      </div>
+      <div style="display:flex;gap:6px;">
+        <button onclick="_dbExportShapeCSV()" title="Download CSV" style="background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.3);padding:5px 9px;font-size:10px;font-weight:700;border-radius:4px;cursor:pointer;">⬇ CSV</button>
+        <button onclick="_dbCloseSidePanel()" title="Close panel" style="background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.3);padding:5px 9px;font-size:13px;font-weight:700;border-radius:4px;cursor:pointer;line-height:1;">✕</button>
+      </div>
+    </div>
+    <div id="db_side_panel_list" style="flex:1;overflow-y:auto;">
+      ${deals.length === 0
+        ? '<div style="padding:40px 20px;text-align:center;font-size:12px;color:#94a3b8;">No deals match your current filters.</div>'
+        : rows + tooMany}
+    </div>
+  `;
+
+  // Wire click-through to deal card (event delegation so it survives re-renders)
+  const list = document.getElementById('db_side_panel_list');
+  if(list){
+    list.addEventListener('click', (e) => {
+      const row = e.target.closest('.db-sp-row');
+      if(row){
+        const id = row.dataset.dealid;
+        if(id && typeof window._dbOpenFromMap === 'function'){
+          window._dbOpenFromMap(id);
+        }
+      }
+    });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// v111.3 extension: CSV export
+// ═══════════════════════════════════════════════════════════════════
+// Exports the fully-filtered deal set (shape + top-bar filters) as a CSV
+// with the 6 columns Ricky asked for: Address, Owner, Agent, Asking Price,
+// Cap Rate, County. Plus an Asset Type column since that's almost always
+// useful to a buyer receiving the list.
+function _dbExportShapeCSV(){
+  const deals = _dbComputeFilteredDeals();
+  if(!deals.length){
+    alert('No deals match your current filters — nothing to export.');
+    return;
+  }
+
+  const csvEscape = v => {
+    if(v === null || v === undefined) return '';
+    const s = String(v);
+    // If contains comma, quote, or newline, wrap in quotes and escape internal quotes
+    if(/[",\n\r]/.test(s)) return '"' + s.replace(/"/g, '""') + '"';
+    return s;
+  };
+
+  const header = ['Address','Owner','Agent','Asking Price','Cap Rate (%)','County','Asset Type'];
+  const rows = deals.map(d => {
+    const addr   = d['Address'] || '';
+    const owner  = d['_ownerName'] || d['_sellerName'] || d['Owner Name'] || '';
+    const agent  = d['Assigned Agent'] || '';
+    const ask    = Number(d['Asking Price']) || '';
+    const cap    = _dealCapRate(d);
+    const capStr = (cap && cap > 0) ? cap.toFixed(2) : '';
+    const county = (d['Simple County']||'').replace(/\s*county\s*/i,'').trim() || '';
+    const type   = _dealAssetTypeFull(d) || '';
+    return [addr, owner, agent, ask, capStr, county, type].map(csvEscape).join(',');
+  });
+
+  const csv = '\uFEFF' + header.map(csvEscape).join(',') + '\n' + rows.join('\n');
+  // BOM \uFEFF so Excel opens it as UTF-8 correctly
+
+  const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+  const url  = URL.createObjectURL(blob);
+  const a    = document.createElement('a');
+  const d    = new Date();
+  const dateStr = d.toISOString().slice(0,10);
+  const shapeHint = _dbDrawnShape
+    ? (_dbDrawnShape instanceof window.L.Circle ? 'circle' :
+       _dbDrawnShape instanceof window.L.Rectangle ? 'rectangle' : 'polygon')
+    : 'filtered';
+  a.href = url;
+  a.download = `ace_deals_${shapeHint}_${dateStr}.csv`;
+  document.body.appendChild(a);
+  a.click();
+  document.body.removeChild(a);
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+}
+window._dbExportShapeCSV = _dbExportShapeCSV;
 
 function dbSetView(view){
   _dbCurrentView = view;

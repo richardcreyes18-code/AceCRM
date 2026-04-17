@@ -15694,14 +15694,18 @@ async function initDealMap(){
   let deals = allDeals.filter(d => {
     if(d['Is Archived']) return false;
     const stage = getStage(d);
-    const dtype = _dealAssetType(d);
+    // v111.3: use FULL type for filter matching (e.g. "Industrial: Warehouse")
+    // instead of the stripped top-level. Smart-matching handles both:
+    //   — selecting "Industrial" matches all Industrial subtypes
+    //   — selecting "Industrial: Warehouse" matches only that exact subtype
+    const dtypeFull = _dealAssetTypeFull(d);
     // v102.24: strip "County" suffix so comparisons align with LOC-001 option values
     const county = (d['Simple County']||'').replace(/\s*county\s*/i,'').trim();
     const addr = (d['Address']||'').toLowerCase();
     const notes = (d['Next Steps']||'').toLowerCase();
-    const matchSearch = !search || addr.includes(search) || county.toLowerCase().includes(search) || notes.includes(search) || dtype.toLowerCase().includes(search) || (d.id||'').toLowerCase().includes(search);
+    const matchSearch = !search || addr.includes(search) || county.toLowerCase().includes(search) || notes.includes(search) || dtypeFull.toLowerCase().includes(search) || (d.id||'').toLowerCase().includes(search);
     const matchStage  = !selStages   || selStages.includes(stage);
-    const matchType   = !selTypes    || selTypes.includes(dtype);
+    const matchType   = _dealAssetTypeMatches(d, selTypes);
     const matchCounty = !selCounties || selCounties.includes(county);
     const matchRegion = !selRegions  || selRegions.some(r => _dealMatchesRegion(d, r));
     // v102.24: State + City predicates to match renderDealBoard
@@ -16064,14 +16068,15 @@ function renderDealBoard(){
   let deals = allDeals.filter(d=>{
     const s = getStage(d);
     const c = (d['Simple County']||'').replace(/\s*county\s*/i,'').trim();
-    const t = _dealAssetType(d);
+    // v111.3: full type (e.g. "Industrial: Warehouse") for smart filter matching
+    const tFull = _dealAssetTypeFull(d);
     const addr = (d['Address']||'').toLowerCase();
     const countyLow = c.toLowerCase();
     const notes = (d['Next Steps']||'').toLowerCase();
-    const matchSearch  = !search || addr.includes(search) || countyLow.includes(search) || notes.includes(search) || t.toLowerCase().includes(search) || (d.id||'').toLowerCase().includes(search);
+    const matchSearch  = !search || addr.includes(search) || countyLow.includes(search) || notes.includes(search) || tFull.toLowerCase().includes(search) || (d.id||'').toLowerCase().includes(search);
     const matchStage   = !selStages   || selStages.includes(s);
     const matchCounty  = !selCounties || selCounties.includes(c);
-    const matchType    = !selTypes    || selTypes.includes(t);
+    const matchType    = _dealAssetTypeMatches(d, selTypes);
     const matchSource  = !selSources  || selSources.includes(d['Import Source']||'(none)');
     // Region is OR-matched: deal matches if ANY selected region matches it
     const matchRegion  = !selRegions  || selRegions.some(r => _dealMatchesRegion(d, r));
@@ -32409,6 +32414,41 @@ function _dealAssetType(d){
   return v.split('|')[0].trim().split(':')[0].trim();
 }
 
+// v111.3: return the FULL type string (e.g. "Industrial: Warehouse"),
+// not the stripped top-level category. Used for filter matching so that
+// selecting "Industrial: Warehouse" in the filter actually finds deals
+// tagged as "Industrial: Warehouse" (was bugged because _dealAssetType
+// stripped the subtype before comparison).
+function _dealAssetTypeFull(d){
+  const v = d['CRM Asset Classification'] || d['Simple Text Property Type'] || '';
+  if(!v) return '';
+  return v.split('|')[0].trim();
+}
+
+// Predicate: does a deal match ANY of the selected asset type filters?
+// Smart-match rules:
+//   - If user selected a full "Type: Subtype", it must match exactly.
+//   - If user selected just a top-level "Type" (no colon), it matches the
+//     deal when its full type equals that OR starts with "Type: " (any subtype).
+// This makes "Industrial" act as a loose parent filter (includes warehouse,
+// self-storage, etc) while "Industrial: Warehouse" is strict.
+function _dealAssetTypeMatches(d, selectedTypes){
+  if(!selectedTypes || !selectedTypes.length) return true;
+  const full = _dealAssetTypeFull(d);
+  if(!full) return false;
+  const top = full.split(':')[0].trim();
+  return selectedTypes.some(sel => {
+    const s = String(sel || '').trim();
+    if(!s) return false;
+    if(s.includes(':')){
+      // Specific subtype — require exact match on full string
+      return full === s;
+    }
+    // Top-level selection — match deals whose top-level category equals it
+    return top === s;
+  });
+}
+
 // Compute cap rate (as percent, e.g. 6.5) from a deal
 function _dealCapRate(d){
   const ask = Number(d['Asking Price']) || 0;
@@ -32477,8 +32517,8 @@ function applyPipelineFilters(deals){
     }
     // Stage
     if(f.stages.length && !f.stages.includes(getStage(d))) return false;
-    // Asset type
-    if(f.assetTypes.length && !f.assetTypes.includes(_dealAssetType(d))) return false;
+    // Asset type — v111.3: smart-match (top-level picks all subtypes)
+    if(f.assetTypes.length && !_dealAssetTypeMatches(d, f.assetTypes)) return false;
     // Region (legacy — matches old "Region for County" field from Airtable sync)
     if(f.regions.length && !f.regions.includes(d['Region for County'])) return false;
     // County

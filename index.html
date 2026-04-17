@@ -15232,6 +15232,9 @@ function showDealBoard(){
             &#10005; Clear Filters
           </button>
         </div>
+
+        <!-- v111.3: Shape-filter banner (shown when user has drawn a shape on the map) -->
+        <div id="db_shape_banner" style="display:none;align-items:center;gap:10px;background:#faf5ff;border:1px solid #d8b4fe;border-radius:6px;padding:8px 12px;font-size:12px;color:#581c87;margin-top:2px;"></div>
       </div>
 
       <!-- TABLE -->
@@ -15325,6 +15328,13 @@ function showDealBoard(){
 let _dbCurrentView = 'list';
 let _dbLeafletMap  = null;
 let _dbMarkers     = [];
+// v111.3: drawing/area-select state. _dbDrawnShape is the last-drawn Leaflet
+// shape layer (Circle / Rectangle / Polygon); _dbShapeGroup is the feature
+// group the draw control uses to render + edit shapes. Both are null until
+// the user draws for the first time.
+let _dbDrawnShape  = null;
+let _dbShapeGroup  = null;
+let _dbDrawControl = null;
 let _dbGeoCache    = {};
 let _dbColorMode   = 'type';   // default: color pins by property type, not stage
 
@@ -15598,6 +15608,180 @@ function _dbCountyFilterSearch(q){
   });
 }
 
+// ═══════════════════════════════════════════════════════════════════
+// v111.3: Area-select drawing tools (Leaflet.draw)
+// ═══════════════════════════════════════════════════════════════════
+// Lets the user draw a circle, rectangle, or polygon on the Deal Board map
+// to filter deals down to just the ones geographically inside that shape.
+// Shape AND-combines with the existing top-bar filters (state, type, etc).
+// Banner above the count shows the match count + a Clear button.
+
+// Attach the draw control to the current map. Idempotent — won't re-add
+// if already present. Called from initDealMap on every map render.
+function _dbAttachDrawControl(){
+  if(!_dbLeafletMap || !window.L || !window.L.Control || !window.L.Control.Draw){
+    // Plugin failed to load or map not ready. The map still works, just
+    // no drawing tools.
+    return;
+  }
+  // If already attached to this map instance, nothing to do
+  if(_dbDrawControl && _dbLeafletMap.hasLayer && _dbShapeGroup){
+    // Ensure the feature group is still on the map (it may have been
+    // removed if the map was torn down and recreated for a different view)
+    if(!_dbLeafletMap.hasLayer(_dbShapeGroup)){
+      _dbShapeGroup.addTo(_dbLeafletMap);
+    }
+    return;
+  }
+
+  // FeatureGroup to hold the user-drawn shape. Required by Leaflet.draw's
+  // edit toolbar.
+  _dbShapeGroup = new window.L.FeatureGroup();
+  _dbShapeGroup.addTo(_dbLeafletMap);
+
+  _dbDrawControl = new window.L.Control.Draw({
+    position: 'topright',
+    draw: {
+      // Disable tools we don't want (marker/polyline/circlemarker).
+      marker: false,
+      polyline: false,
+      circlemarker: false,
+      // Enable the three we asked about.
+      polygon: {
+        allowIntersection: false,
+        showArea: false,
+        shapeOptions: { color:'#7c3aed', weight:2, fillOpacity:0.08 }
+      },
+      rectangle: {
+        shapeOptions: { color:'#7c3aed', weight:2, fillOpacity:0.08 }
+      },
+      circle: {
+        shapeOptions: { color:'#7c3aed', weight:2, fillOpacity:0.08 }
+      }
+    },
+    edit: {
+      featureGroup: _dbShapeGroup,
+      edit: true,
+      remove: true
+    }
+  });
+  _dbLeafletMap.addControl(_dbDrawControl);
+
+  // Fired when the user finishes drawing a new shape.
+  _dbLeafletMap.on(window.L.Draw.Event.CREATED, function(e){
+    // Only keep one shape at a time — replace any previous one
+    _dbShapeGroup.clearLayers();
+    const layer = e.layer;
+    _dbShapeGroup.addLayer(layer);
+    _dbDrawnShape = layer;
+    _dbOnShapeChanged();
+  });
+
+  // Fired when the user edits the existing shape (dragging vertices etc).
+  _dbLeafletMap.on(window.L.Draw.Event.EDITED, function(){
+    // Find whichever layer is currently in the group (there should be 0 or 1)
+    const layers = _dbShapeGroup.getLayers();
+    _dbDrawnShape = layers.length ? layers[0] : null;
+    _dbOnShapeChanged();
+  });
+
+  // Fired when the user deletes shapes via the toolbar trash icon.
+  _dbLeafletMap.on(window.L.Draw.Event.DELETED, function(){
+    const layers = _dbShapeGroup.getLayers();
+    _dbDrawnShape = layers.length ? layers[0] : null;
+    _dbOnShapeChanged();
+  });
+}
+
+// Re-render pins, list, and the shape banner after a shape change.
+function _dbOnShapeChanged(){
+  dbRefreshMapPins();
+  if(typeof renderDealBoard === 'function') renderDealBoard();
+  _dbUpdateShapeBanner();
+}
+
+// Predicate: does deal d's coordinate fall inside the current _dbDrawnShape?
+// Returns false for deals without coords. Handles Circle / Rectangle / Polygon.
+function _dealInsideShape(d){
+  if(!_dbDrawnShape) return true;
+  const lat = Number(d['Latitude']);
+  const lng = Number(d['Longitude']);
+  if(!lat || !lng || isNaN(lat) || isNaN(lng)) return false;
+  const pt = window.L.latLng(lat, lng);
+  try {
+    // Circle: center + radius in meters
+    if(_dbDrawnShape instanceof window.L.Circle){
+      return _dbDrawnShape.getLatLng().distanceTo(pt) <= _dbDrawnShape.getRadius();
+    }
+    // Rectangle: inherits from Polygon but getBounds is simpler/faster
+    if(_dbDrawnShape instanceof window.L.Rectangle){
+      return _dbDrawnShape.getBounds().contains(pt);
+    }
+    // Polygon: ray-casting against latlngs
+    if(_dbDrawnShape instanceof window.L.Polygon){
+      return _pointInPolygonLatLngs(pt, _dbDrawnShape.getLatLngs()[0] || []);
+    }
+  } catch(e){
+    return false;
+  }
+  return false;
+}
+
+// Ray-casting point-in-polygon against an array of Leaflet LatLng objects.
+// Standard algorithm — robust for irregular polygons.
+function _pointInPolygonLatLngs(pt, latlngs){
+  if(!latlngs || latlngs.length < 3) return false;
+  const x = pt.lng, y = pt.lat;
+  let inside = false;
+  for(let i = 0, j = latlngs.length - 1; i < latlngs.length; j = i++){
+    const xi = latlngs[i].lng, yi = latlngs[i].lat;
+    const xj = latlngs[j].lng, yj = latlngs[j].lat;
+    const intersect = ((yi > y) !== (yj > y)) &&
+                      (x < (xj - xi) * (y - yi) / ((yj - yi) || 1e-12) + xi);
+    if(intersect) inside = !inside;
+  }
+  return inside;
+}
+
+// Clear the drawn shape — called from the banner's Clear button.
+function _dbClearShape(){
+  if(_dbShapeGroup) _dbShapeGroup.clearLayers();
+  _dbDrawnShape = null;
+  _dbOnShapeChanged();
+}
+// Expose globally so inline onclick handlers can call it
+window._dbClearShape = _dbClearShape;
+
+// Update the blue banner above the filter bar to reflect current shape state.
+// Shows "N properties inside your area · Clear shape" when a shape is drawn,
+// or hides entirely when not.
+function _dbUpdateShapeBanner(){
+  const el = document.getElementById('db_shape_banner');
+  if(!el) return;
+  if(!_dbDrawnShape){
+    el.style.display = 'none';
+    el.innerHTML = '';
+    return;
+  }
+  // Count matches = deals with coords that pass _dealInsideShape (ignoring
+  // other filters — just tells user how many are geographically inside).
+  let matchCount = 0;
+  for(const d of (allDeals || [])){
+    if(d['Is Archived']) continue;
+    if(_dealInsideShape(d)) matchCount++;
+  }
+  const shapeName =
+    _dbDrawnShape instanceof window.L.Circle    ? 'circle' :
+    _dbDrawnShape instanceof window.L.Rectangle ? 'rectangle' :
+    'polygon';
+  el.style.display = 'flex';
+  el.innerHTML = `
+    <span style="font-size:16px;line-height:1;">🎯</span>
+    <span style="flex:1;"><strong>${matchCount.toLocaleString()} propert${matchCount===1?'y':'ies'}</strong> inside your ${shapeName} <span style="color:#64748b;font-weight:400;">(combined with your other filters — see count above)</span></span>
+    <button onclick="_dbClearShape()" style="background:#fff;border:1px solid #7c3aed;color:#7c3aed;font-size:11px;font-weight:700;padding:5px 12px;border-radius:4px;cursor:pointer;">✕ Clear shape</button>
+  `;
+}
+
 function dbSetView(view){
   _dbCurrentView = view;
   const tableView = document.getElementById('db_tableView');
@@ -15634,6 +15818,21 @@ async function initDealMap(){
     });
   }
 
+  // v111.3: load Leaflet.draw plugin (for circle/rectangle/polygon drawing)
+  // after base Leaflet. Small (~30KB), cached after first load.
+  if(window.L && !window.L.Draw){
+    const drawCss = document.createElement('link');
+    drawCss.rel='stylesheet'; drawCss.href='https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.css';
+    document.head.appendChild(drawCss);
+    await new Promise(resolve=>{
+      const script = document.createElement('script');
+      script.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet.draw/1.0.4/leaflet.draw.js';
+      script.onload = resolve;
+      script.onerror = resolve; // non-fatal — map still works without drawing
+      document.head.appendChild(script);
+    });
+  }
+
   const mapEl = document.getElementById('db_map');
   if(!mapEl) return;
 
@@ -15646,6 +15845,13 @@ async function initDealMap(){
       try { _dbLeafletMap.remove(); } catch(e){}
       _dbLeafletMap = null;
       _dbMarkers = [];
+      // v111.3: drawing state was tied to the dead map — reset so the next
+      // attach call rebuilds against the new map instance. Don't reset
+      // _dbDrawnShape though; the user still wants their shape active.
+      // Actually we have to — the layer itself references the dead map.
+      _dbDrawnShape = null;
+      _dbShapeGroup = null;
+      _dbDrawControl = null;
     }
   }
 
@@ -15678,6 +15884,12 @@ async function initDealMap(){
       });
     }
   });
+
+  // v111.3: attach Leaflet.draw control (circle/rectangle/polygon) once per map.
+  // The shape is stored in _dbDrawnShape; the filter pipeline reads it to
+  // narrow both map pins and the list view.
+  _dbAttachDrawControl();
+  _dbUpdateShapeBanner();  // reflect any existing shape state (e.g. after tab switch)
 
   const countEl  = document.getElementById('db_mapPinCount');
 
@@ -15712,7 +15924,10 @@ async function initDealMap(){
     const matchState  = !selStates   || selStates.includes(_stateFromAddress(d['Address']||''));
     const matchCity   = !selCities   || selCities.includes(_locCityFromAddress(d['Address']||''));
     const matchPri    = !mapPriority || d['Top Priority'];
-    return matchSearch && matchStage && matchState && matchType && matchRegion && matchCounty && matchCity && matchPri;
+    // v111.3: drawn-shape filter — if the user has drawn a circle/rect/polygon,
+    // only deals whose coords fall inside that shape pass.
+    const matchShape  = !_dbDrawnShape || _dealInsideShape(d);
+    return matchSearch && matchStage && matchState && matchType && matchRegion && matchCounty && matchCity && matchPri && matchShape;
   });
 
   // ── Helper: place a single pin on the map ────────────────────
@@ -16085,7 +16300,9 @@ function renderDealBoard(){
     const matchState   = !selStates   || selStates.includes(_stateFromAddress(d['Address']||''));
     const matchCity    = !selCities   || selCities.includes(_locCityFromAddress(d['Address']||''));
     const matchPrio    = !priority || d['Top Priority'];
-    return matchSearch && matchStage && matchState && matchCounty && matchCity && matchType && matchSource && matchRegion && matchPrio;
+    // v111.3: drawn-shape filter shared with map view — keeps list in sync
+    const matchShape   = !_dbDrawnShape || _dealInsideShape(d);
+    return matchSearch && matchStage && matchState && matchCounty && matchCity && matchType && matchSource && matchRegion && matchPrio && matchShape;
   });
 
   // Sort

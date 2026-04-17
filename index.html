@@ -2702,14 +2702,35 @@ function _dashSetAgentGoals(goals){
 }
 
 // Count deals created within a time window, using the Date Added field
-// (mapped from created_at in _sbToAt)
+// (mapped from created_at in _sbToAt).
+//
+// v111.8 bug fix: the Date Added field is a 'YYYY-MM-DD' date-only string
+// when it came from the `date_added` column (which is a Postgres DATE, no
+// time component). `new Date('2026-04-17')` parses as *UTC* midnight —
+// which in NJ (UTC-4/5) lands 4-5 hours before local midnight, so a lead
+// created "today" in local time appears to fall into "yesterday" here and
+// the TODAY counter reports 0. Parse date-only strings as local midnight
+// explicitly so the window comparison works in the user's timezone.
+function _dashParseDealDate(val){
+  if(!val) return null;
+  const s = String(val);
+  // Match a pure YYYY-MM-DD date (no T, no time component) → parse as local
+  const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(s);
+  if(m){
+    return new Date(Number(m[1]), Number(m[2])-1, Number(m[3]));
+  }
+  // Full ISO timestamp — default parse is correct (UTC → local conversion built in)
+  const t = new Date(s);
+  return isNaN(t) ? null : t;
+}
+
 function _dashCountLeadsInWindow(deals, sinceDate){
   let n = 0;
   for(const d of deals){
     const created = d['Date Added'];
     if(!created) continue;
-    const t = new Date(created);
-    if(!isNaN(t) && t >= sinceDate) n++;
+    const t = _dashParseDealDate(created);
+    if(t && t >= sinceDate) n++;
   }
   return n;
 }

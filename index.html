@@ -16411,8 +16411,11 @@ function dealBoardOpen(dealId){
   if(homeBtn) homeBtn.classList.add('active');
   openDeal(deal);
 }
-let allContacts = [];
-let _contactsLastLoadMs = 0;  // v64 perf cache: when allContacts was last loaded
+let allContacts = [];let _contactsLastLoadMs = 0;  // v64 perf cache: when allContacts was last loaded
+// v111.3: lazy load state (declared here so they're ready before showContactsPage runs)
+let _contactsHasMore = false;
+let _contactsLoadedCount = 0;
+let _contactsLoadMoreInFlight = false;
 
 async function showContactsPage(){
   // Default scope: My Deals → mine, All Deals → all. User can override.
@@ -16478,53 +16481,33 @@ async function showContactsPage(){
     if(isSupabase()){
       // Kick off relationships load in parallel with contacts fetch
       const relPromise = _loadMyRelationships();
-      // v102.32: progressive load — render the first small batch as soon
-      // as it arrives (~200-300ms) so the user sees results immediately,
-      // then continue fetching larger batches in the background.
-      let from = 0;
-      let firstBatch = true;
-      while(true){
-        // First batch is small (300) so it returns fast. Subsequent batches
-        // are 1000 to keep total round-trips low.
-        const batchSize = firstBatch ? 300 : 1000;
-        const rows = await _sbGet(SB_TABLES.contacts, `select=*&order=name.asc&limit=${batchSize}&offset=${from}`);
-        if(!rows.length) break;
-        rows.forEach(row => {
-          records.push({ id: row.id, fields: {
-            'Name': row.name, 'Phone Number': row.phone_number,
-            'Secondary Phone Number': row.secondary_phone,
-            'Email': row.email, 'Company': row.company,
-            'Contact Notes': row.contact_notes,
-            'Type': row.type || [],
-            'Date Added': row.date_added,
-            'Import Source': row.import_source || '',
-            '_fubContactId': row.fub_contact_id || null
-          }});
-        });
-        // After the first batch, put what we have into allContacts and render
-        // so the user sees something immediately. Subsequent batches will
-        // re-render with more rows appended.
-        if(firstBatch){
-          allContacts = records.slice(); // copy so later pushes don't mutate mid-render
-          await relPromise; // relationships must be ready before filterContacts runs
-          _populateContactSourceFilter();
-          filterContacts();
-        }
-        // Advance by the batch size actually used this iteration
-        from += rows.length;
-        // If the server returned fewer than requested, we're done
-        if(rows.length < batchSize) break;
-        firstBatch = false;
-      }
-      // After all batches complete, update allContacts with the full set
-      // and re-render if new rows were added past the first batch.
-      if(records.length > allContacts.length){
-        allContacts = records;
-        _populateContactSourceFilter();
-        filterContacts();
-      } else {
-        allContacts = records;
-      }
+      // v111.3: the old progressive-load pattern pulled all 17,875 contacts
+      // in 18+ round-trips (~20-30s), which was both slow AND caused a race
+      // condition where search ran against partial data. Now that search
+      // queries Supabase directly via trigram index, we ONLY need to load
+      // the first page for the "All Contacts" default view. The user can
+      // scroll to load more, and searching always hits the server (fresh
+      // data, no race).
+      const INITIAL_PAGE = 500;
+      const rows = await _sbGet(SB_TABLES.contacts, `select=*&order=name.asc&limit=${INITIAL_PAGE}`);
+      rows.forEach(row => {
+        records.push({ id: row.id, fields: {
+          'Name': row.name, 'Phone Number': row.phone_number,
+          'Secondary Phone Number': row.secondary_phone,
+          'Email': row.email, 'Company': row.company,
+          'Contact Notes': row.contact_notes,
+          'Type': row.type || [],
+          'Date Added': row.date_added,
+          'Import Source': row.import_source || '',
+          '_fubContactId': row.fub_contact_id || null
+        }});
+      });
+      allContacts = records;
+      _contactsHasMore = rows.length >= INITIAL_PAGE;  // whether more pages exist on the server
+      _contactsLoadedCount = rows.length;
+      await relPromise;
+      _populateContactSourceFilter();
+      filterContacts();
     } else {
       let url = `https://api.airtable.com/v0/${cfg.base}/tblpTluzDlrvMCaca?pageSize=100&sort[0][field]=Name&sort[0][direction]=asc`;
       while(url){
@@ -16540,6 +16523,48 @@ async function showContactsPage(){
     _contactsLastLoadMs = Date.now();  // v64 perf cache marker
   }catch(e){
     document.getElementById('contactsTableWrap').innerHTML=`<div style="padding:20px;color:#c00;">Error: ${e.message}</div>`;
+  }
+}
+
+// v111.3: state trackers for lazy load-more (declared above near allContacts)
+
+// Load the next page of contacts (append-only to avoid race conditions).
+// Called from the "Load more" button at the bottom of the contacts table.
+async function _loadMoreContacts(){
+  if(_contactsLoadMoreInFlight || !_contactsHasMore) return;
+  _contactsLoadMoreInFlight = true;
+  const btn = document.getElementById('contactsLoadMoreBtn');
+  if(btn){ btn.disabled = true; btn.textContent = 'Loading…'; }
+  try{
+    const PAGE = 1000;
+    const rows = await _sbGet(SB_TABLES.contacts,
+      `select=*&order=name.asc&limit=${PAGE}&offset=${_contactsLoadedCount}`);
+    if(rows && rows.length){
+      // APPEND to allContacts — don't replace reference (avoids races with
+      // an in-progress filter/sort).
+      rows.forEach(row => {
+        allContacts.push({ id: row.id, fields: {
+          'Name': row.name, 'Phone Number': row.phone_number,
+          'Secondary Phone Number': row.secondary_phone,
+          'Email': row.email, 'Company': row.company,
+          'Contact Notes': row.contact_notes,
+          'Type': row.type || [],
+          'Date Added': row.date_added,
+          'Import Source': row.import_source || '',
+          '_fubContactId': row.fub_contact_id || null
+        }});
+      });
+      _contactsLoadedCount += rows.length;
+      _contactsHasMore = rows.length >= PAGE;
+      filterContacts();  // re-render with newly-appended rows
+    } else {
+      _contactsHasMore = false;
+    }
+  } catch(e){
+    console.warn('Load more contacts failed:', e.message);
+    if(btn){ btn.disabled = false; btn.textContent = 'Try again'; }
+  } finally {
+    _contactsLoadMoreInFlight = false;
   }
 }
 
@@ -16745,22 +16770,22 @@ function _populateBcSourceFilter(){
   wrap.innerHTML = _msBtn('bcs', 'All Sources', sources, () => renderBuyerCriteriaTable(allBuyerCriteria));
 }
 
-// v102.44: contacts search — debounce + result cap + spinner. Previously
-// every keystroke immediately re-rendered the entire filtered table
-// (often 3000+ rows + per-row deal lookup), which caused 200-500ms hangs
-// and the "doesn't show until I delete characters" symptom — when a
-// short query matched too many rows, the renderer was still working
-// when you typed the next character, and the result of the prior render
-// got dropped on the floor. Two fixes:
-//   1. Debounce the input handler — wait 150ms after last keystroke
-//   2. Cap rendered rows at 200 with a footer hint
-//   3. Cache the deal/contact-to-deal maps so they're not rebuilt per render
+// v102.44 → v111.3: contacts search — was fully client-side filter over
+// 5-18k rows in allContacts, which caused two problems as the table grew:
+//   (a) filter loops all N rows per keystroke (even with 150ms debounce)
+//   (b) progressive background loads race the filter — "alan chin" returns
+//       nothing but "alan c" returns rows because the second Alan Chin
+//       hasn't downloaded yet
+// Fix: when user has a non-empty search, query Supabase directly with a
+// trigram-indexed ILIKE (returns in ~50-100ms, always-fresh). Only fall
+// back to client-side filter when there's no search — type filter, source
+// filter, mine-scope all still work the same.
 let _contactsFilterTimer = null;
 let _contactsFilterPending = false;
+let _contactsLiveQueryToken = 0;  // cancellation token for in-flight live searches
 function _filterContactsDebounced(){
   if(_contactsFilterTimer) clearTimeout(_contactsFilterTimer);
   _contactsFilterPending = true;
-  // Show a subtle spinner so the user knows their typing is being processed
   const wrap = document.getElementById('contactsTableWrap');
   if(wrap && !wrap.querySelector('#contactsFilterSpinner')){
     const existing = wrap.querySelector('div[style*="font-size:11px"][style*="margin-bottom:6px"]');
@@ -16768,8 +16793,95 @@ function _filterContactsDebounced(){
   }
   _contactsFilterTimer = setTimeout(() => {
     _contactsFilterPending = false;
-    filterContacts();
+    const q = document.getElementById('contactSearch')?.value?.trim() || '';
+    // ≥2 chars → server-side search (index kicks in at 2+ chars for trigram)
+    if(q.length >= 2){
+      _liveSearchContacts(q);
+    } else {
+      filterContacts();
+    }
   }, 150);
+}
+
+// v111.3: server-side contacts search.
+// Queries ace_contacts directly via Supabase — uses the trigram indexes added
+// in the contacts_trigram_search_indexes migration. Typical response: 50-150ms.
+// Uses a cancellation token so older in-flight searches don't clobber newer ones.
+async function _liveSearchContacts(q){
+  const myToken = ++_contactsLiveQueryToken;
+
+  // Build the PostgREST query. ilike with `%q%` pattern; search across 4 fields
+  // via or=(...) filter. All 4 have trigram indexes for speed.
+  const enc = encodeURIComponent(`*${q}*`);
+  const selectCols = 'id,name,phone_number,secondary_phone,email,company,contact_notes,type,date_added,import_source,fub_contact_id';
+  // Also apply current type + source + scope filters in the server query when possible
+  const typeFilterVal = document.getElementById('contactTypeFilter')?.value || '';
+  const filters = [
+    `or=(name.ilike.${enc},phone_number.ilike.${enc},email.ilike.${enc},company.ilike.${enc})`,
+    'deleted_at=is.null',
+    `select=${selectCols}`,
+    'order=name.asc',
+    'limit=300'
+  ];
+  // Note: type is an array column (ARRAY text) — ilike doesn't apply. Apply client-side after fetch.
+
+  try{
+    const rows = await _sbGet('ace_contacts', filters.join('&'));
+    // If a newer search was issued while this was in-flight, drop our results
+    if(myToken !== _contactsLiveQueryToken) return;
+
+    // Adapt to the same {id, fields} shape renderContactsTable expects
+    const adapted = (rows || []).map(row => ({
+      id: row.id,
+      fields: {
+        'Name': row.name, 'Phone Number': row.phone_number,
+        'Secondary Phone Number': row.secondary_phone,
+        'Email': row.email, 'Company': row.company,
+        'Contact Notes': row.contact_notes,
+        'Type': row.type || [],
+        'Date Added': row.date_added,
+        'Import Source': row.import_source || '',
+        '_fubContactId': row.fub_contact_id || null
+      }
+    }));
+
+    // Apply client-side filters we couldn't push to server: type (array),
+    // source multi-select, mine-scope
+    const mineIds   = _contactScope === 'mine' ? _computeMyContactIds() : null;
+    const selSources = _msGetSelected('cs');
+    const filtered = adapted.filter(r => {
+      const f = r.fields;
+      const matchT = !typeFilterVal || (f.Type || []).includes(typeFilterVal);
+      const matchScope = !mineIds || mineIds.has(r.id);
+      const matchSrc = !selSources || selSources.includes(f['Import Source'] || '(none)');
+      return matchT && matchScope && matchSrc;
+    });
+
+    // Apply the same sort as filterContacts for consistency
+    const sortKey = {
+      name:    r => (r.fields.Name||'').toLowerCase(),
+      type:    r => (r.fields.Type||[]).join(',').toLowerCase(),
+      phone:   r => (r.fields['Phone Number']||'').toLowerCase(),
+      email:   r => (r.fields.Email||'').toLowerCase(),
+      company: r => (r.fields.Company||'').toLowerCase(),
+      notes:   r => (r.fields['Contact Notes']||'').toLowerCase(),
+      date:    r => r.fields['Date Added']||''
+    }[_contactsSort.col] || (r => (r.fields.Name||'').toLowerCase());
+    filtered.sort((a, b) => {
+      const av = sortKey(a), bv = sortKey(b);
+      if(av < bv) return _contactsSort.dir === 'asc' ? -1 : 1;
+      if(av > bv) return _contactsSort.dir === 'asc' ? 1 : -1;
+      return 0;
+    });
+
+    renderContactsTable(filtered);
+  } catch(e){
+    // If the live search fails for any reason, fall back to the client-side filter
+    // so the user still gets something.
+    if(myToken !== _contactsLiveQueryToken) return;
+    console.warn('Live contact search failed, falling back to local filter:', e.message);
+    filterContacts();
+  }
 }
 
 function filterContacts(){
@@ -16937,11 +17049,26 @@ function renderContactsTable(records){
           </tr>`;
         }).join('')}
       </tbody>
-    </table>`;
+    </table>
+    ${_contactsRenderLoadMore()}`;
 
   // v103: enable column resizing on the contacts table
   const tbl = wrap.querySelector('table');
   if(tbl) _makeColumnsResizable(tbl, 'contacts');
+}
+
+// v111.3: footer showing "Load more" button when there are more contacts
+// on the server than currently loaded locally. Hidden during search because
+// search hits the server directly so load-more doesn't apply.
+function _contactsRenderLoadMore(){
+  const hasSearch = !!document.getElementById('contactSearch')?.value?.trim();
+  if(hasSearch || !_contactsHasMore) return '';
+  return `<div style="text-align:center;padding:14px 0;">
+    <button id="contactsLoadMoreBtn" onclick="_loadMoreContacts()" style="background:#fff;border:1px solid #cbd5e1;color:#334155;padding:7px 18px;font-size:11px;font-weight:600;border-radius:6px;cursor:pointer;">
+      Load more contacts (${_contactsLoadedCount.toLocaleString()} loaded)
+    </button>
+    <div style="font-size:10px;color:#94a3b8;margin-top:5px;">Tip: use the search bar above to find any contact instantly — no need to load them all.</div>
+  </div>`;
 }
 
 function navigateToDeal(dealId){

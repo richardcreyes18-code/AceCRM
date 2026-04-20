@@ -22037,6 +22037,7 @@ async function showCompanyPage(){
       <div style="display:flex;background:#f8fafc;border-bottom:1px solid #e2e8f0;padding:0 20px;gap:2px;">
         ${[
           ['directory','👥 Directory'],
+          ['reports','📊 Reports'],
           ['schedule','📅 Schedule'],
           ['documents','📄 Documents'],
           ['training','🎥 Training'],
@@ -22052,6 +22053,7 @@ async function showCompanyPage(){
     </div>`;
 
   if(sub==='directory')    await _companyRenderDirectory();
+  else if(sub==='reports')  await _companyRenderReports();
   else if(sub==='schedule') _companyRenderSchedule();
   else if(sub==='help')    _companyRenderSystemHelp();
   else                     _companyRenderPlaceholder(sub);
@@ -22366,6 +22368,333 @@ function _companyRenderPlaceholder(which){
         </div>
       </div>
     </div>`;
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// v111.12: REPORTS — live FUB call reporting under the Company tab.
+// ═══════════════════════════════════════════════════════════════════════
+// Data path:
+//   fub_calls (populated every 15 min by pg_cron → fub-calls-sync edge fn)
+//     └─> ace_fub_user_map  (fub_user_id → display_name)
+//     └─> RPC fub_call_report(p_start, p_end)  → per-agent rollup
+//
+// Visible to every user (not admin-gated) per product spec. Anyone on the
+// team can see the team's activity — it mirrors the FUB native Reports UI.
+
+let _reportsState = {
+  preset: 'this_week',   // today | yesterday | this_week | last_week | this_month | custom
+  startISO: null,
+  endISO: null,
+  agentFilter: '',       // empty = all
+  data: null,
+  loading: false,
+  lastSyncedAt: null
+};
+
+function _reportsComputeRange(preset){
+  // Returns {startISO, endISO, label} for the given preset in the user's TZ.
+  const now = new Date();
+  const startOfDay = d => { const x = new Date(d); x.setHours(0,0,0,0); return x; };
+  const endOfDay   = d => { const x = new Date(d); x.setHours(23,59,59,999); return x; };
+  let s, e, label;
+  if(preset === 'today'){
+    s = startOfDay(now); e = endOfDay(now); label = 'Today';
+  } else if(preset === 'yesterday'){
+    const y = new Date(now); y.setDate(y.getDate()-1);
+    s = startOfDay(y); e = endOfDay(y); label = 'Yesterday';
+  } else if(preset === 'this_week'){
+    // Monday → today
+    const d = new Date(now);
+    const day = (d.getDay() + 6) % 7;   // Mon = 0
+    d.setDate(d.getDate() - day);
+    s = startOfDay(d); e = endOfDay(now); label = 'This Week';
+  } else if(preset === 'last_week'){
+    const d = new Date(now);
+    const day = (d.getDay() + 6) % 7;
+    d.setDate(d.getDate() - day - 7);
+    const end = new Date(d); end.setDate(d.getDate()+6);
+    s = startOfDay(d); e = endOfDay(end); label = 'Last Week';
+  } else if(preset === 'this_month'){
+    s = startOfDay(new Date(now.getFullYear(), now.getMonth(), 1));
+    e = endOfDay(now); label = 'This Month';
+  } else {
+    // custom — use state values or fall back to today
+    s = _reportsState.startISO ? new Date(_reportsState.startISO) : startOfDay(now);
+    e = _reportsState.endISO   ? new Date(_reportsState.endISO)   : endOfDay(now);
+    label = 'Custom';
+  }
+  return { startISO: s.toISOString(), endISO: e.toISOString(), label };
+}
+
+function _fmtTalkTime(secs){
+  // 3661 → "1h 1m", 59 → "59s", 180 → "3m", 6000 → "1h 40m"
+  if(!secs || secs < 1) return '—';
+  const h = Math.floor(secs / 3600);
+  const m = Math.floor((secs % 3600) / 60);
+  const s = secs % 60;
+  if(h >= 1)  return `${h}h ${m}m`;
+  if(m >= 1)  return s >= 30 ? `${m+1}m` : `${m}m`;
+  return `${s}s`;
+}
+
+async function _companyRenderReports(){
+  const body = document.getElementById('companyBody');
+  if(!body) return;
+
+  // First paint: filter bar + loading state. Reuses _reportsState across re-renders.
+  const st = _reportsState;
+  const r  = _reportsComputeRange(st.preset);
+  const presetBtn = (key, label) => `
+    <button onclick="_reportsSetPreset('${key}')" style="${st.preset===key
+      ?'background:#1a3a6e;color:#fff;border:1px solid #1a3a6e;'
+      :'background:#fff;color:#475569;border:1px solid #e2e8f0;'
+    }padding:8px 14px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;transition:all 0.15s;">${label}</button>`;
+
+  body.innerHTML = `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;flex-wrap:wrap;gap:12px;">
+      <div>
+        <div style="font-size:20px;font-weight:700;color:#0f172a;">📊 Call Reports</div>
+        <div style="font-size:12px;color:#64748b;margin-top:2px;">Live data from Follow Up Boss · <span id="reportsSyncBadge">checking…</span></div>
+      </div>
+      <button onclick="_reportsForceSync()" id="reportsRefreshBtn" style="padding:9px 16px;font-size:12px;font-weight:600;background:#fff;color:#1a3a6e;border:1px solid #cbd5e1;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:6px;">
+        <span>🔄</span><span>Refresh from FUB</span>
+      </button>
+    </div>
+
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+      <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;">
+        <span style="font-size:11px;font-weight:700;color:#64748b;letter-spacing:0.5px;text-transform:uppercase;margin-right:4px;">Date range</span>
+        ${presetBtn('today','Today')}
+        ${presetBtn('yesterday','Yesterday')}
+        ${presetBtn('this_week','This Week')}
+        ${presetBtn('last_week','Last Week')}
+        ${presetBtn('this_month','This Month')}
+        ${presetBtn('custom','Custom')}
+      </div>
+      ${st.preset === 'custom' ? `
+        <div style="display:flex;align-items:center;gap:8px;padding-top:10px;border-top:1px solid #f1f5f9;">
+          <span style="font-size:11px;color:#64748b;font-weight:600;">From</span>
+          <input type="date" id="reportsCustomStart" value="${(st.startISO||'').slice(0,10)}" onchange="_reportsSetCustomRange()" style="padding:6px 10px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;">
+          <span style="font-size:11px;color:#64748b;font-weight:600;">To</span>
+          <input type="date" id="reportsCustomEnd" value="${(st.endISO||'').slice(0,10)}" onchange="_reportsSetCustomRange()" style="padding:6px 10px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;">
+        </div>` : ''}
+      <div style="margin-top:10px;font-size:12px;color:#475569;">
+        Showing <strong>${r.label}</strong> · ${new Date(r.startISO).toLocaleDateString()} – ${new Date(r.endISO).toLocaleDateString()}
+      </div>
+    </div>
+
+    <div id="reportsResults">
+      <div style="padding:60px 20px;text-align:center;color:#94a3b8;">
+        <div style="font-size:32px;margin-bottom:8px;">⏳</div>
+        <div style="font-size:13px;">Loading call data…</div>
+      </div>
+    </div>`;
+
+  // Load in the background — updates #reportsResults and #reportsSyncBadge.
+  await _reportsLoad();
+}
+
+async function _reportsLoad(){
+  const r = _reportsComputeRange(_reportsState.preset);
+  _reportsState.loading = true;
+
+  try {
+    // Fire both in parallel: main report + latest-sync probe.
+    const [rows, syncRow] = await Promise.all([
+      _sbRpc('fub_call_report', { p_start: r.startISO, p_end: r.endISO }),
+      _sbGet('fub_calls', 'select=synced_at&order=synced_at.desc&limit=1')
+    ]);
+    _reportsState.data = Array.isArray(rows) ? rows : [];
+    _reportsState.lastSyncedAt = (syncRow && syncRow[0] && syncRow[0].synced_at) || null;
+  } catch(err){
+    console.error('[reports] load failed', err);
+    _reportsState.data = [];
+  }
+  _reportsState.loading = false;
+  _reportsRenderResults();
+  _reportsRenderSyncBadge();
+}
+
+function _reportsRenderSyncBadge(){
+  const el = document.getElementById('reportsSyncBadge');
+  if(!el) return;
+  const t = _reportsState.lastSyncedAt;
+  if(!t){
+    el.innerHTML = '<span style="color:#94a3b8;">no sync yet</span>';
+    return;
+  }
+  const ageMin = Math.round((Date.now() - new Date(t).getTime()) / 60000);
+  const fresh = ageMin < 30;
+  const color = fresh ? '#16a34a' : (ageMin < 120 ? '#d97706' : '#dc2626');
+  const dot   = `<span style="display:inline-block;width:7px;height:7px;border-radius:50%;background:${color};margin-right:5px;vertical-align:middle;"></span>`;
+  const label = ageMin < 1 ? 'just now'
+              : ageMin < 60 ? `${ageMin}m ago`
+              : ageMin < 1440 ? `${Math.round(ageMin/60)}h ago`
+              : `${Math.round(ageMin/1440)}d ago`;
+  el.innerHTML = `${dot}last sync ${label}`;
+}
+
+function _reportsRenderResults(){
+  const box = document.getElementById('reportsResults');
+  if(!box) return;
+  const rows = _reportsState.data || [];
+
+  if(rows.length === 0){
+    box.innerHTML = `
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:60px 20px;text-align:center;">
+        <div style="font-size:40px;margin-bottom:8px;">📞</div>
+        <div style="font-size:14px;color:#475569;font-weight:600;">No call activity in this date range</div>
+        <div style="font-size:12px;color:#94a3b8;margin-top:4px;">Try a wider range or press Refresh.</div>
+      </div>`;
+    return;
+  }
+
+  // Totals row
+  const totals = rows.reduce((t, r) => ({
+    calls_made:    t.calls_made    + (r.calls_made||0),
+    connected:     t.connected     + (r.connected||0),
+    conversations: t.conversations + (r.conversations||0),
+    received:      t.received      + (r.received||0),
+    missed:        t.missed        + (r.missed||0),
+    talk_time_s:   t.talk_time_s   + (r.talk_time_s||0)
+  }), {calls_made:0,connected:0,conversations:0,received:0,missed:0,talk_time_s:0});
+  totals.avg_talk_s = (totals.connected + totals.received)
+    ? Math.round(totals.talk_time_s / (totals.connected + totals.received))
+    : 0;
+
+  const th = (label, tip) => `
+    <th style="padding:12px 14px;text-align:right;font-size:11px;font-weight:700;color:#1a3a6e;letter-spacing:0.5px;text-transform:uppercase;background:#f8fafc;border-bottom:2px solid #e2e8f0;white-space:nowrap;" title="${tip||''}">${label}</th>`;
+  const td = (val, cls) => `<td style="padding:14px;text-align:right;font-size:13px;font-weight:600;color:#0f172a;border-bottom:1px solid #f1f5f9;${cls||''}">${val}</td>`;
+
+  // Bar scaling for Calls Made column
+  const maxCalls = Math.max(...rows.map(r => r.calls_made || 0), 1);
+  const bar = (v) => {
+    const pct = Math.round((v / maxCalls) * 100);
+    return `<div style="position:relative;height:4px;background:#e2e8f0;border-radius:2px;overflow:hidden;margin-top:4px;"><div style="position:absolute;left:0;top:0;bottom:0;width:${pct}%;background:linear-gradient(90deg,#2563eb,#60a5fa);"></div></div>`;
+  };
+
+  box.innerHTML = `
+    <!-- Totals strip -->
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(140px,1fr));gap:10px;margin-bottom:16px;">
+      ${[
+        ['📞','Calls Made',      totals.calls_made.toLocaleString(),         '#2563eb'],
+        ['✅','Connected',       totals.connected.toLocaleString(),          '#16a34a'],
+        ['💬','Conversations',   totals.conversations.toLocaleString(),      '#0891b2'],
+        ['📲','Received',        totals.received.toLocaleString(),           '#7c3aed'],
+        ['❌','Missed',          totals.missed.toLocaleString(),             '#dc2626'],
+        ['⏱️','Total Talk Time', _fmtTalkTime(totals.talk_time_s),           '#0f172a']
+      ].map(([icon,label,val,color])=>`
+        <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+          <div style="font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;">${icon} ${label}</div>
+          <div style="font-size:22px;font-weight:800;color:${color};margin-top:6px;font-feature-settings:'tnum';">${val}</div>
+        </div>`).join('')}
+    </div>
+
+    <!-- Per-agent table -->
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;box-shadow:0 1px 3px rgba(0,0,0,0.04);">
+      <div style="padding:14px 20px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;">
+        <div style="font-size:14px;font-weight:700;color:#0f172a;">Activity by Agent</div>
+        <div style="font-size:11px;color:#94a3b8;">${rows.length} agents · sorted by Calls Made</div>
+      </div>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-family:'Inter',system-ui,sans-serif;">
+          <thead>
+            <tr>
+              <th style="padding:12px 20px;text-align:left;font-size:11px;font-weight:700;color:#1a3a6e;letter-spacing:0.5px;text-transform:uppercase;background:#f8fafc;border-bottom:2px solid #e2e8f0;">Agent</th>
+              ${th('Calls Made','Outbound calls the agent placed')}
+              ${th('Connected','Outbound calls that reached the other party')}
+              ${th('Conversations','Connected outbound with talk time ≥ 60 sec')}
+              ${th('Received','Inbound calls routed to the agent')}
+              ${th('Missed','Inbound calls with no answer')}
+              ${th('Talk Time','Total time spent on connected calls')}
+              ${th('Avg Call','Avg duration of connected calls')}
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(r => {
+              const name = (r.display_name || '?').replace(/</g,'&lt;');
+              const initials = name.split(/\s+/).slice(0,2).map(s=>s[0]||'').join('').toUpperCase();
+              const missedPct = r.received > 0 ? Math.round((r.missed / r.received) * 100) : 0;
+              const missedColor = missedPct > 40 ? '#dc2626' : missedPct > 20 ? '#d97706' : '#64748b';
+              return `<tr style="transition:background 0.12s;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background='transparent'">
+                <td style="padding:14px 20px;border-bottom:1px solid #f1f5f9;">
+                  <div style="display:flex;align-items:center;gap:10px;">
+                    <div style="width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#1a3a6e,#2563eb);color:#fff;display:flex;align-items:center;justify-content:center;font-size:11px;font-weight:700;flex-shrink:0;">${initials}</div>
+                    <div>
+                      <div style="font-size:13px;font-weight:600;color:#0f172a;">${name}</div>
+                      <div style="font-size:10px;color:#94a3b8;">FUB ID ${r.fub_user_id}</div>
+                    </div>
+                  </div>
+                </td>
+                ${td(`<div style="font-feature-settings:'tnum';">${(r.calls_made||0).toLocaleString()}</div>${bar(r.calls_made||0)}`)}
+                ${td((r.connected||0).toLocaleString(),     'color:#16a34a;')}
+                ${td((r.conversations||0).toLocaleString(), 'color:#0891b2;')}
+                ${td((r.received||0).toLocaleString(),      'color:#7c3aed;')}
+                ${td(`<span style="color:${missedColor};">${(r.missed||0).toLocaleString()}${r.received>0?` <span style="font-size:10px;font-weight:500;">(${missedPct}%)</span>`:''}</span>`)}
+                ${td(_fmtTalkTime(r.talk_time_s||0))}
+                ${td(_fmtTalkTime(r.avg_talk_s||0),         'color:#64748b;font-weight:500;')}
+              </tr>`;
+            }).join('')}
+          </tbody>
+          <tfoot>
+            <tr style="background:#f8fafc;">
+              <td style="padding:14px 20px;font-size:12px;font-weight:700;color:#1a3a6e;letter-spacing:0.3px;text-transform:uppercase;">Team Total</td>
+              ${td(totals.calls_made.toLocaleString(),    'color:#1a3a6e;font-weight:800;')}
+              ${td(totals.connected.toLocaleString(),     'color:#16a34a;font-weight:800;')}
+              ${td(totals.conversations.toLocaleString(), 'color:#0891b2;font-weight:800;')}
+              ${td(totals.received.toLocaleString(),      'color:#7c3aed;font-weight:800;')}
+              ${td(totals.missed.toLocaleString(),        'color:#dc2626;font-weight:800;')}
+              ${td(_fmtTalkTime(totals.talk_time_s),      'color:#0f172a;font-weight:800;')}
+              ${td(_fmtTalkTime(totals.avg_talk_s),       'color:#64748b;font-weight:700;')}
+            </tr>
+          </tfoot>
+        </table>
+      </div>
+    </div>
+
+    <div style="margin-top:14px;padding:12px 16px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;font-size:11px;color:#1e3a8a;line-height:1.6;">
+      <strong>How it works:</strong> Call data syncs from Follow Up Boss every 15 minutes automatically (via pg_cron).
+      Deal-stage updates sync hourly. Click <em>Refresh from FUB</em> above to pull new data immediately.
+      <strong>Conversations</strong> = connected outbound calls ≥ 60 seconds.
+      <strong>Missed</strong> = inbound with no answer. Numbers here match the FUB native Reports view.
+    </div>`;
+}
+
+function _reportsSetPreset(preset){
+  _reportsState.preset = preset;
+  // Re-paint the whole filter bar (preset buttons + range label) + reload data.
+  _companyRenderReports();
+}
+
+function _reportsSetCustomRange(){
+  const s = document.getElementById('reportsCustomStart')?.value;
+  const e = document.getElementById('reportsCustomEnd')?.value;
+  if(!s || !e) return;
+  _reportsState.startISO = new Date(s + 'T00:00:00').toISOString();
+  _reportsState.endISO   = new Date(e + 'T23:59:59').toISOString();
+  _reportsLoad();
+}
+
+async function _reportsForceSync(){
+  const btn = document.getElementById('reportsRefreshBtn');
+  if(btn){ btn.disabled = true; btn.style.opacity = '0.55'; btn.innerHTML = '<span>⏳</span><span>Syncing from FUB…</span>'; }
+  try {
+    // Hit the fub-calls-sync edge function directly (verify_jwt=false, CORS open).
+    // Incremental window: last 2 hours, keeps runtime tiny so we can await it.
+    const cfg = getConfig();
+    const since = new Date(Date.now() - 2*3600*1000).toISOString();
+    const url = `${cfg.url}/functions/v1/fub-calls-sync?since=${encodeURIComponent(since)}`;
+    await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Content-Type':  'application/json',
+        'Authorization': 'Bearer ' + cfg.key
+      },
+      body: '{}'
+    }).catch(() => {/* best-effort; pg_cron runs every 15m regardless */});
+  } catch(e){ console.warn('[reports] manual sync failed', e); }
+  if(btn){ btn.disabled = false; btn.style.opacity = '1'; btn.innerHTML = '<span>🔄</span><span>Refresh from FUB</span>'; }
+  await _reportsLoad();
 }
 
 async function showBuyerCriteriaPage(){

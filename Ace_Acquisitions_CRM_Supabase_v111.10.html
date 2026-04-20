@@ -1334,7 +1334,7 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
     <div style="padding:14px 22px;border-top:1px solid #e2e8f0;background:#f8fafc;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-shrink:0;">
       <div id="dsSaveMsg" style="font-size:11px;color:#16a34a;font-weight:600;opacity:0;transition:opacity 0.2s;">✓ Saved</div>
       <div style="display:flex;gap:8px;">
-        <button onclick="saveDealSnapshot()" style="background:#fff;color:#475569;border:1px solid #cbd5e1;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Save</button>
+        <button onclick="saveDealSnapshot()" style="background:#fff;color:#475569;border:1px solid #cbd5e1;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Save Notes</button>
         <button onclick="openDealFromSnapshot()" style="background:linear-gradient(135deg,#1e3a8a,#2563eb);color:#fff;border:none;padding:8px 20px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">Open Full Deal →</button>
       </div>
     </div>
@@ -2314,10 +2314,6 @@ async function testSupabaseWrite(){
 function isSupabase() { return true; }
 
 let allDeals = [];
-// Full unfiltered snapshot — populated by syncData() when no agent filter is
-// applied (admin / 'all' view). setViewMode() uses this to switch views
-// instantly without hitting the database again.
-let _allDealsSnapshot = [];
 // v102.28: portfolios cache. Loaded once at startup in syncData(), refreshed
 // via _loadAllPortfolios() after create/update/delete actions.
 let allPortfolios = [];
@@ -2540,8 +2536,6 @@ async function syncData(){
         }
       }
       allDeals = records;
-      // Cache the full unfiltered set so view-mode toggling is instant.
-      if(!agentFilter) _allDealsSnapshot = allDeals.slice();
     } else {
       // ── Airtable ─────────────────────────────────────────────
       let offset = null;
@@ -4477,22 +4471,15 @@ function openDealSnapshot(dealId){
       <div style="font-size:14px;font-weight:700;color:#0f172a;">${val}</div>
     </div>`;
 
-  const inputCell = (label, id, val, type, extra='') => `
-    <div>
-      <div style="font-size:10px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${label}</div>
-      <input id="${id}" type="${type}" value="${val}" placeholder="—"
-        style="width:100%;padding:5px 8px;border:1px solid #cbd5e1;border-radius:5px;font-size:13px;font-weight:600;color:#0f172a;box-sizing:border-box;background:#fff;" ${extra}/>
-    </div>`;
-
   document.getElementById('dsStats').innerHTML = [
-    inputCell('Asking Price', 'dsAskingPrice', ask || '', 'number', 'oninput="dsUpdateCapRate()"'),
-    inputCell('Offer Price',  'dsOfferPrice',  offer || '', 'number'),
-    inputCell('NOI',          'dsNOI',         noi || '', 'number', 'oninput="dsUpdateCapRate()"'),
-    statCell('Cap Rate', `<span id="dsCapRate">${capRate}</span>`),
+    statCell('Asking Price', ask ? fmtMoney(ask) : '—'),
+    statCell('Offer Price', offer ? fmtMoney(offer) : '—'),
+    statCell('NOI', noi ? fmtMoney(noi) : '—'),
+    statCell('Cap Rate', capRate),
     statCell('Commission', commission+'%' + (commissionAmt ? ' ('+fmtMoney(commissionAmt)+')' : '')),
-    inputCell('Asset Type', 'dsAssetType', (assetType==='—'?'':assetType.replace(/"/g,'&quot;')), 'text'),
-    inputCell('County',     'dsCounty',    (county==='—'?'':county.replace(/"/g,'&quot;')), 'text'),
-    inputCell('# Units',    'dsUnits',     (units==='—'?'':units), 'number'),
+    statCell('Asset Type', assetType.length > 30 ? assetType.substring(0,30)+'…' : assetType),
+    statCell('County', county),
+    statCell('# Units', units),
   ].join('');
 
   // Notes
@@ -4573,15 +4560,6 @@ async function saveDealSnapshot(){
   fields['Deal Notes'] = notes;
   fields['Next Steps'] = nextSteps;
 
-  const _dsNum = id => { const v = document.getElementById(id)?.value; return (v !== '' && v != null) ? Number(v) : null; };
-  const _dsTxt = id => document.getElementById(id)?.value?.trim() || null;
-  const askVal = _dsNum('dsAskingPrice');   if(askVal !== null) fields['Asking Price'] = askVal;
-  const offerVal = _dsNum('dsOfferPrice');  if(offerVal !== null) fields['Offer Price'] = offerVal;
-  const noiVal = _dsNum('dsNOI');           if(noiVal !== null) fields['NOI'] = noiVal;
-  const unitsVal = _dsNum('dsUnits');       if(unitsVal !== null) fields['No. of Units'] = unitsVal;
-  const assetVal = _dsTxt('dsAssetType');   if(assetVal) fields['Simple Text Property Type'] = assetVal;
-  const countyVal = _dsTxt('dsCounty');     if(countyVal) fields['Simple County'] = countyVal;
-
   const msg = document.getElementById('dsSaveMsg');
   if(msg){ msg.textContent = '⏳ Saving...'; msg.style.color='#2563eb'; msg.style.opacity='1'; }
 
@@ -4611,13 +4589,6 @@ function closeDealSnapshot(){
   const modal = document.getElementById('dealSnapshotModal');
   if(modal) modal.style.display = 'none';
   _snapshotDealId = null;
-}
-
-function dsUpdateCapRate(){
-  const ask = Number(document.getElementById('dsAskingPrice')?.value) || 0;
-  const noi = Number(document.getElementById('dsNOI')?.value) || 0;
-  const el = document.getElementById('dsCapRate');
-  if(el) el.textContent = ask && noi ? ((noi/ask)*100).toFixed(2)+'%' : '—';
 }
 
 async function saveEditAddressModal(){
@@ -39622,40 +39593,24 @@ function _applyUserToUI(user){
 async function setViewMode(mode){
   _viewMode = mode;
   _updateViewToggle();
-
+  // Remember which page the user is currently viewing so we can restore it
+  // after the sync completes. Without this, syncData's showDashboard() at the
+  // end would kick them back to the dashboard every time they toggle.
   const currentNav = document.querySelector('.nav-btn.active');
   const currentPage = currentNav ? currentNav.textContent.trim() : '';
-
-  const pageHandlers = () => ({
-    'Deal Board':     ()=>typeof showDealBoard==='function' && showDealBoard(),
-    'Pipeline':       ()=>typeof showPipeline==='function' && showPipeline(),
-    'Contacts':       ()=>typeof showContactsPage==='function' && showContactsPage(),
-    'Buyer Criteria': ()=>{ _bcLastLoadMs=0; if(typeof showBuyerCriteriaPage==='function') showBuyerCriteriaPage(); },
-    'Tasks':          ()=>typeof showTasksPage==='function' && showTasksPage(),
-    'Dashboard':      ()=>typeof showDashboard==='function' && showDashboard(),
-  });
-
-  // ── Fast path: use cached full dataset, no DB round-trip ──────────────
-  // _allDealsSnapshot is populated whenever syncData() loads without an
-  // agent filter (i.e. the very first 'all' load, which is the admin default).
-  if(_allDealsSnapshot.length > 0){
-    const agentName = _currentUser && _currentUser.fub_name;
-    if(mode === 'my' && agentName){
-      allDeals = _allDealsSnapshot.filter(d => d['Assigned Agent'] === agentName);
-    } else {
-      allDeals = _allDealsSnapshot.slice();
-    }
-    buildSidebar();
-    const h = pageHandlers()[currentPage];
-    if(h) h();
-    return;
-  }
-
-  // ── Slow path: cache empty (first toggle for agent in 'my' mode) ──────
   allDeals = [];
   buildSidebar();
   try { await syncData(); } catch(e) { console.warn('setViewMode sync failed:', e.message); }
-  const h = pageHandlers()[currentPage];
+  // Restore the page the user was on. Known pages get re-rendered from their handler.
+  const handlers = {
+    'Deal Board': ()=>typeof showDealBoard==='function' && showDealBoard(),
+    'Pipeline':   ()=>typeof showPipeline==='function' && showPipeline(),
+    'Contacts':   ()=>typeof showContactsPage==='function' && showContactsPage(),
+    'Buyer Criteria':()=>{ _bcLastLoadMs=0; if(typeof showBuyerCriteriaPage==='function') showBuyerCriteriaPage(); },
+    'Tasks':      ()=>typeof showTasksPage==='function' && showTasksPage(),
+    'Dashboard':  ()=>typeof showDashboard==='function' && showDashboard(),
+  };
+  const h = handlers[currentPage];
   if(h) h();
 }
 

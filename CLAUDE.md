@@ -2,7 +2,7 @@
 ## What this is
 Single-file HTML CRM for Ace Acquisitions (NJ commercial real estate brokerage).
 Backend: Supabase (project id: kxtuegjptvzqycgyzehj).
-Current working file: Ace_Acquisitions_CRM_Supabase_v111.10.html
+Current working file: Ace_Acquisitions_CRM_Supabase_v111.11.html
 This file lives in ~/Documents/ace-crm/
 ## How to edit
 - Make all edits directly to the HTML file
@@ -11,7 +11,7 @@ This file lives in ~/Documents/ace-crm/
 - Keep the prior version on disk until browser-tested
 ## Syntax check — run after every single edit
 ```bash
-FILE=~/Documents/ace-crm/Ace_Acquisitions_CRM_Supabase_v111.10.html
+FILE=~/Documents/ace-crm/Ace_Acquisitions_CRM_Supabase_v111.11.html
 END=$(grep -n "^</script>" "$FILE" | tail -1 | cut -d: -f1)
 sed -n "1640,$((END-1))p" "$FILE" > /tmp/main.js
 node -e "const fs=require('fs');try{new Function(fs.readFileSync('/tmp/main.js','utf8'));console.log('✓ SYNTAX OK');}catch(e){console.log('✗',e.message);}"
@@ -79,9 +79,31 @@ Key line ranges (approximate, grep to confirm):
 - showDedupePage(): ~line 25131
 - Dashboard: ~line 2600
 ## Git workflow
+Branch strategy: all work goes to `staging` first. Richard reviews on the
+Vercel staging URL, then merges to `main` to go live.
+
+**ALWAYS work on the staging branch:**
 ```bash
 cd ~/Documents/ace-crm
-git add .
-git commit -m "v111.11: description of what changed"
+git checkout staging
 ```
+
+**Ship a new version (run these steps in order):**
+```bash
+# 1. Bump version — copy edited file to new version number
+cp Ace_Acquisitions_CRM_Supabase_v111.11.html Ace_Acquisitions_CRM_Supabase_v111.12.html
+# (make edits to the new file, run syntax check)
+
+# 2. Update index.html — Vercel always serves this file
+cp Ace_Acquisitions_CRM_Supabase_v111.12.html index.html
+
+# 3. Commit and push to staging
+git add Ace_Acquisitions_CRM_Supabase_v111.12.html index.html CLAUDE.md
+git commit -m "v111.12: description of what changed"
+git push origin staging
+```
+
+Vercel auto-deploys the staging branch to its preview URL for review.
+Richard merges staging → main on GitHub when ready to go live.
+
 Always commit a working version before starting new work.

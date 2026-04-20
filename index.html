@@ -1334,7 +1334,7 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
     <div style="padding:14px 22px;border-top:1px solid #e2e8f0;background:#f8fafc;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-shrink:0;">
       <div id="dsSaveMsg" style="font-size:11px;color:#16a34a;font-weight:600;opacity:0;transition:opacity 0.2s;">✓ Saved</div>
       <div style="display:flex;gap:8px;">
-        <button onclick="saveDealSnapshot()" style="background:#fff;color:#475569;border:1px solid #cbd5e1;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Save Notes</button>
+        <button onclick="saveDealSnapshot()" style="background:#fff;color:#475569;border:1px solid #cbd5e1;padding:8px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Save</button>
         <button onclick="openDealFromSnapshot()" style="background:linear-gradient(135deg,#1e3a8a,#2563eb);color:#fff;border:none;padding:8px 20px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">Open Full Deal →</button>
       </div>
     </div>
@@ -2314,6 +2314,10 @@ async function testSupabaseWrite(){
 function isSupabase() { return true; }
 
 let allDeals = [];
+// Full unfiltered snapshot — populated by syncData() when no agent filter is
+// applied (admin / 'all' view). setViewMode() uses this to switch views
+// instantly without hitting the database again.
+let _allDealsSnapshot = [];
 // v102.28: portfolios cache. Loaded once at startup in syncData(), refreshed
 // via _loadAllPortfolios() after create/update/delete actions.
 let allPortfolios = [];
@@ -2536,6 +2540,8 @@ async function syncData(){
         }
       }
       allDeals = records;
+      // Cache the full unfiltered set so view-mode toggling is instant.
+      if(!agentFilter) _allDealsSnapshot = allDeals.slice();
     } else {
       // ── Airtable ─────────────────────────────────────────────
       let offset = null;
@@ -4471,15 +4477,22 @@ function openDealSnapshot(dealId){
       <div style="font-size:14px;font-weight:700;color:#0f172a;">${val}</div>
     </div>`;
 
+  const inputCell = (label, id, val, type, extra='') => `
+    <div>
+      <div style="font-size:10px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">${label}</div>
+      <input id="${id}" type="${type}" value="${val}" placeholder="—"
+        style="width:100%;padding:5px 8px;border:1px solid #cbd5e1;border-radius:5px;font-size:13px;font-weight:600;color:#0f172a;box-sizing:border-box;background:#fff;" ${extra}/>
+    </div>`;
+
   document.getElementById('dsStats').innerHTML = [
-    statCell('Asking Price', ask ? fmtMoney(ask) : '—'),
-    statCell('Offer Price', offer ? fmtMoney(offer) : '—'),
-    statCell('NOI', noi ? fmtMoney(noi) : '—'),
-    statCell('Cap Rate', capRate),
+    inputCell('Asking Price', 'dsAskingPrice', ask || '', 'number', 'oninput="dsUpdateCapRate()"'),
+    inputCell('Offer Price',  'dsOfferPrice',  offer || '', 'number'),
+    inputCell('NOI',          'dsNOI',         noi || '', 'number', 'oninput="dsUpdateCapRate()"'),
+    statCell('Cap Rate', `<span id="dsCapRate">${capRate}</span>`),
     statCell('Commission', commission+'%' + (commissionAmt ? ' ('+fmtMoney(commissionAmt)+')' : '')),
-    statCell('Asset Type', assetType.length > 30 ? assetType.substring(0,30)+'…' : assetType),
-    statCell('County', county),
-    statCell('# Units', units),
+    inputCell('Asset Type', 'dsAssetType', (assetType==='—'?'':assetType.replace(/"/g,'&quot;')), 'text'),
+    inputCell('County',     'dsCounty',    (county==='—'?'':county.replace(/"/g,'&quot;')), 'text'),
+    inputCell('# Units',    'dsUnits',     (units==='—'?'':units), 'number'),
   ].join('');
 
   // Notes
@@ -4560,6 +4573,15 @@ async function saveDealSnapshot(){
   fields['Deal Notes'] = notes;
   fields['Next Steps'] = nextSteps;
 
+  const _dsNum = id => { const v = document.getElementById(id)?.value; return (v !== '' && v != null) ? Number(v) : null; };
+  const _dsTxt = id => document.getElementById(id)?.value?.trim() || null;
+  const askVal = _dsNum('dsAskingPrice');   if(askVal !== null) fields['Asking Price'] = askVal;
+  const offerVal = _dsNum('dsOfferPrice');  if(offerVal !== null) fields['Offer Price'] = offerVal;
+  const noiVal = _dsNum('dsNOI');           if(noiVal !== null) fields['NOI'] = noiVal;
+  const unitsVal = _dsNum('dsUnits');       if(unitsVal !== null) fields['No. of Units'] = unitsVal;
+  const assetVal = _dsTxt('dsAssetType');   if(assetVal) fields['Simple Text Property Type'] = assetVal;
+  const countyVal = _dsTxt('dsCounty');     if(countyVal) fields['Simple County'] = countyVal;
+
   const msg = document.getElementById('dsSaveMsg');
   if(msg){ msg.textContent = '⏳ Saving...'; msg.style.color='#2563eb'; msg.style.opacity='1'; }
 
@@ -4589,6 +4611,13 @@ function closeDealSnapshot(){
   const modal = document.getElementById('dealSnapshotModal');
   if(modal) modal.style.display = 'none';
   _snapshotDealId = null;
+}
+
+function dsUpdateCapRate(){
+  const ask = Number(document.getElementById('dsAskingPrice')?.value) || 0;
+  const noi = Number(document.getElementById('dsNOI')?.value) || 0;
+  const el = document.getElementById('dsCapRate');
+  if(el) el.textContent = ask && noi ? ((noi/ask)*100).toFixed(2)+'%' : '—';
 }
 
 async function saveEditAddressModal(){
@@ -21386,6 +21415,30 @@ function showSettingsPage(){
           <button onclick="_assetCleanupOpen()" style="background:#7c3aed;color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Open workbench →</button>
         </section>
 
+        <!-- v111.9: FUB Pipeline Sync tile -->
+        <section style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
+          <div style="font-size:28px;flex-shrink:0;">🔄</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:15px;font-weight:700;color:#0f172a;">FUB pipeline stage sync</div>
+            <div style="font-size:12px;color:#64748b;margin-top:3px;line-height:1.5;">
+              Read current deal stages from Follow Up Boss and update matching CRM properties. No duplicates created — only existing properties are updated. Run on demand when the boss asks why counts differ from FUB.
+            </div>
+          </div>
+          <button onclick="_fubSyncOpen()" style="background:#0284c7;color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Open sync →</button>
+        </section>
+
+        <!-- v111.9: Unmatched FUB Deals review tile -->
+        <section style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
+          <div style="font-size:28px;flex-shrink:0;">🔍</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:15px;font-weight:700;color:#0f172a;">Unmatched FUB deals review</div>
+            <div style="font-size:12px;color:#64748b;margin-top:3px;line-height:1.5;">
+              Triage FUB deals the sync couldn't auto-link to CRM properties. Link to an existing property by address search, or mark as ignored.
+            </div>
+          </div>
+          <button onclick="_fubUnmatchedOpen()" style="background:#475569;color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Open review →</button>
+        </section>
+
         <!-- CONNECTION -->
         <section style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
           <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:4px;">
@@ -37266,6 +37319,756 @@ function _fubImportPropertyPreview(fub){
   `;
 }
 
+// ─── v111.9: FUB Pipeline Stage Sync ─────────────────────────────
+// Reads FUB deal stages via Edge Function `fub-stages-sync` and updates
+// matching ace_properties rows. Runs in ~300-deal chunks to stay under
+// the 150s Edge timeout. One-time sync, not scheduled.
+
+const _FUB_SYNC_URL = 'https://kxtuegjptvzqycgyzehj.functions.supabase.co/fub-stages-sync';
+
+// Module-level state for an in-flight sync driven by the UI.
+let _fubSyncState = { running:false, aborted:false, syncLogId:null, nextCursor:null, chunks:0, dryRun:true };
+
+function _fubSyncOpen(){
+  const main = document.getElementById('mainArea');
+  if(!main) return;
+  main.innerHTML = `
+    <div style="padding:16px 22px;max-width:1100px;margin:0 auto;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px;">
+        <div>
+          <div style="font-size:20px;font-weight:700;color:#0f172a;">🔄 FUB Pipeline Stage Sync</div>
+          <div style="font-size:12px;color:#64748b;margin-top:3px;">Read-only pull from Follow Up Boss. Updates pipeline_stage on matching ace_properties. Does not create new properties or contacts.</div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button onclick="setNav(null,'settings')" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:8px 14px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;">← Back to Settings</button>
+        </div>
+      </div>
+
+      <!-- Action card -->
+      <section style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
+        <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:6px;">Run a sync</div>
+        <div style="font-size:12px;color:#64748b;line-height:1.55;margin-bottom:14px;">
+          A full sync takes about 15–20 minutes because it walks ~10,000 deals in chunks of 300. You can close this tab — but do not start another sync while one is in progress. Progress is persisted in <code style="background:#f1f5f9;padding:1px 5px;border-radius:3px;">ace_fub_sync_log</code>.
+        </div>
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+          <button id="fubSyncDryBtn" onclick="_fubSyncStart(true)" style="background:#f1f5f9;color:#0f172a;border:1px solid #cbd5e1;padding:10px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;">🔍 Preview (dry run)</button>
+          <button id="fubSyncRealBtn" onclick="_fubSyncConfirmReal()" style="background:#0284c7;color:#fff;border:none;padding:10px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;">▶ Run sync (writes to DB)</button>
+          <button id="fubSyncStopBtn" onclick="_fubSyncAbort()" style="display:none;background:#fee2e2;color:#991b1b;border:1px solid #fecaca;padding:10px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;">■ Stop after current chunk</button>
+          <div id="fubSyncStatus" style="margin-left:auto;font-size:12px;color:#64748b;"></div>
+        </div>
+      </section>
+
+      <!-- Progress card (hidden until a run starts) -->
+      <section id="fubSyncProgressCard" style="display:none;background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
+        <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:12px;">Current run</div>
+        <div id="fubSyncProgressBody"></div>
+      </section>
+
+      <!-- History card -->
+      <section style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+          <div style="font-size:15px;font-weight:700;color:#0f172a;">Sync history</div>
+          <button onclick="_fubSyncLoadHistory()" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:6px 12px;font-size:11px;font-weight:600;border-radius:6px;cursor:pointer;">↻ Refresh</button>
+        </div>
+        <div id="fubSyncHistoryBody"><div style="padding:20px;text-align:center;color:#94a3b8;font-size:12px;">Loading...</div></div>
+      </section>
+    </div>`;
+  _fubSyncLoadHistory();
+}
+
+async function _fubSyncLoadHistory(){
+  const body = document.getElementById('fubSyncHistoryBody');
+  if(!body) return;
+  try{
+    const rows = await _sbGet('ace_fub_sync_log',
+      'select=id,started_at,ended_at,status,dry_run,total_processed,total_matched,total_stage_updated,total_unmatched,total_archived,triggered_by_name&order=started_at.desc&limit=10');
+    if(!Array.isArray(rows) || rows.length === 0){
+      body.innerHTML = '<div style="padding:20px;text-align:center;color:#94a3b8;font-size:12px;">No sync runs yet.</div>';
+      return;
+    }
+    const fmt = (s) => {
+      if(!s) return '—';
+      const d = new Date(s);
+      return d.toLocaleString('en-US',{ month:'short', day:'numeric', hour:'numeric', minute:'2-digit' });
+    };
+    const statusBadge = (st) => {
+      const colors = { completed:['#dcfce7','#166534'], running:['#fef3c7','#92400e'], failed:['#fee2e2','#991b1b'], cancelled:['#f1f5f9','#64748b'], partial:['#e0f2fe','#075985'] };
+      const [bg, fg] = colors[st] || ['#f1f5f9','#64748b'];
+      return `<span style="display:inline-block;background:${bg};color:${fg};padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">${st || '?'}</span>`;
+    };
+    const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+    body.innerHTML = `
+      <table style="width:100%;border-collapse:collapse;font-size:12px;">
+        <thead>
+          <tr style="border-bottom:2px solid #e2e8f0;text-align:left;color:#64748b;">
+            <th style="padding:8px 6px;font-weight:700;">Started</th>
+            <th style="padding:8px 6px;font-weight:700;">Mode</th>
+            <th style="padding:8px 6px;font-weight:700;">Status</th>
+            <th style="padding:8px 6px;font-weight:700;text-align:right;">Processed</th>
+            <th style="padding:8px 6px;font-weight:700;text-align:right;">Matched</th>
+            <th style="padding:8px 6px;font-weight:700;text-align:right;">Stage updates</th>
+            <th style="padding:8px 6px;font-weight:700;text-align:right;">Unmatched</th>
+            <th style="padding:8px 6px;font-weight:700;">By</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${rows.map(r => `
+            <tr style="border-bottom:1px solid #f1f5f9;">
+              <td style="padding:8px 6px;color:#0f172a;">${fmt(r.started_at)}</td>
+              <td style="padding:8px 6px;"><span style="display:inline-block;background:${r.dry_run?'#f1f5f9':'#fef3c7'};color:${r.dry_run?'#475569':'#92400e'};padding:2px 7px;border-radius:10px;font-size:10px;font-weight:700;">${r.dry_run?'DRY':'LIVE'}</span></td>
+              <td style="padding:8px 6px;">${statusBadge(r.status)}</td>
+              <td style="padding:8px 6px;text-align:right;color:#0f172a;font-variant-numeric:tabular-nums;">${(r.total_processed||0).toLocaleString()}</td>
+              <td style="padding:8px 6px;text-align:right;color:#0f172a;font-variant-numeric:tabular-nums;">${(r.total_matched||0).toLocaleString()}</td>
+              <td style="padding:8px 6px;text-align:right;color:#16a34a;font-variant-numeric:tabular-nums;font-weight:600;">${(r.total_stage_updated||0).toLocaleString()}</td>
+              <td style="padding:8px 6px;text-align:right;color:#64748b;font-variant-numeric:tabular-nums;">${(r.total_unmatched||0).toLocaleString()}</td>
+              <td style="padding:8px 6px;color:#64748b;">${esc(r.triggered_by_name) || '—'}</td>
+            </tr>
+          `).join('')}
+        </tbody>
+      </table>`;
+  } catch(e){
+    body.innerHTML = `<div style="padding:14px;color:#991b1b;font-size:12px;background:#fef2f2;border:1px solid #fecaca;border-radius:6px;">Failed to load history: ${e.message}</div>`;
+  }
+}
+
+function _fubSyncConfirmReal(){
+  if(!confirm('Run a LIVE sync? This will update pipeline_stage on matching ace_properties based on the current FUB deal stages. Takes ~15–20 minutes. Continue?')) return;
+  _fubSyncStart(false);
+}
+
+async function _fubSyncStart(dryRun){
+  if(_fubSyncState.running){ alert('A sync is already in progress in this session.'); return; }
+  // Check server-side for a concurrent run too
+  try{
+    const inProg = await _sbGet('ace_fub_sync_log', 'select=id,started_at,triggered_by_name&ended_at=is.null&limit=1');
+    if(Array.isArray(inProg) && inProg.length > 0){
+      if(!confirm(`Another sync looks like it's already running (started ${new Date(inProg[0].started_at).toLocaleTimeString()} by ${inProg[0].triggered_by_name || 'unknown'}). Proceed anyway? The Edge Function will reject concurrent starts, so this should be safe.`)) return;
+    }
+  } catch(_){}
+
+  _fubSyncState = { running:true, aborted:false, syncLogId:null, nextCursor:null, chunks:0, dryRun };
+  const card = document.getElementById('fubSyncProgressCard');
+  const body = document.getElementById('fubSyncProgressBody');
+  const stopBtn = document.getElementById('fubSyncStopBtn');
+  const dryBtn = document.getElementById('fubSyncDryBtn');
+  const realBtn = document.getElementById('fubSyncRealBtn');
+  if(card) card.style.display = '';
+  if(stopBtn) stopBtn.style.display = '';
+  if(dryBtn) dryBtn.disabled = true;
+  if(realBtn) realBtn.disabled = true;
+  _fubSyncRenderProgress({ chunk:0, status:'starting...', dryRun });
+
+  const triggeredBy = (window._currentUser && window._currentUser.fub_name) ? window._currentUser.fub_name : 'CRM User';
+  let done = false;
+  let lastData = null;
+  try{
+    while(!done && !_fubSyncState.aborted){
+      const payload = {
+        dry_run: dryRun,
+        auto_create_contacts: false,
+        chunk_size: 300,
+        triggered_by: { name: triggeredBy + (dryRun ? ' (preview)' : '') }
+      };
+      if(_fubSyncState.syncLogId) payload.sync_log_id = _fubSyncState.syncLogId;
+      if(_fubSyncState.nextCursor) payload.starting_cursor = _fubSyncState.nextCursor;
+
+      const res = await fetch(_FUB_SYNC_URL, {
+        method:'POST',
+        headers:{'Content-Type':'application/json'},
+        body: JSON.stringify(payload)
+      });
+      const data = await res.json();
+      if(data.error){
+        _fubSyncRenderProgress({ chunk: _fubSyncState.chunks, status:'error', error: data.error, dryRun });
+        break;
+      }
+      lastData = data;
+      _fubSyncState.syncLogId = data.sync_log_id || _fubSyncState.syncLogId;
+      _fubSyncState.nextCursor = data.next_cursor || null;
+      _fubSyncState.chunks += 1;
+      done = !!data.done;
+      _fubSyncRenderProgress({ chunk: _fubSyncState.chunks, status: done ? 'complete' : 'running', data, dryRun });
+      // Small delay between chunks to be polite to Edge Function + FUB API
+      if(!done && !_fubSyncState.aborted) await new Promise(r => setTimeout(r, 800));
+    }
+    if(_fubSyncState.aborted){
+      _fubSyncRenderProgress({ chunk: _fubSyncState.chunks, status:'stopped', data: lastData, dryRun });
+    }
+  } catch(e){
+    _fubSyncRenderProgress({ chunk: _fubSyncState.chunks, status:'error', error: e.message, dryRun });
+  } finally{
+    _fubSyncState.running = false;
+    if(stopBtn) stopBtn.style.display = 'none';
+    if(dryBtn) dryBtn.disabled = false;
+    if(realBtn) realBtn.disabled = false;
+    _fubSyncLoadHistory();
+  }
+}
+
+function _fubSyncAbort(){
+  if(!_fubSyncState.running) return;
+  if(!confirm('Stop the sync after the current chunk finishes? Data already written is not rolled back. The sync log row will stay open — you can close it manually via SQL if needed.')) return;
+  _fubSyncState.aborted = true;
+  const stopBtn = document.getElementById('fubSyncStopBtn');
+  if(stopBtn){ stopBtn.textContent = '⏳ Stopping...'; stopBtn.disabled = true; }
+}
+
+function _fubSyncRenderProgress(st){
+  const body = document.getElementById('fubSyncProgressBody');
+  const statusEl = document.getElementById('fubSyncStatus');
+  if(!body) return;
+  const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const d = st.data || {};
+  const counterRow = (label, val, color) => `
+    <div style="flex:1;min-width:120px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;">
+      <div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">${label}</div>
+      <div style="font-size:20px;font-weight:700;color:${color || '#0f172a'};font-variant-numeric:tabular-nums;margin-top:2px;">${(val||0).toLocaleString()}</div>
+    </div>`;
+
+  let statusBlock = '';
+  if(st.status === 'starting...'){
+    statusBlock = `<div style="padding:12px;background:#fef3c7;border:1px solid #fde68a;border-radius:6px;color:#92400e;font-size:12px;font-weight:600;">⏳ Starting sync${st.dryRun ? ' (dry run)' : ''}...</div>`;
+  } else if(st.status === 'running'){
+    statusBlock = `<div style="padding:12px;background:#e0f2fe;border:1px solid #7dd3fc;border-radius:6px;color:#075985;font-size:12px;font-weight:600;">🔄 Running — chunk ${st.chunk} done. Next chunk starting...</div>`;
+  } else if(st.status === 'complete'){
+    statusBlock = `<div style="padding:12px;background:#dcfce7;border:1px solid #bbf7d0;border-radius:6px;color:#166534;font-size:12px;font-weight:600;">✓ Sync complete. ${st.chunk} chunks processed.${st.dryRun ? ' (This was a dry run — no changes were written.)' : ''}</div>`;
+  } else if(st.status === 'stopped'){
+    statusBlock = `<div style="padding:12px;background:#fee2e2;border:1px solid #fecaca;border-radius:6px;color:#991b1b;font-size:12px;font-weight:600;">■ Stopped after ${st.chunk} chunks. Run log remains open in ace_fub_sync_log.</div>`;
+  } else if(st.status === 'error'){
+    statusBlock = `<div style="padding:12px;background:#fee2e2;border:1px solid #fecaca;border-radius:6px;color:#991b1b;font-size:12px;font-weight:600;">✗ Error: ${esc(st.error || 'unknown')}</div>`;
+  }
+
+  let changesBlock = '';
+  const changes = d.stage_change_summary || {};
+  const changeEntries = Object.entries(changes).sort((a,b) => b[1] - a[1]).slice(0, 15);
+  if(changeEntries.length > 0){
+    changesBlock = `
+      <div style="margin-top:14px;">
+        <div style="font-size:12px;font-weight:700;color:#334155;margin-bottom:8px;">Top stage changes so far</div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px 18px;font-size:11px;">
+          ${changeEntries.map(([k,v]) => `
+            <div style="display:flex;justify-content:space-between;padding:4px 0;border-bottom:1px dotted #e2e8f0;">
+              <span style="color:#475569;">${esc(k)}</span>
+              <span style="color:#0f172a;font-weight:700;font-variant-numeric:tabular-nums;">${v}</span>
+            </div>
+          `).join('')}
+        </div>
+      </div>`;
+  }
+
+  let unknownBlock = '';
+  const unknowns = d.unknown_fub_stages || {};
+  const unkEntries = Object.entries(unknowns);
+  if(unkEntries.length > 0){
+    unknownBlock = `
+      <div style="margin-top:14px;padding:10px 12px;background:#fefce8;border:1px solid #fde68a;border-radius:6px;font-size:11px;color:#713f12;">
+        <div style="font-weight:700;margin-bottom:4px;">⚠ Unknown FUB stages encountered (logged, not applied):</div>
+        <div>${unkEntries.map(([k,v]) => `<span style="display:inline-block;margin:2px 4px 2px 0;padding:2px 8px;background:#fef3c7;border-radius:10px;">${esc(k)} (${v})</span>`).join('')}</div>
+      </div>`;
+  }
+
+  body.innerHTML = `
+    ${statusBlock}
+    <div style="display:flex;flex-wrap:wrap;gap:8px;margin-top:14px;">
+      ${counterRow('Chunks',  st.chunk || 0)}
+      ${counterRow('Processed', d.total_processed)}
+      ${counterRow('Matched', d.total_matched, '#0284c7')}
+      ${counterRow('Stage updates', d.total_stage_updated, '#16a34a')}
+      ${counterRow('Unmatched', d.total_unmatched, '#64748b')}
+      ${counterRow('Archived', d.total_archived, '#a16207')}
+    </div>
+    ${changesBlock}
+    ${unknownBlock}
+  `;
+
+  if(statusEl){
+    if(st.status === 'running') statusEl.textContent = `Chunk ${st.chunk} · ${(d.total_processed||0).toLocaleString()} processed`;
+    else if(st.status === 'complete') statusEl.textContent = `Done · ${(d.total_stage_updated||0).toLocaleString()} updates`;
+    else if(st.status === 'stopped') statusEl.textContent = `Stopped at chunk ${st.chunk}`;
+    else if(st.status === 'error') statusEl.textContent = 'Error';
+  }
+}
+
+// ─── v111.9: Unmatched FUB Deals Review ──────────────────────────
+// Triage the ~1,600 FUB deals that the sync couldn't auto-link. Per-row
+// actions: link to existing property, mark ignored, or view resolution notes.
+
+const _FUB_UNMATCHED_PAGE_SIZE = 50;
+let _fubUmState = {
+  filters: { search:'', resolution:'pending', pipeline:'all', stage:'all', lowConfOnly:false },
+  page: 0,
+  rows: [],
+  total: 0,
+  selected: new Set()
+};
+
+function _fubUnmatchedOpen(){
+  const main = document.getElementById('mainArea');
+  if(!main) return;
+  _fubUmState.filters = { search:'', resolution:'pending', pipeline:'all', stage:'all', lowConfOnly:false };
+  _fubUmState.page = 0;
+  _fubUmState.selected = new Set();
+  main.innerHTML = `
+    <div style="padding:16px 22px;max-width:1400px;margin:0 auto;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <div>
+          <div style="font-size:20px;font-weight:700;color:#0f172a;">🔍 Unmatched FUB Deals</div>
+          <div style="font-size:12px;color:#64748b;margin-top:3px;">Deals from Follow Up Boss that couldn't be auto-linked to an ace_property. Link or ignore to clean the queue.</div>
+        </div>
+        <button onclick="setNav(null,'settings')" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:8px 14px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;">← Back to Settings</button>
+      </div>
+
+      <!-- Stats strip -->
+      <div id="fubUmStats" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;"></div>
+
+      <!-- Filters -->
+      <section style="background:#fff;border-radius:10px;padding:14px 16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+          <input id="fubUmSearch" type="text" placeholder="Search deal name or contact..." oninput="_fubUmDebouncedRefresh()" style="flex:1;min-width:220px;padding:8px 12px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;">
+          <select id="fubUmResolution" onchange="_fubUmSetFilter('resolution',this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;background:#fff;">
+            <option value="pending">Pending only</option>
+            <option value="ignored">Ignored only</option>
+            <option value="linked">Linked only</option>
+            <option value="all">All statuses</option>
+          </select>
+          <select id="fubUmPipeline" onchange="_fubUmSetFilter('pipeline',this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;background:#fff;">
+            <option value="all">All pipelines</option>
+            <option value="Sellers">Sellers</option>
+            <option value="Sellers KW - NOT ACE">Sellers KW - NOT ACE</option>
+            <option value="Biz Deals">Biz Deals</option>
+          </select>
+          <select id="fubUmStage" onchange="_fubUmSetFilter('stage',this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;background:#fff;">
+            <option value="all">All stages</option>
+            <option value="Hot Active Listing">Hot Active Listing</option>
+            <option value="Active Listing">Active Listing</option>
+            <option value="Market Price Active">Market Price Active</option>
+            <option value="Needs Offer">Needs Offer</option>
+            <option value="Nurture">Nurture</option>
+            <option value="Lead">Lead</option>
+            <option value="Attempted Contact">Attempted Contact</option>
+            <option value="Top G Review">Top G Review</option>
+            <option value="GHL">GHL</option>
+            <option value="In Negotiations">In Negotiations</option>
+            <option value="Under Contract">Under Contract</option>
+            <option value="Closed">Closed</option>
+            <option value="Lease Listing">Lease Listing</option>
+          </select>
+          <label style="display:flex;align-items:center;gap:6px;font-size:12px;color:#475569;cursor:pointer;">
+            <input id="fubUmLowConf" type="checkbox" onchange="_fubUmSetFilter('lowConfOnly',this.checked)">
+            Low confidence only
+          </label>
+        </div>
+        <div id="fubUmBulkBar" style="display:none;margin-top:10px;padding-top:10px;border-top:1px solid #e2e8f0;">
+          <span id="fubUmSelCount" style="font-size:12px;color:#0f172a;font-weight:600;margin-right:12px;"></span>
+          <button onclick="_fubUmBulkResolve('ignored')" style="background:#f59e0b;color:#fff;border:none;padding:6px 12px;font-size:11px;font-weight:600;border-radius:5px;cursor:pointer;margin-right:6px;">Mark ignored</button>
+          <button onclick="_fubUmBulkResolve('pending')" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:6px 12px;font-size:11px;font-weight:600;border-radius:5px;cursor:pointer;margin-right:6px;">Unmark</button>
+          <button onclick="_fubUmClearSelection()" style="background:transparent;color:#64748b;border:none;font-size:11px;font-weight:600;cursor:pointer;">Clear selection</button>
+        </div>
+      </section>
+
+      <!-- Table -->
+      <section style="background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;overflow:hidden;">
+        <div id="fubUmTableBody" style="max-height:calc(100vh - 340px);overflow-y:auto;"><div style="padding:40px;text-align:center;color:#94a3b8;font-size:12px;">Loading...</div></div>
+        <div id="fubUmPager" style="display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-top:1px solid #e2e8f0;background:#f8fafc;font-size:12px;color:#475569;"></div>
+      </section>
+    </div>
+
+    <!-- Link-to-property modal (hidden by default) -->
+    <div id="fubUmLinkModal" style="display:none;position:fixed;top:0;left:0;right:0;bottom:0;background:rgba(15,23,42,0.6);z-index:9999;align-items:center;justify-content:center;">
+      <div style="background:#fff;border-radius:10px;width:90%;max-width:640px;max-height:80vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.3);">
+        <div style="padding:16px 20px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;">
+          <div style="font-size:15px;font-weight:700;color:#0f172a;">Link FUB deal to existing property</div>
+          <button onclick="_fubUmCloseLinkModal()" style="background:none;border:none;font-size:20px;color:#94a3b8;cursor:pointer;">×</button>
+        </div>
+        <div id="fubUmLinkModalBody" style="padding:16px 20px;overflow-y:auto;flex:1;"></div>
+      </div>
+    </div>`;
+  _fubUmLoadData();
+}
+
+let _fubUmSearchTimer = null;
+function _fubUmDebouncedRefresh(){
+  if(_fubUmSearchTimer) clearTimeout(_fubUmSearchTimer);
+  _fubUmSearchTimer = setTimeout(() => {
+    const el = document.getElementById('fubUmSearch');
+    _fubUmState.filters.search = el ? el.value.trim() : '';
+    _fubUmState.page = 0;
+    _fubUmLoadData();
+  }, 300);
+}
+
+function _fubUmSetFilter(key, val){
+  _fubUmState.filters[key] = val;
+  _fubUmState.page = 0;
+  _fubUmLoadData();
+}
+
+async function _fubUmLoadData(){
+  const body = document.getElementById('fubUmTableBody');
+  if(!body) return;
+  body.innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8;font-size:12px;">Loading...</div>';
+
+  // Build query params for ace_fub_unmatched_deals
+  const f = _fubUmState.filters;
+  const parts = ['select=*', `order=last_seen_at.desc`, `limit=${_FUB_UNMATCHED_PAGE_SIZE}`, `offset=${_fubUmState.page * _FUB_UNMATCHED_PAGE_SIZE}`];
+  if(f.resolution !== 'all') parts.push(`resolution=eq.${encodeURIComponent(f.resolution)}`);
+  if(f.pipeline !== 'all') parts.push(`fub_pipeline_name=eq.${encodeURIComponent(f.pipeline)}`);
+  if(f.stage !== 'all') parts.push(`fub_stage_name=eq.${encodeURIComponent(f.stage)}`);
+  if(f.lowConfOnly) parts.push(`resolution_notes=ilike.low_confidence*`);
+  if(f.search){
+    const s = encodeURIComponent('%' + f.search + '%');
+    parts.push(`or=(fub_deal_name.ilike.${s},fub_contact_name.ilike.${s})`);
+  }
+
+  try{
+    const rows = await _sbGet('ace_fub_unmatched_deals', parts.join('&'));
+    _fubUmState.rows = Array.isArray(rows) ? rows : [];
+    // Only refresh aggregate counts on the first page load of a filter change,
+    // not on every Next/Prev page click (expensive ~1600-row scan).
+    if(_fubUmState.page === 0 || !_fubUmState.counts){
+      await _fubUmLoadCounts();
+    }
+    _fubUmRender();
+  }catch(e){
+    body.innerHTML = `<div style="padding:24px;color:#991b1b;background:#fef2f2;margin:12px;border:1px solid #fecaca;border-radius:6px;font-size:12px;">Failed to load: ${e.message}</div>`;
+  }
+}
+
+async function _fubUmLoadCounts(){
+  // Fetch aggregate counts for the stats strip via an aggregate RPC.
+  // Server-side aggregation avoids the 1,000-row PostgREST limit.
+  _fubUmState.counts = { pending:0, ignored:0, linked:0, hotActive:0, lowConf:0, total:0 };
+  try{
+    const result = await _sbRpc('_fub_unmatched_counts');
+    if(result && typeof result === 'object'){
+      _fubUmState.counts = {
+        pending:   result.pending   || 0,
+        ignored:   result.ignored   || 0,
+        linked:    result.linked    || 0,
+        hotActive: result.hotActive || 0,
+        lowConf:   result.lowConf   || 0,
+        total:     result.total     || 0,
+      };
+    }
+  }catch(_){ /* keep zeros */ }
+}
+
+function _fubUmRender(){
+  const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+
+  // Stats strip
+  const stats = document.getElementById('fubUmStats');
+  if(stats){
+    const c = _fubUmState.counts || {};
+    const stat = (label, val, color) => `
+      <div style="flex:1;min-width:140px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;">
+        <div style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.5px;">${label}</div>
+        <div style="font-size:20px;font-weight:700;color:${color||'#0f172a'};font-variant-numeric:tabular-nums;margin-top:2px;">${(val||0).toLocaleString()}</div>
+      </div>`;
+    stats.innerHTML = [
+      stat('Pending', c.pending, '#d97706'),
+      stat('Ignored', c.ignored, '#64748b'),
+      stat('Linked', c.linked, '#16a34a'),
+      stat('Hot Active (pending)', c.hotActive, '#dc2626'),
+    ].join('');
+  }
+
+  const body = document.getElementById('fubUmTableBody');
+  if(!body) return;
+  if(_fubUmState.rows.length === 0){
+    body.innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8;font-size:12px;">No unmatched deals match these filters.</div>';
+    _fubUmUpdatePager();
+    _fubUmUpdateBulkBar();
+    return;
+  }
+
+  const notesBadge = (notes) => {
+    if(!notes) return '';
+    let bg='#f1f5f9', fg='#475569', label=notes;
+    if(notes.startsWith('low_confidence')) { bg='#fef3c7'; fg='#92400e'; label='low conf'; }
+    else if(notes === 'no_candidates') { bg='#f1f5f9'; fg='#64748b'; label='no cands'; }
+    else if(notes.startsWith('property_already_claimed')) { bg='#e0e7ff'; fg='#3730a3'; label='dup claim'; }
+    else if(notes.startsWith('fub_deal_id_conflict')) { bg='#fce7f3'; fg='#9d174d'; label='id conflict'; }
+    return `<span style="display:inline-block;background:${bg};color:${fg};padding:2px 7px;border-radius:10px;font-size:10px;font-weight:700;letter-spacing:0.3px;" title="${esc(notes)}">${esc(label)}</span>`;
+  };
+
+  const resBadge = (r) => {
+    const c = r === 'pending' ? ['#fef3c7','#92400e'] : r === 'ignored' ? ['#f1f5f9','#64748b'] : r === 'linked' ? ['#dcfce7','#166534'] : ['#f1f5f9','#64748b'];
+    return `<span style="display:inline-block;background:${c[0]};color:${c[1]};padding:2px 8px;border-radius:10px;font-size:10px;font-weight:700;text-transform:uppercase;">${esc(r||'—')}</span>`;
+  };
+
+  const fmt = (s) => {
+    if(!s) return '—';
+    const d = new Date(s);
+    return d.toLocaleDateString('en-US',{ month:'short', day:'numeric' });
+  };
+
+  const allSelected = _fubUmState.rows.every(r => _fubUmState.selected.has(r.id));
+  body.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;font-size:12px;">
+      <thead style="position:sticky;top:0;background:#f8fafc;z-index:2;">
+        <tr style="border-bottom:2px solid #e2e8f0;text-align:left;color:#64748b;">
+          <th style="padding:10px 8px;font-weight:700;width:32px;"><input type="checkbox" ${allSelected?'checked':''} onchange="_fubUmToggleAll(this.checked)"></th>
+          <th style="padding:10px 8px;font-weight:700;">Deal</th>
+          <th style="padding:10px 8px;font-weight:700;">Contact</th>
+          <th style="padding:10px 8px;font-weight:700;">Pipeline · Stage</th>
+          <th style="padding:10px 8px;font-weight:700;">Flags</th>
+          <th style="padding:10px 8px;font-weight:700;">Status</th>
+          <th style="padding:10px 8px;font-weight:700;">Seen</th>
+          <th style="padding:10px 8px;font-weight:700;text-align:right;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${_fubUmState.rows.map(r => {
+          const isSel = _fubUmState.selected.has(r.id);
+          const isIgnored = r.resolution === 'ignored';
+          return `
+            <tr style="border-bottom:1px solid #f1f5f9;${isSel?'background:#eff6ff;':''}">
+              <td style="padding:10px 8px;"><input type="checkbox" ${isSel?'checked':''} onchange="_fubUmToggleRow('${esc(r.id)}', this.checked)"></td>
+              <td style="padding:10px 8px;max-width:280px;">
+                <div style="font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(r.fub_deal_name)}">${esc(r.fub_deal_name)}</div>
+                <div style="font-size:10px;color:#94a3b8;margin-top:2px;">FUB #${r.fub_deal_id||'?'}</div>
+              </td>
+              <td style="padding:10px 8px;max-width:180px;">
+                <div style="color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(r.fub_contact_name)}">${esc(r.fub_contact_name||'—')}</div>
+                ${r.fub_contact_id ? `<div style="font-size:10px;color:#94a3b8;margin-top:2px;">FUB #${r.fub_contact_id}</div>` : ''}
+              </td>
+              <td style="padding:10px 8px;">
+                <div style="font-size:11px;color:#64748b;">${esc(r.fub_pipeline_name||'—')}</div>
+                <div style="color:#0f172a;font-weight:500;margin-top:2px;">${esc(r.fub_stage_name||'—')}</div>
+              </td>
+              <td style="padding:10px 8px;">${notesBadge(r.resolution_notes)}</td>
+              <td style="padding:10px 8px;">${resBadge(r.resolution)}</td>
+              <td style="padding:10px 8px;color:#64748b;white-space:nowrap;">${fmt(r.last_seen_at)}</td>
+              <td style="padding:10px 8px;text-align:right;white-space:nowrap;">
+                <button onclick="_fubUmOpenLink('${esc(r.id)}')" style="background:#0284c7;color:#fff;border:none;padding:5px 10px;font-size:11px;font-weight:600;border-radius:5px;cursor:pointer;margin-right:4px;">Link</button>
+                ${isIgnored
+                  ? `<button onclick="_fubUmResolveOne('${esc(r.id)}','pending')" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:5px 10px;font-size:11px;font-weight:600;border-radius:5px;cursor:pointer;">Unignore</button>`
+                  : `<button onclick="_fubUmResolveOne('${esc(r.id)}','ignored')" style="background:#f59e0b;color:#fff;border:none;padding:5px 10px;font-size:11px;font-weight:600;border-radius:5px;cursor:pointer;">Ignore</button>`}
+              </td>
+            </tr>
+          `;
+        }).join('')}
+      </tbody>
+    </table>`;
+  _fubUmUpdatePager();
+  _fubUmUpdateBulkBar();
+}
+
+function _fubUmUpdatePager(){
+  const pager = document.getElementById('fubUmPager');
+  if(!pager) return;
+  const start = _fubUmState.page * _FUB_UNMATCHED_PAGE_SIZE + 1;
+  const end = _fubUmState.page * _FUB_UNMATCHED_PAGE_SIZE + _fubUmState.rows.length;
+  const hasMore = _fubUmState.rows.length >= _FUB_UNMATCHED_PAGE_SIZE;
+  pager.innerHTML = `
+    <div>Showing ${start.toLocaleString()}–${end.toLocaleString()}${hasMore?'+':''}</div>
+    <div style="display:flex;gap:6px;">
+      <button onclick="_fubUmPage(-1)" ${_fubUmState.page===0?'disabled':''} style="padding:6px 12px;border:1px solid #cbd5e1;background:${_fubUmState.page===0?'#f8fafc':'#fff'};color:${_fubUmState.page===0?'#cbd5e1':'#475569'};font-size:11px;font-weight:600;border-radius:5px;cursor:${_fubUmState.page===0?'not-allowed':'pointer'};">← Prev</button>
+      <button onclick="_fubUmPage(1)" ${hasMore?'':'disabled'} style="padding:6px 12px;border:1px solid #cbd5e1;background:${hasMore?'#fff':'#f8fafc'};color:${hasMore?'#475569':'#cbd5e1'};font-size:11px;font-weight:600;border-radius:5px;cursor:${hasMore?'pointer':'not-allowed'};">Next →</button>
+    </div>`;
+}
+
+function _fubUmPage(delta){
+  const np = _fubUmState.page + delta;
+  if(np < 0) return;
+  _fubUmState.page = np;
+  _fubUmLoadData();
+}
+
+function _fubUmToggleRow(id, checked){
+  if(checked) _fubUmState.selected.add(id);
+  else _fubUmState.selected.delete(id);
+  _fubUmRender();
+}
+
+function _fubUmToggleAll(checked){
+  if(checked){
+    _fubUmState.rows.forEach(r => _fubUmState.selected.add(r.id));
+  } else {
+    _fubUmState.rows.forEach(r => _fubUmState.selected.delete(r.id));
+  }
+  _fubUmRender();
+}
+
+function _fubUmClearSelection(){
+  _fubUmState.selected.clear();
+  _fubUmRender();
+}
+
+function _fubUmUpdateBulkBar(){
+  const bar = document.getElementById('fubUmBulkBar');
+  const count = document.getElementById('fubUmSelCount');
+  if(!bar || !count) return;
+  if(_fubUmState.selected.size === 0){ bar.style.display = 'none'; return; }
+  bar.style.display = '';
+  count.textContent = `${_fubUmState.selected.size} selected`;
+}
+
+async function _fubUmResolveOne(id, newResolution){
+  try{
+    const patch = { resolution: newResolution, resolved_at: new Date().toISOString() };
+    if(window._currentUser && window._currentUser.id) patch.resolved_by_user_id = window._currentUser.id;
+    if(newResolution === 'pending'){ patch.resolved_at = null; patch.resolved_by_user_id = null; patch.resolved_property_id = null; }
+    await _sbPatch('ace_fub_unmatched_deals', id, patch);
+    // Update row locally
+    const row = _fubUmState.rows.find(r => r.id === id);
+    if(row) row.resolution = newResolution;
+    if(_fubUmState.counts){
+      if(newResolution === 'ignored'){ _fubUmState.counts.pending--; _fubUmState.counts.ignored++; }
+      else if(newResolution === 'pending'){ _fubUmState.counts.ignored--; _fubUmState.counts.pending++; }
+    }
+    _fubUmRender();
+  } catch(e){
+    alert('Failed to update: ' + e.message);
+  }
+}
+
+async function _fubUmBulkResolve(newResolution){
+  const ids = Array.from(_fubUmState.selected);
+  if(ids.length === 0) return;
+  if(!confirm(`${newResolution === 'ignored' ? 'Ignore' : 'Unmark'} ${ids.length} selected deals?`)) return;
+  let okCount = 0, failCount = 0;
+  for(const id of ids){
+    try{
+      const patch = { resolution: newResolution, resolved_at: new Date().toISOString() };
+      if(window._currentUser && window._currentUser.id) patch.resolved_by_user_id = window._currentUser.id;
+      if(newResolution === 'pending'){ patch.resolved_at = null; patch.resolved_by_user_id = null; patch.resolved_property_id = null; }
+      await _sbPatch('ace_fub_unmatched_deals', id, patch);
+      okCount++;
+    } catch(e){ failCount++; }
+  }
+  _fubUmState.selected.clear();
+  await _fubUmLoadData();
+  if(failCount > 0) alert(`${okCount} updated, ${failCount} failed.`);
+}
+
+// Link-to-property modal
+let _fubUmLinkSearchTimer = null;
+
+function _fubUmOpenLink(unmatchedId){
+  const row = _fubUmState.rows.find(r => r.id === unmatchedId);
+  if(!row) return;
+  _fubUmState.linkingId = unmatchedId;
+  const modal = document.getElementById('fubUmLinkModal');
+  const body = document.getElementById('fubUmLinkModalBody');
+  if(!modal || !body) return;
+  modal.style.display = 'flex';
+  const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  body.innerHTML = `
+    <div style="background:#f8fafc;padding:12px 14px;border-radius:8px;margin-bottom:14px;border:1px solid #e2e8f0;">
+      <div style="font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">FUB deal</div>
+      <div style="font-size:13px;font-weight:600;color:#0f172a;">${esc(row.fub_deal_name)}</div>
+      <div style="font-size:11px;color:#64748b;margin-top:4px;">${esc(row.fub_pipeline_name||'—')} · ${esc(row.fub_stage_name||'—')} · Owner: ${esc(row.fub_contact_name||'—')}</div>
+    </div>
+    <div style="font-size:12px;font-weight:600;color:#0f172a;margin-bottom:6px;">Search for matching property</div>
+    <input id="fubUmLinkSearch" type="text" placeholder="Address or partial match..." oninput="_fubUmLinkSearch(this.value)" style="width:100%;padding:9px 12px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;box-sizing:border-box;margin-bottom:10px;">
+    <div id="fubUmLinkResults" style="max-height:300px;overflow-y:auto;"></div>`;
+  // Auto-search with contact's other properties
+  if(row.fub_contact_id){
+    _fubUmLinkSearchByContact(row.fub_contact_id);
+  } else {
+    // Search by deal name keywords
+    const m = row.fub_deal_name && row.fub_deal_name.match(/\b\d{1,5}\s+\w+/);
+    const seed = m ? m[0] : '';
+    const el = document.getElementById('fubUmLinkSearch');
+    if(el && seed){ el.value = seed; _fubUmLinkSearch(seed); }
+  }
+}
+
+async function _fubUmLinkSearchByContact(fubContactId){
+  const results = document.getElementById('fubUmLinkResults');
+  if(!results) return;
+  results.innerHTML = '<div style="padding:14px;color:#94a3b8;font-size:12px;text-align:center;">Searching...</div>';
+  try{
+    // Find ace_contact with this FUB id
+    const contacts = await _sbGet('ace_contacts', `select=id&fub_contact_id=eq.${fubContactId}&limit=1`);
+    if(!Array.isArray(contacts) || contacts.length === 0){
+      results.innerHTML = '<div style="padding:14px;color:#94a3b8;font-size:12px;">Contact not in CRM. Try searching by address instead.</div>';
+      return;
+    }
+    const props = await _sbGet('ace_properties', `select=id,address,pipeline_stage,fub_deal_id,is_archived&owner_contact_id=eq.${contacts[0].id}&limit=50`);
+    _fubUmRenderLinkResults(props || []);
+  } catch(e){
+    results.innerHTML = `<div style="padding:14px;color:#991b1b;font-size:12px;">Error: ${e.message}</div>`;
+  }
+}
+
+function _fubUmLinkSearch(q){
+  if(_fubUmLinkSearchTimer) clearTimeout(_fubUmLinkSearchTimer);
+  _fubUmLinkSearchTimer = setTimeout(async () => {
+    const results = document.getElementById('fubUmLinkResults');
+    if(!results) return;
+    q = (q||'').trim();
+    if(q.length < 2){ results.innerHTML = '<div style="padding:14px;color:#94a3b8;font-size:12px;">Type at least 2 characters.</div>'; return; }
+    results.innerHTML = '<div style="padding:14px;color:#94a3b8;font-size:12px;text-align:center;">Searching...</div>';
+    try{
+      const qEnc = encodeURIComponent('%' + q + '%');
+      const props = await _sbGet('ace_properties', `select=id,address,pipeline_stage,fub_deal_id,is_archived&address=ilike.${qEnc}&limit=30`);
+      _fubUmRenderLinkResults(props || []);
+    } catch(e){
+      results.innerHTML = `<div style="padding:14px;color:#991b1b;font-size:12px;">Error: ${e.message}</div>`;
+    }
+  }, 300);
+}
+
+function _fubUmRenderLinkResults(props){
+  const results = document.getElementById('fubUmLinkResults');
+  if(!results) return;
+  const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  if(props.length === 0){
+    results.innerHTML = '<div style="padding:14px;color:#94a3b8;font-size:12px;">No properties found.</div>';
+    return;
+  }
+  results.innerHTML = props.map(p => {
+    const claimed = p.fub_deal_id ? `<span style="display:inline-block;background:#fee2e2;color:#991b1b;padding:1px 6px;border-radius:8px;font-size:9px;font-weight:700;margin-left:6px;">claimed by #${p.fub_deal_id}</span>` : '';
+    const arch = p.is_archived ? `<span style="display:inline-block;background:#f1f5f9;color:#64748b;padding:1px 6px;border-radius:8px;font-size:9px;font-weight:700;margin-left:6px;">archived</span>` : '';
+    return `
+      <div style="padding:10px 12px;border:1px solid #e2e8f0;border-radius:6px;margin-bottom:6px;display:flex;justify-content:space-between;align-items:center;gap:10px;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:600;color:#0f172a;font-size:12px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${esc(p.address)}">${esc(p.address)}</div>
+          <div style="font-size:10px;color:#64748b;margin-top:2px;">Stage: ${esc(p.pipeline_stage||'—')}${claimed}${arch}</div>
+        </div>
+        <button onclick="_fubUmConfirmLink('${esc(p.id)}', ${p.fub_deal_id ? 'true' : 'false'})" style="background:#0284c7;color:#fff;border:none;padding:6px 12px;font-size:11px;font-weight:600;border-radius:5px;cursor:pointer;white-space:nowrap;">Link →</button>
+      </div>`;
+  }).join('');
+}
+
+async function _fubUmConfirmLink(propertyId, alreadyClaimed){
+  const unmatchedId = _fubUmState.linkingId;
+  const row = _fubUmState.rows.find(r => r.id === unmatchedId);
+  if(!row) return;
+  if(alreadyClaimed && !confirm(`This property is already linked to another FUB deal. Overwrite that link with deal #${row.fub_deal_id}?`)) return;
+
+  try{
+    // 1. Patch the property with fub_deal_id + new stage
+    const stage = row.fub_stage_name && row.fub_stage_name !== 'Trash' ? row.fub_stage_name : null;
+    const propPatch = { fub_deal_id: row.fub_deal_id };
+    if(stage) propPatch.pipeline_stage = stage;
+    await _sbPatch('ace_properties', propertyId, propPatch);
+
+    // 2. Mark the unmatched row as linked
+    const umPatch = {
+      resolution: 'linked',
+      resolved_property_id: propertyId,
+      resolved_at: new Date().toISOString()
+    };
+    if(window._currentUser && window._currentUser.id) umPatch.resolved_by_user_id = window._currentUser.id;
+    await _sbPatch('ace_fub_unmatched_deals', unmatchedId, umPatch);
+
+    _fubUmCloseLinkModal();
+    await _fubUmLoadData();
+  } catch(e){
+    alert('Link failed: ' + e.message);
+  }
+}
+
+function _fubUmCloseLinkModal(){
+  const modal = document.getElementById('fubUmLinkModal');
+  if(modal) modal.style.display = 'none';
+  _fubUmState.linkingId = null;
+}
+
 // v107.2: dynamically toggle the NO FINANCIALS stamp.
 // Reads live DOM input values so it works immediately after typing/saving.
 function _finUpdateStamp(){
@@ -38819,24 +39622,40 @@ function _applyUserToUI(user){
 async function setViewMode(mode){
   _viewMode = mode;
   _updateViewToggle();
-  // Remember which page the user is currently viewing so we can restore it
-  // after the sync completes. Without this, syncData's showDashboard() at the
-  // end would kick them back to the dashboard every time they toggle.
+
   const currentNav = document.querySelector('.nav-btn.active');
   const currentPage = currentNav ? currentNav.textContent.trim() : '';
+
+  const pageHandlers = () => ({
+    'Deal Board':     ()=>typeof showDealBoard==='function' && showDealBoard(),
+    'Pipeline':       ()=>typeof showPipeline==='function' && showPipeline(),
+    'Contacts':       ()=>typeof showContactsPage==='function' && showContactsPage(),
+    'Buyer Criteria': ()=>{ _bcLastLoadMs=0; if(typeof showBuyerCriteriaPage==='function') showBuyerCriteriaPage(); },
+    'Tasks':          ()=>typeof showTasksPage==='function' && showTasksPage(),
+    'Dashboard':      ()=>typeof showDashboard==='function' && showDashboard(),
+  });
+
+  // ── Fast path: use cached full dataset, no DB round-trip ──────────────
+  // _allDealsSnapshot is populated whenever syncData() loads without an
+  // agent filter (i.e. the very first 'all' load, which is the admin default).
+  if(_allDealsSnapshot.length > 0){
+    const agentName = _currentUser && _currentUser.fub_name;
+    if(mode === 'my' && agentName){
+      allDeals = _allDealsSnapshot.filter(d => d['Assigned Agent'] === agentName);
+    } else {
+      allDeals = _allDealsSnapshot.slice();
+    }
+    buildSidebar();
+    const h = pageHandlers()[currentPage];
+    if(h) h();
+    return;
+  }
+
+  // ── Slow path: cache empty (first toggle for agent in 'my' mode) ──────
   allDeals = [];
   buildSidebar();
   try { await syncData(); } catch(e) { console.warn('setViewMode sync failed:', e.message); }
-  // Restore the page the user was on. Known pages get re-rendered from their handler.
-  const handlers = {
-    'Deal Board': ()=>typeof showDealBoard==='function' && showDealBoard(),
-    'Pipeline':   ()=>typeof showPipeline==='function' && showPipeline(),
-    'Contacts':   ()=>typeof showContactsPage==='function' && showContactsPage(),
-    'Buyer Criteria':()=>{ _bcLastLoadMs=0; if(typeof showBuyerCriteriaPage==='function') showBuyerCriteriaPage(); },
-    'Tasks':      ()=>typeof showTasksPage==='function' && showTasksPage(),
-    'Dashboard':  ()=>typeof showDashboard==='function' && showDashboard(),
-  };
-  const h = handlers[currentPage];
+  const h = pageHandlers()[currentPage];
   if(h) h();
 }
 

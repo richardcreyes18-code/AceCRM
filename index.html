@@ -7925,9 +7925,16 @@ function _renderOffersSummary(rows){
   // Values shown in the cards have no $ prefix — the $ is a static overlay span.
   // Just format with commas via _fmtNum.
   const latest = (t) => { const r = rows.find(x => x.offer_type === t); return r ? Number(r.amount) : null; };
-  const asking        = latest('asking');
+  let   asking        = latest('asking');
   const starter       = latest('ace_starter');
   const acceptedSeller= latest('accepted_by_seller');
+  // v111.9: fall back to the property's asking_price (which is what the seller-lead
+  // intake writes) when there is no ace_deal_offers row of type 'asking' yet. New
+  // leads now seed this row at submit time; the fallback covers existing deals.
+  if(asking == null && currentDeal){
+    const fb = Number(currentDeal['Asking Price']);
+    if(fb && !isNaN(fb)) asking = fb;
+  }
 
   const setVal = (id, v) => { const el = document.getElementById(id); if(el) el.value = (v == null ? '' : _fmtNum(v)); };
   setVal('offerInAsking', asking);
@@ -8070,6 +8077,19 @@ async function _offerInlineSave(inputEl){
         notes: 'Entered via Offers tab'
       });
       if(created && created.id) inputEl.setAttribute('data-row-id', created.id);
+    }
+    // v111.9: when the "Seller Original Asking" card changes, also mirror the
+    // value onto ace_properties.asking_price so the header strip, Financial
+    // Analysis's asking price input, and all `d['Asking Price']` readers stay
+    // in sync. Without this, the two copies drift as soon as the user edits.
+    if(offerType === 'asking'){
+      try {
+        await _sbPatch('ace_properties', dealId, { asking_price: amount });
+        if(currentDeal && currentDeal.id === dealId){
+          currentDeal['Asking Price'] = amount;
+          currentDeal.asking_price    = amount;
+        }
+      } catch(e){ console.warn('asking_price mirror failed:', e.message); }
     }
     setTimeout(()=>{ inputEl.style.borderBottomColor = offerType==='accepted_by_seller' ? '#86efac' : '#cbd5e1'; }, 600);
   } catch(e) {
@@ -9420,7 +9440,16 @@ function renderFinancialTab(d){
 
       return `
       <div class="info-box fin-hide-simple">
-        <div class="info-box-title">Income</div>
+        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
+          <div class="info-box-title" style="margin:0;">Income</div>
+          <!-- v111.9: one-click snapshot from Actual to Proforma so the agent
+               can start from today's numbers and tweak from there. -->
+          <button type="button" onclick="copyActualToProforma('income')"
+            title="Copy every Actual (current) input into the Proforma (projected) column"
+            style="margin-left:auto;background:#e0e7ff;color:#3730a3;border:1px solid #c7d2fe;padding:5px 12px;font-size:11px;border-radius:5px;cursor:pointer;font-weight:600;white-space:nowrap;">
+            ⇒ Copy Actual → Proforma
+          </button>
+        </div>
         <div style="overflow-x:auto;">
         <table style="width:100%;border-collapse:collapse;font-size:11px;min-width:900px;">
           <thead>
@@ -9808,6 +9837,13 @@ function renderFinancialTab(d){
               <input type="radio" name="expMode" id="expModeRatio" value="ratio" onchange="toggleExpMode()" style="cursor:pointer;"/> % Ratio
             </label>
           </div>
+          <!-- v111.9: mirror of the Income section's one-click copy — snapshots
+               every Actual expense line into the Proforma column. -->
+          <button type="button" onclick="copyActualToProforma('expenses')"
+            title="Copy every Actual (current) expense input into the Proforma (projected) column"
+            style="background:#e0e7ff;color:#3730a3;border:1px solid #c7d2fe;padding:5px 12px;font-size:11px;border-radius:5px;cursor:pointer;font-weight:600;white-space:nowrap;">
+            ⇒ Copy Actual → Proforma
+          </button>
           <button class="save-btn" style="padding:3px 12px;" onclick="showAllExpCats()">Show All</button>
           <button class="save-btn" style="padding:3px 12px;" onclick="hideAllExpCats()">Hide All</button>
         </div>
@@ -29902,6 +29938,22 @@ async function _liSubmitSeller(){
         const createdDeal = await _sbPost(SB_TABLES.properties, propData);
         if(createdDeal && createdDeal.id){
           createdDealIds.push({ id: createdDeal.id, address: p.address, propIdx: p.propIdx });
+          // v111.9: seed an ace_deal_offers row of type 'asking' so the Offers tab
+          // "Seller Original Asking" card is pre-populated. Without this row the
+          // amount lived only in ace_properties.asking_price, and the Offers tab
+          // reads from ace_deal_offers — so the field showed up blank post-intake.
+          const askAmt = Number(p.dealFields['Asking Price']||0);
+          if(askAmt > 0){
+            try {
+              await _sbPost('ace_deal_offers', {
+                deal_id: createdDeal.id,
+                offer_type: 'asking',
+                amount: askAmt,
+                offer_date: new Date().toISOString().slice(0,10),
+                notes: 'Seeded from seller lead intake'
+              });
+            } catch(e){ console.warn('asking offer seed failed:', e.message); }
+          }
         }
       }
 
@@ -36547,82 +36599,109 @@ function updateIncomeTotals(){
   const fd3 = n => '$'+(r2(n)).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
   const el  = id => document.getElementById(id);
 
+  // v111.9: precision fix. Previously yearly was always computed as monthly*12,
+  // so $400,000/yr typed by the user round-tripped through $33,333.33/mo and
+  // came back as $399,999.96/yr. Now we read BOTH inputs and prefer the yr
+  // input when non-zero, deriving mo = yr/12 for the monthly column.
+  const dualRead = (moId, yrId) => {
+    const mo = v(moId), yr = v(yrId);
+    if(yr > 0) return { mo: yr/12, yr };
+    return { mo, yr: mo * 12 };
+  };
+
   // Actual income
-  const aGRI   = v('fin_aGrossRent_mo');
+  const aGRI   = dualRead('fin_aGrossRent_mo', 'fin_aGrossRent_yr');
+  const aOI    = dualRead('fin_aOI_mo',        'fin_aOI_yr');
+  const aRUBS  = dualRead('fin_aRUBS_mo',      'fin_aRUBS_yr');
   const aVacP  = vac('fin_aVacancy');
-  const aVac   = r2(aGRI * aVacP / 100);
-  const aNRU   = v('fin_aNRU_pct') ? r2(aGRI * v('fin_aNRU_pct') / 100) : 0;
-  const aBD    = v('fin_aBD_pct')  ? r2(aGRI * v('fin_aBD_pct')  / 100) : 0;
-  const aCon   = v('fin_aCon_pct') ? r2(aGRI * v('fin_aCon_pct') / 100) : 0;
-  const aTRI   = aGRI - aVac - aNRU - aBD - aCon;
-  const aOI    = v('fin_aOI_mo');
-  const aRUBS  = v('fin_aRUBS_mo');
-  const aEGI   = aTRI + aOI + aRUBS;
+  const aVac_yr = r2(aGRI.yr * aVacP / 100);
+  const aVac_mo = aVac_yr / 12;
+  const aNRU_yr = v('fin_aNRU_pct') ? r2(aGRI.yr * v('fin_aNRU_pct') / 100) : 0;
+  const aNRU_mo = aNRU_yr / 12;
+  const aBD_yr  = v('fin_aBD_pct')  ? r2(aGRI.yr * v('fin_aBD_pct')  / 100) : 0;
+  const aBD_mo  = aBD_yr / 12;
+  const aCon_yr = v('fin_aCon_pct') ? r2(aGRI.yr * v('fin_aCon_pct') / 100) : 0;
+  const aCon_mo = aCon_yr / 12;
+  const aTRI_mo = aGRI.mo - aVac_mo - aNRU_mo - aBD_mo - aCon_mo;
+  const aTRI_yr = aGRI.yr - aVac_yr - aNRU_yr - aBD_yr - aCon_yr;
+  const aEGI_mo = aTRI_mo + aOI.mo + aRUBS.mo;
+  const aEGI_yr = aTRI_yr + aOI.yr + aRUBS.yr;
 
   // Proforma income
-  const pGRI   = v('fin_pGrossRent_mo');
+  const pGRI   = dualRead('fin_pGrossRent_mo', 'fin_pGrossRent_yr');
+  const pOI    = dualRead('fin_pOI_mo',        'fin_pOI_yr');
+  const pRUBS  = dualRead('fin_pRUBS_mo',      'fin_pRUBS_yr');
   const pVacP  = vac('fin_pVacancy');
-  const pVac   = r2(pGRI * pVacP / 100);
-  const pNRU   = v('fin_pNRU_pct') ? r2(pGRI * v('fin_pNRU_pct') / 100) : 0;
-  const pBD    = v('fin_pBD_pct')  ? r2(pGRI * v('fin_pBD_pct')  / 100) : 0;
-  const pCon   = v('fin_pCon_pct') ? r2(pGRI * v('fin_pCon_pct') / 100) : 0;
-  const pTRI   = pGRI - pVac - pNRU - pBD - pCon;
-  const pOI    = v('fin_pOI_mo');
-  const pRUBS  = v('fin_pRUBS_mo');
-  const pEGI   = pTRI + pOI + pRUBS;
+  const pVac_yr = r2(pGRI.yr * pVacP / 100);
+  const pVac_mo = pVac_yr / 12;
+  const pNRU_yr = v('fin_pNRU_pct') ? r2(pGRI.yr * v('fin_pNRU_pct') / 100) : 0;
+  const pNRU_mo = pNRU_yr / 12;
+  const pBD_yr  = v('fin_pBD_pct')  ? r2(pGRI.yr * v('fin_pBD_pct')  / 100) : 0;
+  const pBD_mo  = pBD_yr / 12;
+  const pCon_yr = v('fin_pCon_pct') ? r2(pGRI.yr * v('fin_pCon_pct') / 100) : 0;
+  const pCon_mo = pCon_yr / 12;
+  const pTRI_mo = pGRI.mo - pVac_mo - pNRU_mo - pBD_mo - pCon_mo;
+  const pTRI_yr = pGRI.yr - pVac_yr - pNRU_yr - pBD_yr - pCon_yr;
+  const pEGI_mo = pTRI_mo + pOI.mo + pRUBS.mo;
+  const pEGI_yr = pTRI_yr + pOI.yr + pRUBS.yr;
 
   // Update deduction rows
-  if(el('inc_aVac_mo'))  el('inc_aVac_mo').textContent  = fd3(aVac);   if(el('inc_aVac_yr'))  el('inc_aVac_yr').textContent  = fd3(aVac*12);
-  if(el('inc_pVac_mo'))  el('inc_pVac_mo').textContent  = fd3(pVac);   if(el('inc_pVac_yr'))  el('inc_pVac_yr').textContent  = fd3(pVac*12);
-  if(el('inc_aNRU_mo'))  el('inc_aNRU_mo').textContent  = fd3(aNRU);   if(el('inc_aNRU_yr'))  el('inc_aNRU_yr').textContent  = fd3(aNRU*12);
-  if(el('inc_pNRU_mo'))  el('inc_pNRU_mo').textContent  = fd3(pNRU);   if(el('inc_pNRU_yr'))  el('inc_pNRU_yr').textContent  = fd3(pNRU*12);
-  if(el('inc_aBD_mo'))   el('inc_aBD_mo').textContent   = fd3(aBD);    if(el('inc_aBD_yr'))   el('inc_aBD_yr').textContent   = fd3(aBD*12);
-  if(el('inc_pBD_mo'))   el('inc_pBD_mo').textContent   = fd3(pBD);    if(el('inc_pBD_yr'))   el('inc_pBD_yr').textContent   = fd3(pBD*12);
-  if(el('inc_aCon_mo'))  el('inc_aCon_mo').textContent  = fd3(aCon);   if(el('inc_aCon_yr'))  el('inc_aCon_yr').textContent  = fd3(aCon*12);
-  if(el('inc_pCon_mo'))  el('inc_pCon_mo').textContent  = fd3(pCon);   if(el('inc_pCon_yr'))  el('inc_pCon_yr').textContent  = fd3(pCon*12);
+  if(el('inc_aVac_mo'))  el('inc_aVac_mo').textContent  = fd3(aVac_mo); if(el('inc_aVac_yr'))  el('inc_aVac_yr').textContent  = fd3(aVac_yr);
+  if(el('inc_pVac_mo'))  el('inc_pVac_mo').textContent  = fd3(pVac_mo); if(el('inc_pVac_yr'))  el('inc_pVac_yr').textContent  = fd3(pVac_yr);
+  if(el('inc_aNRU_mo'))  el('inc_aNRU_mo').textContent  = fd3(aNRU_mo); if(el('inc_aNRU_yr'))  el('inc_aNRU_yr').textContent  = fd3(aNRU_yr);
+  if(el('inc_pNRU_mo'))  el('inc_pNRU_mo').textContent  = fd3(pNRU_mo); if(el('inc_pNRU_yr'))  el('inc_pNRU_yr').textContent  = fd3(pNRU_yr);
+  if(el('inc_aBD_mo'))   el('inc_aBD_mo').textContent   = fd3(aBD_mo);  if(el('inc_aBD_yr'))   el('inc_aBD_yr').textContent   = fd3(aBD_yr);
+  if(el('inc_pBD_mo'))   el('inc_pBD_mo').textContent   = fd3(pBD_mo);  if(el('inc_pBD_yr'))   el('inc_pBD_yr').textContent   = fd3(pBD_yr);
+  if(el('inc_aCon_mo'))  el('inc_aCon_mo').textContent  = fd3(aCon_mo); if(el('inc_aCon_yr'))  el('inc_aCon_yr').textContent  = fd3(aCon_yr);
+  if(el('inc_pCon_mo'))  el('inc_pCon_mo').textContent  = fd3(pCon_mo); if(el('inc_pCon_yr'))  el('inc_pCon_yr').textContent  = fd3(pCon_yr);
 
   // Update TRI and EGI
-  if(el('inc_aTRI_mo')) el('inc_aTRI_mo').textContent = fd3(aTRI); if(el('inc_aTRI_yr')) el('inc_aTRI_yr').textContent = fd3(aTRI*12);
-  if(el('inc_pTRI_mo')) el('inc_pTRI_mo').textContent = fd3(pTRI); if(el('inc_pTRI_yr')) el('inc_pTRI_yr').textContent = fd3(pTRI*12);
-  if(el('inc_aEGI_mo')) el('inc_aEGI_mo').textContent = fd3(aEGI); if(el('inc_aEGI_yr')) el('inc_aEGI_yr').textContent = fd3(aEGI*12);
-  if(el('inc_pEGI_mo')) el('inc_pEGI_mo').textContent = fd3(pEGI); if(el('inc_pEGI_yr')) el('inc_pEGI_yr').textContent = fd3(pEGI*12);
+  if(el('inc_aTRI_mo')) el('inc_aTRI_mo').textContent = fd3(aTRI_mo); if(el('inc_aTRI_yr')) el('inc_aTRI_yr').textContent = fd3(aTRI_yr);
+  if(el('inc_pTRI_mo')) el('inc_pTRI_mo').textContent = fd3(pTRI_mo); if(el('inc_pTRI_yr')) el('inc_pTRI_yr').textContent = fd3(pTRI_yr);
+  if(el('inc_aEGI_mo')) el('inc_aEGI_mo').textContent = fd3(aEGI_mo); if(el('inc_aEGI_yr')) el('inc_aEGI_yr').textContent = fd3(aEGI_yr);
+  if(el('inc_pEGI_mo')) el('inc_pEGI_mo').textContent = fd3(pEGI_mo); if(el('inc_pEGI_yr')) el('inc_pEGI_yr').textContent = fd3(pEGI_yr);
 
-  window._aEGI_mo = aEGI;
-  window._pEGI_mo = pEGI;
+  window._aEGI_mo = aEGI_mo;
+  window._pEGI_mo = pEGI_mo;
+  window._aEGI_yr = aEGI_yr;
+  window._pEGI_yr = pEGI_yr;
 
   // NOI = EGI - Operating Expenses
   const aTotalOpEx = window._aTotalOpEx_mo || 0;
   const pTotalOpEx = window._pTotalOpEx_mo || 0;
-  const aNOI = aEGI - aTotalOpEx;
-  const pNOI = pEGI - pTotalOpEx;
+  const aNOI_mo = aEGI_mo - aTotalOpEx;
+  const pNOI_mo = pEGI_mo - pTotalOpEx;
+  const aNOI_yr = aEGI_yr - aTotalOpEx * 12;
+  const pNOI_yr = pEGI_yr - pTotalOpEx * 12;
 
-  if(el('inc_aNOI_mo')) el('inc_aNOI_mo').textContent = fd3(aNOI); if(el('inc_aNOI_yr')) el('inc_aNOI_yr').textContent = fd3(aNOI*12);
-  if(el('inc_pNOI_mo')) el('inc_pNOI_mo').textContent = fd3(pNOI); if(el('inc_pNOI_yr')) el('inc_pNOI_yr').textContent = fd3(pNOI*12);
-  if(el('top_noi_mo'))  el('top_noi_mo').textContent  = fd3(aNOI); if(el('top_noi_yr'))  el('top_noi_yr').textContent  = fd3(aNOI*12);
-  if(el('top_pnoi_mo')) el('top_pnoi_mo').textContent = fd3(pNOI); if(el('top_pnoi_yr')) el('top_pnoi_yr').textContent = fd3(pNOI*12);
+  if(el('inc_aNOI_mo')) el('inc_aNOI_mo').textContent = fd3(aNOI_mo); if(el('inc_aNOI_yr')) el('inc_aNOI_yr').textContent = fd3(aNOI_yr);
+  if(el('inc_pNOI_mo')) el('inc_pNOI_mo').textContent = fd3(pNOI_mo); if(el('inc_pNOI_yr')) el('inc_pNOI_yr').textContent = fd3(pNOI_yr);
+  if(el('top_noi_mo'))  el('top_noi_mo').textContent  = fd3(aNOI_mo); if(el('top_noi_yr'))  el('top_noi_yr').textContent  = fd3(aNOI_yr);
+  if(el('top_pnoi_mo')) el('top_pnoi_mo').textContent = fd3(pNOI_mo); if(el('top_pnoi_yr')) el('top_pnoi_yr').textContent = fd3(pNOI_yr);
 
-  window._aNOI_mo = aNOI;
-  window._pNOI_mo = pNOI;
+  window._aNOI_mo = aNOI_mo;
+  window._pNOI_mo = pNOI_mo;
 
   // ── Also update the Cash Flow section cells live ──────────────
   const mort_mo = window._aMortgage_mo || 0;
   const pmort_mo = window._pMortgage_mo || mort_mo;
-  const aCF = aNOI - mort_mo;
-  const pCF = pNOI - pmort_mo;
+  const aCF_mo = aNOI_mo - mort_mo;
+  const pCF_mo = pNOI_mo - pmort_mo;
+  const aCF_yr = aNOI_yr - mort_mo * 12;
+  const pCF_yr = pNOI_yr - pmort_mo * 12;
 
-  const fmtCF = n => fd3(n);
-  if(el('cf_aEGI_mo'))  el('cf_aEGI_mo').textContent  = fd3(aEGI);
-  if(el('cf_aEGI_yr'))  el('cf_aEGI_yr').textContent  = fd3(aEGI*12);
-  if(el('cf_pEGI_mo'))  el('cf_pEGI_mo').textContent  = fd3(pEGI);
-  if(el('cf_pEGI_yr'))  el('cf_pEGI_yr').textContent  = fd3(pEGI*12);
+  if(el('cf_aEGI_mo'))  el('cf_aEGI_mo').textContent  = fd3(aEGI_mo);
+  if(el('cf_aEGI_yr'))  el('cf_aEGI_yr').textContent  = fd3(aEGI_yr);
+  if(el('cf_pEGI_mo'))  el('cf_pEGI_mo').textContent  = fd3(pEGI_mo);
+  if(el('cf_pEGI_yr'))  el('cf_pEGI_yr').textContent  = fd3(pEGI_yr);
   if(el('cf_aOpEx_mo')) el('cf_aOpEx_mo').textContent = fd3(aTotalOpEx);
   if(el('cf_aOpEx_yr')) el('cf_aOpEx_yr').textContent = fd3(aTotalOpEx*12);
   if(el('cf_pOpEx_mo')) el('cf_pOpEx_mo').textContent = fd3(pTotalOpEx);
   if(el('cf_pOpEx_yr')) el('cf_pOpEx_yr').textContent = fd3(pTotalOpEx*12);
-  if(el('cf_aCF_mo')){ el('cf_aCF_mo').textContent = fmtCF(aCF);   el('cf_aCF_mo').style.color = aCF>=0?'#1a3a6e':'#c00'; }
-  if(el('cf_aCF_yr')){ el('cf_aCF_yr').textContent = fmtCF(aCF*12); el('cf_aCF_yr').style.color = aCF>=0?'#1a3a6e':'#c00'; }
-  if(el('cf_pCF_mo')){ el('cf_pCF_mo').textContent = fmtCF(pCF);   el('cf_pCF_mo').style.color = pCF>=0?'#306030':'#c00'; }
-  if(el('cf_pCF_yr')){ el('cf_pCF_yr').textContent = fmtCF(pCF*12); el('cf_pCF_yr').style.color = pCF>=0?'#306030':'#c00'; }
+  if(el('cf_aCF_mo')){ el('cf_aCF_mo').textContent = fd3(aCF_mo); el('cf_aCF_mo').style.color = aCF_mo>=0?'#1a3a6e':'#c00'; }
+  if(el('cf_aCF_yr')){ el('cf_aCF_yr').textContent = fd3(aCF_yr); el('cf_aCF_yr').style.color = aCF_yr>=0?'#1a3a6e':'#c00'; }
+  if(el('cf_pCF_mo')){ el('cf_pCF_mo').textContent = fd3(pCF_mo); el('cf_pCF_mo').style.color = pCF_mo>=0?'#306030':'#c00'; }
+  if(el('cf_pCF_yr')){ el('cf_pCF_yr').textContent = fd3(pCF_yr); el('cf_pCF_yr').style.color = pCF_yr>=0?'#306030':'#c00'; }
 }
 
 function toggleExpMode(){
@@ -36711,6 +36790,71 @@ function updateExpenseTotals(){
 
   // NOI = EGI - OpEx — refresh whenever expenses change
   updateIncomeTotals();
+}
+
+// v111.9: Copy every Actual (current) Income/Expense input into its Proforma
+// counterpart, in one click. Lets the agent stamp the current state as the
+// starting proforma, then tweak upward/downward from there.
+//   which='income'    → Income section only
+//   which='expenses'  → Expenses section only
+//   which='all' (def) → both
+// Always re-triggers incomeCalc + expenseCalc so totals refresh immediately.
+function copyActualToProforma(which){
+  which = which || 'all';
+  const copy = (srcId, dstId) => {
+    const s = document.getElementById(srcId);
+    const d = document.getElementById(dstId);
+    if(s && d){ d.value = s.value; }
+  };
+
+  if(which === 'income' || which === 'all'){
+    const incomePairs = [
+      ['fin_aGrossRent_mo', 'fin_pGrossRent_mo'],
+      ['fin_aGrossRent_yr', 'fin_pGrossRent_yr'],
+      ['fin_aVacancy',      'fin_pVacancy'],
+      ['fin_aNRU_pct',      'fin_pNRU_pct'],
+      ['fin_aBD_pct',       'fin_pBD_pct'],
+      ['fin_aCon_pct',      'fin_pCon_pct'],
+      ['fin_aOI_mo',        'fin_pOI_mo'],
+      ['fin_aOI_yr',        'fin_pOI_yr'],
+      ['fin_aRUBS_mo',      'fin_pRUBS_mo'],
+      ['fin_aRUBS_yr',      'fin_pRUBS_yr'],
+    ];
+    incomePairs.forEach(p => copy(p[0], p[1]));
+  }
+
+  if(which === 'expenses' || which === 'all'){
+    // Itemized expense line ids — keep in sync with the EXP map in updateExpenseTotals
+    const expItems = [
+      'admin_mgmt','admin_acct','admin_legal','admin_other',
+      'rm_jan','rm_land','rm_maint','rm_sal','rm_pool','rm_sup',
+      'util_elec','util_gas','util_water','util_trash','util_other',
+      'misc_adv','misc_other',
+      'tax_prop','tax_other',
+      'ins_prop','ins_liab',
+      'pm_fee','pm_other'
+    ];
+    expItems.forEach(id => {
+      copy('fin_a_'+id+'_mo', 'fin_p_'+id+'_mo');
+      copy('fin_a_'+id+'_yr', 'fin_p_'+id+'_yr');
+    });
+    copy('fin_aCapRes_mo', 'fin_pCapRes_mo');
+    copy('fin_aCapRes_yr', 'fin_pCapRes_yr');
+    // % Ratio override inputs
+    copy('fin_aExpRatio',  'fin_pExpRatio');
+  }
+
+  markDirty();
+  if(typeof incomeCalc  === 'function') incomeCalc();
+  if(typeof expenseCalc === 'function') expenseCalc();
+
+  // Lightweight confirmation — flash the clicked button if we can find one
+  const label = which === 'income' ? 'Income' : (which === 'expenses' ? 'Expenses' : 'Income + Expenses');
+  try {
+    if(typeof showSaveConfirm === 'function'){
+      showSaveConfirm('Copied ' + label + ' → Proforma ✓');
+    }
+  } catch(e){}
 }
 
 // Bidirectional monthly/yearly sync

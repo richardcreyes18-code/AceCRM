@@ -9118,6 +9118,16 @@ function renderFinancialTab(d){
       </table>
     </div>
 
+    </div><!-- close #finStampTarget (stamp/dim covers Results Summary only) -->
+    </div><!-- close #finStampWrap -->
+
+    <!-- v111.15: Purchase Price & Down Payment is now OUTSIDE the stamp wrap.
+         Previously the "No Financials" stamp dimmed & disabled (pointer-events:none)
+         the Asking Price and Offer Price inputs — users couldn't enter them. Now
+         those inputs stay fully editable even before any rent/NOI/expense data
+         has been entered. The stamp still renders over the Results Summary table,
+         where the missing data is actually relevant. -->
+
     <!-- PURCHASE PRICE & DOWN PAYMENT ───────────────────────── -->
     <div class="info-box">
       <div class="info-box-title">Purchase Price &amp; Down Payment</div>
@@ -9302,8 +9312,8 @@ function renderFinancialTab(d){
     </div>
     ` : ''}
 
-    </div><!-- close #finStampTarget -->
-    </div><!-- close #finStampWrap -->
+    <!-- v111.15: stamp wrap is now closed earlier (right after Results Summary)
+         so the Asking/Offer price inputs above are never dimmed/disabled. -->
 
     <!-- INCOME TABLE ─────────────────────────────────────────── -->
     ${(()=>{

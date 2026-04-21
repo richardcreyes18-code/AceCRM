@@ -19464,16 +19464,19 @@ async function _contactLoadCommunication(contactId){
     const fubContactId = primaryFubId;  // kept for empty-state copy
     const fubIdsParam = fubIds.length ? `in.(${fubIds.join(',')})` : null;
 
-    // Step 2: Fetch all four data sources in parallel
-    const [callRows, noteRows, outreachRows] = await Promise.all([
+    // Step 2: Fetch all data sources in parallel (incl. FUB user map for agent names)
+    const [callRows, noteRows, outreachRows, userMapRows] = await Promise.all([
       fubIdsParam ? _sbGet('fub_calls', `person_id=${fubIdsParam}&select=id,created_at,direction,duration,outcome,note,phone,user_id&order=created_at.desc&limit=200`).catch(e=>{console.warn('calls fetch:',e.message);return[];}) : Promise.resolve([]),
-      fubIdsParam ? _sbGet('fub_notes', `person_id=${fubIdsParam}&select=id,created_at,subject,body&order=created_at.desc&limit=200`).catch(e=>{console.warn('notes fetch:',e.message);return[];}) : Promise.resolve([]),
-      _sbGet(SB_TABLES.buyerInterests, `contact_id=eq.${contactId}&select=id,date_sent,activity_type,response_status,response_notes,interest_notes,template_used,agent_name,property_id&order=date_sent.desc&limit=100`).catch(e=>{console.warn('outreach fetch:',e.message);return[];})
+      fubIdsParam ? _sbGet('fub_notes', `person_id=${fubIdsParam}&select=id,created_at,subject,body,created_by&order=created_at.desc&limit=200`).catch(e=>{console.warn('notes fetch:',e.message);return[];}) : Promise.resolve([]),
+      _sbGet(SB_TABLES.buyerInterests, `contact_id=eq.${contactId}&select=id,date_sent,activity_type,response_status,response_notes,interest_notes,template_used,agent_name,property_id&order=date_sent.desc&limit=100`).catch(e=>{console.warn('outreach fetch:',e.message);return[];}),
+      _sbGet('ace_fub_user_map', `select=fub_user_id,display_name`).catch(e=>{console.warn('user map fetch:',e.message);return[];})
     ]);
 
     const calls = callRows || [];
     const notes = noteRows || [];
     const outreach = outreachRows || [];
+    const userMap = new Map();
+    for(const u of (userMapRows||[])) userMap.set(u.fub_user_id, u.display_name);
     const totalCount = calls.length + notes.length + outreach.length;
 
     if(badgeEl) badgeEl.textContent = totalCount;
@@ -19585,15 +19588,17 @@ async function _contactLoadCommunication(contactId){
         const c = item.data;
         const dirIcon = c.direction === 'inbound' ? '⬇ IN' : '⬆ OUT';
         const dirColor = c.direction === 'inbound' ? '#16a34a' : '#2563eb';
+        const agent = c.user_id ? (userMap.get(c.user_id) || `FUB user ${c.user_id}`) : null;
         html += `
           <div style="background:#fff;padding:12px 16px;">
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:${c.note?'8px':'0'};">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:${c.note?'8px':'0'};flex-wrap:wrap;">
               <div style="font-size:14px;">${meta.icon}</div>
               <div style="font-size:11px;font-weight:700;color:${meta.color};letter-spacing:0.5px;">CALL</div>
               <div style="font-size:10px;font-weight:600;color:${dirColor};background:${c.direction==='inbound'?'#f0fdf4':'#eff6ff'};padding:2px 8px;border-radius:4px;border:1px solid ${dirColor};">${dirIcon}</div>
               <div style="font-size:11px;color:#64748b;">⏱ ${fmtDuration(c.duration)}</div>
               ${c.outcome ? `<div style="font-size:11px;color:#64748b;">${escapeHtml(c.outcome)}</div>` : ''}
-              <div style="margin-left:auto;font-size:11px;color:#94a3b8;">${fmtDate(c.date)}</div>
+              ${agent ? `<div style="font-size:11px;color:#64748b;">by ${escapeHtml(agent)}</div>` : ''}
+              <div style="margin-left:auto;font-size:11px;color:#94a3b8;">${fmtDate(item.date)}</div>
             </div>
             ${c.note ? `<div style="font-size:13px;color:#1e293b;white-space:pre-wrap;line-height:1.55;padding-left:22px;">${escapeHtml(c.note)}</div>` : '<div style="font-size:11px;color:#cbd5e1;font-style:italic;padding-left:22px;">No agent note</div>'}
           </div>`;
@@ -19603,11 +19608,12 @@ async function _contactLoadCommunication(contactId){
         const truncated = body.length > 600 ? body.substring(0,600)+'…' : body;
         html += `
           <div style="background:#fffbeb;padding:12px 16px;">
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
               <div style="font-size:14px;">${meta.icon}</div>
               <div style="font-size:11px;font-weight:700;color:${meta.color};letter-spacing:0.5px;">FUB NOTE</div>
               ${n.subject ? `<div style="font-size:11px;color:#64748b;">${escapeHtml(n.subject)}</div>` : ''}
-              <div style="margin-left:auto;font-size:11px;color:#94a3b8;">${fmtDate(n.date)}</div>
+              ${n.created_by ? `<div style="font-size:11px;color:#64748b;">by ${escapeHtml(n.created_by)}</div>` : ''}
+              <div style="margin-left:auto;font-size:11px;color:#94a3b8;">${fmtDate(item.date)}</div>
             </div>
             <div style="font-size:13px;color:#1e293b;white-space:pre-wrap;line-height:1.55;padding-left:22px;">${escapeHtml(truncated)}</div>
           </div>`;
@@ -19617,13 +19623,13 @@ async function _contactLoadCommunication(contactId){
         const statusLabel = (o.response_status||'no_response').replace(/_/g,' ');
         html += `
           <div style="background:#f0fdf4;padding:12px 16px;">
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:${(o.interest_notes || o.response_notes)?'8px':'0'};">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:${(o.interest_notes || o.response_notes)?'8px':'0'};flex-wrap:wrap;">
               <div style="font-size:14px;">${meta.icon}</div>
               <div style="font-size:11px;font-weight:700;color:${meta.color};letter-spacing:0.5px;">OUR OUTREACH</div>
               <div style="font-size:10px;font-weight:600;color:${meta.color};background:#fff;padding:2px 8px;border-radius:4px;border:1px solid ${meta.border};">${escapeHtml(typeLabel)}</div>
               <div style="font-size:11px;color:#64748b;">${escapeHtml(statusLabel)}</div>
               ${o.agent_name ? `<div style="font-size:11px;color:#64748b;">by ${escapeHtml(o.agent_name)}</div>` : ''}
-              <div style="margin-left:auto;font-size:11px;color:#94a3b8;">${fmtDate(o.date)}</div>
+              <div style="margin-left:auto;font-size:11px;color:#94a3b8;">${fmtDate(item.date)}</div>
             </div>
             ${(o.interest_notes || o.response_notes) ? `<div style="font-size:13px;color:#1e293b;white-space:pre-wrap;line-height:1.55;padding-left:22px;">${escapeHtml(o.interest_notes || o.response_notes)}</div>` : ''}
           </div>`;

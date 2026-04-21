@@ -17933,6 +17933,9 @@ async function showContactDetailPage(recordId, returnTo){
               <input class="form-input" id="cm_phone2" value="${(f['Secondary Phone Number']||'').replace(/"/g,'&quot;')}" style="width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;box-sizing:border-box;background:#fff;"/>
             </div>
 
+            <!-- v111.14: rich FUB data — all phones, emails, tags, stage/source/assigned -->
+            <div id="cdp_richProfile"></div>
+
             <div>
               <label style="display:block;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">✉ Email</label>
               <input class="form-input" id="cm_email" value="${(f.Email||'').replace(/"/g,'&quot;')}" style="width:100%;padding:10px 12px;border:1px solid #e2e8f0;border-radius:8px;font-size:14px;box-sizing:border-box;background:#fff;"/>
@@ -18010,6 +18013,8 @@ async function showContactDetailPage(recordId, returnTo){
   _contactLoadCommunication(recordId);
   // v102.31: load pitches for the new Pitches tab
   _contactLoadPitches(recordId);
+  // v111.14: load rich FUB profile (all phones, emails, tags, stage, etc.)
+  _contactLoadRichProfile(recordId);
 
   // v102.39: sync the "+ Add to Workbench" button with the warm-cache state
   // so the button paints in its already-added form when this contact is
@@ -19035,6 +19040,81 @@ function bcOpenContactPitches(contactId){
     }
   };
   setTimeout(tryTabSwitch, 150);
+}
+
+// v111.14: Rich FUB profile loader ───────────────────────────────
+// Renders everything FUB sends beyond the single-value columns: all phones
+// with type+primary, all emails same, tags, and a stage/source/assigned
+// metadata strip. Reads from ace_contacts columns that are already populated
+// by _ace_contact_append_from_fub — nothing touches fub_contacts directly.
+async function _contactLoadRichProfile(contactId){
+  const host = document.getElementById('cdp_richProfile');
+  if(!host) return;
+  host.innerHTML = '';
+  if(!isSupabase()) return;
+
+  try {
+    const rows = await _sbGet(SB_TABLES.contacts,
+      `id=${contactId}&select=all_phones,all_emails,fub_tags,fub_stage,fub_source,fub_assigned_to,fub_contact_id`);
+    const r = rows && rows[0];
+    if(!r) return;
+
+    const esc = s => String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+
+    const phones = Array.isArray(r.all_phones) ? r.all_phones : [];
+    const emails = Array.isArray(r.all_emails) ? r.all_emails : [];
+    const tags   = Array.isArray(r.fub_tags)  ? r.fub_tags  : [];
+    const hasMeta = r.fub_stage || r.fub_source || r.fub_assigned_to;
+
+    const metaHtml = hasMeta ? `
+      <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.7;">
+        ${r.fub_stage ? `<div><span style="color:#94a3b8;width:90px;display:inline-block;">Stage</span><strong style="color:#0f172a;">${esc(r.fub_stage)}</strong></div>`:''}
+        ${r.fub_source ? `<div><span style="color:#94a3b8;width:90px;display:inline-block;">Source</span><strong style="color:#0f172a;">${esc(r.fub_source)}</strong></div>`:''}
+        ${r.fub_assigned_to ? `<div><span style="color:#94a3b8;width:90px;display:inline-block;">Assigned</span><strong style="color:#0f172a;">${esc(r.fub_assigned_to)}</strong></div>`:''}
+      </div>` : '';
+
+    const phonesHtml = phones.length > 1 ? `
+      <div>
+        <label style="display:block;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">📞 All Phones (${phones.length})</label>
+        <div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:4px 10px;">
+          ${phones.map(p => `
+            <div style="display:flex;align-items:center;padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:13px;">
+              <span style="color:#94a3b8;font-size:11px;width:70px;flex-shrink:0;text-transform:lowercase;">${esc(p.type||'phone')}</span>
+              <span style="color:#0f172a;font-weight:500;flex:1;">${esc(p.value||'')}</span>
+              ${p.isPrimary ? '<span style="background:#dbeafe;color:#1e40af;font-size:9px;padding:1px 6px;border-radius:8px;font-weight:700;">primary</span>':''}
+            </div>`).join('')}
+        </div>
+      </div>` : '';
+
+    const emailsHtml = emails.length > 1 ? `
+      <div>
+        <label style="display:block;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">✉ All Emails (${emails.length})</label>
+        <div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:4px 10px;">
+          ${emails.map(e => `
+            <div style="display:flex;align-items:center;padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:13px;">
+              <span style="color:#94a3b8;font-size:11px;width:70px;flex-shrink:0;text-transform:lowercase;">${esc(e.type||'email')}</span>
+              <span style="color:#0f172a;font-weight:500;flex:1;word-break:break-all;">${esc(e.value||'')}</span>
+              ${e.isPrimary ? '<span style="background:#dbeafe;color:#1e40af;font-size:9px;padding:1px 6px;border-radius:8px;font-weight:700;">primary</span>':''}
+            </div>`).join('')}
+        </div>
+      </div>` : '';
+
+    const tagsHtml = tags.length ? `
+      <div>
+        <label style="display:block;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">🏷 Tags</label>
+        <div style="display:flex;flex-wrap:wrap;gap:4px;">
+          ${tags.map(t => `<span style="background:#f1f5f9;color:#334155;font-size:11px;padding:3px 10px;border-radius:10px;font-weight:500;">${esc(t)}</span>`).join('')}
+        </div>
+      </div>` : '';
+
+    // Only render the container with gap spacing if we have at least one section
+    if(!metaHtml && !phonesHtml && !emailsHtml && !tagsHtml) return;
+    host.innerHTML = `<div style="display:flex;flex-direction:column;gap:18px;">
+      ${metaHtml}${phonesHtml}${emailsHtml}${tagsHtml}
+    </div>`;
+  } catch(e) {
+    console.warn('Rich profile load failed:', e.message);
+  }
 }
 
 // ─── COMMUNICATION HISTORY LOADER ─────────────────────────────────

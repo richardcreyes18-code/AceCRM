@@ -9885,6 +9885,23 @@ function renderFinancialTab(d){
             style="background:#e0e7ff;color:#3730a3;border:1px solid #c7d2fe;padding:5px 12px;font-size:11px;border-radius:5px;cursor:pointer;font-weight:600;white-space:nowrap;">
             ⇒ Copy Actual → Proforma
           </button>
+          <!-- v112 Bug 4: scale every existing Proforma expense by user-specified % -->
+          <button type="button" onclick="bumpProformaExpenses()"
+            title="Scale every Proforma expense line by a percentage (e.g. +3% or -5%)"
+            style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;padding:5px 12px;font-size:11px;border-radius:5px;cursor:pointer;font-weight:600;white-space:nowrap;">
+            % Bump Proforma
+          </button>
+          <!-- v112 Bug 3: one-click clear for each side -->
+          <button type="button" onclick="clearExpenses('actual')"
+            title="Clear every Actual (current) expense input"
+            style="background:#fee2e2;color:#991b1b;border:1px solid #fecaca;padding:5px 10px;font-size:11px;border-radius:5px;cursor:pointer;font-weight:600;white-space:nowrap;">
+            ✕ Clear Actual
+          </button>
+          <button type="button" onclick="clearExpenses('proforma')"
+            title="Clear every Proforma (projected) expense input"
+            style="background:#fee2e2;color:#991b1b;border:1px solid #fecaca;padding:5px 10px;font-size:11px;border-radius:5px;cursor:pointer;font-weight:600;white-space:nowrap;">
+            ✕ Clear Proforma
+          </button>
           <button class="save-btn" style="padding:3px 12px;" onclick="showAllExpCats()">Show All</button>
           <button class="save-btn" style="padding:3px 12px;" onclick="hideAllExpCats()">Hide All</button>
         </div>
@@ -37940,6 +37957,120 @@ function copyActualToProforma(which){
   try {
     if(typeof showSaveConfirm === 'function'){
       showSaveConfirm('Copied ' + label + ' → Proforma ✓');
+    }
+  } catch(e){}
+}
+
+// v112 Bug 3: Clear every expense input on one side (Actual or Proforma).
+// Wipes the itemized lines, the Capital Reserve, and the % Ratio Override,
+// then triggers expenseCalc so totals refresh to $0 immediately. Autosave
+// fires via markDirty → _finScheduleAutoSave.
+function clearExpenses(side){
+  if(side !== 'actual' && side !== 'proforma') return;
+  const label = side === 'actual' ? 'Actual (current)' : 'Proforma (projected)';
+  if(!confirm('Clear ALL ' + label + ' expense values?\n\nThis cannot be undone — it autosaves and the original numbers won\'t come back on reload.')) return;
+
+  const prefix  = side === 'actual' ? 'fin_a_'       : 'fin_p_';
+  const capId   = side === 'actual' ? 'fin_aCapRes'  : 'fin_pCapRes';
+  const ratioId = side === 'actual' ? 'fin_aExpRatio': 'fin_pExpRatio';
+
+  // Keep in sync with the EXP map in updateExpenseTotals / copyActualToProforma
+  const expItems = [
+    'admin_mgmt','admin_acct','admin_legal','admin_other',
+    'rm_jan','rm_land','rm_maint','rm_sal','rm_pool','rm_sup',
+    'util_elec','util_gas','util_water','util_trash','util_other',
+    'misc_adv','misc_other',
+    'tax_prop','tax_other',
+    'ins_prop','ins_liab',
+    'pm_fee','pm_other',
+  ];
+  const wipe = id => {
+    const e = document.getElementById(id);
+    if(!e) return;
+    e.value = '';
+    if(e.dataset) e.dataset.authoritative = '';
+  };
+  expItems.forEach(id => {
+    wipe(prefix+id+'_mo');
+    wipe(prefix+id+'_yr');
+  });
+  wipe(capId+'_mo');
+  wipe(capId+'_yr');
+  wipe(ratioId);
+
+  markDirty();
+  if(typeof expenseCalc === 'function') expenseCalc();
+  try {
+    if(typeof showSaveConfirm === 'function'){
+      showSaveConfirm('Cleared ' + label + ' expenses ✓');
+    }
+  } catch(e){}
+}
+
+// v112 Bug 4: Scale every Proforma expense line by a user-specified percent.
+// Separate from "Copy Actual → Proforma" — this operates on whatever is
+// already in the Proforma column. Typical flow: Copy Actual → Proforma,
+// then Bump +3% to model next year's expense growth.
+//   +3  → scale up 3%
+//   -5  → scale down 5%
+// Skips blank/zero lines. Rounds the new monthly to 2 decimals and the new
+// yearly to the nearest whole dollar (same convention as syncMoYr on render).
+function bumpProformaExpenses(){
+  const raw = prompt('Bump ALL Proforma expenses by what %?\n\n(e.g. 3 for +3%, -5 for a 5% reduction)');
+  if(raw === null) return; // user cancelled
+  const cleaned = String(raw).trim().replace(/[%\s,]/g,'');
+  const pct = parseFloat(cleaned);
+  if(isNaN(pct) || pct === 0){
+    if(cleaned !== '') alert('Enter a non-zero number, e.g. 3 or -5.');
+    return;
+  }
+  const factor = 1 + pct/100;
+
+  const expItems = [
+    'admin_mgmt','admin_acct','admin_legal','admin_other',
+    'rm_jan','rm_land','rm_maint','rm_sal','rm_pool','rm_sup',
+    'util_elec','util_gas','util_water','util_trash','util_other',
+    'misc_adv','misc_other',
+    'tax_prop','tax_other',
+    'ins_prop','ins_liab',
+    'pm_fee','pm_other',
+  ];
+
+  let scaledCount = 0;
+  const scaleMo = moId => {
+    const moEl = document.getElementById(moId);
+    if(!moEl) return;
+    const n = parseFloat(String(moEl.value||'').replace(/,/g,''));
+    if(isNaN(n) || n === 0) return;
+    const newMo = n * factor;
+    // Format mo to max 2 decimals, stripping trailing zeros so $83.33 stays
+    // $83.33 but $100.00 shows as "100".
+    const moStr = Number(newMo.toFixed(2));
+    moEl.value  = moStr.toLocaleString('en-US');
+    if(moEl.dataset) moEl.dataset.authoritative = '1';
+    const yrId  = moId.replace(/_mo$/, '_yr');
+    const yrEl  = document.getElementById(yrId);
+    if(yrEl){
+      yrEl.value = Math.round(newMo*12).toLocaleString('en-US');
+      if(yrEl.dataset) yrEl.dataset.authoritative = '';
+    }
+    scaledCount++;
+  };
+
+  expItems.forEach(id => scaleMo('fin_p_'+id+'_mo'));
+  scaleMo('fin_pCapRes_mo');
+
+  if(scaledCount === 0){
+    alert('No Proforma expenses to bump — the column is empty.\n\nTip: use "Copy Actual → Proforma" first to seed it.');
+    return;
+  }
+
+  markDirty();
+  if(typeof expenseCalc === 'function') expenseCalc();
+  try {
+    if(typeof showSaveConfirm === 'function'){
+      const sign = pct > 0 ? '+' : '';
+      showSaveConfirm('Bumped Proforma ' + sign + pct + '% (' + scaledCount + ' lines) ✓');
     }
   } catch(e){}
 }

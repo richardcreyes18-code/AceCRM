@@ -37952,6 +37952,13 @@ function copyActualToProforma(which){
   if(typeof incomeCalc  === 'function') incomeCalc();
   if(typeof expenseCalc === 'function') expenseCalc();
 
+  // v112.2: programmatic .value writes don't fire the 'input' event, so
+  // _finWireAutoSave's listener never schedules an autosave. Trigger the
+  // save explicitly so the copy actually persists on refresh.
+  if(typeof saveFinInputs === 'function' && currentDeal?.id){
+    try { saveFinInputs(currentDeal.id); } catch(e) { console.warn('[Fin] copy save failed:', e); }
+  }
+
   // Lightweight confirmation — flash the clicked button if we can find one
   const label = which === 'income' ? 'Income' : (which === 'expenses' ? 'Expenses' : 'Income + Expenses');
   try {
@@ -38000,6 +38007,12 @@ function clearExpenses(side){
 
   markDirty();
   if(typeof expenseCalc === 'function') expenseCalc();
+  // v112.2: programmatic .value writes don't fire the 'input' event, so
+  // the autosave listener never sees the change. Save explicitly so the
+  // cleared values survive a page refresh.
+  if(typeof saveFinInputs === 'function' && currentDeal?.id){
+    try { saveFinInputs(currentDeal.id); } catch(e) { console.warn('[Fin] clear save failed:', e); }
+  }
   try {
     if(typeof showSaveConfirm === 'function'){
       showSaveConfirm('Cleared ' + label + ' expenses ✓');
@@ -38067,6 +38080,11 @@ function bumpProformaExpenses(){
 
   markDirty();
   if(typeof expenseCalc === 'function') expenseCalc();
+  // v112.2: programmatic .value writes don't fire 'input' events, so
+  // force an explicit save — same reason as clearExpenses.
+  if(typeof saveFinInputs === 'function' && currentDeal?.id){
+    try { saveFinInputs(currentDeal.id); } catch(e) { console.warn('[Fin] bump save failed:', e); }
+  }
   try {
     if(typeof showSaveConfirm === 'function'){
       const sign = pct > 0 ? '+' : '';

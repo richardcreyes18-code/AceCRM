@@ -26248,14 +26248,19 @@ function _clkRenderDropdown(prefix, query, rows){
     });
   }
   // Always show "create new" at the bottom
+  // v102.41: Pass the typed query so _clkClear can seed it into the form
+  // below (into Name, Phone, or Email depending on what the user typed).
+  // Before, "+ Create new contact" just cleared the input and the user
+  // had to re-type everything — looked like the button did nothing.
+  const seedAttr = query ? String(query).replace(/&/g,'&amp;').replace(/'/g,"\\'").replace(/"/g,'&quot;') : '';
   html += `
-    <div onclick="_clkClear('${prefix}')" onmousedown="event.preventDefault()"
+    <div onclick="_clkClear('${prefix}', '${seedAttr}')" onmousedown="event.preventDefault()"
          style="padding:10px 12px;cursor:pointer;border-top:1px solid #cbd5e1;background:#f8fafc;display:flex;align-items:center;gap:10px;"
          onmouseover="this.style.background='#eff6ff'" onmouseout="this.style.background='#f8fafc'">
       <div style="width:32px;height:32px;border-radius:50%;background:#dbeafe;color:#1e40af;display:flex;align-items:center;justify-content:center;font-size:18px;font-weight:600;flex-shrink:0;">+</div>
       <div style="flex:1;">
         <div style="font-size:13px;font-weight:600;color:#1e40af;">Create new contact${query ? ' &ldquo;' + safeQ + '&rdquo;' : ''}</div>
-        <div style="font-size:11px;color:#64748b;margin-top:1px;">Continue typing in the form below</div>
+        <div style="font-size:11px;color:#64748b;margin-top:1px;">${query ? 'Prefilled below — finish the form' : 'Continue typing in the form below'}</div>
       </div>
     </div>
   `;
@@ -26345,7 +26350,12 @@ async function _clkSelect(prefix, contactId){
 }
 
 // User clicked "+ Create new" or chose to clear an existing selection.
-function _clkClear(prefix){
+// v102.41: Accepts optional querySeed — when the user clicked "+ Create
+// new contact" after typing a search term, we carry that term down into
+// the Name / Phone / Email field below so they don't have to retype.
+// Heuristic: looks-like-email → Email, looks-like-phone (>=7 digits) →
+// Phone, otherwise → Name.
+function _clkClear(prefix, querySeed){
   if(prefix === 's') _liSelectedSellerContactId = null;
   else               _liSelectedBuyerContactId  = null;
   _liSelectedContactSnapshot[prefix] = null;
@@ -26361,7 +26371,29 @@ function _clkClear(prefix){
   const dd = document.getElementById('li_' + prefix + '_clk_dropdown');
   if(dd){ dd.style.display = 'none'; dd.innerHTML = ''; }
   const inp = document.getElementById('li_' + prefix + '_clk_input');
-  if(inp){ inp.value = ''; inp.focus(); }
+  if(inp){ inp.value = ''; }
+
+  const seed = (querySeed || '').trim();
+  if(seed){
+    // "Create new" path — pump the typed query into the form below.
+    const digits  = seed.replace(/[^0-9]/g, '');
+    const isEmail = /.+@.+\..+/.test(seed);
+    const isPhone = !isEmail && digits.length >= 7;
+    const targetId = isEmail ? ('li_' + prefix + '_email')
+                   : isPhone ? ('li_' + prefix + '_phone')
+                   :           ('li_' + prefix + '_name');
+    const targetEl = document.getElementById(targetId);
+    if(targetEl){
+      if(!targetEl.value) targetEl.value = seed;
+      targetEl.focus();
+      try{ const n = targetEl.value.length; targetEl.setSelectionRange(n, n); }catch(e){}
+    } else if(inp){
+      inp.focus();
+    }
+  } else if(inp){
+    // "Change" / unlink path — refocus the search input so they can try again.
+    inp.focus();
+  }
 }
 
 // Show the green confirmation banner inside the lookup widget.
@@ -28224,8 +28256,10 @@ function _liAtSearch(mode){
 
 function _liAtSelect(mode, type, sub){
   const fullType = sub ? `${type}: ${sub}` : type;
-  // Map to asset section key
-  const assetKey = _liTypeToKey(type);
+  // Map to asset section key — pass the FULL type so niche subtypes
+  // (Industrial: Truck Terminal, Self Storage, Data Center, etc.) can
+  // opt out of the generic Warehouse form.
+  const assetKey = _liTypeToKey(fullType);
   // v111.7: route to correct slot (legacy global for mode='s', or _liExtraProps[N-1] for mode='s_p<N>')
   const state = _liGetAssetState(mode);
   if(state.assetTypes.includes(fullType)) return; // already added
@@ -28237,16 +28271,31 @@ function _liAtSelect(mode, type, sub){
   else _liRenderBuyerConditional();
 }
 
-function _liTypeToKey(type){
-  const t = type.toLowerCase();
-  if(t.includes('multi') || t.includes('residential income')) return 'multifamily';
-  if(t.includes('warehouse') || t.includes('industrial') || t.includes('flex') || t.includes('distribution')) return 'warehouse';
-  if(t.includes('retail') && !t.includes('shopping')) return 'retail';
-  if(t.includes('office')) return 'office';
-  if(t.includes('land')) return 'land';
-  if(t.includes('mixed use')) return 'mixeduse';
-  if(t.includes('automotive')) return 'automotive';
-  if(t.includes('shopping')) return 'shopping';
+// v102.41: Accept full "Category: Subtype" strings (not just category) so
+// niche Industrial subtypes can opt out of the Warehouse form. Previously
+// "Industrial: Truck Terminal" → 'warehouse' because we only looked at
+// "Industrial" and ignored the subtype. Callers now pass the full string.
+function _liTypeToKey(typeOrFull){
+  const raw = String(typeOrFull || '').toLowerCase();
+  const parts = raw.split(':').map(s => s.trim());
+  const cat = parts[0] || '';
+  const sub = parts[1] || '';
+  // Industrial subtypes that are physically unlike a warehouse. Showing
+  // the Warehouse criteria form (dock doors, clear heights, etc.) would
+  // be misleading. Fall through to null → no conditional fields; user
+  // captures specifics in the Notes section.
+  if(cat.includes('industrial')){
+    const niche = ['truck terminal','self storage','data center','r&d','showroom','outdoor storage','ios'];
+    if(niche.some(n => sub.includes(n))) return null;
+  }
+  if(cat.includes('multi') || cat.includes('residential income')) return 'multifamily';
+  if(cat.includes('warehouse') || cat.includes('industrial') || cat.includes('flex') || cat.includes('distribution')) return 'warehouse';
+  if(cat.includes('retail') && !cat.includes('shopping')) return 'retail';
+  if(cat.includes('office')) return 'office';
+  if(cat.includes('land')) return 'land';
+  if(cat.includes('mixed use')) return 'mixeduse';
+  if(cat.includes('automotive')) return 'automotive';
+  if(cat.includes('shopping')) return 'shopping';
   return null;
 }
 
@@ -28264,7 +28313,10 @@ function _liRemoveType(mode, idx){
   if(!state.assetTypes) return;
   state.assetTypes.splice(idx,1);
   // Rebuild assetKeys from remaining types
-  const rebuilt = [...new Set((state.assetTypes||[]).map(t=>_liTypeToKey(t.split(':')[0].trim())).filter(Boolean))];
+  // v102.41: Pass the FULL "Category: Subtype" so niche Industrial subtypes
+  // (Truck Terminal, Self Storage, Data Center, R&D, Showroom, IOS) correctly
+  // map to null and don't pull in the Warehouse form.
+  const rebuilt = [...new Set((state.assetTypes||[]).map(t=>_liTypeToKey(t)).filter(Boolean))];
   state.assetKeys.length = 0;
   rebuilt.forEach(k => state.assetKeys.push(k));
   _liRenderSelectedTypes(mode);
@@ -34603,6 +34655,14 @@ async function _sumNsSave(){
     const ok = await airtableUpdate(currentDeal.id, { 'Next Steps': newVal });
     if(ok){
       currentDeal['Next Steps'] = newVal;
+      // v102.41: Clear the textarea AND drop the key from _pendingEdits
+      // BEFORE switchTab — otherwise snapshotCurrentTab() captures the
+      // typed text and restorePendingEdits() writes it back after the
+      // re-render, making it look like the save didn't clear the field.
+      // (saveNoteEntry avoids this by clearing #newNoteText first; we
+      // mirror that here and also defensively purge the store.)
+      if(input){ input.value = ''; }
+      if(_pendingEdits[currentDeal.id]){ delete _pendingEdits[currentDeal.id]['sumNsInput']; }
       showSaveConfirm('Next step saved ✓');
       // Re-render the Summary tab so the card shows the new current entry
       // and the previous one moves to history.

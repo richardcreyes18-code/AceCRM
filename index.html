@@ -21716,6 +21716,10 @@ async function _syncStatusRender(forceRefresh){
   ];
 
   try{
+    // Orphan notes = in fub_notes but their person has no ace_contacts row yet.
+    // Becomes visible automatically once the contact is approved via the queue.
+    const orphanNotes = await _sbRpc('fub_notes_orphan_count').catch(()=>null);
+
     const results = await Promise.all(tables.map(async t => {
       // Get max synced_at (most recent sync timestamp)
       const rows = await _sbGet(t.key, 'select=synced_at&order=synced_at.desc.nullslast&limit=1').catch(()=>[]);
@@ -21759,6 +21763,9 @@ async function _syncStatusRender(forceRefresh){
       else {                       color = '#dc2626'; statusText = '● Not syncing'; }
       const ageStr = r.last ? fmtAgo(ageMs) : 'never';
       const totalStr = r.total == null ? '—' : r.total.toLocaleString();
+      const orphanLine = (r.key === 'fub_notes' && orphanNotes != null)
+        ? `<div title="Notes about FUB people not yet in ace_contacts. Will surface automatically once the contact is approved via the review queue."><span style="color:#94a3b8;">Orphans:</span> <strong style="color:${orphanNotes > 0 ? '#d97706':'#16a34a'};">${Number(orphanNotes).toLocaleString()}</strong></div>`
+        : '';
       return `
         <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px;">
           <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
@@ -21770,6 +21777,7 @@ async function _syncStatusRender(forceRefresh){
             <div><span style="color:#94a3b8;">Rows:</span> <strong style="color:#334155;">${totalStr}</strong></div>
             <div><span style="color:#94a3b8;">Last sync:</span> <strong style="color:#334155;">${ageStr}</strong></div>
             <div><span style="color:#94a3b8;">Schedule:</span> ${r.cron}</div>
+            ${orphanLine}
           </div>
           <button onclick="_syncForceRun('${r.fn}', this)" style="margin-top:10px;width:100%;background:#1e3a8a;color:#fff;border:none;padding:7px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Force sync now</button>
         </div>`;
@@ -21856,13 +21864,15 @@ async function _reconQueueRender(forceRefresh){
       // Hydrate FUB/ace lookups for context display
       const fubIds = [...new Set(rows.map(r=>r.fub_source_id).filter(Boolean))];
       const aceIds = [...new Set(rows.map(r=>r.ace_target_id).filter(Boolean))];
-      const [fubDetails, aceDetails] = await Promise.all([
+      const [fubDetails, aceDetails, activity] = await Promise.all([
         fubIds.length ? _sbGet('fub_contacts', `select=id,name,phones,emails,stage,source&id=in.(${fubIds.join(',')})`).catch(()=>[]) : [],
         aceIds.length ? _sbGet('ace_contacts', `select=id,name,email,phone_number&id=in.(${aceIds.join(',')})`).catch(()=>[]) : [],
+        fubIds.length ? _sbRpc('fub_contact_activity_counts', { p_ids: fubIds }).catch(()=>[]) : [],
       ]);
       const fubBy = Object.fromEntries((fubDetails||[]).map(r => [r.id, r]));
       const aceBy = Object.fromEntries((aceDetails||[]).map(r => [r.id, r]));
-      list.innerHTML = rows.map(r => _reconRowHtml(r, fubBy, aceBy)).join('');
+      const actBy = Object.fromEntries((activity||[]).map(r => [r.fub_id, r]));
+      list.innerHTML = rows.map(r => _reconRowHtml(r, fubBy, aceBy, actBy)).join('');
     }
     list.dataset.loaded = '1';
   }catch(e){
@@ -21872,13 +21882,19 @@ async function _reconQueueRender(forceRefresh){
   }
 }
 
-function _reconRowHtml(r, fubBy, aceBy){
+function _reconRowHtml(r, fubBy, aceBy, actBy){
   const fub = fubBy[r.fub_source_id];
   const ace = r.ace_target_id ? aceBy[r.ace_target_id] : null;
+  const act = (actBy && actBy[r.fub_source_id]) || { notes: 0, calls: 0 };
   const color = r.action === 'conflict' ? '#f59e0b' : r.action === 'create' ? '#2563eb' : '#7c3aed';
   const label = r.action === 'conflict' ? 'Conflict' : r.action === 'create' ? 'New contact' : 'Merge';
   const fubPhone = fub && fub.phones && fub.phones[0] ? fub.phones[0].value : '';
   const fubEmail = fub && fub.emails && fub.emails[0] ? fub.emails[0].value : '';
+  const notesN = Number(act.notes || 0);
+  const callsN = Number(act.calls || 0);
+  const activityChip = (notesN + callsN > 0)
+    ? `<span style="background:#eef2ff;color:#4338ca;font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;margin-left:6px;">📝 ${notesN} · 📞 ${callsN}</span>`
+    : '';
 
   let body = '';
   let actions = '';
@@ -21933,6 +21949,7 @@ function _reconRowHtml(r, fubBy, aceBy){
       <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
         <span style="background:${color};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;">${label}</span>
         <span style="color:#94a3b8;font-size:10px;">FUB #${r.fub_source_id}</span>
+        ${activityChip}
         <span style="color:#cbd5e1;font-size:10px;margin-left:auto;">${_reconEsc(new Date(r.created_at).toLocaleString())}</span>
         <button onclick="_reconOpenPreview(${r.fub_source_id})" style="background:#fff;border:1px solid #cbd5e1;color:#2563eb;padding:3px 10px;border-radius:6px;font-size:10px;font-weight:600;cursor:pointer;">🔍 Preview all data</button>
       </div>

@@ -10072,17 +10072,25 @@ function renderFinancialTab(d){
         const aNOI_mo = window._aNOI_mo || (egi/12 - aTotalOpEx_mo);
         const pNOI_mo = window._pNOI_mo || (pegi/12 - pTotalOpEx_mo);
 
-        // Mortgage payment inputs — read live from DOM first, fall back to fi
+        // v112 Bug 5 fix: compute mortgage total from the `fi` seed (which
+        // comes from the deal record), NOT from live DOM inputs — the
+        // inputs don't exist yet at render time (they're in a sub-template
+        // below this one) so the old code always read 0 and the Cash Flow
+        // summary showed $0 for mortgage payments until the user edited a
+        // field (which triggered mortCalc()).
         const aMortgage_mo  = (()=>{
           let t=0;
           [1,2,3].forEach(n=>{
-            const bal=Number(document.getElementById('fin_mort'+n+'_bal')?.value)||0;
-            const amort=Number(document.getElementById('fin_mort'+n+'_amort')?.value)||0;
-            const rate=Number(document.getElementById('fin_mort'+n+'_rate')?.value)||0;
-            const mo=rate/100/12; const np=amort*12;
-            if(mo>0&&np>0&&bal>0) t+=bal*mo*Math.pow(1+mo,np)/(Math.pow(1+mo,np)-1);
+            const bal   = Number(fi['mort'+n+'_bal'])  || 0;
+            const amort = Number(fi['mort'+n+'_amort'])|| 0;
+            const rate  = Number(fi['mort'+n+'_rate']) || 0;
+            const mo = rate/100/12;
+            const np = amort*12;
+            if(mo>0 && np>0 && bal>0){
+              t += bal*mo*Math.pow(1+mo,np)/(Math.pow(1+mo,np)-1);
+            }
           });
-          return t || Number(fi.aMortgage_mo) || 0;
+          return t;
         })();
         const aMortgage_yr  = aMortgage_mo*12;
         const pMortgage_mo  = aMortgage_mo;
@@ -10141,10 +10149,10 @@ function renderFinancialTab(d){
                   </a>
                   ${tip('mort','Total monthly debt service across all loans. Auto-calculated from the mortgage inputs below.')}
                 </td>
-                <td style="padding:3px 6px;border:1px solid #ddd;text-align:right;">${fd(aMortgage_mo)}</td>
-                <td style="padding:3px 6px;border:1px solid #ddd;text-align:right;">${fd(aMortgage_yr)}</td>
-                <td style="padding:3px 6px;border:1px solid #ddd;text-align:right;">${fd(pMortgage_mo)}</td>
-                <td style="padding:3px 6px;border:1px solid #ddd;text-align:right;">${fd(pMortgage_yr)}</td>
+                <td id="cf_aMort_mo" style="padding:3px 6px;border:1px solid #ddd;text-align:right;">${fd(aMortgage_mo)}</td>
+                <td id="cf_aMort_yr" style="padding:3px 6px;border:1px solid #ddd;text-align:right;">${fd(aMortgage_yr)}</td>
+                <td id="cf_pMort_mo" style="padding:3px 6px;border:1px solid #ddd;text-align:right;">${fd(pMortgage_mo)}</td>
+                <td id="cf_pMort_yr" style="padding:3px 6px;border:1px solid #ddd;text-align:right;">${fd(pMortgage_yr)}</td>
               </tr>
               <!-- MORTGAGE EXPANDED DETAIL -->
               <tr class="mortgage-subrow" style="display:${isMortgageExpanded?'table-row':'none'};">
@@ -37760,6 +37768,11 @@ function updateIncomeTotals(){
   if(el('cf_aOpEx_yr')) el('cf_aOpEx_yr').textContent = fd3(aTotalOpEx*12);
   if(el('cf_pOpEx_mo')) el('cf_pOpEx_mo').textContent = fd3(pTotalOpEx);
   if(el('cf_pOpEx_yr')) el('cf_pOpEx_yr').textContent = fd3(pTotalOpEx*12);
+  // v112 Bug 5: keep Mortgage Payments row in sync on every cash-flow refresh
+  if(el('cf_aMort_mo')) el('cf_aMort_mo').textContent = fd3(mort_mo);
+  if(el('cf_aMort_yr')) el('cf_aMort_yr').textContent = fd3(mort_mo*12);
+  if(el('cf_pMort_mo')) el('cf_pMort_mo').textContent = fd3(pmort_mo);
+  if(el('cf_pMort_yr')) el('cf_pMort_yr').textContent = fd3(pmort_mo*12);
   if(el('cf_aCF_mo')){ el('cf_aCF_mo').textContent = fd3(aCF_mo); el('cf_aCF_mo').style.color = aCF_mo>=0?'#1a3a6e':'#c00'; }
   if(el('cf_aCF_yr')){ el('cf_aCF_yr').textContent = fd3(aCF_yr); el('cf_aCF_yr').style.color = aCF_yr>=0?'#1a3a6e':'#c00'; }
   if(el('cf_pCF_mo')){ el('cf_pCF_mo').textContent = fd3(pCF_mo); el('cf_pCF_mo').style.color = pCF_mo>=0?'#306030':'#c00'; }
@@ -38128,6 +38141,17 @@ function mortCalc(){
   // Refresh Cash Flow cells immediately
   const fd4 = n => '$'+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
   const el  = id => document.getElementById(id);
+
+  // v112 Bug 5: refresh the "Mortgage Payments" row in the Cash Flow table.
+  // Previously these cells had no IDs so mortCalc couldn't update them live;
+  // they stayed at whatever value the initial render baked in (which was
+  // $0 because renderFinancialTab read live DOM inputs that didn't exist
+  // yet — see the fix at the render site).
+  if(el('cf_aMort_mo')) el('cf_aMort_mo').textContent = fd4(total);
+  if(el('cf_aMort_yr')) el('cf_aMort_yr').textContent = fd4(total*12);
+  if(el('cf_pMort_mo')) el('cf_pMort_mo').textContent = fd4(total);
+  if(el('cf_pMort_yr')) el('cf_pMort_yr').textContent = fd4(total*12);
+
   const aNOI = window._aNOI_mo || 0;
   const pNOI = window._pNOI_mo || 0;
   const aCF = aNOI - total;

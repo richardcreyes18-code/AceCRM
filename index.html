@@ -19055,7 +19055,7 @@ async function _contactLoadRichProfile(contactId){
 
   try {
     const rows = await _sbGet(SB_TABLES.contacts,
-      `id=${contactId}&select=all_phones,all_emails,fub_tags,fub_stage,fub_source,fub_assigned_to,fub_contact_id`);
+      `id=${contactId}&select=all_phones,all_emails,fub_tags,fub_stage,fub_source,fub_assigned_to,fub_contact_id,addresses`);
     const r = rows && rows[0];
     if(!r) return;
 
@@ -19064,7 +19064,30 @@ async function _contactLoadRichProfile(contactId){
     const phones = Array.isArray(r.all_phones) ? r.all_phones : [];
     const emails = Array.isArray(r.all_emails) ? r.all_emails : [];
     const tags   = Array.isArray(r.fub_tags)  ? r.fub_tags  : [];
+    const addrsRaw = Array.isArray(r.addresses) ? r.addresses : [];
     const hasMeta = r.fub_stage || r.fub_source || r.fub_assigned_to;
+
+    // FUB sometimes splits an address into two rows (street number alone,
+    // street name alone) and our backfill dedup can scramble the order.
+    // Strategy: (a) pair adjacent number→name, (b) hide remaining pure-number
+    // fragments from the render (still kept in DB — not deleted).
+    const addrs = [];
+    const isNum = s => /^\d+[A-Za-z]?$/.test(String(s||'').trim());
+    const hasCity = a => !!(a && (a.city || a.state || a.code));
+    for (let i = 0; i < addrsRaw.length; i++) {
+      const cur = addrsRaw[i] || {};
+      const nxt = addrsRaw[i+1] || null;
+      const curStreet = String(cur.street||'').trim();
+      if (isNum(curStreet) && nxt && !isNum(nxt.street) && nxt.street &&
+          !hasCity(cur) && !hasCity(nxt) && (cur.type||'') === (nxt.type||'')) {
+        addrs.push({...nxt, street: curStreet + ' ' + String(nxt.street).trim()});
+        i++;
+      } else if (isNum(curStreet) && !hasCity(cur)) {
+        continue;
+      } else if (curStreet || hasCity(cur)) {
+        addrs.push(cur);
+      }
+    }
 
     const metaHtml = hasMeta ? `
       <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.7;">
@@ -19107,10 +19130,29 @@ async function _contactLoadRichProfile(contactId){
         </div>
       </div>` : '';
 
+    const addrsHtml = addrs.length ? `
+      <div>
+        <label style="display:block;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">📍 Addresses (${addrs.length})</label>
+        <div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:4px 10px;">
+          ${addrs.map(a => {
+            const street = esc(a.street||'');
+            const cityStateZip = [a.city, a.state].filter(Boolean).map(esc).join(', ') + (a.code ? ' ' + esc(a.code) : '');
+            return `
+            <div style="display:flex;align-items:flex-start;padding:8px 0;border-bottom:1px solid #f1f5f9;font-size:13px;">
+              <span style="color:#94a3b8;font-size:11px;width:70px;flex-shrink:0;text-transform:lowercase;padding-top:2px;">${esc(a.type||'addr')}</span>
+              <span style="color:#0f172a;font-weight:500;flex:1;line-height:1.5;">
+                ${street}
+                ${cityStateZip.trim() ? `<br><span style="color:#64748b;font-weight:400;">${cityStateZip}</span>`:''}
+              </span>
+            </div>`;
+          }).join('')}
+        </div>
+      </div>` : '';
+
     // Only render the container with gap spacing if we have at least one section
-    if(!metaHtml && !phonesHtml && !emailsHtml && !tagsHtml) return;
+    if(!metaHtml && !phonesHtml && !emailsHtml && !tagsHtml && !addrsHtml) return;
     host.innerHTML = `<div style="display:flex;flex-direction:column;gap:18px;">
-      ${metaHtml}${phonesHtml}${emailsHtml}${tagsHtml}
+      ${metaHtml}${phonesHtml}${emailsHtml}${addrsHtml}${tagsHtml}
     </div>`;
   } catch(e) {
     console.warn('Rich profile load failed:', e.message);

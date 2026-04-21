@@ -26961,12 +26961,75 @@ async function showDedupePage(){
   _ddRenderShell();
 }
 
+// v108.1: Smart notes combiner — splits each contact's notes into
+// paragraphs, normalizes for comparison (whitespace + case), dedupes
+// identical paragraphs even across contacts, and rejoins with provenance.
+// If the same paragraph came from multiple contacts, the header shows
+// "[From A, B]" instead of two duplicate sections.
+function _ddCombineNotes(contactsWithNotes){
+  // contactsWithNotes: [{ name, date_added, contact_notes }, …]
+  // Returns a single combined string, never duplicating identical
+  // paragraphs across contacts.
+  const seen = new Map(); // normalizedKey → { text, sources: [{name, date}] }
+  const order = [];       // preserve first-seen order across all contacts
+  const normalize = s => String(s||'').trim().replace(/\s+/g, ' ').toLowerCase();
+  (contactsWithNotes||[]).forEach(c => {
+    const raw = String(c.contact_notes||'').trim();
+    if(!raw) return;
+    // Split on blank lines (paragraph boundary). Single-newline blocks
+    // stay as one paragraph so bulleted/listed notes don't fragment.
+    const paragraphs = raw.split(/\n\s*\n+/).map(p => p.trim()).filter(Boolean);
+    paragraphs.forEach(p => {
+      const key = normalize(p);
+      if(!key) return;
+      if(!seen.has(key)){
+        seen.set(key, { text: p, sources: [] });
+        order.push(key);
+      }
+      const entry = seen.get(key);
+      // Only add this source if it's not already attributed (handles the
+      // case where one contact has the same paragraph twice in its notes).
+      const tag = (c.name||'(unnamed)') + (c.date_added ? ', added ' + c.date_added : '');
+      if(!entry.sources.some(s => s === tag)) entry.sources.push(tag);
+    });
+  });
+  return order.map(key => {
+    const { text, sources } = seen.get(key);
+    const header = '[From ' + sources.join(' · From ') + ']';
+    return header + '\n' + text;
+  }).join('\n\n');
+}
+
 async function _ddLoadCandidates(){
   const rows = await _sbGet('ace_contact_dedupe_candidates',
     'select=id,contact_ids,tier,match_signal,match_value,status,detected_at'
     + '&status=eq.pending'
     + '&order=tier.asc,detected_at.desc&limit=2000');
   _ddCandidates = Array.isArray(rows) ? rows : [];
+
+  // v108.1: Pre-fetch contact names for every contact_id across all
+  // candidates in one batched query, so _ddRenderList can show names at
+  // a glance without N+1 round trips. Cached in _ddContactCache (id → row).
+  try{
+    const idSet = new Set();
+    _ddCandidates.forEach(c => {
+      (Array.isArray(c.contact_ids) ? c.contact_ids : []).forEach(id => id && idSet.add(id));
+    });
+    // Skip IDs we already have cached
+    const toFetch = Array.from(idSet).filter(id => !_ddContactCache[id]);
+    if(toFetch.length){
+      // Chunk to avoid URL-length issues with huge IN() filters
+      const chunkSize = 200;
+      for(let i = 0; i < toFetch.length; i += chunkSize){
+        const chunk = toFetch.slice(i, i + chunkSize);
+        const filter = 'in.(' + chunk.map(encodeURIComponent).join(',') + ')';
+        const namerows = await _sbGet('ace_contacts',
+          'select=id,name,phone_number,email,company&id=' + filter + '&limit=' + chunk.length)
+          .catch(e=>{ console.warn('name fetch chunk failed:', e.message); return []; });
+        (Array.isArray(namerows) ? namerows : []).forEach(r => { _ddContactCache[r.id] = r; });
+      }
+    }
+  }catch(e){ console.warn('dedupe name pre-fetch failed (non-fatal):', e.message); }
 }
 
 function _ddRenderShell(){
@@ -27035,14 +27098,25 @@ function _ddRenderList(){
     if(s === 'name')  return 'Name match: ' + (v||'');
     return s;
   };
+  // v108.1: Pull names from _ddContactCache (pre-fetched in _ddLoadCandidates).
+  // Show up to 3 names fully, then "+N more" so the row stays one line.
+  const escape = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const nameList = (ids) => {
+    const names = (Array.isArray(ids) ? ids : []).map(id => {
+      const row = _ddContactCache[id];
+      return row && row.name ? row.name.trim() : '(no name)';
+    });
+    if(names.length <= 3) return names.map(escape).join(' · ');
+    return names.slice(0, 3).map(escape).join(' · ') + ` · +${names.length - 3} more`;
+  };
   el.innerHTML = `
     <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
       ${slice.map((c, i) => `
         <div style="padding:14px 18px;${i>0?'border-top:1px solid #f1f5f9;':''}display:flex;align-items:center;gap:12px;">
           <span style="font-size:11px;padding:3px 9px;border-radius:6px;background:${tierBg[c.tier]};color:${tierColor[c.tier]};font-weight:700;flex-shrink:0;">${tierLabel[c.tier]||c.tier}</span>
           <div style="flex:1;min-width:0;">
-            <div style="font-size:13px;font-weight:600;color:#0f172a;">${c.contact_ids.length} contacts may be duplicates</div>
-            <div style="font-size:11px;color:#64748b;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${signalLabel(c.match_signal, c.match_value)}</div>
+            <div style="font-size:13px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${nameList(c.contact_ids)}</div>
+            <div style="font-size:11px;color:#64748b;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${c.contact_ids.length} contacts · ${signalLabel(c.match_signal, c.match_value)}</div>
           </div>
           <button onclick="_ddOpenMerge('${c.id}')" style="font-size:12px;padding:7px 14px;background:#0f172a;color:#fff;border:none;border-radius:5px;font-weight:600;cursor:pointer;">Review & merge</button>
           <button onclick="_ddSkip('${c.id}')" style="font-size:12px;padding:7px 12px;background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:5px;font-weight:600;cursor:pointer;">Skip</button>
@@ -27223,6 +27297,13 @@ async function _ddOpenMerge(candidateId){
   _ddPropertyGroups = _ddDetectPropertyGroups(detail);
   _ddPropertyExpanded = new Set();
   _ddPropertyPicks = {};
+  // v108.1: Pre-populate picks for every detected group so "WILL MERGE ✓"
+  // shows up immediately (without requiring the user to expand each one).
+  // User can still override by expanding and picking per field. If they
+  // want to opt out, they click "Don't merge these" on the group card.
+  _ddPropertyGroups.forEach(g => {
+    _ddPropertyPicks[g.key] = _ddAutoPickPropertyGroup(g);
+  });
 
   _ddRenderMergeDialog(cand, contacts, dealCounts);
 }
@@ -27497,10 +27578,12 @@ function _ddRenderSurvivingPreview(contacts, fields){
   const valueFor = (f) => {
     const pickedId = _ddMergePicks[f.key];
     if(f.key === 'contact_notes' && pickedId === '__combine__'){
-      const parts = contacts
-        .filter(c => (c.contact_notes||'').trim())
-        .map(c => '[From ' + (c.name||'(unnamed)') + ']');
-      return parts.length ? '(combined: ' + parts.join(' + ') + ')' : '';
+      // v108.1: show actual combined text (with paragraph dedup) so the
+      // preview matches what gets saved. If nothing after dedup, empty.
+      const combined = _ddCombineNotes(
+        contacts.filter(c => (c.contact_notes||'').trim())
+      );
+      return combined || '';
     }
     if(pickedId && contactsById[pickedId]){
       return contactsById[pickedId][f.key] || '';
@@ -27748,6 +27831,47 @@ function _ddDetectPropertyGroups(detail){
   return Object.values(byAddr).filter(g => g.properties.length >= 2);
 }
 
+// v108.1: Compute default picks for a property group (same logic that
+// used to live inline in _ddRenderPropertyGroupBody on first expand).
+// Survivor = property with most filled fields. Each field defaults to
+// survivor's value if non-empty, else first non-empty value from any
+// property in the group. Returns { surviving_id, <field>: propertyId, … }.
+// The same function is used both at group-detection time (so the card
+// shows WILL MERGE ✓ without requiring expansion) and by the auto-merge
+// high-confidence flow in commit 3.
+function _ddAutoPickPropertyGroup(group){
+  const props = Array.isArray(group && group.properties) ? group.properties : [];
+  if(!props.length) return {};
+  const signalFields = ['address','property_name','asking_price','offer_price',
+                        'pipeline_stage','deal_tag','deal_notes','next_steps',
+                        'general_property_notes','crm_asset_classification'];
+  // Survivor = densest row. Tiebreaker: highest asking_price (more
+  // likely to be the "real" deal entry the user has worked on).
+  let bestId = props[0].id, bestScore = -1, bestAsk = -Infinity;
+  props.forEach(p => {
+    const score = signalFields.filter(f =>
+      p[f] !== null && p[f] !== undefined && String(p[f]).trim() !== ''
+    ).length;
+    const ask = Number(p.asking_price) || 0;
+    if(score > bestScore || (score === bestScore && ask > bestAsk)){
+      bestScore = score; bestAsk = ask; bestId = p.id;
+    }
+  });
+  const picks = { surviving_id: bestId };
+  const survRow = props.find(p => p.id === bestId) || {};
+  signalFields.forEach(f => {
+    const sv = survRow[f];
+    if(sv !== null && sv !== undefined && String(sv).trim() !== ''){
+      picks[f] = bestId; return;
+    }
+    const fallback = props.find(p =>
+      p[f] !== null && p[f] !== undefined && String(p[f]).trim() !== ''
+    );
+    if(fallback) picks[f] = fallback.id;
+  });
+  return picks;
+}
+
 // Render the property merge sub-section. One collapsible card per group.
 // Returns empty string if no duplicate property groups detected.
 function _ddRenderPropertyGroups(){
@@ -27796,23 +27920,12 @@ function _ddRenderPropertyGroupBody(group){
   const props = group.properties;
   const cols = props.length;
   const groupKey = group.key;
-  const picks = (_ddPropertyPicks && _ddPropertyPicks[groupKey]) || {};
-
-  // Default surviving property = the one with the most fields filled in
-  // (best signal of "this is the canonical record"). Could also use
-  // "most recent" but field-density tends to be a better proxy for "the
-  // one the user actually worked on".
-  if(!picks.surviving_id){
-    let best = props[0].id;
-    let bestScore = -1;
-    props.forEach(p => {
-      const score = ['address','property_name','asking_price','offer_price',
-                     'pipeline_stage','deal_tag','deal_notes','next_steps',
-                     'general_property_notes','crm_asset_classification']
-        .filter(f => p[f] !== null && p[f] !== undefined && String(p[f]).trim() !== '').length;
-      if(score > bestScore){ bestScore = score; best = p.id; }
-    });
-    picks.surviving_id = best;
+  // v108.1: picks are pre-populated by _ddAutoPickPropertyGroup when
+  // the groups are detected. Fall back to computing them here if they
+  // got cleared (e.g. user clicked "Don't merge these" and expanded).
+  let picks = (_ddPropertyPicks && _ddPropertyPicks[groupKey]) || null;
+  if(!picks || !picks.surviving_id){
+    picks = _ddAutoPickPropertyGroup(group);
   }
   const survId = picks.surviving_id;
 
@@ -27832,18 +27945,9 @@ function _ddRenderPropertyGroupBody(group){
     { key: 'general_property_notes',   label: 'General notes'     }
   ];
 
-  // Default per-field picks (only on first expand of this group)
-  fields.forEach(f => {
-    if(picks[f.key] !== undefined) return;
-    const survVal = (props.find(p => p.id === survId) || {})[f.key];
-    if(survVal !== null && survVal !== undefined && String(survVal).trim() !== ''){
-      picks[f.key] = survId; return;
-    }
-    const fallback = props.find(p => p[f.key] !== null && p[f.key] !== undefined && String(p[f.key]).trim() !== '');
-    picks[f.key] = fallback ? fallback.id : survId;
-  });
-
-  // Persist picks back so re-renders see them
+  // v108.1: per-field picks are pre-populated by _ddAutoPickPropertyGroup
+  // when the groups are detected (see _ddOpenMerge). Persist back in case
+  // the fallback path above recomputed them.
   if(!_ddPropertyPicks) _ddPropertyPicks = {};
   _ddPropertyPicks[groupKey] = picks;
 
@@ -28121,13 +28225,15 @@ async function _ddSubmitMerge(candidateId){
     const v = resolvePick(_ddMergePicks[f], f);
     if(v !== undefined) fieldValues[f] = v;
   });
-  // Notes special case: '__combine__' joins all non-empty notes with provenance
+  // Notes special case: '__combine__' joins all non-empty notes with
+  // provenance. v108.1: paragraph-level dedup so identical notes across
+  // contacts collapse to one entry (attributed to all sources) rather
+  // than appearing twice.
   const notesPick = _ddMergePicks.contact_notes;
   if(notesPick === '__combine__'){
-    const parts = _ddDialogContactsCache
-      .filter(c => (c.contact_notes||'').trim())
-      .map(c => '[From ' + (c.name||'(unnamed)') + ', added ' + (c.date_added||'?') + ']\n' + c.contact_notes.trim());
-    fieldValues.contact_notes = parts.join('\n\n');
+    fieldValues.contact_notes = _ddCombineNotes(
+      _ddDialogContactsCache.filter(c => (c.contact_notes||'').trim())
+    );
   } else if(notesPick && contactsById[notesPick]){
     fieldValues.contact_notes = contactsById[notesPick].contact_notes || '';
   }

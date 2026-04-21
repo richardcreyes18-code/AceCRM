@@ -15243,6 +15243,328 @@ function _renderPortfolioOffersTab(p, children, fmt$, fmtPct){
     </div>`;
 }
 
+// ═══════════════════════════════════════════════════════════════════
+//  DEAL BOARD — COLUMN CONFIG + FILTER PERSISTENCE  (v102.42)
+// ═══════════════════════════════════════════════════════════════════
+// Single source of truth for the Deal Board list columns. Used by both
+// the <thead> render in showDealBoard and the <tbody> render in
+// renderDealBoard. Adding an entry here makes the column sortable AND
+// toggleable in the "⚙ Columns" chooser.
+//
+//   id      — stable key used for sort state + visibility storage
+//   label   — header text
+//   width   — CSS width
+//   locked  — can't be hidden (⭐ priority, Address — needed for orientation)
+//   sortKey — (d) => sortable value; omit to disable sorting on this col
+//   cell    — (d, ctx) => full "<td>…</td>" HTML for one row
+const _DB_STAGE_ORDER = ['New Lead','Need INFO','Needs Offer','Pitch Out','Limbo','Negotiating','Needs a 1031','Won','Closed','Overpriced','Nurture'];
+function _dbStageOrder(s){ const i = _DB_STAGE_ORDER.indexOf(s); return i === -1 ? 999 : i; }
+
+const _DB_CELL_STAGE_COLORS = {
+  'New Lead':'#2060b0','Need INFO':'#8040c0','Needs Offer':'#c07000',
+  'Pitch Out':'#207060','Limbo':'#888','Negotiating':'#c04000',
+  'Needs a 1031':'#408040','Won':'#206020','Closed':'#104010',
+  'Overpriced':'#c00','Nurture':'#6060a0'
+};
+
+const DB_COLUMNS = [
+  { id:'priority', label:'⭐', width:'40px', locked:true,
+    sortKey: d => d['Top Priority'] ? 0 : 1,
+    cell: (d) => {
+      const prio = d['Top Priority'];
+      return `<td style="padding:4px 6px;border-right:1px solid #e8ecf4;text-align:center;" onclick="event.stopPropagation()">
+        <button onclick="toggleStar('${d.id}')" title="${prio?'Remove Priority':'Mark as Priority'}"
+          style="background:none;border:none;cursor:pointer;font-size:16px;line-height:1;padding:2px;
+            color:${prio?'#f5c400':'transparent'};transition:color 0.15s,transform 0.1s;display:block;margin:0 auto;"
+          onmouseenter="this.style.color='${prio?'#f5c400':'#ddd'}';this.style.transform='scale(1.2)'"
+          onmouseleave="this.style.color='${prio?'#f5c400':'transparent'}';this.style.transform='scale(1)'">⭐</button>
+      </td>`;
+    }
+  },
+  { id:'address', label:'Address', width:'180px', locked:true,
+    sortKey: d => d['Address'] || '',
+    cell: (d) => {
+      const addr = d['Address'] || '—';
+      const safe = String(addr).replace(/"/g,'&quot;');
+      return `<td style="padding:6px 8px;border-right:1px solid #e8ecf4;font-weight:bold;color:#1a3a6e;max-width:180px;">
+        <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${safe}">${_pfIconHtml(d)}${addr}</div>
+      </td>`;
+    }
+  },
+  { id:'agent', label:'Agent', width:'100px',
+    sortKey: d => d['_agentDisplay'] || d['Assigned Agent'] || '',
+    cell: (d) => {
+      const agentFull = d['Assigned Agent'] || '';
+      const display   = d['_agentDisplay'] || '—';
+      if(!display || display === '—'){
+        return `<td style="padding:6px 8px;border-right:1px solid #e8ecf4;text-align:center;"><span style="color:#aaa;font-size:11px;">—</span></td>`;
+      }
+      return `<td style="padding:6px 8px;border-right:1px solid #e8ecf4;text-align:center;">
+        <span title="${String(agentFull||display).replace(/"/g,'&quot;')}" style="background:#1a3a6e;color:#fff;font-size:10px;font-weight:600;padding:2px 8px;border-radius:99px;white-space:nowrap;">${display}</span>
+      </td>`;
+    }
+  },
+  { id:'owner', label:'Owner', width:'120px',
+    sortKey: d => d['_ownerName'] || '',
+    cell: (d) => {
+      const owner = d['_ownerName'] || '—';
+      return `<td style="padding:6px 8px;border-right:1px solid #e8ecf4;font-size:11px;color:#333;max-width:120px;">
+        <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${String(owner).replace(/"/g,'&quot;')}">${owner}</div>
+      </td>`;
+    }
+  },
+  { id:'county', label:'County', width:'110px',
+    sortKey: d => d['Simple County'] || '',
+    cell: (d) => `<td style="padding:6px 8px;border-right:1px solid #e8ecf4;">${d['Simple County'] || '—'}</td>`
+  },
+  { id:'region', label:'Region', width:'110px',
+    sortKey: d => d['Region for County'] || '',
+    cell: (d) => `<td style="padding:6px 8px;border-right:1px solid #e8ecf4;font-size:10px;color:#555;">${d['Region for County'] || '—'}</td>`
+  },
+  { id:'type', label:'Asset Type', width:'110px',
+    sortKey: d => (d['Simple Text Property Type']||'').replace(/[🔴🟠🟡🟢🔵🟣]/g,'').trim(),
+    cell: (d) => {
+      const type = (d['Simple Text Property Type']||'—').replace(/[🔴🟠🟡🟢🔵🟣]/g,'').trim();
+      const emoji = (d['Simple Text Property Type']||'').match(/[🔴🟠🟡🟢🔵🟣]/)?.[0] || '';
+      return `<td style="padding:6px 8px;border-right:1px solid #e8ecf4;">${emoji} ${type}</td>`;
+    }
+  },
+  { id:'stage', label:'Pipeline Stage', width:'115px',
+    sortKey: d => _dbStageOrder(getStage(d)),
+    cell: (d) => {
+      const s = getStage(d);
+      const c = _DB_CELL_STAGE_COLORS[s] || '#555';
+      return `<td style="padding:6px 8px;border-right:1px solid #e8ecf4;">
+        <span style="background:${c};color:#fff;padding:2px 8px;border-radius:3px;font-size:10px;white-space:nowrap;">${s}</span>
+      </td>`;
+    }
+  },
+  { id:'ask', label:'Asking Price', width:'100px',
+    sortKey: d => Number(d['Asking Price']) || 0,
+    cell: (d) => {
+      const v = d['Asking Price'] ? '$'+Number(d['Asking Price']).toLocaleString() : '—';
+      return `<td style="padding:6px 8px;border-right:1px solid #e8ecf4;color:#1a6a1a;font-weight:bold;">${v}</td>`;
+    }
+  },
+  { id:'offer', label:'Offer Price', width:'100px',
+    sortKey: d => Number(d['Offer Price']) || 0,
+    cell: (d) => {
+      const v = d['Offer Price'] ? '$'+Number(d['Offer Price']).toLocaleString() : '—';
+      return `<td style="padding:6px 8px;border-right:1px solid #e8ecf4;color:#c05000;">${v}</td>`;
+    }
+  },
+  { id:'noi', label:'NOI', width:'80px',
+    sortKey: d => Number(d['NOI']) || 0,
+    cell: (d) => {
+      const v = d['NOI'] ? '$'+Number(d['NOI']).toLocaleString() : '—';
+      return `<td style="padding:6px 8px;border-right:1px solid #e8ecf4;">${v}</td>`;
+    }
+  },
+  { id:'caprate', label:'CAP Rate', width:'75px',
+    sortKey: d => { const v = d['Cap Rate (Asking Price)']; return parseFloat(v) || 0; },
+    cell: (d) => `<td style="padding:6px 8px;border-right:1px solid #e8ecf4;font-weight:bold;">${d['Cap Rate (Asking Price)'] || '—'}</td>`
+  },
+  { id:'buyers', label:'Buyers', width:'60px',
+    sortKey: d => Number(d['# of Buyers Pitched']) || 0,
+    cell: (d) => {
+      const n = d['# of Buyers Pitched'] || 0;
+      return `<td style="padding:6px 8px;border-right:1px solid #e8ecf4;text-align:center;">${n>0?`<span style="background:#1a3a6e;color:#fff;padding:1px 7px;border-radius:10px;font-size:10px;">${n}</span>`:''}</td>`;
+    }
+  },
+  { id:'nextsteps', label:'Next Steps', width:'180px',
+    sortKey: d => d['Next Steps'] || '',
+    cell: (d) => {
+      const full = d['Next Steps'] || '';
+      const next = full.substring(0,80) + (full.length>80?'…':'');
+      return `<td style="padding:6px 8px;border-right:1px solid #e8ecf4;color:#444;max-width:200px;">
+        <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10px;" title="${String(full).replace(/"/g,'&quot;')}">${next||'—'}</div>
+      </td>`;
+    }
+  },
+  { id:'dateadded', label:'Date Added', width:'95px',
+    sortKey: d => {
+      const v = d['Date Added']; if(!v) return 0;
+      const t = new Date(v).getTime(); return isNaN(t) ? 0 : t;
+    },
+    cell: (d) => {
+      const iso = d['Date Added'];
+      let disp = '—';
+      if(iso){ const t = new Date(iso); if(!isNaN(t.getTime())) disp = t.toLocaleDateString(); }
+      return `<td style="padding:6px 8px;border-right:1px solid #e8ecf4;font-size:10px;color:#475569;white-space:nowrap;">${disp}</td>`;
+    }
+  },
+];
+
+// Default visible columns — matches the historical hardcoded layout.
+// Date Added ships hidden-by-default so existing users don't see a
+// surprise extra column; they can enable it from the Columns menu.
+const DB_DEFAULT_VISIBLE = ['priority','address','agent','owner','county','region','type','stage','ask','offer','noi','caprate','buyers','nextsteps'];
+
+function _dbColsStorageKey(){
+  const uid = (typeof _currentUser !== 'undefined' && _currentUser && _currentUser.id) ? _currentUser.id : 'anon';
+  return 'ace_db_columns_v1_' + uid;
+}
+function _dbGetVisibleCols(){
+  try{
+    const raw = localStorage.getItem(_dbColsStorageKey());
+    if(raw){
+      const arr = JSON.parse(raw);
+      if(Array.isArray(arr) && arr.length){
+        const set = new Set(arr);
+        DB_COLUMNS.forEach(c => { if(c.locked) set.add(c.id); });
+        return DB_COLUMNS.filter(c => set.has(c.id)).map(c => c.id);
+      }
+    }
+  }catch(e){}
+  return DB_DEFAULT_VISIBLE.slice();
+}
+function _dbSetVisibleCols(ids){
+  try{ localStorage.setItem(_dbColsStorageKey(), JSON.stringify(ids)); }catch(e){}
+}
+function _dbToggleCol(id){
+  const cur = new Set(_dbGetVisibleCols());
+  if(cur.has(id)) cur.delete(id); else cur.add(id);
+  const def = DB_COLUMNS.find(c => c.id === id);
+  if(def && def.locked) cur.add(id);
+  _dbSetVisibleCols(DB_COLUMNS.filter(c => cur.has(c.id)).map(c => c.id));
+  // Rebuild the whole board so <thead> picks up the new column set.
+  showDealBoard();
+}
+function _dbResetCols(){
+  _dbSetVisibleCols(DB_DEFAULT_VISIBLE.slice());
+  showDealBoard();
+}
+
+function _dbColsMenuHTML(){
+  const visible = new Set(_dbGetVisibleCols());
+  const rows = DB_COLUMNS.map(c => {
+    const checked = visible.has(c.id) ? 'checked' : '';
+    const disabled = c.locked ? 'disabled' : '';
+    const hint = c.locked ? `<span style="font-size:10px;color:#94a3b8;margin-left:auto;">locked</span>` : '';
+    return `<label style="display:flex;align-items:center;gap:8px;padding:6px 10px;font-size:12px;color:#0f172a;${c.locked?'opacity:0.6;cursor:not-allowed;':'cursor:pointer;'}"
+      onmouseenter="${c.locked?'':"this.style.background='#f1f5f9'"}"
+      onmouseleave="this.style.background='transparent'">
+      <input type="checkbox" ${checked} ${disabled} onchange="_dbToggleCol('${c.id}')" style="${c.locked?'cursor:not-allowed;':'cursor:pointer;'}"/>
+      <span>${c.label}</span>${hint}
+    </label>`;
+  }).join('');
+  return `
+    <div id="db_cols_wrap" style="position:relative;display:inline-block;">
+      <button onclick="_dbColsToggle()" class="db-fbar-btn" style="white-space:nowrap;">
+        <span class="db-fbar-btn-label">⚙ Columns</span>
+        <span class="db-fbar-btn-chev">&#x25BE;</span>
+      </button>
+      <div id="db_cols_menu" class="db-fbar-menu" style="min-width:230px;right:0;left:auto;">
+        <div class="db-fbar-menu-hdr">
+          <div class="db-fbar-menu-actions">
+            <span class="db-fbar-menu-count">Show / hide columns</span>
+            <a class="db-fbar-menu-action" style="margin-left:auto;" onclick="_dbResetCols();return false;">Reset</a>
+          </div>
+        </div>
+        <div>${rows}</div>
+      </div>
+    </div>`;
+}
+function _dbColsToggle(){
+  const menu = document.getElementById('db_cols_menu');
+  const wrap = document.getElementById('db_cols_wrap');
+  if(!menu) return;
+  const isOpen = window.getComputedStyle(menu).display !== 'none';
+  menu.style.display = isOpen ? 'none' : 'block';
+  if(!isOpen){
+    setTimeout(() => {
+      document.addEventListener('click', function closeCb(e){
+        if(!wrap?.contains(e.target)){
+          if(menu) menu.style.display = 'none';
+          document.removeEventListener('click', closeCb);
+        }
+      });
+    }, 50);
+  }
+}
+
+// ─── FILTER PERSISTENCE ─────────────────────────────────────
+// Snapshots filter state (search, priority, stage/source checkboxes,
+// LOC-001 tags, and sort) to sessionStorage on every render. Restored
+// when the Deal Board mounts so navigating away and back keeps the
+// same filters. sessionStorage clears on tab close (= "fully exit"
+// case). A TTL check handles the "elapsed time" case.
+const _DB_FILTER_TTL_MS = 60 * 60 * 1000; // 60 minutes
+const _DB_FILTER_KEY    = 'ace_db_filters_v1';
+
+function _dbSaveFilterState(){
+  try{
+    const readKind = (kind) => {
+      const cbs = [...document.querySelectorAll(`.db_${kind}_cb`)];
+      if(!cbs.length) return null;
+      const checked = cbs.filter(c => c.checked).map(c => c.value);
+      if(checked.length === cbs.length) return null; // all = no filter
+      return checked;
+    };
+    const state = {
+      ts: Date.now(),
+      search:   document.getElementById('db_search')?.value || '',
+      priority: !!document.getElementById('db_priority')?.checked,
+      stage:    readKind('stage'),
+      source:   readKind('source'),
+      loc: {
+        state:  (_locFilters.state  || []).slice(),
+        region: (_locFilters.region || []).slice(),
+        county: (_locFilters.county || []).slice(),
+        city:   (_locFilters.city   || []).slice(),
+        type:   (_locFilters.type   || []).slice(),
+      },
+      sort: { col: _dbSort.col, dir: _dbSort.dir },
+    };
+    sessionStorage.setItem(_DB_FILTER_KEY, JSON.stringify(state));
+  }catch(e){ /* sessionStorage full/blocked — non-fatal */ }
+}
+
+function _dbRestoreFilterState(){
+  try{
+    const raw = sessionStorage.getItem(_DB_FILTER_KEY);
+    if(!raw) return false;
+    const st = JSON.parse(raw);
+    if(!st || !st.ts) return false;
+    if(Date.now() - st.ts > _DB_FILTER_TTL_MS){
+      sessionStorage.removeItem(_DB_FILTER_KEY);
+      return false;
+    }
+    const search = document.getElementById('db_search');
+    if(search && typeof st.search === 'string') search.value = st.search;
+    const priority = document.getElementById('db_priority');
+    if(priority) priority.checked = !!st.priority;
+    ['stage','source'].forEach(kind => {
+      const cbs = [...document.querySelectorAll(`.db_${kind}_cb`)];
+      if(!cbs.length) return;
+      const saved = st[kind];
+      if(!Array.isArray(saved)){
+        cbs.forEach(cb => cb.checked = true);
+      } else {
+        const ss = new Set(saved);
+        cbs.forEach(cb => cb.checked = ss.has(cb.value));
+      }
+      _dbMultiChanged(kind);
+    });
+    if(st.loc){
+      ['state','region','county','city','type'].forEach(k => {
+        if(Array.isArray(st.loc[k])){
+          _locFilters[k] = st.loc[k].slice();
+          if(typeof _locRenderTags === 'function') _locRenderTags(k);
+        }
+      });
+    }
+    if(st.sort && typeof st.sort.col === 'string'){
+      _dbSort.col = st.sort.col;
+      _dbSort.dir = (st.sort.dir === 'desc') ? 'desc' : 'asc';
+    }
+    return true;
+  }catch(e){
+    console.warn('filter restore failed:', e);
+    return false;
+  }
+}
+
 function showDealBoard(){
   const STAGE_ORDER = ['New Lead','Need INFO','Needs Offer','Pitch Out','Limbo','Negotiating','Needs a 1031','Won','Closed','Overpriced','Nurture'];
   const STAGE_COLORS = {
@@ -15323,7 +15645,7 @@ function showDealBoard(){
           ${_locCompactBarHTML()}
         </div>
 
-        <!-- FILTER ROW 3: Stages + Asset Type + Sources + Priority + spacer + Clear Filters -->
+        <!-- FILTER ROW 3: Stages + Asset Type + Sources + Priority + spacer + Columns + Clear Filters -->
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
           ${_dbMultiBtn('stage', 'All Stages', stages, false)}
           ${_locRenderSingleField('type', 'Asset Type')}
@@ -15333,6 +15655,7 @@ function showDealBoard(){
             &#9733; Priority Only
           </label>
           <div style="flex:1;"></div>
+          ${_dbColsMenuHTML()}
           <button onclick="dbClearAllFilters()" class="db-fbar-clear">
             &#10005; Clear Filters
           </button>
@@ -15347,26 +15670,16 @@ function showDealBoard(){
         <table id="db_table" style="width:100%;border-collapse:collapse;font-size:11px;min-width:1100px;">
           <thead>
             <tr style="background:#243a5e;color:#fff;position:sticky;top:0;z-index:10;">
-              ${[
-                ['priority','⭐','40px'],
-                ['address','Address','180px'],
-                ['agent','Agent','100px'],
-                ['owner','Owner','120px'],
-                ['county','County','110px'],
-                ['region','Region','110px'],
-                ['type','Asset Type','110px'],
-                ['stage','Pipeline Stage','115px'],
-                ['ask','Asking Price','100px'],
-                ['offer','Offer Price','100px'],
-                ['noi','NOI','80px'],
-                ['caprate','CAP Rate','75px'],
-                ['buyers','Buyers','60px'],
-                ['nextsteps','Next Steps','180px'],
-              ].map(([col,label,w])=>`
-                <th style="padding:7px 8px;text-align:left;white-space:nowrap;width:${w};border-right:1px solid #1a2e4e;cursor:pointer;user-select:none;"
-                  onclick="dbSortBy('${col}')">
-                  ${label} <span id="db_sort_${col}" style="font-size:9px;opacity:0.7;"></span>
-                </th>`).join('')}
+              ${_dbGetVisibleCols().map(id => {
+                const c = DB_COLUMNS.find(x => x.id === id);
+                if(!c) return '';
+                return `<th style="padding:7px 8px;text-align:left;white-space:nowrap;width:${c.width};border-right:1px solid #1a2e4e;cursor:pointer;user-select:none;"
+                  onclick="dbSortBy('${c.id}')">
+                  ${c.label} <span id="db_sort_${c.id}" style="font-size:9px;opacity:0.7;"></span>
+                </th>`;
+              }).join('')}
+              <!-- Trailing actions column (delete); not toggleable -->
+              <th style="padding:7px 8px;width:40px;"></th>
             </tr>
           </thead>
           <tbody id="db_tbody"></tbody>
@@ -15419,7 +15732,6 @@ function showDealBoard(){
       </div>
     </div>`;
 
-  renderDealBoard();
   window._dbCurrentView = 'list';
   // v102.24: Wire up LOC-001 fields now that the DOM elements exist.
   _locPostRender();
@@ -15428,6 +15740,12 @@ function showDealBoard(){
   // here after showDealBoard's innerHTML has landed.
   _locWireField('type');
   _locRenderTags('type');
+  // v102.42: Restore the user's last filter state (sessionStorage, 60-min
+  // TTL) BEFORE the first render so filter inputs / LOC tags / sort are
+  // already populated when renderDealBoard runs. Tab close clears session
+  // storage, so "fully exit" resets naturally.
+  _dbRestoreFilterState();
+  renderDealBoard();
 }
 
 let _dbCurrentView = 'list';
@@ -16624,19 +16942,12 @@ function renderDealBoard(){
   const selTypes    = _dbMultiGetSelected('type');
   const selSources  = _dbMultiGetSelected('source');
 
-  // Update sort indicators
-  ['priority','address','county','region','type','stage','ask','offer','noi','caprate','buyers','nextsteps'].forEach(c=>{
-    const el = document.getElementById('db_sort_'+c);
-    if(el) el.textContent = _dbSort.col===c ? (_dbSort.dir==='asc'?'▲':'▼') : '';
+  // Update sort indicators (only visible columns have DOM elements, but
+  // iterating all defs is harmless — getElementById returns null for hidden).
+  DB_COLUMNS.forEach(c => {
+    const el = document.getElementById('db_sort_'+c.id);
+    if(el) el.textContent = _dbSort.col===c.id ? (_dbSort.dir==='asc'?'▲':'▼') : '';
   });
-
-  const STAGE_ORDER = ['New Lead','Need INFO','Needs Offer','Pitch Out','Limbo','Negotiating','Needs a 1031','Won','Closed','Overpriced','Nurture'];
-  const STAGE_COLORS = {
-    'New Lead':'#2060b0','Need INFO':'#8040c0','Needs Offer':'#c07000',
-    'Pitch Out':'#207060','Limbo':'#888','Negotiating':'#c04000',
-    'Needs a 1031':'#408040','Won':'#206020','Closed':'#104010',
-    'Overpriced':'#c00','Nurture':'#6060a0'
-  };
 
   // Filter
   let deals = allDeals.filter(d=>{
@@ -16664,22 +16975,10 @@ function renderDealBoard(){
     return matchSearch && matchStage && matchState && matchCounty && matchCity && matchType && matchSource && matchRegion && matchPrio && matchShape;
   });
 
-  // Sort
-  const colKey = {
-    priority: d=>d['Top Priority']?0:1,
-    address:  d=>d['Address']||'',
-    owner:    d=>d['_ownerName']||'',
-    county:   d=>d['Simple County']||'',
-    region:   d=>d['Region for County']||'',
-    type:     d=>(d['Simple Text Property Type']||'').replace(/[🔴🟠🟡🟢🔵🟣]/g,'').trim(),
-    stage:    d=>STAGE_ORDER.indexOf(getStage(d)),
-    ask:      d=>Number(d['Asking Price'])||0,
-    offer:    d=>Number(d['Offer Price'])||0,
-    noi:      d=>Number(d['NOI'])||0,
-    caprate:  d=>{ const v=d['Cap Rate (Asking Price)']; return parseFloat(v)||0; },
-    buyers:   d=>Number(d['# of Buyers Pitched'])||0,
-    nextsteps:d=>d['Next Steps']||'',
-  };
+  // Sort — sortKey functions live on DB_COLUMNS so adding a new column
+  // with a sortKey makes it sortable without touching this function.
+  const colKey = {};
+  DB_COLUMNS.forEach(c => { if(c.sortKey) colKey[c.id] = c.sortKey; });
   const keyFn = colKey[_dbSort.col] || (d=>d['Address']||'');
   deals.sort((a,b)=>{
     const av=keyFn(a), bv=keyFn(b);
@@ -16692,90 +16991,55 @@ function renderDealBoard(){
   if(countEl) countEl.textContent = `${deals.length} deal${deals.length!==1?'s':''}`;
 
   // Render rows
-  tbody.innerHTML = deals.map((d,i)=>{
-    const stage   = getStage(d);
-    const stageColor = STAGE_COLORS[stage]||'#555';
-    const addr    = d['Address']||'—';
-    const county  = d['Simple County']||'—';
-    const region  = d['Region for County']||'—';
-    const type    = (d['Simple Text Property Type']||'—').replace(/[🔴🟠🟡🟢🔵🟣]/g,'').trim();
-    const typeEmoji = (d['Simple Text Property Type']||'').match(/[🔴🟠🟡🟢🔵🟣]/)?.[0]||'';
-    const ask     = d['Asking Price']  ? '$'+Number(d['Asking Price']).toLocaleString()  : '—';
-    const offer   = d['Offer Price']   ? '$'+Number(d['Offer Price']).toLocaleString()   : '—';
-    const noi     = d['NOI']           ? '$'+Number(d['NOI']).toLocaleString()           : '—';
-    const cap     = d['Cap Rate (Asking Price)']||'—';
-    const buyers  = d['# of Buyers Pitched']||0;
-    const next    = (d['Next Steps']||'').substring(0,80)+(d['Next Steps']?.length>80?'…':'');
-    const prio    = d['Top Priority'];
-    const owner   = d['_ownerName'] || '—';
-    const bg      = i%2===0 ? '#fff' : '#f6f8fc';
+  // Agent display lookup tables — defined once per render, reused per row.
+  const FULL_NAME_MAP = {
+    'Timothy Emrich':'Tim E.','Joseph Domenech':'Joe D.','Aidan Alverson':'Aidan A.',
+    'Richard Reyes':'Richard R.','Daniel Keenan':'Dan K.','Joseph Spinella':'Joe S.',
+    'Greg Sly':'Greg S.','Will Hartgers':'Will H.','Everett James':'Everett J.'
+  };
+  const INITIALS_TO_DISPLAY = {
+    'TE':'Tim E.','JD':'Joe D.','AA':'Aidan A.','RR':'Richard R.','DK':'Dan K.',
+    'JS':'Joe S.','GS':'Greg S.','WH':'Will H.','EJ':'Everett J.','TS':'Tim S.','HE':'H.E.'
+  };
 
-    // Agent — use full name from Assigned Agent field or parse initials from deal name
-    const FULL_NAME_MAP = {
-      'Timothy Emrich':'Tim E.','Joseph Domenech':'Joe D.','Aidan Alverson':'Aidan A.',
-      'Richard Reyes':'Richard R.','Daniel Keenan':'Dan K.','Joseph Spinella':'Joe S.',
-      'Greg Sly':'Greg S.','Will Hartgers':'Will H.','Everett James':'Everett J.'
-    };
-    const INITIALS_TO_DISPLAY = {
-      'TE':'Tim E.','JD':'Joe D.','AA':'Aidan A.','RR':'Richard R.','DK':'Dan K.',
-      'JS':'Joe S.','GS':'Greg S.','WH':'Will H.','EJ':'Everett J.','TS':'Tim S.','HE':'H.E.'
-    };
+  const visibleCols = _dbGetVisibleCols().map(id => DB_COLUMNS.find(c => c.id === id)).filter(Boolean);
+
+  tbody.innerHTML = deals.map((d,i)=>{
+    // Precompute the agent display string and cache on the deal object so
+    // both the cell render and sortKey can see the same value.
     const agentFull = d['Assigned Agent']||'';
     const addrInitials = (d['Address']||'').match(/[-–]\s*([A-Z]{2,3})\s*$/)?.[1]||'';
-    const agentDisplay = FULL_NAME_MAP[agentFull] || INITIALS_TO_DISPLAY[addrInitials] || (agentFull ? agentFull.split(' ')[0]+' '+(agentFull.split(' ')[1]?.[0]||'')+'.':'' ) || '—';
-    const agentInitials = agentDisplay;
+    d['_agentDisplay'] = FULL_NAME_MAP[agentFull] || INITIALS_TO_DISPLAY[addrInitials] || (agentFull ? agentFull.split(' ')[0]+' '+(agentFull.split(' ')[1]?.[0]||'')+'.':'' ) || '—';
+
+    const bg = i%2===0 ? '#fff' : '#f6f8fc';
+    const cells = visibleCols.map(c => c.cell(d)).join('');
+    const deleteCell = `<td style="padding:4px 6px;border-right:1px solid #e8ecf4;text-align:center;width:40px;" onclick="event.stopPropagation()">
+      <button onclick="deleteDeal('${d.id}','${(d['Address']||'').replace(/'/g,"\\'")}')"
+        title="Delete deal"
+        style="background:none;border:none;cursor:pointer;font-size:14px;color:#ddd;padding:2px;transition:color 0.15s;"
+        onmouseenter="this.style.color='#c0392b'"
+        onmouseleave="this.style.color='#ddd'">🗑</button>
+    </td>`;
 
     return `<tr style="background:${bg};cursor:pointer;border-bottom:1px solid #e8ecf4;"
       onclick="dealBoardOpen('${d.id}')"
       onmouseenter="this.style.background='#e8f0fe'"
-      onmouseleave="this.style.background='${bg}'">
-      <td style="padding:4px 6px;border-right:1px solid #e8ecf4;text-align:center;" onclick="event.stopPropagation()">
-        <button onclick="toggleStar('${d.id}')" title="${prio?'Remove Priority':'Mark as Priority'}"
-          style="background:none;border:none;cursor:pointer;font-size:16px;line-height:1;padding:2px;
-            color:${prio?'#f5c400':'transparent'};transition:color 0.15s,transform 0.1s;display:block;margin:0 auto;"
-          onmouseenter="this.style.color='${prio?'#f5c400':'#ddd'}';this.style.transform='scale(1.2)'"
-          onmouseleave="this.style.color='${prio?'#f5c400':'transparent'}';this.style.transform='scale(1)'">⭐</button>
-      </td>
-      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;font-weight:bold;color:#1a3a6e;max-width:180px;">
-        <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${addr}">${_pfIconHtml(d)}${addr}</div>
-      </td>
-      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;text-align:center;">
-        ${agentDisplay && agentDisplay !== '—' ? `<span title="${agentFull||agentDisplay}" style="background:#1a3a6e;color:#fff;font-size:10px;font-weight:600;padding:2px 8px;border-radius:99px;white-space:nowrap;">${agentDisplay}</span>` : `<span style="color:#aaa;font-size:11px;">—</span>`}
-      </td>
-      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;font-size:11px;color:#333;max-width:120px;">
-        <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${owner}">${owner}</div>
-      </td>
-      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;">${county}</td>
-      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;font-size:10px;color:#555;">${region}</td>
-      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;">${typeEmoji} ${type}</td>
-      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;">
-        <span style="background:${stageColor};color:#fff;padding:2px 8px;border-radius:3px;font-size:10px;white-space:nowrap;">${stage}</span>
-      </td>
-      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;color:#1a6a1a;font-weight:bold;">${ask}</td>
-      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;color:#c05000;">${offer}</td>
-      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;">${noi}</td>
-      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;font-weight:bold;">${cap}</td>
-      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;text-align:center;">${buyers>0?`<span style="background:#1a3a6e;color:#fff;padding:1px 7px;border-radius:10px;font-size:10px;">${buyers}</span>`:''}</td>
-      <td style="padding:6px 8px;color:#444;max-width:200px;">
-        <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:10px;" title="${(d['Next Steps']||'').replace(/"/g,'&quot;')}">${next||'—'}</div>
-      </td>
-      <td style="padding:4px 6px;border-right:1px solid #e8ecf4;text-align:center;width:40px;" onclick="event.stopPropagation()">
-        <button onclick="deleteDeal('${d.id}','${(d['Address']||'').replace(/'/g,"\\'")}')"
-          title="Delete deal"
-          style="background:none;border:none;cursor:pointer;font-size:14px;color:#ddd;padding:2px;transition:color 0.15s;"
-          onmouseenter="this.style.color='#c0392b'"
-          onmouseleave="this.style.color='#ddd'">🗑</button>
-      </td>
-    </tr>`;
+      onmouseleave="this.style.background='${bg}'">${cells}${deleteCell}</tr>`;
   }).join('');
 
   if(!deals.length){
-    tbody.innerHTML = '<tr><td colspan="15" style="text-align:center;padding:30px;color:#888;">No deals match your filters.</td></tr>';
+    const span = visibleCols.length + 1; // + trailing delete col
+    tbody.innerHTML = '<tr><td colspan="'+span+'" style="text-align:center;padding:30px;color:#888;">No deals match your filters.</td></tr>';
   }
 
   // v103: enable column resizing on the deal board table
   const _dbTbl = tbody.closest('table');
   if(_dbTbl) _makeColumnsResizable(_dbTbl, 'dealBoard');
+
+  // v102.42: Persist current filter state to sessionStorage for restore on
+  // next mount. Called at the end of every render, so any filter change
+  // (which re-renders) updates the saved snapshot automatically.
+  _dbSaveFilterState();
 }
 
 async function deleteDeal(dealId, addr){

@@ -19068,36 +19068,39 @@ async function _contactLoadRichProfile(contactId){
 
     const phonesRaw = Array.isArray(r.all_phones) ? r.all_phones : [];
     const emailsRaw = Array.isArray(r.all_emails) ? r.all_emails : [];
+    const addrsRaw  = Array.isArray(r.addresses)  ? r.addresses  : [];
     // Keep raw arrays in state so edit/delete handlers know index positions
     // that include hidden entries (render uses visible indices for display,
     // handlers use the original raw-array index to mutate the correct row).
-    window._rpState[contactId] = { phones: phonesRaw, emails: emailsRaw };
+    window._rpState[contactId] = { phones: phonesRaw, emails: emailsRaw, addresses: addrsRaw };
 
     const phones = phonesRaw.map((p,i) => ({...p, _i: i})).filter(p => !p.hidden);
     const emails = emailsRaw.map((e,i) => ({...e, _i: i})).filter(e => !e.hidden);
     const tags   = Array.isArray(r.fub_tags)  ? r.fub_tags  : [];
-    const addrsRaw = Array.isArray(r.addresses) ? r.addresses : [];
     const hasMeta = r.fub_stage || r.fub_source || r.fub_assigned_to;
 
     // FUB sometimes splits an address into two rows (street number alone,
     // street name alone) and our backfill dedup can scramble the order.
     // Strategy: (a) pair adjacent number→name, (b) hide remaining pure-number
-    // fragments from the render (still kept in DB — not deleted).
+    // fragments from the render (still kept in DB — not deleted). Each display
+    // entry carries _srcIdxs so delete/edit can target the right raw row(s).
     const addrs = [];
     const isNum = s => /^\d+[A-Za-z]?$/.test(String(s||'').trim());
     const hasCity = a => !!(a && (a.city || a.state || a.code));
     for (let i = 0; i < addrsRaw.length; i++) {
       const cur = addrsRaw[i] || {};
+      if (cur.hidden) continue;
       const nxt = addrsRaw[i+1] || null;
+      const nxtHidden = nxt && nxt.hidden;
       const curStreet = String(cur.street||'').trim();
-      if (isNum(curStreet) && nxt && !isNum(nxt.street) && nxt.street &&
+      if (isNum(curStreet) && nxt && !nxtHidden && !isNum(nxt.street) && nxt.street &&
           !hasCity(cur) && !hasCity(nxt) && (cur.type||'') === (nxt.type||'')) {
-        addrs.push({...nxt, street: curStreet + ' ' + String(nxt.street).trim()});
+        addrs.push({...nxt, street: curStreet + ' ' + String(nxt.street).trim(), _srcIdxs: [i, i+1]});
         i++;
       } else if (isNum(curStreet) && !hasCity(cur)) {
         continue;
       } else if (curStreet || hasCity(cur)) {
-        addrs.push(cur);
+        addrs.push({...cur, _srcIdxs: [i]});
       }
     }
 
@@ -19156,24 +19159,32 @@ async function _contactLoadRichProfile(contactId){
         </div>
       </div>` : '';
 
-    const addrsHtml = addrs.length ? `
+    const addrsHtml = `
       <div>
-        <label style="display:block;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">📍 Addresses (${addrs.length})</label>
-        <div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:4px 10px;">
-          ${addrs.map(a => {
+        <label style="display:flex;align-items:center;justify-content:space-between;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">
+          <span>📍 Addresses${addrs.length ? ` (${addrs.length})` : ''}</span>
+          <button type="button" onclick="_rpAddAddr('${contactId}')" style="background:#f1f5f9;border:1px solid #e2e8f0;color:#0f172a;font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;cursor:pointer;text-transform:none;letter-spacing:0;">+ Add</button>
+        </label>
+        <div id="rp_addresses_${contactId}" style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:4px 10px;">
+          ${addrs.length ? addrs.map(a => {
             const street = esc(a.street||'');
             const cityStateZip = [a.city, a.state].filter(Boolean).map(esc).join(', ') + (a.code ? ' ' + esc(a.code) : '');
+            const srcKey = a._srcIdxs.join(',');
             return `
-            <div style="display:flex;align-items:flex-start;padding:8px 0;border-bottom:1px solid #f1f5f9;font-size:13px;">
+            <div data-rp-addr="${contactId}:${srcKey}" style="display:flex;align-items:flex-start;padding:8px 0;border-bottom:1px solid #f1f5f9;font-size:13px;gap:6px;">
               <span style="color:#94a3b8;font-size:11px;width:70px;flex-shrink:0;text-transform:lowercase;padding-top:2px;">${esc(a.type||'addr')}</span>
               <span style="color:#0f172a;font-weight:500;flex:1;line-height:1.5;">
                 ${street}
                 ${cityStateZip.trim() ? `<br><span style="color:#64748b;font-weight:400;">${cityStateZip}</span>`:''}
               </span>
+              <span style="display:inline-flex;gap:2px;opacity:0.65;padding-top:2px;">
+                <button type="button" title="Edit" onclick="_rpEditAddr('${contactId}','${srcKey}')" style="background:none;border:none;padding:2px 4px;cursor:pointer;color:#64748b;font-size:11px;">✎</button>
+                <button type="button" title="Hide" onclick="_rpDeleteAddr('${contactId}','${srcKey}')" style="background:none;border:none;padding:2px 4px;cursor:pointer;color:#94a3b8;font-size:11px;">✕</button>
+              </span>
             </div>`;
-          }).join('')}
+          }).join('') : '<div style="color:#94a3b8;font-size:12px;padding:8px 0;">No addresses yet. Click + Add.</div>'}
         </div>
-      </div>` : '';
+      </div>`;
 
     // phones/emails sections always render (they host the Add button). The
     // other sections only render when they have data.
@@ -19273,6 +19284,133 @@ async function _rpDelete(contactId, kind, i){
   const col = kind === 'phones' ? 'all_phones' : 'all_emails';
   try {
     await _sbPatch(SB_TABLES.contacts, contactId, { [col]: arr });
+    await _contactLoadRichProfile(contactId);
+  } catch(e){
+    alert('Hide failed: ' + e.message);
+  }
+}
+
+// ─── Address editor (multi-field) ─────────────────────────────────
+// srcKey is the comma-joined list of raw-array indices this display row
+// points at. For an unsplit entry it's a single idx; for a paired merge
+// ("442" + "Elizabeth Ave") it's two. Delete marks all of them hidden.
+// Edit: saves cleaned values to the first idx, hides the rest.
+function _rpAddrEditRowHtml(contactId, srcKey, init){
+  const types = ['home','work','rental','other'];
+  const v = init || {};
+  return `
+    <div data-rp-addr="${contactId}:${srcKey}" style="display:flex;flex-direction:column;padding:10px 0;border-bottom:1px solid #f1f5f9;font-size:13px;gap:6px;">
+      <div style="display:flex;gap:6px;align-items:center;">
+        <select id="rp_addr_type_${srcKey}" style="font-size:11px;padding:2px 4px;border:1px solid #cbd5e1;border-radius:4px;width:80px;flex-shrink:0;">
+          ${types.map(t => `<option value="${t}"${t===(v.type||'home').toLowerCase()?' selected':''}>${t}</option>`).join('')}
+        </select>
+        <input id="rp_addr_street_${srcKey}" type="text" value="${_rpEscAttr(v.street||'')}" placeholder="Street (e.g. 442 Elizabeth Ave)" style="flex:1;font-size:13px;padding:3px 6px;border:1px solid #cbd5e1;border-radius:4px;">
+      </div>
+      <div style="display:flex;gap:6px;">
+        <input id="rp_addr_city_${srcKey}" type="text" value="${_rpEscAttr(v.city||'')}" placeholder="City" style="flex:1;font-size:13px;padding:3px 6px;border:1px solid #cbd5e1;border-radius:4px;">
+        <input id="rp_addr_state_${srcKey}" type="text" value="${_rpEscAttr(v.state||'')}" placeholder="State" style="width:52px;font-size:13px;padding:3px 6px;border:1px solid #cbd5e1;border-radius:4px;">
+        <input id="rp_addr_code_${srcKey}" type="text" value="${_rpEscAttr(v.code||'')}" placeholder="Zip" style="width:72px;font-size:13px;padding:3px 6px;border:1px solid #cbd5e1;border-radius:4px;">
+      </div>
+      <div style="display:flex;gap:6px;justify-content:flex-end;">
+        <button type="button" onclick="_rpSaveAddr('${contactId}','${srcKey}')" style="background:#2563eb;color:#fff;border:none;padding:4px 14px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;">Save</button>
+        <button type="button" onclick="_contactLoadRichProfile('${contactId}')" style="background:none;border:none;color:#64748b;font-size:11px;cursor:pointer;">Cancel</button>
+      </div>
+    </div>`;
+}
+
+function _rpParseSrcKey(srcKey){
+  return String(srcKey||'').split(',').map(s => parseInt(s,10)).filter(n => !isNaN(n));
+}
+
+function _rpEditAddr(contactId, srcKey){
+  const st = window._rpState && window._rpState[contactId];
+  if(!st) return;
+  const idxs = _rpParseSrcKey(srcKey);
+  const raw = st.addresses || [];
+  const primary = raw[idxs[0]] || {};
+  // For a paired merge, rebuild the street from both fragments so the editor
+  // shows "442 Elizabeth Ave" rather than just the name portion.
+  let street = String(primary.street||'').trim();
+  if (idxs.length >= 2) {
+    const isNum = s => /^\d+[A-Za-z]?$/.test(String(s||'').trim());
+    const first = raw[idxs[0]]||{}, second = raw[idxs[1]]||{};
+    if (isNum(first.street) && !isNum(second.street)) {
+      street = String(first.street).trim() + ' ' + String(second.street||'').trim();
+    }
+  }
+  const init = { ...primary, street };
+  const row = document.querySelector(`[data-rp-addr="${contactId}:${srcKey}"]`);
+  if(!row) return;
+  row.outerHTML = _rpAddrEditRowHtml(contactId, srcKey, init);
+  const inp = document.getElementById(`rp_addr_street_${srcKey}`);
+  if(inp){ inp.focus(); inp.select(); }
+}
+
+function _rpAddAddr(contactId){
+  const st = window._rpState && window._rpState[contactId];
+  if(!st) return;
+  const newIdx = (st.addresses||[]).length;
+  const listEl = document.getElementById(`rp_addresses_${contactId}`);
+  if(!listEl) return;
+  const emptyPh = listEl.querySelector('div[style*="No addresses"]');
+  if(emptyPh) emptyPh.remove();
+  const srcKey = String(newIdx);
+  if (listEl.querySelector(`[data-rp-addr="${contactId}:${srcKey}"]`)) return;
+  listEl.insertAdjacentHTML('beforeend', _rpAddrEditRowHtml(contactId, srcKey, { type: 'home' }));
+  const inp = document.getElementById(`rp_addr_street_${srcKey}`);
+  if(inp) inp.focus();
+}
+
+async function _rpSaveAddr(contactId, srcKey){
+  const st = window._rpState && window._rpState[contactId];
+  if(!st) return;
+  const street = String((document.getElementById(`rp_addr_street_${srcKey}`)||{}).value||'').trim();
+  const city   = String((document.getElementById(`rp_addr_city_${srcKey}`)  ||{}).value||'').trim();
+  const state  = String((document.getElementById(`rp_addr_state_${srcKey}`) ||{}).value||'').trim();
+  const code   = String((document.getElementById(`rp_addr_code_${srcKey}`)  ||{}).value||'').trim();
+  const type   = String((document.getElementById(`rp_addr_type_${srcKey}`)  ||{}).value||'home').trim();
+  if(!street && !city && !state && !code){ alert('Please fill in at least one field.'); return; }
+
+  const arr = (st.addresses||[]).slice();
+  const idxs = _rpParseSrcKey(srcKey);
+  const cleaned = { type, street, city, state, code, country: (arr[idxs[0]]||{}).country || '' };
+
+  if (idxs.length === 0) {
+    // shouldn't happen — treat as add
+    arr.push(cleaned);
+  } else if (idxs[0] >= arr.length) {
+    // Add flow: new row at end
+    arr.push(cleaned);
+  } else {
+    // Edit: overwrite first, hide the rest (covers paired-merge case)
+    arr[idxs[0]] = { ...arr[idxs[0]], ...cleaned };
+    for (let k = 1; k < idxs.length; k++) {
+      arr[idxs[k]] = { ...arr[idxs[k]], hidden: true };
+    }
+  }
+  try {
+    await _sbPatch(SB_TABLES.contacts, contactId, { addresses: arr });
+    await _contactLoadRichProfile(contactId);
+  } catch(e){
+    alert('Save failed: ' + e.message);
+  }
+}
+
+async function _rpDeleteAddr(contactId, srcKey){
+  const st = window._rpState && window._rpState[contactId];
+  if(!st) return;
+  const idxs = _rpParseSrcKey(srcKey);
+  const raw = st.addresses || [];
+  const preview = idxs.map(i => raw[i]).filter(Boolean)
+    .map(a => [a.street, a.city, a.state].filter(Boolean).join(', '))
+    .filter(Boolean).join(' / ') || 'this address';
+  if(!confirm(`Hide address "${preview}"? It stays in the database but won't show here (FUB won't re-import it).`)) return;
+  const arr = raw.slice();
+  for (const i of idxs) {
+    if (arr[i]) arr[i] = { ...arr[i], hidden: true };
+  }
+  try {
+    await _sbPatch(SB_TABLES.contacts, contactId, { addresses: arr });
     await _contactLoadRichProfile(contactId);
   } catch(e){
     alert('Hide failed: ' + e.message);

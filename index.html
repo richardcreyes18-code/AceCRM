@@ -4777,7 +4777,25 @@ async function saveEditAddressModal(){
 
 function _openDealDirect(d){
   // Clear pending edits only if switching to a different deal
-  if(currentDeal?.id !== d.id) clearPendingEdits();
+  if(currentDeal?.id !== d.id){
+    // v112 Bug 1 fix: flush any pending financial autosave for the deal
+    // we're leaving, before currentDeal gets overwritten. Without this,
+    // a user who types an expense and immediately clicks another deal
+    // would lose the change — the 900ms debouncer fires, but by then
+    // currentDeal.id points at the new deal and saveFinInputs targets
+    // the wrong record (or no record if the fin tab isn't rendered yet).
+    if(currentDeal?.id && _finAutoSaveTimer){
+      clearTimeout(_finAutoSaveTimer);
+      _finAutoSaveTimer = null;
+      const hasFinInputs = !!document.getElementById('fin_a_ins_prop_mo')
+                        || !!document.getElementById('fin_a_tax_prop_mo')
+                        || !!document.getElementById('fin_aGrossRent_mo');
+      if(hasFinInputs){
+        try { saveFinInputs(currentDeal.id); } catch(e) { /* best-effort */ }
+      }
+    }
+    clearPendingEdits();
+  }
   currentDeal=d;
   currentTab='summary';
   clearDirty();
@@ -37771,6 +37789,12 @@ function updateExpenseTotals(){
   const fd3 = n => '$'+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
   const el  = id => document.getElementById(id);
 
+  // v112: Read yearly DOM values directly for yearly subtotals instead of
+  // deriving them from summed monthly values. When the user types $1,000
+  // into a yearly line, syncMoYr writes "83.33" to the monthly side. Summing
+  // monthly and multiplying by 12 gives $999.96 — a 4¢ precision loss.
+  // The yearly DOM input always holds Math.round(mo*12) via syncMoYr, so
+  // summing it gives a clean whole-dollar category subtotal.
   const EXP = {
     admin: ['admin_mgmt','admin_acct','admin_legal','admin_other'],
     rm:    ['rm_jan','rm_land','rm_maint','rm_sal','rm_pool','rm_sup'],
@@ -37781,28 +37805,34 @@ function updateExpenseTotals(){
     pm:    ['pm_fee','pm_other']
   };
 
-  let varA=0, varP=0, fixA=0, fixP=0, totalA=0, totalP=0;
+  let varA_mo=0, varP_mo=0, fixA_mo=0, fixP_mo=0, totalA_mo=0, totalP_mo=0;
+  let varA_yr=0, varP_yr=0, fixA_yr=0, fixP_yr=0, totalA_yr=0, totalP_yr=0;
   const VAR = ['admin','rm','util','misc'];
   const FIX = ['tax','ins','pm'];
 
   Object.entries(EXP).forEach(([cat, items]) => {
-    let cA=0, cP=0;
+    let cA_mo=0, cP_mo=0, cA_yr=0, cP_yr=0;
     items.forEach(id => {
-      cA += v('fin_a_'+id+'_mo');
-      cP += v('fin_p_'+id+'_mo');
+      cA_mo += v('fin_a_'+id+'_mo');
+      cP_mo += v('fin_p_'+id+'_mo');
+      cA_yr += v('fin_a_'+id+'_yr');
+      cP_yr += v('fin_p_'+id+'_yr');
     });
-    if(el('exp_a_'+cat+'_mo')) el('exp_a_'+cat+'_mo').textContent = fd3(cA);
-    if(el('exp_a_'+cat+'_yr')) el('exp_a_'+cat+'_yr').textContent = fd3(cA*12);
-    if(el('exp_p_'+cat+'_mo')) el('exp_p_'+cat+'_mo').textContent = fd3(cP);
-    if(el('exp_p_'+cat+'_yr')) el('exp_p_'+cat+'_yr').textContent = fd3(cP*12);
-    if(VAR.includes(cat)){ varA+=cA; varP+=cP; }
-    if(FIX.includes(cat)){ fixA+=cA; fixP+=cP; }
-    totalA+=cA; totalP+=cP;
+    if(el('exp_a_'+cat+'_mo')) el('exp_a_'+cat+'_mo').textContent = fd3(cA_mo);
+    if(el('exp_a_'+cat+'_yr')) el('exp_a_'+cat+'_yr').textContent = fd3(cA_yr);
+    if(el('exp_p_'+cat+'_mo')) el('exp_p_'+cat+'_mo').textContent = fd3(cP_mo);
+    if(el('exp_p_'+cat+'_yr')) el('exp_p_'+cat+'_yr').textContent = fd3(cP_yr);
+    if(VAR.includes(cat)){ varA_mo+=cA_mo; varP_mo+=cP_mo; varA_yr+=cA_yr; varP_yr+=cP_yr; }
+    if(FIX.includes(cat)){ fixA_mo+=cA_mo; fixP_mo+=cP_mo; fixA_yr+=cA_yr; fixP_yr+=cP_yr; }
+    totalA_mo+=cA_mo; totalP_mo+=cP_mo; totalA_yr+=cA_yr; totalP_yr+=cP_yr;
   });
 
-  const capA = v('fin_aCapRes_mo');
-  const capP = v('fin_pCapRes_mo');
-  totalA += capA; totalP += capP;
+  const capA_mo = v('fin_aCapRes_mo');
+  const capP_mo = v('fin_pCapRes_mo');
+  const capA_yr = v('fin_aCapRes_yr');
+  const capP_yr = v('fin_pCapRes_yr');
+  totalA_mo += capA_mo; totalP_mo += capP_mo;
+  totalA_yr += capA_yr; totalP_yr += capP_yr;
 
   // Check if ratio override mode is active
   const isRatio = el('expModeRatio')?.checked;
@@ -37811,26 +37841,26 @@ function updateExpenseTotals(){
     const pEGI = window._pEGI_mo || 0;
     const aRatio = v('fin_aExpRatio') / 100;
     const pRatio = v('fin_pExpRatio') / 100;
-    if(aRatio > 0) totalA = aEGI * aRatio;
-    if(pRatio > 0) totalP = pEGI * pRatio;
+    if(aRatio > 0){ totalA_mo = aEGI * aRatio; totalA_yr = totalA_mo * 12; }
+    if(pRatio > 0){ totalP_mo = pEGI * pRatio; totalP_yr = totalP_mo * 12; }
   }
 
-  if(el('exp_varTotal_a_mo')) el('exp_varTotal_a_mo').textContent = fd3(varA);
-  if(el('exp_varTotal_a_yr')) el('exp_varTotal_a_yr').textContent = fd3(varA*12);
-  if(el('exp_varTotal_p_mo')) el('exp_varTotal_p_mo').textContent = fd3(varP);
-  if(el('exp_varTotal_p_yr')) el('exp_varTotal_p_yr').textContent = fd3(varP*12);
-  if(el('exp_fixTotal_a_mo')) el('exp_fixTotal_a_mo').textContent = fd3(fixA);
-  if(el('exp_fixTotal_a_yr')) el('exp_fixTotal_a_yr').textContent = fd3(fixA*12);
-  if(el('exp_fixTotal_p_mo')) el('exp_fixTotal_p_mo').textContent = fd3(fixP);
-  if(el('exp_fixTotal_p_yr')) el('exp_fixTotal_p_yr').textContent = fd3(fixP*12);
-  if(el('exp_totalOpEx_a_mo')) el('exp_totalOpEx_a_mo').textContent = fd3(totalA);
-  if(el('exp_totalOpEx_a_yr')) el('exp_totalOpEx_a_yr').textContent = fd3(totalA*12);
-  if(el('exp_totalOpEx_p_mo')) el('exp_totalOpEx_p_mo').textContent = fd3(totalP);
-  if(el('exp_totalOpEx_p_yr')) el('exp_totalOpEx_p_yr').textContent = fd3(totalP*12);
+  if(el('exp_varTotal_a_mo')) el('exp_varTotal_a_mo').textContent = fd3(varA_mo);
+  if(el('exp_varTotal_a_yr')) el('exp_varTotal_a_yr').textContent = fd3(varA_yr);
+  if(el('exp_varTotal_p_mo')) el('exp_varTotal_p_mo').textContent = fd3(varP_mo);
+  if(el('exp_varTotal_p_yr')) el('exp_varTotal_p_yr').textContent = fd3(varP_yr);
+  if(el('exp_fixTotal_a_mo')) el('exp_fixTotal_a_mo').textContent = fd3(fixA_mo);
+  if(el('exp_fixTotal_a_yr')) el('exp_fixTotal_a_yr').textContent = fd3(fixA_yr);
+  if(el('exp_fixTotal_p_mo')) el('exp_fixTotal_p_mo').textContent = fd3(fixP_mo);
+  if(el('exp_fixTotal_p_yr')) el('exp_fixTotal_p_yr').textContent = fd3(fixP_yr);
+  if(el('exp_totalOpEx_a_mo')) el('exp_totalOpEx_a_mo').textContent = fd3(totalA_mo);
+  if(el('exp_totalOpEx_a_yr')) el('exp_totalOpEx_a_yr').textContent = fd3(totalA_yr);
+  if(el('exp_totalOpEx_p_mo')) el('exp_totalOpEx_p_mo').textContent = fd3(totalP_mo);
+  if(el('exp_totalOpEx_p_yr')) el('exp_totalOpEx_p_yr').textContent = fd3(totalP_yr);
 
-  // Store for NOI calculation
-  window._aTotalOpEx_mo = totalA;
-  window._pTotalOpEx_mo = totalP;
+  // Store for NOI calculation (NOI uses monthly OpEx)
+  window._aTotalOpEx_mo = totalA_mo;
+  window._pTotalOpEx_mo = totalP_mo;
 
   // NOI = EGI - OpEx — refresh whenever expenses change
   updateIncomeTotals();
@@ -38161,13 +38191,57 @@ function _finWireAutoSave(){
     if(t.id.endsWith('Display') || t.id.endsWith('Label')) return;
     _finScheduleAutoSave();
   });
-  // Also flush pending save if the user switches tabs or navigates away
-  root.addEventListener('focusout', (e) => {
-    const t = e.target;
-    if(!t || !t.id || !t.id.startsWith('fin_')) return;
-    // Don't flush on simple blur — the 1500ms debouncer will catch it.
-    // But if the user is about to navigate (visibilitychange), save now.
+
+  // v112 Bug 1 fix: flush any pending autosave the instant the user
+  // navigates away or reloads. Previously the 900ms debouncer could
+  // silently drop the last change if the user hit refresh or clicked
+  // another deal within that window.
+  //
+  // _finInstallGlobalFlushHooks is idempotent (guards against double-
+  // wiring) and also wires flush calls into openDeal / hash nav. We
+  // call it here so it fires the first time a Financial tab renders,
+  // but it's also safe to call from anywhere else if needed.
+  if(typeof _finInstallGlobalFlushHooks === 'function'){
+    _finInstallGlobalFlushHooks();
+  }
+}
+
+let _finGlobalFlushWired = false;
+// Wire global navigation/unload listeners that force a synchronous
+// financial autosave flush. Called on first Financial tab render.
+function _finInstallGlobalFlushHooks(){
+  if(_finGlobalFlushWired) return;
+  _finGlobalFlushWired = true;
+
+  // Synchronous best-effort flush used by beforeunload/pagehide. In these
+  // contexts we can't await a fetch — instead we cancel the timer and
+  // fire saveFinInputs which dispatches the Airtable request immediately.
+  // Modern browsers keep in-flight fetches alive during pagehide long
+  // enough to complete for same-origin requests (keepalive semantics).
+  const syncFlush = () => {
+    if(_finAutoSaveTimer){
+      clearTimeout(_finAutoSaveTimer);
+      _finAutoSaveTimer = null;
+    }
+    if(!currentDeal || !currentDeal.id) return;
+    const hasFinInputs = !!document.getElementById('fin_a_ins_prop_mo')
+                      || !!document.getElementById('fin_a_tax_prop_mo')
+                      || !!document.getElementById('fin_aGrossRent_mo');
+    if(!hasFinInputs) return;
+    try { saveFinInputs(currentDeal.id); } catch(e) { /* best-effort */ }
+  };
+
+  // Flush before the tab unloads (refresh, close, navigate to new URL)
+  window.addEventListener('beforeunload', syncFlush);
+  // pagehide fires in more cases than beforeunload (bfcache, iOS Safari)
+  window.addEventListener('pagehide', syncFlush);
+  // Fires when the tab is backgrounded — user switched tabs, locked screen,
+  // opened a new window. Counts as "about to navigate away" for our purposes.
+  document.addEventListener('visibilitychange', () => {
+    if(document.visibilityState === 'hidden') syncFlush();
   });
+  // In-app hash navigation (_nav uses hash routing)
+  window.addEventListener('hashchange', syncFlush);
 }
 
 // Pulse the small green dot next to the Save Inputs button. Called by

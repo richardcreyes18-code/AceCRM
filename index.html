@@ -8863,9 +8863,26 @@ function renderFinancialTab(d){
   // v107: legacy fields (gross_revenue_yearly, gross_revenue_monthly) have
   // been migrated to gross_rental_income_monthly and nulled. Read only the
   // canonical field now.
-  const aGrossRent   = (Number(d['Gross Rental Income (Monthly)'])||0)*12;
+  // v108: Legacy data where monthly was stored at 2-decimal precision (from
+  // syncMoYr's toFixed(2) rounding) round-trips with artifacts — e.g.
+  // $400,000/yr → 33333.33/mo → 399,999.96/yr on reload. Snap yearly to the
+  // nearest whole dollar when (a) the stored monthly is precisely 2-decimal
+  // rounded AND (b) the resulting yearly is within 5¢ of a whole dollar.
+  // Real rents below $1/year don't exist, so this is safe.
+  const _cleanYr = moRaw => {
+    const mo = Number(moRaw)||0;
+    if(!mo) return 0;
+    const yr = mo * 12;
+    const moAt2 = Math.round(mo * 100) / 100;
+    const yrRound = Math.round(yr);
+    if(Math.abs(mo - moAt2) < 1e-9 && Math.abs(yr - yrRound) < 0.05){
+      return yrRound;
+    }
+    return yr;
+  };
+  const aGrossRent   = _cleanYr(d['Gross Rental Income (Monthly)']);
   const aVacancy     = (d['Vacancy Rate (%)'] !== null && d['Vacancy Rate (%)'] !== undefined && d['Vacancy Rate (%)'] !== '') ? Number(d['Vacancy Rate (%)']) : '';
-  const aOtherInc    = (Number(d['Other Income (Monthly)'])||0)*12;
+  const aOtherInc    = _cleanYr(d['Other Income (Monthly)']);
   const aExpenses    = Number(d['Expenses Yearly']) || (Number(d['Expenses Monthly'])||0)*12 || 0;
   const aDownPct     = Number(d['Down Payment (%)']) || 25;
   const pDownPct     = Number(d['Proforma Down Payment (%)']) || aDownPct;
@@ -8877,9 +8894,9 @@ function renderFinancialTab(d){
   const aOccupancy   = Number(d['Occupancy (%)']) || 100;
 
   // Proforma inputs
-  const pGrossRent   = (Number(d['Proforma Gross Rent (Monthly)'])||0)*12;
+  const pGrossRent   = _cleanYr(d['Proforma Gross Rent (Monthly)']);
   const pVacancy     = (d['Vacancy Rate Proforma (%)'] !== null && d['Vacancy Rate Proforma (%)'] !== undefined && d['Vacancy Rate Proforma (%)'] !== '') ? Number(d['Vacancy Rate Proforma (%)']) : '';
-  const pOtherInc    = (Number(d['Proforma Other Income (Monthly)'])||0)*12;
+  const pOtherInc    = _cleanYr(d['Proforma Other Income (Monthly)']);
   const pExpenses    = Number(d['Pro Forma Expenses Yearly']) || (Number(d['Pro Forma Expenses Monthly'])||0)*12 || 0;
 
   // Seed fi for the rest of the tab render code that still reads fi.X
@@ -9406,10 +9423,12 @@ function renderFinancialTab(d){
       const aCon_yr   = Number(fi.aCon)||0;
       const aTRI_yr   = aGRI_yr - aVac_yr - aNRU_yr - aBD_yr - aCon_yr;
       const aTRI_mo   = aTRI_yr/12;
+      // v108: RUBS / Other Income can also have the same legacy 2-decimal
+      // rounding artifact. Clean the yearly display the same way.
       const aOI_mo    = Number(fi.aOI_mo)||0;
-      const aOI_yr    = aOI_mo*12;
+      const aOI_yr    = _cleanYr(fi.aOI_mo);
       const aRUBS_mo  = Number(fi.aRUBS_mo)||0;
-      const aRUBS_yr  = aRUBS_mo*12;
+      const aRUBS_yr  = _cleanYr(fi.aRUBS_mo);
       const aEGI_yr   = aTRI_yr + aOI_yr + aRUBS_yr;
       const aEGI_mo   = aEGI_yr/12;
 
@@ -9424,9 +9443,9 @@ function renderFinancialTab(d){
       const pTRI_yr   = pGRI_yr - pVac_yr - pNRU_yr - pBD_yr - pCon_yr;
       const pTRI_mo   = pTRI_yr/12;
       const pOI_mo    = Number(fi.pOI_mo)||0;
-      const pOI_yr    = pOI_mo*12;
+      const pOI_yr    = _cleanYr(fi.pOI_mo);
       const pRUBS_mo  = Number(fi.pRUBS_mo)||0;
-      const pRUBS_yr  = pRUBS_mo*12;
+      const pRUBS_yr  = _cleanYr(fi.pRUBS_mo);
       const pEGI_yr   = pTRI_yr + pOI_yr + pRUBS_yr;
       const pEGI_mo   = pEGI_yr/12;
 
@@ -9687,16 +9706,14 @@ function renderFinancialTab(d){
       const egi = (() => {
         const aGRI_yr = aGrossRent;
         const aVac_yr = aGRI_yr*(aVacancy/100);
-        const aOI_mo  = Number(fi.aOI_mo)||0;
-        const aRUBS_mo= Number(fi.aRUBS_mo)||0;
-        return aGRI_yr - aVac_yr + aOI_mo*12 + aRUBS_mo*12;
+        // v108: use _cleanYr so legacy 2-decimal mo storage doesn't leak $0.04
+        // rounding artifacts into the EGI displayed above the expense table.
+        return aGRI_yr - aVac_yr + _cleanYr(fi.aOI_mo) + _cleanYr(fi.aRUBS_mo);
       })();
       const pegi = (() => {
         const pGRI_yr = pGrossRent;
         const pVac_yr = pGRI_yr*(pVacancy/100);
-        const pOI_mo  = Number(fi.pOI_mo)||0;
-        const pRUBS_mo= Number(fi.pRUBS_mo)||0;
-        return pGRI_yr - pVac_yr + pOI_mo*12 + pRUBS_mo*12;
+        return pGRI_yr - pVac_yr + _cleanYr(fi.pOI_mo) + _cleanYr(fi.pRUBS_mo);
       })();
 
       const fd  = v => v?'$'+Number(v).toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}):'$0.00';
@@ -36863,6 +36880,18 @@ function syncMoYr(moId, yrId, source){
   const moEl = document.getElementById(moId);
   const yrEl = document.getElementById(yrId);
   if(!moEl || !yrEl) return;
+  // v108: Track which side the user last edited. saveFinInputs uses this
+  // to decide which value is authoritative. When the user types a yearly
+  // value that isn't cleanly divisible by 12 (e.g. $400,000), we want to
+  // save yr/12 at full float precision — NOT the .toFixed(2) rounded mo
+  // shown in the UI, which would round-trip back to $399,999.96 on reload.
+  if(source === 'mo'){
+    moEl.dataset.authoritative = '1';
+    yrEl.dataset.authoritative = '';
+  } else {
+    yrEl.dataset.authoritative = '1';
+    moEl.dataset.authoritative = '';
+  }
   // Strip commas before parsing so num-input formatted values still work
   const rawMo = String(moEl.value||'').replace(/,/g,'');
   const rawYr = String(yrEl.value||'').replace(/,/g,'');
@@ -37156,6 +37185,42 @@ function saveFinInputs(dealId){
   const get   = id => Number(String(document.getElementById(id)?.value||'').replace(/,/g,''))||0;
   const getStr= id => document.getElementById(id)?.value||'';
   const getChk= id => document.getElementById(id)?.checked||false;
+  // v108: When the user last edited the yearly input (e.g. typed "400,000"),
+  // prefer yr/12 at full float precision instead of the rounded mo value
+  // shown in the UI. Otherwise $400,000 round-trips to $399,999.96 because
+  // syncMoYr writes the mo input as (yr/12).toFixed(2) = "33333.33".
+  // See syncMoYr for the authoritative marker.
+  //
+  // Also handles post-load data recovery: when renderFinancialTab's
+  // _cleanYr snapped a yearly rounding artifact (33333.33*12 → 399999.96 →
+  // 400000), the yr input now holds the canonical whole-dollar value.
+  // An autosave without any user edit should store yr/12 at full precision,
+  // not re-save the rounded mo. Heuristic: if mo is precisely 2-decimal
+  // and mo*12 is within 5¢ of yr, prefer yr/12.
+  const getAuthMo = (moId, yrId) => {
+    const moEl = document.getElementById(moId);
+    const yrEl = document.getElementById(yrId);
+    if(!moEl) return 0;
+    const mo = get(moId);
+    const yr = get(yrId);
+    // Explicit marker from syncMoYr (user just edited the yr input)
+    if(yrEl && yrEl.dataset && yrEl.dataset.authoritative === '1'){
+      if(yr > 0) return yr / 12;
+    }
+    // If mo is authoritative (user just edited mo), respect it exactly
+    if(moEl && moEl.dataset && moEl.dataset.authoritative === '1'){
+      return mo;
+    }
+    // Fallback heuristic (no explicit edit, e.g. autosave post-load):
+    // recover yr precision when mo looks like a 2-decimal rounding of yr/12
+    if(yr > 0){
+      const moAt2 = Math.round(mo * 100) / 100;
+      if(Math.abs(mo - moAt2) < 1e-9 && Math.abs(mo * 12 - yr) < 0.05){
+        return yr / 12;
+      }
+    }
+    return mo;
+  };
 
   // Build the complete Airtable fields object — all Phase 2 fields
   const fields = {};
@@ -37167,19 +37232,23 @@ function saveFinInputs(dealId){
   if(offer) fields['Offer Price']    = offer;
 
   // ── Income ───────────────────────────────────────────────────
-  const aGRI_mo = get('fin_aGrossRent_mo');
-  const pGRI_mo = get('fin_pGrossRent_mo');
+  const aGRI_mo = getAuthMo('fin_aGrossRent_mo', 'fin_aGrossRent_yr');
+  const pGRI_mo = getAuthMo('fin_pGrossRent_mo', 'fin_pGrossRent_yr');
+  const aOI_mo   = getAuthMo('fin_aOI_mo',   'fin_aOI_yr');
+  const aRUBS_mo = getAuthMo('fin_aRUBS_mo', 'fin_aRUBS_yr');
+  const pOI_mo   = getAuthMo('fin_pOI_mo',   'fin_pOI_yr');
+  const pRUBS_mo = getAuthMo('fin_pRUBS_mo', 'fin_pRUBS_yr');
   // v107: always send GRI even when 0 — otherwise clearing the input
   // field never writes to the DB and the old value persists forever.
   // Send null instead of 0 so the DB column is actually cleared.
   fields['Gross Rental Income (Monthly)']  = aGRI_mo || null;
   if(get('fin_aVacancy'))   fields['Vacancy Rate (%)']            = get('fin_aVacancy');
-  if(get('fin_aOI_mo'))     fields['Other Income (Monthly)']      = get('fin_aOI_mo');
-  if(get('fin_aRUBS_mo'))   fields['RUBS/CAM Income (Monthly)']   = get('fin_aRUBS_mo');
+  if(aOI_mo)   fields['Other Income (Monthly)']      = aOI_mo;
+  if(aRUBS_mo) fields['RUBS/CAM Income (Monthly)']   = aRUBS_mo;
   fields['Proforma Gross Rent (Monthly)']  = pGRI_mo || null;
   if(get('fin_pVacancy'))   fields['Vacancy Rate Proforma (%)']   = get('fin_pVacancy');
-  if(get('fin_pOI_mo'))     fields['Proforma Other Income (Monthly)'] = get('fin_pOI_mo');
-  if(get('fin_pRUBS_mo'))   fields['Proforma RUBS/CAM (Monthly)'] = get('fin_pRUBS_mo');
+  if(pOI_mo)   fields['Proforma Other Income (Monthly)'] = pOI_mo;
+  if(pRUBS_mo) fields['Proforma RUBS/CAM (Monthly)'] = pRUBS_mo;
 
   // ── Size & Building ──────────────────────────────────────────
   if(get('fin_aNetRentSF')) fields['Net Rentable SF']    = get('fin_aNetRentSF');
@@ -37246,7 +37315,9 @@ function saveFinInputs(dealId){
     'fin_aCapRes_mo':        'Capital Reserve (Monthly)',
   };
   Object.entries(expMap).forEach(([inputId, airtableField]) => {
-    const v = get(inputId);
+    // v108: prefer yr/12 at full precision if user last edited the yearly input
+    const yrId = inputId.replace(/_mo$/, '_yr');
+    const v = getAuthMo(inputId, yrId);
     if(v) fields[airtableField] = v;
   });
 
@@ -37266,7 +37337,8 @@ function saveFinInputs(dealId){
   const proFormaBreakdown = {};
   let hasProForma = false;
   proFormaExpenseKeys.forEach(k => {
-    const v = get('fin_p_'+k+'_mo');
+    // v108: prefer yr/12 at full precision when user last edited the yearly side
+    const v = getAuthMo('fin_p_'+k+'_mo', 'fin_p_'+k+'_yr');
     if(v) { proFormaBreakdown[k] = v; hasProForma = true; }
   });
   if(hasProForma) fields['Pro Forma Expense Breakdown'] = proFormaBreakdown;

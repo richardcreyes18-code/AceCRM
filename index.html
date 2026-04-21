@@ -21934,10 +21934,127 @@ function _reconRowHtml(r, fubBy, aceBy){
         <span style="background:${color};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;">${label}</span>
         <span style="color:#94a3b8;font-size:10px;">FUB #${r.fub_source_id}</span>
         <span style="color:#cbd5e1;font-size:10px;margin-left:auto;">${_reconEsc(new Date(r.created_at).toLocaleString())}</span>
+        <button onclick="_reconOpenPreview(${r.fub_source_id})" style="background:#fff;border:1px solid #cbd5e1;color:#2563eb;padding:3px 10px;border-radius:6px;font-size:10px;font-weight:600;cursor:pointer;">🔍 Preview all data</button>
       </div>
       ${body}
       <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;">${actions}</div>
     </div>`;
+}
+
+// v111.13: Preview modal — everything FUB has for a contact
+// Fetches fub_contacts + fub_notes + fub_calls in parallel so the user can see
+// exactly what will land in ace_contacts before approving a queue action.
+async function _reconOpenPreview(fubId){
+  let modal = document.getElementById('reconPreviewModal');
+  if(!modal){
+    modal = document.createElement('div');
+    modal.id = 'reconPreviewModal';
+    modal.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9999;align-items:flex-start;justify-content:center;padding:40px 20px;overflow-y:auto;';
+    modal.onclick = e => { if(e.target === modal) _reconClosePreview(); };
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:12px;max-width:860px;width:100%;max-height:calc(100vh - 80px);overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.3);display:flex;flex-direction:column;">
+        <div id="reconPreviewHeader" style="padding:18px 24px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;">
+          <div style="font-size:16px;font-weight:700;color:#0f172a;">FUB Contact Preview</div>
+          <button onclick="_reconClosePreview()" style="background:transparent;border:none;font-size:22px;color:#94a3b8;cursor:pointer;line-height:1;">×</button>
+        </div>
+        <div id="reconPreviewBody" style="padding:20px 24px;overflow-y:auto;flex:1;">
+          <div style="padding:40px;text-align:center;color:#94a3b8;font-size:12px;">Loading…</div>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+  }
+  modal.style.display = 'flex';
+  const body = document.getElementById('reconPreviewBody');
+  body.innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8;font-size:12px;">Loading FUB data…</div>';
+
+  try{
+    const [contactRows, notes, calls] = await Promise.all([
+      _sbGet('fub_contacts',
+        `select=id,name,first_name,last_name,type,stage,source,assigned_to,tags,phones,emails,addresses,deal_name,deal_status,deal_stage,deal_price,price,created_at,updated_at,last_activity&id=eq.${fubId}`),
+      _sbGet('fub_notes',
+        `select=id,subject,body,created_by,created_at&person_id=eq.${fubId}&order=created_at.desc&limit=50`).catch(()=>[]),
+      _sbGet('fub_calls',
+        `select=id,direction,outcome,duration,phone,note,summary,created_at,user_id&person_id=eq.${fubId}&order=created_at.desc&limit=50`).catch(()=>[]),
+    ]);
+    const c = contactRows && contactRows[0];
+    if(!c){ body.innerHTML = '<div style="padding:40px;text-align:center;color:#dc2626;">FUB contact not found</div>'; return; }
+    document.getElementById('reconPreviewHeader').firstElementChild.textContent = `${c.name || '(no name)'} — FUB #${c.id}`;
+    body.innerHTML = _reconPreviewHtml(c, notes||[], calls||[]);
+  }catch(e){
+    body.innerHTML = `<div style="padding:40px;text-align:center;color:#dc2626;">Failed to load: ${_reconEsc(e.message||e)}</div>`;
+  }
+}
+
+function _reconClosePreview(){
+  const m = document.getElementById('reconPreviewModal');
+  if(m) m.style.display = 'none';
+}
+
+function _reconPreviewHtml(c, notes, calls){
+  const secTitle = t => `<div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin:18px 0 8px;">${t}</div>`;
+  const kv = (k, v) => `<div style="display:flex;font-size:12px;padding:3px 0;border-bottom:1px solid #f1f5f9;"><span style="color:#94a3b8;width:140px;flex-shrink:0;">${_reconEsc(k)}</span><span style="color:#0f172a;">${_reconEsc(v ?? '—')}</span></div>`;
+
+  const phonesHtml = (c.phones && c.phones.length)
+    ? c.phones.map(p => `<div style="font-size:12px;padding:4px 0;"><span style="color:#94a3b8;width:80px;display:inline-block;">${_reconEsc(p.type||'phone')}</span><strong style="color:#0f172a;">${_reconEsc(p.value||'')}</strong>${p.isPrimary ? ' <span style="background:#dbeafe;color:#1e40af;font-size:9px;padding:1px 6px;border-radius:8px;margin-left:6px;">primary</span>':''}</div>`).join('')
+    : '<div style="font-size:11px;color:#94a3b8;">None</div>';
+  const emailsHtml = (c.emails && c.emails.length)
+    ? c.emails.map(e => `<div style="font-size:12px;padding:4px 0;"><span style="color:#94a3b8;width:80px;display:inline-block;">${_reconEsc(e.type||'email')}</span><strong style="color:#0f172a;">${_reconEsc(e.value||'')}</strong>${e.isPrimary ? ' <span style="background:#dbeafe;color:#1e40af;font-size:9px;padding:1px 6px;border-radius:8px;margin-left:6px;">primary</span>':''}</div>`).join('')
+    : '<div style="font-size:11px;color:#94a3b8;">None</div>';
+  const addrHtml = (c.addresses && c.addresses.length)
+    ? c.addresses.map(a => `<div style="font-size:12px;padding:4px 0;color:#0f172a;">${_reconEsc([a.street,a.city,a.state,a.code,a.country].filter(Boolean).join(', '))}</div>`).join('')
+    : '<div style="font-size:11px;color:#94a3b8;">None</div>';
+  const tagsHtml = (c.tags && c.tags.length)
+    ? c.tags.map(t => `<span style="background:#f1f5f9;color:#334155;font-size:11px;padding:2px 8px;border-radius:10px;margin-right:4px;margin-bottom:4px;display:inline-block;">${_reconEsc(t)}</span>`).join('')
+    : '<span style="font-size:11px;color:#94a3b8;">None</span>';
+
+  const notesHtml = notes.length ? notes.map(n => `
+    <div style="background:#fafbfc;border:1px solid #e2e8f0;border-radius:6px;padding:10px 12px;margin-bottom:8px;">
+      <div style="font-size:11px;color:#64748b;margin-bottom:4px;">
+        <strong style="color:#334155;">${_reconEsc(n.subject || '(no subject)')}</strong>
+        <span style="margin-left:8px;">by ${_reconEsc(n.created_by||'?')}</span>
+        <span style="margin-left:8px;color:#94a3b8;">${_reconEsc(new Date(n.created_at).toLocaleString())}</span>
+      </div>
+      <div style="font-size:12px;color:#0f172a;white-space:pre-wrap;line-height:1.5;">${_reconEsc(n.body||'')}</div>
+    </div>`).join('') : '<div style="font-size:11px;color:#94a3b8;">No notes</div>';
+
+  const fmtDur = s => !s ? '—' : (s<60 ? s+'s' : Math.floor(s/60)+'m '+(s%60)+'s');
+  const callsHtml = calls.length ? calls.map(k => `
+    <div style="background:#fafbfc;border:1px solid #e2e8f0;border-radius:6px;padding:10px 12px;margin-bottom:8px;">
+      <div style="font-size:11px;color:#64748b;margin-bottom:4px;">
+        <strong style="color:#334155;">${_reconEsc(k.direction||'call')}</strong>
+        <span style="margin-left:8px;color:${k.outcome==='Connected'?'#16a34a':'#94a3b8'};">${_reconEsc(k.outcome||'')}</span>
+        <span style="margin-left:8px;">${fmtDur(k.duration)}</span>
+        <span style="margin-left:8px;">${_reconEsc(k.phone||'')}</span>
+        <span style="margin-left:8px;color:#94a3b8;">${_reconEsc(new Date(k.created_at).toLocaleString())}</span>
+      </div>
+      ${k.note ? `<div style="font-size:12px;color:#0f172a;white-space:pre-wrap;line-height:1.5;">${_reconEsc(k.note)}</div>`:''}
+      ${k.summary && k.summary !== k.note ? `<div style="font-size:11px;color:#64748b;margin-top:4px;font-style:italic;">${_reconEsc(k.summary)}</div>`:''}
+    </div>`).join('') : '<div style="font-size:11px;color:#94a3b8;">No calls</div>';
+
+  return `
+    ${secTitle('Identity')}
+    ${kv('Name', c.name)}
+    ${kv('First / Last', (c.first_name||'—') + ' / ' + (c.last_name||'—'))}
+    ${kv('Type', c.type)}
+    ${kv('Stage', c.stage)}
+    ${kv('Source', c.source)}
+    ${kv('Assigned to', c.assigned_to)}
+    ${kv('Created', c.created_at ? new Date(c.created_at).toLocaleString() : '—')}
+    ${kv('Last activity', c.last_activity ? new Date(c.last_activity).toLocaleString() : '—')}
+
+    ${secTitle(`Phones (${(c.phones||[]).length})`)}${phonesHtml}
+    ${secTitle(`Emails (${(c.emails||[]).length})`)}${emailsHtml}
+    ${secTitle(`Addresses (${(c.addresses||[]).length})`)}${addrHtml}
+    ${secTitle(`Tags (${(c.tags||[]).length})`)}<div>${tagsHtml}</div>
+
+    ${(c.deal_name || c.deal_price || c.deal_status) ? secTitle('Deal') +
+      kv('Deal name', c.deal_name) + kv('Deal status', c.deal_status) +
+      kv('Deal stage', c.deal_stage) + kv('Deal price', c.deal_price) +
+      kv('Price', c.price) : ''}
+
+    ${secTitle(`Notes (${notes.length})`)}${notesHtml}
+    ${secTitle(`Calls (${calls.length})`)}${callsHtml}
+  `;
 }
 
 // Small wrapper so the resolve buttons can share error handling. Uses the

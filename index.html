@@ -18720,7 +18720,7 @@ async function _contactLoadLinkedBuyerCriteria(contactId){
   try{
     let matches = [];
     if(isSupabase()){
-      const rows = await _sbGet(SB_TABLES.buyerCriteria, `contact_id=eq.${contactId}&select=*&limit=50`);
+      const rows = await _sbGet(SB_TABLES.buyerCriteria, `contact_id=eq.${contactId}&deleted_at=is.null&select=*&limit=50`);
       matches = rows||[];
     }
 
@@ -24205,7 +24205,8 @@ async function showBuyerCriteriaPage(){
       while(true){
         // v63: embedded JOIN on ace_contacts replaces the separate batch fetch loop below.
         // One round-trip instead of ~12.
-        const rows = await _sbGet(SB_TABLES.buyerCriteria, `select=*,ace_contacts(id,name,phone_number,email,company,fub_contact_id)&order=created_at.desc&limit=${batchSize}&offset=${from}`);
+        // v108.2: filter soft-deleted BCs (losers from a smart merge)
+        const rows = await _sbGet(SB_TABLES.buyerCriteria, `deleted_at=is.null&select=*,ace_contacts(id,name,phone_number,email,company,fub_contact_id)&order=created_at.desc&limit=${batchSize}&offset=${from}`);
         if(!rows.length) break;
         rows.forEach(row => {
           // Hydrate contact cache from the embedded record
@@ -26946,6 +26947,10 @@ let _ddTagPicks = null;   // v102.42.5: Set<string> of tags chosen for the survi
 let _ddPropertyGroups = [];      // [{ key, addrHint, properties[] }, ...]
 let _ddPropertyExpanded = null;  // Set<groupKey> currently expanded
 let _ddPropertyPicks = null;     // { groupKey: { surviving_id, address, asking_price, ... } }
+// v108.2: buyer-criteria smart-merge state
+let _ddBCRows = [];              // full ace_buyer_criteria rows for the dedupe group
+let _ddBCMerge = null;           // result of _ddResolveBCMerge — { surviving_id, loser_ids, mergedValues, conflicts, isClean, needsMerge }
+let _ddBCConflictPicks = {};     // field → bcId chosen by user for each conflict
 
 async function showDedupePage(){
   const main = document.getElementById('mainArea');
@@ -26959,6 +26964,243 @@ async function showDedupePage(){
     return;
   }
   _ddRenderShell();
+}
+
+// v108.2: Buyer-criteria field bucketing for smart merge. Each field is
+// classified by how conflicts should be resolved:
+//   - numeric:   numbers, 5% tolerance → if within 5%, take the one from
+//                the survivor BC (or first non-null); otherwise conflict.
+//   - scalar:    strict equality (text or boolean). Different non-null
+//                values → conflict.
+//   - csv:       comma-separated value lists → split, union, dedupe, rejoin.
+//                Never a conflict (always additive).
+//   - freetext:  free-form text → paragraph-level dedup (same as notes).
+//                Never a conflict.
+//   - array:     native Postgres array (vip_asset_types) → union+dedupe.
+//                Never a conflict.
+// Fields not listed here are ignored by the smart merge.
+const _DD_BC_FIELDS = {
+  // --- NUMERIC (5% tolerance, MIN-of-mins, MAX-of-maxes for range fields) ---
+  minimum_cap_rate:              { bucket:'numeric', label:'Min cap rate',          integer:false, rangeRole:'min' },
+  min_purchase_price:            { bucket:'numeric', label:'Min purchase price',    integer:false, rangeRole:'min' },
+  max_purchase_price:            { bucket:'numeric', label:'Max purchase price',    integer:false, rangeRole:'max' },
+  mf_min_units:                  { bucket:'numeric', label:'MF min units',          integer:true,  rangeRole:'min' },
+  mf_max_units:                  { bucket:'numeric', label:'MF max units',          integer:true,  rangeRole:'max' },
+  mf_max_price_per_unit:         { bucket:'numeric', label:'MF max $/unit',         integer:false, rangeRole:'max' },
+  warehouse_min_sf:              { bucket:'numeric', label:'Warehouse min SF',      integer:true,  rangeRole:'min' },
+  warehouse_max_sf:              { bucket:'numeric', label:'Warehouse max SF',      integer:true,  rangeRole:'max' },
+  warehouse_min_clear_height:    { bucket:'numeric', label:'Warehouse min clear ht',integer:true,  rangeRole:'min' },
+  warehouse_min_docks:           { bucket:'numeric', label:'Warehouse min docks',   integer:true,  rangeRole:'min' },
+  retail_min_tenants:            { bucket:'numeric', label:'Retail min tenants',    integer:true,  rangeRole:'min' },
+  retail_min_occupancy:          { bucket:'numeric', label:'Retail min occupancy',  integer:true,  rangeRole:'min' },
+  retail_min_sf:                 { bucket:'numeric', label:'Retail min SF',         integer:true,  rangeRole:'min' },
+  retail_max_sf:                 { bucket:'numeric', label:'Retail max SF',         integer:true,  rangeRole:'max' },
+  office_min_sf:                 { bucket:'numeric', label:'Office min SF',         integer:true,  rangeRole:'min' },
+  office_max_sf:                 { bucket:'numeric', label:'Office max SF',         integer:false, rangeRole:'max' },
+  office_min_tenants:            { bucket:'numeric', label:'Office min tenants',    integer:true,  rangeRole:'min' },
+  office_max_tenants:            { bucket:'numeric', label:'Office max tenants',    integer:true,  rangeRole:'max' },
+  land_min_acreage:              { bucket:'numeric', label:'Land min acreage',      integer:false, rangeRole:'min' },
+  land_max_acreage:              { bucket:'numeric', label:'Land max acreage',      integer:false, rangeRole:'max' },
+  mixeduse_min_residential:      { bucket:'numeric', label:'Mixed-use min resid.',  integer:true,  rangeRole:'min' },
+  mixeduse_min_commercial:       { bucket:'numeric', label:'Mixed-use min comm.',   integer:true,  rangeRole:'min' },
+  mixeduse_min_sf:               { bucket:'numeric', label:'Mixed-use min SF',      integer:true,  rangeRole:'min' },
+  automotive_min_bays:           { bucket:'numeric', label:'Automotive min bays',   integer:true,  rangeRole:'min' },
+  shopping_min_sf:               { bucket:'numeric', label:'Shopping min SF',       integer:true,  rangeRole:'min' },
+  shopping_max_sf:               { bucket:'numeric', label:'Shopping max SF',       integer:true,  rangeRole:'max' },
+  shopping_min_tenants:          { bucket:'numeric', label:'Shopping min tenants',  integer:true,  rangeRole:'min' },
+
+  // --- CSV (split/union/dedupe, never a conflict) ---
+  desired_property_types:        { bucket:'csv',     label:'Desired property types' },
+  location_preferences:          { bucket:'csv',     label:'Location preferences'   },
+  simple_area_preference:        { bucket:'csv',     label:'Simple area'            },
+  preferred_cities:              { bucket:'csv',     label:'Preferred cities'       },
+  preferred_states:              { bucket:'csv',     label:'Preferred states'       },
+  preferred_counties:            { bucket:'csv',     label:'Preferred counties'     },
+  warehouse_features:            { bucket:'csv',     label:'Warehouse features'     },
+  warehouse_profile_preference:  { bucket:'csv',     label:'Warehouse profile'      },
+  retail_tenant_type:            { bucket:'csv',     label:'Retail tenant type'     },
+  land_zoning_preference:        { bucket:'csv',     label:'Land zoning pref'       },
+
+  // --- SCALAR TEXT (strict equality, conflict if different) ---
+  financing_type:                { bucket:'scalar',  label:'Financing type'         },
+  warehouse_investor_or_owner:   { bucket:'scalar',  label:'Investor / owner-user'  },
+  mf_style_preference:           { bucket:'scalar',  label:'MF style'               },
+  mf_class_preference:           { bucket:'scalar',  label:'MF class'               },
+  mf_deal_profile:               { bucket:'scalar',  label:'MF deal profile'        },
+  retail_anchor_preference:      { bucket:'scalar',  label:'Retail anchor'          },
+  retail_lease_preference:       { bucket:'scalar',  label:'Retail lease'           },
+  office_class_preference:       { bucket:'scalar',  label:'Office class'           },
+  land_intended_use:             { bucket:'scalar',  label:'Land intended use'      },
+  automotive_gas_preference:     { bucket:'scalar',  label:'Automotive gas'         },
+  automotive_type_preference:    { bucket:'scalar',  label:'Automotive type'        },
+
+  // --- BOOLEAN (strict; null treated as "unknown") ---
+  is_vip_buyer:                  { bucket:'boolean', label:'VIP buyer'              },
+  budget_is_deal_dependent:      { bucket:'boolean', label:'Budget = deal-dep.'     },
+
+  // --- FREE TEXT (paragraph dedup, never conflict) ---
+  other_requirements:            { bucket:'freetext', label:'Other requirements'    },
+  deals_sent_notes:              { bucket:'freetext', label:'Deals-sent notes'      },
+  review_notes:                  { bucket:'freetext', label:'Review notes'          },
+
+  // --- ARRAY (union, never conflict) ---
+  vip_asset_types:               { bucket:'array',    label:'VIP asset types'       }
+};
+
+// v108.2: Compute the smart BC merge. Given an array of full ace_buyer_criteria
+// rows + the contacts they belong to (for friendly names in conflict UI),
+// returns:
+//   {
+//     surviving_id,       // id of the BC row to keep (most-filled)
+//     loser_ids,          // ids of BCs to soft-delete
+//     mergedValues,       // field → final resolved value (string/number/array)
+//     conflicts,          // [{ field, label, values:[{bcId, contactName, value}]}]
+//     isClean             // true if conflicts.length === 0
+//   }
+// If fewer than 2 BCs, returns { needsMerge:false } — nothing to do.
+function _ddResolveBCMerge(bcRows, contactsById){
+  if(!Array.isArray(bcRows) || bcRows.length < 2){
+    return { needsMerge:false, isClean:true, conflicts:[], mergedValues:{}, surviving_id: bcRows && bcRows[0] && bcRows[0].id, loser_ids:[] };
+  }
+
+  // Survivor BC = the one with the most filled fields (across all
+  // bucketed fields). Tiebreaker: most-recently updated.
+  const fieldKeys = Object.keys(_DD_BC_FIELDS);
+  const fillCount = bc => fieldKeys.filter(k => {
+    const v = bc[k];
+    if(v === null || v === undefined) return false;
+    if(Array.isArray(v)) return v.length > 0;
+    return String(v).trim() !== '';
+  }).length;
+  let survId = bcRows[0].id;
+  let bestFill = -1;
+  let bestUpdated = '';
+  bcRows.forEach(bc => {
+    const f = fillCount(bc);
+    const u = String(bc.updated_at || bc.created_at || bc.date_added || '');
+    if(f > bestFill || (f === bestFill && u > bestUpdated)){
+      bestFill = f; bestUpdated = u; survId = bc.id;
+    }
+  });
+  const loser_ids = bcRows.filter(bc => bc.id !== survId).map(bc => bc.id);
+
+  const mergedValues = {};
+  const conflicts = [];
+  const nameOf = bc => {
+    const c = contactsById && contactsById[bc.contact_id];
+    return (c && c.name) || '(no name)';
+  };
+
+  const NUMERIC_TOL = 0.05; // 5% tolerance for numeric near-equality
+
+  fieldKeys.forEach(field => {
+    const spec = _DD_BC_FIELDS[field];
+    const values = bcRows.map(bc => ({ bcId: bc.id, contactName: nameOf(bc), raw: bc[field] }));
+    const nonNull = values.filter(v => {
+      if(v.raw === null || v.raw === undefined) return false;
+      if(Array.isArray(v.raw)) return v.raw.length > 0;
+      return String(v.raw).trim() !== '';
+    });
+    if(nonNull.length === 0) return; // nothing to write
+
+    switch(spec.bucket){
+      case 'numeric': {
+        const nums = nonNull.map(v => ({ ...v, n: Number(v.raw) })).filter(v => !isNaN(v.n));
+        if(nums.length === 0) return;
+        if(nums.length === 1){ mergedValues[field] = spec.integer ? Math.round(nums[0].n) : nums[0].n; return; }
+        // Check pairwise: are all values within 5% of each other?
+        const minN = Math.min(...nums.map(v => v.n));
+        const maxN = Math.max(...nums.map(v => v.n));
+        const base = Math.max(Math.abs(minN), Math.abs(maxN), 1e-9);
+        const withinTol = (maxN - minN) / base <= NUMERIC_TOL;
+        if(withinTol){
+          // Near-equal → take the more permissive value per rangeRole
+          // (MIN for min-bound fields, MAX for max-bound fields). Falls
+          // back to MAX if role is unspecified.
+          const chosen = spec.rangeRole === 'min' ? minN : maxN;
+          mergedValues[field] = spec.integer ? Math.round(chosen) : chosen;
+        } else {
+          conflicts.push({
+            field, label: spec.label, bucket:'numeric',
+            values: nums.map(v => ({ bcId:v.bcId, contactName:v.contactName, value:v.n }))
+          });
+        }
+        return;
+      }
+      case 'csv': {
+        // Split each value on comma, trim, lowercase-key, dedupe.
+        const seen = new Map(); // normalizedKey → displayValue (first-seen casing)
+        const order = [];
+        nonNull.forEach(v => {
+          String(v.raw).split(',').forEach(part => {
+            const t = part.trim();
+            if(!t) return;
+            const k = t.toLowerCase();
+            if(!seen.has(k)){ seen.set(k, t); order.push(k); }
+          });
+        });
+        mergedValues[field] = order.map(k => seen.get(k)).join(', ');
+        return;
+      }
+      case 'scalar': {
+        const keys = new Set(nonNull.map(v => String(v.raw).trim().toLowerCase()));
+        if(keys.size === 1){
+          mergedValues[field] = String(nonNull[0].raw).trim();
+        } else {
+          conflicts.push({
+            field, label: spec.label, bucket:'scalar',
+            values: nonNull.map(v => ({ bcId:v.bcId, contactName:v.contactName, value: String(v.raw).trim() }))
+          });
+        }
+        return;
+      }
+      case 'boolean': {
+        const vals = nonNull.map(v => v.raw === true || v.raw === 'true');
+        const allSame = vals.every(x => x === vals[0]);
+        if(allSame){
+          mergedValues[field] = vals[0];
+        } else {
+          conflicts.push({
+            field, label: spec.label, bucket:'boolean',
+            values: nonNull.map(v => ({ bcId:v.bcId, contactName:v.contactName, value: (v.raw===true||v.raw==='true') }))
+          });
+        }
+        return;
+      }
+      case 'freetext': {
+        // Reuse the notes combiner: treat each BC as a pseudo-contact.
+        const combined = _ddCombineNotes(nonNull.map(v => ({
+          name: v.contactName, date_added: null, contact_notes: String(v.raw)
+        })));
+        if(combined) mergedValues[field] = combined;
+        return;
+      }
+      case 'array': {
+        // vip_asset_types is a Postgres text[]. Union case-insensitive.
+        const seen = new Map();
+        const order = [];
+        nonNull.forEach(v => {
+          (Array.isArray(v.raw) ? v.raw : []).forEach(t => {
+            const s = String(t||'').trim();
+            if(!s) return;
+            const k = s.toLowerCase();
+            if(!seen.has(k)){ seen.set(k, s); order.push(k); }
+          });
+        });
+        mergedValues[field] = order.map(k => seen.get(k));
+        return;
+      }
+    }
+  });
+
+  return {
+    needsMerge: true,
+    surviving_id: survId,
+    loser_ids,
+    mergedValues,
+    conflicts,
+    isClean: conflicts.length === 0
+  };
 }
 
 // v108.1: Smart notes combiner — splits each contact's notes into
@@ -27263,7 +27505,9 @@ async function _ddOpenMerge(candidateId){
         'select=id,address,property_name,asking_price,offer_price,pipeline_stage,deal_tag,owner_contact_id,deal_notes,next_steps,general_property_notes,crm_asset_classification,date_added,deleted_at'
         + '&owner_contact_id=' + idFilter + '&limit=2000').catch(e=>{console.warn('detail props:',e.message); return [];}),
       _sbGet('ace_buyer_criteria',
-        'select=id,contact_id,desired_property_types,min_purchase_price,max_purchase_price,preferred_counties,simple_area_preference,financing_type,date_added'
+        // v108.2: widened to select=* so the client has every column needed
+        // for smart BC merge detection + resolution. Exclude soft-deleted BCs.
+        'select=*&deleted_at=is.null'
         + '&contact_id=' + idFilter + '&limit=2000').catch(e=>{console.warn('detail bcs:',e.message); return [];}),
       _sbGet('ace_buyer_pitches',
         'select=id,contact_id'
@@ -27288,6 +27532,21 @@ async function _ddOpenMerge(candidateId){
     });
   }catch(e){ console.warn('detail batch fetch failed (non-fatal):', e.message); }
   _ddDialogDetailCache = detail;
+
+  // v108.2: compute smart BC merge. Pull full BC rows out of the detail
+  // batch, resolve conflicts with _ddResolveBCMerge. If there are 0 or 1
+  // BCs across the group, _ddBCMerge.needsMerge is false — nothing to do.
+  // If there are 2+ BCs with no conflicts, we can auto-merge. If conflicts,
+  // the dialog shows a side-by-side picker for each conflict field.
+  const contactsById = {};
+  contacts.forEach(c => { contactsById[c.id] = c; });
+  _ddBCRows = [];
+  Object.keys(detail.byContact || {}).forEach(cid => {
+    const bc = (detail.byContact[cid] || {}).buyerCriteria;
+    if(bc) _ddBCRows.push(bc);
+  });
+  _ddBCMerge = _ddResolveBCMerge(_ddBCRows, contactsById);
+  _ddBCConflictPicks = {}; // reset — user hasn't resolved any conflicts yet
 
   // v102.43: detect duplicate properties across the contacts being merged.
   // Group by normalized address (lowercase, alphanumeric only, first 20
@@ -27331,6 +27590,9 @@ function _ddCloseMerge(){
   _ddPropertyGroups = [];
   _ddPropertyExpanded = null;
   _ddPropertyPicks = null;
+  _ddBCRows = [];
+  _ddBCMerge = null;
+  _ddBCConflictPicks = {};
 }
 
 function _ddRenderMergeDialog(cand, contacts, dealCounts){
@@ -27407,9 +27669,20 @@ function _ddRenderMergeDialog(cand, contacts, dealCounts){
           <button onclick="_ddMarkNotDups('${cand.id}')" style="font-size:12px;padding:9px 14px;background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;font-weight:600;cursor:pointer;">Mark as not duplicates</button>
           <div style="flex:1;"></div>
           <button onclick="_ddCloseMerge()" style="font-size:13px;padding:9px 16px;background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;font-weight:600;cursor:pointer;">Cancel</button>
-          ${(_ddDialogPreviewCache && _ddDialogPreviewCache.blocker)
-            ? `<button id="ddMergeBtn" disabled title="Resolve the blocker shown above first" style="font-size:13px;padding:9px 22px;background:#cbd5e1;color:#64748b;border:none;border-radius:6px;font-weight:700;cursor:not-allowed;">Merge into 1 contact</button>`
-            : `<button onclick="_ddSubmitMerge('${cand.id}')" id="ddMergeBtn" style="font-size:13px;padding:9px 22px;background:#0f172a;color:#fff;border:none;border-radius:6px;font-weight:700;cursor:pointer;">Merge into 1 contact</button>`}
+          ${(() => {
+            // v108.2: gate merge button on BC conflict resolution instead
+            // of the old server-side BC_COLLISION blocker. If there are
+            // BC conflicts and the user hasn't picked a winner for each,
+            // block the merge until they do.
+            const bcMerge = _ddBCMerge;
+            const hasUnresolvedConflicts = bcMerge && bcMerge.needsMerge && bcMerge.conflicts &&
+              bcMerge.conflicts.some(cf => _ddBCConflictPicks[cf.field] === undefined);
+            if(hasUnresolvedConflicts){
+              const n = bcMerge.conflicts.length - Object.keys(_ddBCConflictPicks).length;
+              return `<button id="ddMergeBtn" disabled title="Resolve the ${n} buyer-criteria conflict${n===1?'':'s'} below first" style="font-size:13px;padding:9px 22px;background:#cbd5e1;color:#64748b;border:none;border-radius:6px;font-weight:700;cursor:not-allowed;">Resolve ${n} BC conflict${n===1?'':'s'} to merge</button>`;
+            }
+            return `<button onclick="_ddSubmitMerge('${cand.id}')" id="ddMergeBtn" style="font-size:13px;padding:9px 22px;background:#0f172a;color:#fff;border:none;border-radius:6px;font-weight:700;cursor:pointer;">Merge into 1 contact</button>`;
+          })()}
         </div>
       </div>
     </div>
@@ -27560,8 +27833,127 @@ function _ddRenderMergeBody(cand, contacts, dealCounts, fields){
       </div>
       ${fields.map(f => fieldRow(f)).join('')}
     </div>
+    ${_ddRenderBCMergeSection()}
     ${_ddRenderPropertyGroups()}
   `;
+}
+
+// v108.2: Render the buyer-criteria smart-merge section. Three states:
+//   (a) No BCs or single BC                 → hidden (nothing to do).
+//   (b) 2+ BCs with zero conflicts          → green "will auto-merge" card.
+//   (c) 2+ BCs with at least one conflict   → yellow card + conflict picker.
+// The merge button below remains enabled only if (a), (b), or all
+// conflicts in (c) are resolved by the user.
+function _ddRenderBCMergeSection(){
+  if(!_ddBCMerge || !_ddBCMerge.needsMerge) return '';
+  const contactsById = {};
+  (_ddDialogContactsCache || []).forEach(c => { contactsById[c.id] = c; });
+  const bcById = {};
+  (_ddBCRows || []).forEach(bc => { bcById[bc.id] = bc; });
+
+  const survName = () => {
+    const bc = bcById[_ddBCMerge.surviving_id];
+    if(!bc) return '(unknown)';
+    const c = contactsById[bc.contact_id];
+    return (c && c.name) || '(no name)';
+  };
+  const escape = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+
+  // Count how many fields will auto-merge cleanly (for the success message)
+  const cleanFieldCount = Object.keys(_ddBCMerge.mergedValues || {}).length;
+
+  if(_ddBCMerge.isClean){
+    // CASE (b): all clean — green banner
+    return `
+      <div style="margin-top:18px;border-top:2px solid #e2e8f0;padding-top:16px;">
+        <div style="background:#ecfdf5;border:1px solid #bbf7d0;border-radius:8px;padding:14px 16px;">
+          <div style="display:flex;align-items:flex-start;gap:10px;">
+            <div style="font-size:20px;flex-shrink:0;line-height:1;">✅</div>
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:13px;font-weight:700;color:#065f46;margin-bottom:4px;">
+                🎯 Buyer criteria will auto-merge
+                <span style="display:inline-block;font-size:10px;padding:2px 8px;border-radius:6px;background:#16a34a;color:#fff;font-weight:700;margin-left:6px;">WILL MERGE ✓</span>
+              </div>
+              <div style="font-size:12px;color:#064e3b;line-height:1.5;">
+                ${_ddBCRows.length} buyer-criteria records across these contacts can be combined with no conflicts
+                (${cleanFieldCount} field${cleanFieldCount===1?'':'s'} resolved — near-equal numeric values merged with 5% tolerance, lists unioned, free-text combined).
+                Surviving BC will be attached to <strong>${escape(survName())}</strong>.
+              </div>
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+  }
+
+  // CASE (c): conflicts — yellow banner + picker
+  const conflicts = _ddBCMerge.conflicts;
+  const resolvedCount = conflicts.filter(cf => _ddBCConflictPicks[cf.field] !== undefined).length;
+  const allResolved = resolvedCount === conflicts.length;
+
+  const conflictRow = (cf) => {
+    const picked = _ddBCConflictPicks[cf.field];
+    const cells = cf.values.map(v => {
+      const isPicked = picked === v.bcId;
+      const display = cf.bucket === 'boolean'
+        ? (v.value ? 'Yes' : 'No')
+        : (cf.bucket === 'numeric'
+            ? String(v.value)
+            : escape(String(v.value)));
+      return `
+        <label style="flex:1;min-width:0;padding:8px 12px;border:2px solid ${isPicked?'#16a34a':'#e2e8f0'};border-radius:6px;background:${isPicked?'#ecfdf5':'#fff'};cursor:pointer;display:flex;align-items:flex-start;gap:8px;">
+          <input type="radio" name="dd_bc_${cf.field}" value="${v.bcId}" ${isPicked?'checked':''} onchange="_ddPickBCConflict('${cf.field}','${v.bcId}')" style="margin-top:3px;flex-shrink:0;"/>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:11px;color:#64748b;font-weight:600;margin-bottom:2px;">${escape(v.contactName)}</div>
+            <div style="font-size:13px;color:${isPicked?'#04342c':'#0f172a'};font-weight:${isPicked?'700':'500'};word-break:break-word;">${display}${isPicked?' <span style=\"display:inline-block;font-size:9px;padding:1px 5px;border-radius:8px;background:#16a34a;color:#fff;font-weight:700;margin-left:4px;letter-spacing:0.04em;\">PICKED ✓</span>':''}</div>
+          </div>
+        </label>
+      `;
+    }).join('');
+    return `
+      <div style="padding:10px 0;border-bottom:1px solid #f1f5f9;">
+        <div style="font-size:12px;color:#334155;font-weight:700;margin-bottom:6px;display:flex;align-items:center;gap:6px;">
+          ${escape(cf.label)}
+          ${picked !== undefined
+            ? '<span style="display:inline-block;font-size:9px;padding:1px 6px;border-radius:8px;background:#16a34a;color:#fff;font-weight:700;letter-spacing:0.04em;">RESOLVED</span>'
+            : '<span style="display:inline-block;font-size:9px;padding:1px 6px;border-radius:8px;background:#fef3c7;color:#92400e;font-weight:700;letter-spacing:0.04em;">NEEDS PICK</span>'
+          }
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">${cells}</div>
+      </div>
+    `;
+  };
+
+  return `
+    <div style="margin-top:18px;border-top:2px solid #e2e8f0;padding-top:16px;">
+      <div style="background:${allResolved?'#ecfdf5':'#fffbeb'};border:1px solid ${allResolved?'#bbf7d0':'#fde68a'};border-radius:8px;padding:14px 16px;">
+        <div style="display:flex;align-items:flex-start;gap:10px;margin-bottom:10px;">
+          <div style="font-size:20px;flex-shrink:0;line-height:1;">${allResolved?'✅':'⚠️'}</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:13px;font-weight:700;color:${allResolved?'#065f46':'#92400e'};margin-bottom:4px;">
+              🎯 Buyer criteria: ${conflicts.length} conflict${conflicts.length===1?'':'s'} — ${resolvedCount}/${conflicts.length} resolved
+              ${allResolved
+                ? '<span style="display:inline-block;font-size:10px;padding:2px 8px;border-radius:6px;background:#16a34a;color:#fff;font-weight:700;margin-left:6px;">READY ✓</span>'
+                : '<span style="display:inline-block;font-size:10px;padding:2px 8px;border-radius:6px;background:#d97706;color:#fff;font-weight:700;margin-left:6px;">NEEDS REVIEW</span>'
+              }
+            </div>
+            <div style="font-size:12px;color:${allResolved?'#064e3b':'#78350f'};line-height:1.5;">
+              ${cleanFieldCount} field${cleanFieldCount===1?'':'s'} can auto-merge. The ${conflicts.length} below have different values across contacts — pick the correct one for each. Surviving BC will be attached to <strong>${escape(survName())}</strong>.
+            </div>
+          </div>
+        </div>
+        <div style="background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:12px 14px;">
+          ${conflicts.map(conflictRow).join('')}
+        </div>
+      </div>
+    </div>
+  `;
+}
+
+// User clicked a conflict-resolution radio. Persist the pick and re-render.
+function _ddPickBCConflict(field, bcId){
+  _ddBCConflictPicks[field] = bcId;
+  _ddReRenderDialog();
 }
 // v102.42.6: Live preview row showing what the surviving contact will
 // look like after merge. Computed from _ddMergePicks (per-field winners)
@@ -28076,29 +28468,13 @@ function _ddOpenDealFromMerge(propertyId){
 //   - Counts of related rows that will re-point
 function _ddRenderPreviewBanner(preview, contacts){
   if(!preview) return '';
-  const isBlocked = preview.blocker === 'BC_COLLISION';
+  // v108.2: BC_COLLISION is no longer a hard blocker — the client-side
+  // smart merge handles 2+ BCs automatically (or with explicit user picks
+  // for conflicts). The preview banner just reports the type union +
+  // re-point counts; the BC details are shown in _ddRenderBCMergeSection.
   const types = Array.isArray(preview.final_types) ? preview.final_types : [];
   const repoint = preview.will_repoint || {};
   const total = (repoint.properties||0) + (repoint.pitches||0) + (repoint.communications||0);
-
-  if(isBlocked){
-    // BC collision: 2+ buyer criteria across the group. Show owners + ask
-    // user to consolidate first.
-    const owners = Array.isArray(preview.bc_owners) ? preview.bc_owners : [];
-    const ownerLines = owners.map(o => '· ' + (o.contact_name||'(no name)')
-      + (o.date_added ? ' (BC added ' + o.date_added + ')' : '')).join('<br>');
-    return `
-      <div style="background:#fef2f2;border:1px solid #fecaca;border-radius:8px;padding:14px 16px;margin-bottom:16px;">
-        <div style="display:flex;align-items:flex-start;gap:10px;">
-          <div style="font-size:20px;flex-shrink:0;line-height:1;">⛔</div>
-          <div style="flex:1;min-width:0;">
-            <div style="font-size:13px;font-weight:700;color:#991b1b;margin-bottom:4px;">Merge blocked: ${preview.bc_count} of these contacts have buyer criteria</div>
-            <div style="font-size:12px;color:#7f1d1d;line-height:1.5;margin-bottom:6px;">Per the "1 buyer criteria per contact" rule, this merge would lose data. Open each of these contacts' Buyer Criteria tabs, copy the data into one, delete the others, then return here:</div>
-            <div style="font-size:12px;color:#7f1d1d;line-height:1.6;">${ownerLines}</div>
-          </div>
-        </div>
-      </div>`;
-  }
 
   const typeBadges = types.map(t =>
     '<span style="display:inline-block;font-size:11px;padding:2px 9px;border-radius:6px;background:#eef2fb;color:#1e3a8a;font-weight:600;margin-right:4px;">' + t + '</span>'
@@ -28298,6 +28674,49 @@ async function _ddSubmitMerge(candidateId){
       }
     }
 
+    // v108.2: BC smart merge — runs BEFORE contact merge so the
+    // BC_COLLISION check sees a consolidated landscape (losers already
+    // soft-deleted, survivor holds the merged values). If the user had
+    // conflicts, their picks in _ddBCConflictPicks override the
+    // auto-resolved values for those fields.
+    let bcMerged = false;
+    let bcConflictsResolved = 0;
+    if(_ddBCMerge && _ddBCMerge.needsMerge){
+      const bcFieldValues = { ..._ddBCMerge.mergedValues };
+      // Apply user's conflict picks on top of the auto-merge values
+      const bcById = {};
+      (_ddBCRows||[]).forEach(bc => { bcById[bc.id] = bc; });
+      (_ddBCMerge.conflicts||[]).forEach(cf => {
+        const pickedBcId = _ddBCConflictPicks[cf.field];
+        if(pickedBcId === undefined) return; // should be blocked by button gate
+        const pickedBc = bcById[pickedBcId];
+        if(!pickedBc) return;
+        bcFieldValues[cf.field] = pickedBc[cf.field];
+        bcConflictsResolved++;
+      });
+      // Coerce values for JSONB transport. Booleans and numbers pass as-is;
+      // arrays stay arrays; everything else stringifies.
+      const jsonReady = {};
+      Object.keys(bcFieldValues).forEach(k => {
+        const v = bcFieldValues[k];
+        if(v === null || v === undefined) return;
+        jsonReady[k] = v; // supabase-js will JSON-encode arrays/bools/numbers correctly
+      });
+      const bcRes = await _sbRpc('merge_buyer_criteria_smart', {
+        p_surviving_id: _ddBCMerge.surviving_id,
+        p_loser_ids:    _ddBCMerge.loser_ids,
+        p_field_values: jsonReady,
+        p_user_id:      userId,
+        p_parent_contact_merge_id: null
+      });
+      if(bcRes && bcRes.error){
+        showSaveConfirm('Buyer criteria merge failed: ' + bcRes.error);
+        if(btn){ btn.disabled = false; btn.textContent = 'Merge into 1 contact'; }
+        return;
+      }
+      bcMerged = true;
+    }
+
     const res = await _sbRpc('merge_contacts', {
       p_surviving_id: survivingId,
       p_loser_ids:    loserIds,
@@ -28312,7 +28731,10 @@ async function _ddSubmitMerge(candidateId){
     const propMsg = propMergeCount > 0
       ? ' + ' + propMergeCount + ' property group' + (propMergeCount===1?'':'s') + ' merged (' + propRepointCount + ' rows re-pointed)'
       : '';
-    showSaveConfirm('✓ Merged ' + (loserIds.length+1) + ' contacts into 1 (' + (res.fk_repointed_count||0) + ' related rows re-pointed)' + propMsg);
+    const bcMsg = bcMerged
+      ? ' + BC auto-merged (' + (_ddBCMerge.loser_ids.length+1) + ' → 1' + (bcConflictsResolved ? ', ' + bcConflictsResolved + ' conflict' + (bcConflictsResolved===1?'':'s') + ' resolved' : '') + ')'
+      : '';
+    showSaveConfirm('✓ Merged ' + (loserIds.length+1) + ' contacts into 1 (' + (res.fk_repointed_count||0) + ' related rows re-pointed)' + propMsg + bcMsg);
     _ddCloseMerge();
     // Refresh the queue so the merged candidate (and any subsumed groups)
     // disappear immediately.
@@ -42220,7 +42642,7 @@ async function _aiCommitBuyerCriteria(){
       const cr=await _sbPost('ace_contacts',row); cid=cr?.id; if(!cid) throw new Error('Contact creation failed');
       _aiAddBotMessage('Created contact <strong>'+(c.name||'')+'</strong>.',true);
     }
-    const exBc=await _sbGet('ace_buyer_criteria','select=id&contact_id=eq.'+cid+'&limit=1');
+    const exBc=await _sbGet('ace_buyer_criteria','select=id&contact_id=eq.'+cid+'&deleted_at=is.null&limit=1');
     if(Array.isArray(exBc)&&exBc.length){
       const patch={}; if(bc.desired_property_types) patch.desired_property_types=bc.desired_property_types; if(bc.min_purchase_price) patch.min_purchase_price=bc.min_purchase_price; if(bc.max_purchase_price) patch.max_purchase_price=bc.max_purchase_price; if(bc.preferred_counties) patch.preferred_counties=bc.preferred_counties; if(bc.simple_area_preference) patch.simple_area_preference=bc.simple_area_preference; if(bc.financing_type) patch.financing_type=bc.financing_type; if(bc.other_requirements) patch.other_requirements=bc.other_requirements;
       await _sbPatch('ace_buyer_criteria',exBc[0].id,patch);

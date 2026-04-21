@@ -19047,6 +19047,11 @@ function bcOpenContactPitches(contactId){
 // with type+primary, all emails same, tags, and a stage/source/assigned
 // metadata strip. Reads from ace_contacts columns that are already populated
 // by _ace_contact_append_from_fub — nothing touches fub_contacts directly.
+// v111.15: supports inline add/edit/delete for phones & emails. Delete is a
+// soft-hide (sets {hidden:true} on the entry) so future FUB syncs don't
+// re-import the entry the user chose to remove.
+window._rpState = window._rpState || {};
+
 async function _contactLoadRichProfile(contactId){
   const host = document.getElementById('cdp_richProfile');
   if(!host) return;
@@ -19061,8 +19066,15 @@ async function _contactLoadRichProfile(contactId){
 
     const esc = s => String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 
-    const phones = Array.isArray(r.all_phones) ? r.all_phones : [];
-    const emails = Array.isArray(r.all_emails) ? r.all_emails : [];
+    const phonesRaw = Array.isArray(r.all_phones) ? r.all_phones : [];
+    const emailsRaw = Array.isArray(r.all_emails) ? r.all_emails : [];
+    // Keep raw arrays in state so edit/delete handlers know index positions
+    // that include hidden entries (render uses visible indices for display,
+    // handlers use the original raw-array index to mutate the correct row).
+    window._rpState[contactId] = { phones: phonesRaw, emails: emailsRaw };
+
+    const phones = phonesRaw.map((p,i) => ({...p, _i: i})).filter(p => !p.hidden);
+    const emails = emailsRaw.map((e,i) => ({...e, _i: i})).filter(e => !e.hidden);
     const tags   = Array.isArray(r.fub_tags)  ? r.fub_tags  : [];
     const addrsRaw = Array.isArray(r.addresses) ? r.addresses : [];
     const hasMeta = r.fub_stage || r.fub_source || r.fub_assigned_to;
@@ -19096,31 +19108,45 @@ async function _contactLoadRichProfile(contactId){
         ${r.fub_assigned_to ? `<div><span style="color:#94a3b8;width:90px;display:inline-block;">Assigned</span><strong style="color:#0f172a;">${esc(r.fub_assigned_to)}</strong></div>`:''}
       </div>` : '';
 
-    const phonesHtml = phones.length > 1 ? `
+    const rowActions = (kind, i) => `
+      <span style="display:inline-flex;gap:2px;opacity:0.65;">
+        <button type="button" title="Edit" onclick="_rpEdit('${contactId}','${kind}',${i})" style="background:none;border:none;padding:2px 4px;cursor:pointer;color:#64748b;font-size:11px;">✎</button>
+        <button type="button" title="Hide" onclick="_rpDelete('${contactId}','${kind}',${i})" style="background:none;border:none;padding:2px 4px;cursor:pointer;color:#94a3b8;font-size:11px;">✕</button>
+      </span>`;
+
+    const phonesHtml = `
       <div>
-        <label style="display:block;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">📞 All Phones (${phones.length})</label>
-        <div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:4px 10px;">
-          ${phones.map(p => `
-            <div style="display:flex;align-items:center;padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:13px;">
+        <label style="display:flex;align-items:center;justify-content:space-between;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">
+          <span>📞 All Phones${phones.length ? ` (${phones.length})` : ''}</span>
+          <button type="button" onclick="_rpAdd('${contactId}','phones')" style="background:#f1f5f9;border:1px solid #e2e8f0;color:#0f172a;font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;cursor:pointer;text-transform:none;letter-spacing:0;">+ Add</button>
+        </label>
+        <div id="rp_phones_${contactId}" style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:4px 10px;">
+          ${phones.length ? phones.map(p => `
+            <div data-rp-row="${contactId}:phones:${p._i}" style="display:flex;align-items:center;padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:13px;gap:6px;">
               <span style="color:#94a3b8;font-size:11px;width:70px;flex-shrink:0;text-transform:lowercase;">${esc(p.type||'phone')}</span>
               <span style="color:#0f172a;font-weight:500;flex:1;">${esc(p.value||'')}</span>
               ${p.isPrimary ? '<span style="background:#dbeafe;color:#1e40af;font-size:9px;padding:1px 6px;border-radius:8px;font-weight:700;">primary</span>':''}
-            </div>`).join('')}
+              ${rowActions('phones', p._i)}
+            </div>`).join('') : '<div style="color:#94a3b8;font-size:12px;padding:8px 0;">No phones yet. Click + Add.</div>'}
         </div>
-      </div>` : '';
+      </div>`;
 
-    const emailsHtml = emails.length > 1 ? `
+    const emailsHtml = `
       <div>
-        <label style="display:block;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">✉ All Emails (${emails.length})</label>
-        <div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:4px 10px;">
-          ${emails.map(e => `
-            <div style="display:flex;align-items:center;padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:13px;">
+        <label style="display:flex;align-items:center;justify-content:space-between;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">
+          <span>✉ All Emails${emails.length ? ` (${emails.length})` : ''}</span>
+          <button type="button" onclick="_rpAdd('${contactId}','emails')" style="background:#f1f5f9;border:1px solid #e2e8f0;color:#0f172a;font-size:10px;font-weight:600;padding:2px 8px;border-radius:10px;cursor:pointer;text-transform:none;letter-spacing:0;">+ Add</button>
+        </label>
+        <div id="rp_emails_${contactId}" style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:4px 10px;">
+          ${emails.length ? emails.map(e => `
+            <div data-rp-row="${contactId}:emails:${e._i}" style="display:flex;align-items:center;padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:13px;gap:6px;">
               <span style="color:#94a3b8;font-size:11px;width:70px;flex-shrink:0;text-transform:lowercase;">${esc(e.type||'email')}</span>
               <span style="color:#0f172a;font-weight:500;flex:1;word-break:break-all;">${esc(e.value||'')}</span>
               ${e.isPrimary ? '<span style="background:#dbeafe;color:#1e40af;font-size:9px;padding:1px 6px;border-radius:8px;font-weight:700;">primary</span>':''}
-            </div>`).join('')}
+              ${rowActions('emails', e._i)}
+            </div>`).join('') : '<div style="color:#94a3b8;font-size:12px;padding:8px 0;">No emails yet. Click + Add.</div>'}
         </div>
-      </div>` : '';
+      </div>`;
 
     const tagsHtml = tags.length ? `
       <div>
@@ -19149,13 +19175,107 @@ async function _contactLoadRichProfile(contactId){
         </div>
       </div>` : '';
 
-    // Only render the container with gap spacing if we have at least one section
-    if(!metaHtml && !phonesHtml && !emailsHtml && !tagsHtml && !addrsHtml) return;
+    // phones/emails sections always render (they host the Add button). The
+    // other sections only render when they have data.
     host.innerHTML = `<div style="display:flex;flex-direction:column;gap:18px;">
       ${metaHtml}${phonesHtml}${emailsHtml}${addrsHtml}${tagsHtml}
     </div>`;
   } catch(e) {
     console.warn('Rich profile load failed:', e.message);
+  }
+}
+
+// ─── Rich profile inline edit/delete/add for phones + emails ──────
+// Soft-delete: sets {hidden:true} on the jsonb entry rather than removing it.
+// The append helper (public._ace_contact_append_from_fub) prefers local
+// entries on dedup, so a hidden entry survives the next FUB sync.
+function _rpEscAttr(s){ return String(s==null?'':s).replace(/"/g,'&quot;'); }
+function _rpEditRowHtml(contactId, kind, i, initialType, initialValue){
+  const typeOptions = kind === 'phones'
+    ? ['mobile','home','work','landline','other']
+    : ['work','home','other'];
+  return `
+    <div data-rp-row="${contactId}:${kind}:${i}" style="display:flex;align-items:center;padding:6px 0;border-bottom:1px solid #f1f5f9;font-size:13px;gap:6px;">
+      <select id="rp_type_${kind}_${i}" style="font-size:11px;padding:2px 4px;border:1px solid #cbd5e1;border-radius:4px;width:70px;flex-shrink:0;">
+        ${typeOptions.map(t => `<option value="${t}"${t===(initialType||'').toLowerCase()?' selected':''}>${t}</option>`).join('')}
+      </select>
+      <input id="rp_val_${kind}_${i}" type="${kind==='emails'?'email':'text'}" value="${_rpEscAttr(initialValue)}" placeholder="${kind==='emails'?'name@example.com':'5551234567'}" style="flex:1;font-size:13px;padding:3px 6px;border:1px solid #cbd5e1;border-radius:4px;">
+      <button type="button" onclick="_rpSave('${contactId}','${kind}',${i})" style="background:#2563eb;color:#fff;border:none;padding:3px 10px;border-radius:4px;font-size:11px;font-weight:600;cursor:pointer;">Save</button>
+      <button type="button" onclick="_contactLoadRichProfile('${contactId}')" style="background:none;border:none;color:#64748b;font-size:11px;cursor:pointer;">Cancel</button>
+    </div>`;
+}
+
+function _rpEdit(contactId, kind, i){
+  const st = window._rpState && window._rpState[contactId];
+  if(!st) return;
+  const entry = (st[kind]||[])[i];
+  if(!entry) return;
+  const row = document.querySelector(`[data-rp-row="${contactId}:${kind}:${i}"]`);
+  if(!row) return;
+  row.outerHTML = _rpEditRowHtml(contactId, kind, i, entry.type||'', entry.value||'');
+  const input = document.getElementById(`rp_val_${kind}_${i}`);
+  if(input){ input.focus(); input.select(); }
+}
+
+function _rpAdd(contactId, kind){
+  const st = window._rpState && window._rpState[contactId];
+  if(!st) return;
+  // Reuse the index-based editor with index = array length (append on save)
+  const newIdx = (st[kind]||[]).length;
+  const listEl = document.getElementById(`rp_${kind}_${contactId}`);
+  if(!listEl) return;
+  // Remove the empty-state placeholder if present
+  const emptyPh = listEl.querySelector('div[style*="No phones"], div[style*="No emails"]');
+  if(emptyPh) emptyPh.remove();
+  // Defensive: if there's already an in-progress add row, focus it
+  const existing = listEl.querySelector(`[data-rp-row="${contactId}:${kind}:${newIdx}"]`);
+  if(existing){
+    const inp = existing.querySelector('input'); if(inp) inp.focus();
+    return;
+  }
+  listEl.insertAdjacentHTML('beforeend', _rpEditRowHtml(contactId, kind, newIdx, kind==='phones'?'mobile':'work', ''));
+  const input = document.getElementById(`rp_val_${kind}_${newIdx}`);
+  if(input) input.focus();
+}
+
+async function _rpSave(contactId, kind, i){
+  const st = window._rpState && window._rpState[contactId];
+  if(!st) return;
+  const typeEl = document.getElementById(`rp_type_${kind}_${i}`);
+  const valEl  = document.getElementById(`rp_val_${kind}_${i}`);
+  if(!valEl) return;
+  const newType = typeEl ? typeEl.value : '';
+  const newVal  = String(valEl.value||'').trim();
+  if(!newVal){ alert('Value cannot be empty.'); return; }
+  const arr = (st[kind]||[]).slice();
+  if(i < arr.length){
+    arr[i] = { ...arr[i], type: newType, value: newVal };
+  } else {
+    arr.push({ type: newType, value: newVal, isPrimary: false });
+  }
+  const col = kind === 'phones' ? 'all_phones' : 'all_emails';
+  try {
+    await _sbPatch(SB_TABLES.contacts, contactId, { [col]: arr });
+    await _contactLoadRichProfile(contactId);
+  } catch(e){
+    alert('Save failed: ' + e.message);
+  }
+}
+
+async function _rpDelete(contactId, kind, i){
+  const st = window._rpState && window._rpState[contactId];
+  if(!st) return;
+  const entry = (st[kind]||[])[i];
+  if(!entry) return;
+  if(!confirm(`Hide ${kind.slice(0,-1)} "${entry.value}"? It stays in the database but won't show here (FUB won't re-import it).`)) return;
+  const arr = st[kind].slice();
+  arr[i] = { ...arr[i], hidden: true };
+  const col = kind === 'phones' ? 'all_phones' : 'all_emails';
+  try {
+    await _sbPatch(SB_TABLES.contacts, contactId, { [col]: arr });
+    await _contactLoadRichProfile(contactId);
+  } catch(e){
+    alert('Hide failed: ' + e.message);
   }
 }
 

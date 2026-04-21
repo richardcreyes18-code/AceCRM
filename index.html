@@ -19059,8 +19059,12 @@ async function _contactLoadRichProfile(contactId){
   if(!isSupabase()) return;
 
   try {
-    const rows = await _sbGet(SB_TABLES.contacts,
-      `id=${contactId}&select=all_phones,all_emails,fub_tags,fub_stage,fub_source,fub_assigned_to,fub_contact_id,addresses`);
+    const [rows, fubLinks] = await Promise.all([
+      _sbGet(SB_TABLES.contacts,
+        `id=${contactId}&select=all_phones,all_emails,fub_tags,fub_stage,fub_source,fub_assigned_to,fub_contact_id,addresses`),
+      _sbGet('ace_contact_fub_links',
+        `ace_id=eq.${contactId}&select=fub_contact_id,is_primary&order=is_primary.desc,linked_at.asc`).catch(()=>[])
+    ]);
     const r = rows && rows[0];
     if(!r) return;
 
@@ -19109,6 +19113,18 @@ async function _contactLoadRichProfile(contactId){
         ${r.fub_stage ? `<div><span style="color:#94a3b8;width:90px;display:inline-block;">Stage</span><strong style="color:#0f172a;">${esc(r.fub_stage)}</strong></div>`:''}
         ${r.fub_source ? `<div><span style="color:#94a3b8;width:90px;display:inline-block;">Source</span><strong style="color:#0f172a;">${esc(r.fub_source)}</strong></div>`:''}
         ${r.fub_assigned_to ? `<div><span style="color:#94a3b8;width:90px;display:inline-block;">Assigned</span><strong style="color:#0f172a;">${esc(r.fub_assigned_to)}</strong></div>`:''}
+      </div>` : '';
+
+    // Show every FUB record linked to this ace contact. When we auto-link a
+    // duplicate FUB row (e.g. a MOJO skip-trace re-import), the secondary id
+    // shows up here so the user can see why extra notes/calls are rendering.
+    const linksArr = Array.isArray(fubLinks) ? fubLinks : [];
+    const linksHtml = linksArr.length ? `
+      <div>
+        <label style="display:block;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">🔗 Linked FUB Records${linksArr.length > 1 ? ` (${linksArr.length})` : ''}</label>
+        <div style="display:flex;flex-wrap:wrap;gap:4px;">
+          ${linksArr.map(l => `<span style="background:${l.is_primary?'#dbeafe':'#f1f5f9'};color:${l.is_primary?'#1e40af':'#334155'};font-size:11px;padding:3px 10px;border-radius:10px;font-weight:600;">#${esc(l.fub_contact_id)}${l.is_primary?' · primary':''}</span>`).join('')}
+        </div>
       </div>` : '';
 
     const rowActions = (kind, i) => `
@@ -19189,7 +19205,7 @@ async function _contactLoadRichProfile(contactId){
     // phones/emails sections always render (they host the Add button). The
     // other sections only render when they have data.
     host.innerHTML = `<div style="display:flex;flex-direction:column;gap:18px;">
-      ${metaHtml}${phonesHtml}${emailsHtml}${addrsHtml}${tagsHtml}
+      ${metaHtml}${linksHtml}${phonesHtml}${emailsHtml}${addrsHtml}${tagsHtml}
     </div>`;
   } catch(e) {
     console.warn('Rich profile load failed:', e.message);
@@ -19432,16 +19448,26 @@ async function _contactLoadCommunication(contactId){
   }
 
   try {
-    // Step 1: Get fub_contact_id for this ace_contacts row (may be null for
-    // contacts not yet linked to a FUB record). Note: the proxy's 'id' param
-    // is handled specially — pass the bare UUID, not 'eq.UUID'.
-    const contactRows = await _sbGet(SB_TABLES.contacts, `id=${contactId}&select=id,fub_contact_id`);
-    const fubContactId = contactRows?.[0]?.fub_contact_id || null;
+    // Step 1: Get fub_contact_id + all linked FUB ids. An ace contact can be
+    // linked to multiple FUB records via ace_contact_fub_links (e.g. when a
+    // skip-trace import created a second FUB record we auto-linked as a
+    // duplicate). We want notes/calls from EVERY linked FUB id, not just the
+    // primary. Falls back to the row's fub_contact_id when the links table
+    // has no rows (e.g. very fresh contacts before backfill).
+    const [contactRows, linkRows] = await Promise.all([
+      _sbGet(SB_TABLES.contacts, `id=${contactId}&select=id,fub_contact_id`),
+      _sbGet('ace_contact_fub_links', `ace_id=eq.${contactId}&select=fub_contact_id`).catch(()=>[])
+    ]);
+    const primaryFubId = contactRows?.[0]?.fub_contact_id || null;
+    const linkedIds = Array.isArray(linkRows) ? linkRows.map(r => r.fub_contact_id).filter(Boolean) : [];
+    const fubIds = Array.from(new Set([...(primaryFubId ? [primaryFubId] : []), ...linkedIds]));
+    const fubContactId = primaryFubId;  // kept for empty-state copy
+    const fubIdsParam = fubIds.length ? `in.(${fubIds.join(',')})` : null;
 
     // Step 2: Fetch all four data sources in parallel
     const [callRows, noteRows, outreachRows] = await Promise.all([
-      fubContactId ? _sbGet('fub_calls', `person_id=eq.${fubContactId}&select=id,created_at,direction,duration,outcome,note,phone,user_id&order=created_at.desc&limit=200`).catch(e=>{console.warn('calls fetch:',e.message);return[];}) : Promise.resolve([]),
-      fubContactId ? _sbGet('fub_notes', `person_id=eq.${fubContactId}&select=id,created_at,subject,body&order=created_at.desc&limit=200`).catch(e=>{console.warn('notes fetch:',e.message);return[];}) : Promise.resolve([]),
+      fubIdsParam ? _sbGet('fub_calls', `person_id=${fubIdsParam}&select=id,created_at,direction,duration,outcome,note,phone,user_id&order=created_at.desc&limit=200`).catch(e=>{console.warn('calls fetch:',e.message);return[];}) : Promise.resolve([]),
+      fubIdsParam ? _sbGet('fub_notes', `person_id=${fubIdsParam}&select=id,created_at,subject,body&order=created_at.desc&limit=200`).catch(e=>{console.warn('notes fetch:',e.message);return[];}) : Promise.resolve([]),
       _sbGet(SB_TABLES.buyerInterests, `contact_id=eq.${contactId}&select=id,date_sent,activity_type,response_status,response_notes,interest_notes,template_used,agent_name,property_id&order=date_sent.desc&limit=100`).catch(e=>{console.warn('outreach fetch:',e.message);return[];})
     ]);
 

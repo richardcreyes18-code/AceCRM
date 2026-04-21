@@ -21356,11 +21356,30 @@ function showSettingsPage(){
         </div>
         <button onclick="saveSettingsPage()" style="background:linear-gradient(180deg,#22c55e,#16a34a);color:#fff;border:none;padding:10px 22px;font-size:13px;font-weight:700;border-radius:6px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,0.2);">✓ Save All Settings</button>
       </div>
-      <div style="max-width:900px;margin:22px auto;padding:0 22px 60px;">
+      <div style="max-width:900px;margin:0 auto;padding:0 22px 60px;">
+        <!-- v111.12: Settings tab navigation -->
+        <div id="settingsTabBar" style="display:flex;gap:2px;border-bottom:1px solid #cbd5e1;margin:18px 0 18px;flex-wrap:wrap;"></div>
         <div id="settingsSaveMsg" style="min-height:18px;font-size:12px;color:#16a34a;font-weight:600;margin-bottom:12px;"></div>
 
+        <!-- v111.12: FUB Sync Health dashboard -->
+        <section data-settings-tab="sync" style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
+            <div>
+              <div style="font-size:15px;font-weight:700;color:#0f172a;">🔗 FUB Sync Health</div>
+              <div style="font-size:12px;color:#64748b;margin-top:4px;">Live status of each Follow Up Boss table. Green = synced within the last run window.</div>
+            </div>
+            <button onclick="_syncStatusRender(true)" id="syncStatusRefreshBtn" style="background:#f1f5f9;border:1px solid #cbd5e1;color:#334155;padding:7px 14px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">↻ Refresh</button>
+          </div>
+          <div id="syncStatusGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(210px,1fr));gap:12px;">
+            <div style="padding:24px;text-align:center;color:#94a3b8;font-size:12px;grid-column:1/-1;">Loading sync status…</div>
+          </div>
+          <div style="font-size:10px;color:#94a3b8;margin-top:12px;line-height:1.5;">
+            Schedule: Calls every 15 min · Deal stages @ :07 hourly · Contacts @ :17 hourly · Notes @ :37 hourly
+          </div>
+        </section>
+
         <!-- v105: AI Assistant cost tracking -->
-        <section style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
+        <section data-settings-tab="sync" style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
           <div style="display:flex;align-items:center;gap:16px;">
             <div style="font-size:28px;flex-shrink:0;">✦</div>
             <div style="flex:1;min-width:0;">
@@ -21371,7 +21390,7 @@ function showSettingsPage(){
         </section>
 
         <!-- v102.42: Dedupe entry tile -->
-        <section style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
+        <section data-settings-tab="tools" style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
           <div style="font-size:28px;flex-shrink:0;">🧹</div>
           <div style="flex:1;min-width:0;">
             <div style="font-size:15px;font-weight:700;color:#0f172a;">Contact dedupe</div>
@@ -21381,7 +21400,7 @@ function showSettingsPage(){
         </section>
 
         <!-- v108: FUB Import tile -->
-        <section style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
+        <section data-settings-tab="integrations" style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
           <div style="font-size:28px;flex-shrink:0;">📥</div>
           <div style="flex:1;min-width:0;">
             <div style="font-size:15px;font-weight:700;color:#0f172a;">FUB data import</div>
@@ -21391,7 +21410,7 @@ function showSettingsPage(){
         </section>
 
         <!-- v110: Bulk Street View fill tile -->
-        <section style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
+        <section data-settings-tab="tools" style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
           <div style="font-size:28px;flex-shrink:0;">📸</div>
           <div style="flex:1;min-width:0;">
             <div style="font-size:15px;font-weight:700;color:#0f172a;">Auto-fill Street View photos</div>
@@ -21404,7 +21423,7 @@ function showSettingsPage(){
         </section>
 
         <!-- v111 Ship 3: Asset Cleanup tile -->
-        <section style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
+        <section data-settings-tab="tools" style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
           <div style="font-size:28px;flex-shrink:0;">🏷</div>
           <div style="flex:1;min-width:0;">
             <div style="font-size:15px;font-weight:700;color:#0f172a;">Asset Type Cleanup</div>
@@ -21416,7 +21435,7 @@ function showSettingsPage(){
         </section>
 
         <!-- v111.9: FUB Pipeline Sync tile -->
-        <section style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
+        <section data-settings-tab="integrations" style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
           <div style="font-size:28px;flex-shrink:0;">🔄</div>
           <div style="flex:1;min-width:0;">
             <div style="font-size:15px;font-weight:700;color:#0f172a;">FUB pipeline stage sync</div>
@@ -21428,7 +21447,7 @@ function showSettingsPage(){
         </section>
 
         <!-- v111.9: Unmatched FUB Deals review tile -->
-        <section style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
+        <section data-settings-tab="integrations" style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
           <div style="font-size:28px;flex-shrink:0;">🔍</div>
           <div style="flex:1;min-width:0;">
             <div style="font-size:15px;font-weight:700;color:#0f172a;">Unmatched FUB deals review</div>
@@ -21440,7 +21459,7 @@ function showSettingsPage(){
         </section>
 
         <!-- CONNECTION -->
-        <section style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
+        <section data-settings-tab="integrations" style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
           <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:4px;">
             <div style="font-size:15px;font-weight:700;color:#0f172a;">🔌 Database Connection</div>
             <button onclick="_testDbConnection()" id="dbTestBtn" style="background:#f1f5f9;border:1px solid #cbd5e1;color:#334155;padding:6px 14px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Test Connection</button>
@@ -21463,7 +21482,7 @@ function showSettingsPage(){
         </section>
 
         <!-- API KEYS -->
-        <section style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
+        <section data-settings-tab="integrations" style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
           <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:14px;">🔑 API Keys</div>
 
           <div style="margin-bottom:16px;">
@@ -21480,7 +21499,7 @@ function showSettingsPage(){
         </section>
 
         <!-- DEFAULTS -->
-        <section style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
+        <section data-settings-tab="config" style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
           <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:4px;">🏦 Default Loan Terms</div>
           <div style="font-size:12px;color:#64748b;margin-bottom:14px;">Applied automatically to new deals in Financial Analysis (Mortgage 1) if no loan has been entered yet.</div>
           <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;">
@@ -21506,13 +21525,13 @@ function showSettingsPage(){
         </section>
 
         <!-- PLACEHOLDER for future sections -->
-        <section style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;opacity:0.7;">
+        <section data-settings-tab="config" style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;opacity:0.7;">
           <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:4px;">🧠 AI Features <span style="font-size:10px;background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:99px;margin-left:6px;">Coming Soon</span></div>
           <div style="font-size:12px;color:#64748b;">Confidence threshold, model selection, auto-extract schedule, prompt tuning.</div>
         </section>
 
         <!-- ═══ TEAM MANAGEMENT ═══════════════════════════════════════ -->
-        <section style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
+        <section data-settings-tab="team" style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
           <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
             <div>
               <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:4px;">👥 Team Management</div>
@@ -21525,7 +21544,7 @@ function showSettingsPage(){
         </section>
 
         <!-- ═══ v102.34 APP LISTS ═════════════════════════════════════ -->
-        <section style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
+        <section data-settings-tab="config" style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
           <div style="margin-bottom:14px;">
             <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:4px;">⚙ App Lists</div>
             <div style="font-size:12px;color:#64748b;">Edit the curated lists used by Deal Board filters, the asset-type editor, and the seller lead form. Asset Types are organized as Categories with nested subtypes — click ▶ to expand. Deletes are soft (tombstoned) so re-adding a removed value reactivates it instead of creating duplicates. <strong>Renames cascade</strong> to all matching subtype rows and to every deal carrying the value (atomic, reversible). Category renames require typing <code style="background:#f1f5f9;padding:1px 5px;border-radius:3px;">RENAME</code> to confirm.</div>
@@ -21563,7 +21582,7 @@ function showSettingsPage(){
 
 
         <!-- v102.33: FIELD MAP — moved from main nav -->
-        <section style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
+        <section data-settings-tab="tools" style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
           <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;">
             <div>
               <div style="font-size:15px;font-weight:700;color:#0f172a;">⇄ Field Map</div>
@@ -21573,7 +21592,7 @@ function showSettingsPage(){
           </div>
         </section>
 
-        <section style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;opacity:0.7;">
+        <section data-settings-tab="config" style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;opacity:0.7;">
           <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:4px;">🎨 Display Preferences <span style="font-size:10px;background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:99px;margin-left:6px;">Coming Soon</span></div>
           <div style="font-size:12px;color:#64748b;">Dark mode, font size, default landing page, pipeline card fields.</div>
         </section>
@@ -21605,6 +21624,167 @@ function showSettingsPage(){
       el.innerHTML = '<strong>' + (s.call_count||0) + '</strong> API calls · <strong>' + (s.total_input||0).toLocaleString() + '</strong> input tokens · <strong>' + (s.total_output||0).toLocaleString() + '</strong> output tokens · Total cost: <strong>$' + cost.toFixed(4) + '</strong>' + (s.last_call ? ' · Last call: ' + new Date(s.last_call).toLocaleString() : '');
     }catch(e){ el.textContent = 'No usage recorded yet.'; }
   }, 100);
+
+  // v111.12: Render tab bar + activate persisted tab
+  _settingsRenderTabBar();
+  const saved = (()=>{ try{ return localStorage.getItem('settings_tab') || 'sync'; }catch(e){ return 'sync'; } })();
+  _settingsSwitchTab(saved);
+}
+
+// v111.12: Settings tab navigation
+const _SETTINGS_TABS = [
+  { id:'sync',         label:'🔄 Sync Status' },
+  { id:'integrations', label:'🔌 Integrations' },
+  { id:'tools',        label:'🧹 Tools' },
+  { id:'team',         label:'👥 Team' },
+  { id:'config',       label:'⚙ Configuration' },
+];
+
+function _settingsRenderTabBar(){
+  const bar = document.getElementById('settingsTabBar');
+  if(!bar) return;
+  bar.innerHTML = _SETTINGS_TABS.map(t =>
+    `<button type="button" data-settings-tabnav="${t.id}" onclick="_settingsSwitchTab('${t.id}')" style="padding:10px 16px;background:none;border:none;border-bottom:2px solid transparent;font-size:13px;font-weight:600;color:#64748b;cursor:pointer;transition:color .12s,border-color .12s;">${t.label}</button>`
+  ).join('');
+}
+
+function _settingsSwitchTab(name){
+  // Toggle section visibility
+  document.querySelectorAll('[data-settings-tab]').forEach(el => {
+    el.style.display = (el.getAttribute('data-settings-tab') === name) ? '' : 'none';
+  });
+  // Toggle tab button active state
+  document.querySelectorAll('[data-settings-tabnav]').forEach(btn => {
+    const active = btn.getAttribute('data-settings-tabnav') === name;
+    btn.style.color = active ? '#0f172a' : '#64748b';
+    btn.style.borderBottomColor = active ? '#2563eb' : 'transparent';
+  });
+  // Persist
+  try{ localStorage.setItem('settings_tab', name); }catch(e){}
+  // Lazy-render sync status the first time Sync tab is opened
+  if(name === 'sync'){ _syncStatusRender(false); }
+}
+
+// v111.12: FUB sync health dashboard
+//
+// Queries fub_* tables for row count + max(synced_at) + newest_record, renders
+// per-table cards with freshness indicator. Click "Force sync" on any card to
+// fire the corresponding Edge Function immediately (skipping the hourly wait).
+async function _syncStatusRender(forceRefresh){
+  const grid = document.getElementById('syncStatusGrid');
+  if(!grid) return;
+  // Avoid refetching if already rendered and not forced
+  if(!forceRefresh && grid.dataset.loaded === '1') return;
+  grid.innerHTML = '<div style="padding:24px;text-align:center;color:#94a3b8;font-size:12px;grid-column:1/-1;">Loading sync status…</div>';
+
+  const btn = document.getElementById('syncStatusRefreshBtn');
+  if(btn){ btn.disabled = true; btn.textContent = '⏳ Loading…'; }
+
+  // Table + freshness threshold config. If synced_at is older than `stale_mins`,
+  // mark the card yellow; older than `down_mins` marks it red.
+  const tables = [
+    { key:'fub_calls',    label:'Calls',        icon:'📞', stale:20, down:60,   fn:'fub-calls-sync',    cron:'Every 15 min' },
+    { key:'fub_contacts', label:'Contacts',     icon:'👤', stale:75, down:180,  fn:'fub-contacts-sync', cron:'Hourly @ :17' },
+    { key:'fub_deals',    label:'Deal Stages',  icon:'🗂',  stale:75, down:180,  fn:'fub-stages-sync',   cron:'Hourly @ :07' },
+    { key:'fub_notes',    label:'Notes',        icon:'📝', stale:75, down:180,  fn:'fub-notes-sync',    cron:'Hourly @ :37' },
+  ];
+
+  try{
+    const results = await Promise.all(tables.map(async t => {
+      // Get max synced_at (most recent sync timestamp)
+      const rows = await _sbGet(t.key, 'select=synced_at&order=synced_at.desc.nullslast&limit=1').catch(()=>[]);
+      const last = (rows && rows[0] && rows[0].synced_at) ? new Date(rows[0].synced_at) : null;
+      // Approximate row count via head request
+      let total = null;
+      try{
+        const cfg = getConfig();
+        const r = await fetch(`${cfg.url}/functions/v1/crm-proxy/${t.key}?select=id&limit=1`, {
+          method: 'GET',
+          headers: { 'Authorization': 'Bearer ' + cfg.key, 'apikey': cfg.key, 'Prefer': 'count=estimated' }
+        });
+        const cnt = r.headers.get('content-range');
+        if(cnt){
+          const m = cnt.match(/\/(\d+|\*)/);
+          if(m && m[1] !== '*') total = Number(m[1]);
+        }
+      }catch(e){}
+      return { ...t, last, total };
+    }));
+
+    const now = Date.now();
+    const fmtAgo = ms => {
+      if(!ms || ms < 0) return '—';
+      const s = Math.floor(ms/1000);
+      if(s < 60) return s + 's ago';
+      const m = Math.floor(s/60);
+      if(m < 60) return m + 'm ago';
+      const h = Math.floor(m/60);
+      if(h < 24) return h + 'h ' + (m%60) + 'm ago';
+      const d = Math.floor(h/24);
+      return d + 'd ago';
+    };
+
+    grid.innerHTML = results.map(r => {
+      const ageMs = r.last ? (now - r.last.getTime()) : Infinity;
+      const ageMin = ageMs / 60000;
+      let color, statusText;
+      if(ageMin <= r.stale){       color = '#16a34a'; statusText = '● Synced'; }
+      else if(ageMin <= r.down){   color = '#d97706'; statusText = '● Stale'; }
+      else {                       color = '#dc2626'; statusText = '● Not syncing'; }
+      const ageStr = r.last ? fmtAgo(ageMs) : 'never';
+      const totalStr = r.total == null ? '—' : r.total.toLocaleString();
+      return `
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:14px;">
+          <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+            <span style="font-size:18px;">${r.icon}</span>
+            <span style="font-size:13px;font-weight:700;color:#0f172a;">${r.label}</span>
+          </div>
+          <div style="font-size:11px;color:${color};font-weight:600;margin-bottom:8px;">${statusText}</div>
+          <div style="font-size:11px;color:#64748b;line-height:1.7;">
+            <div><span style="color:#94a3b8;">Rows:</span> <strong style="color:#334155;">${totalStr}</strong></div>
+            <div><span style="color:#94a3b8;">Last sync:</span> <strong style="color:#334155;">${ageStr}</strong></div>
+            <div><span style="color:#94a3b8;">Schedule:</span> ${r.cron}</div>
+          </div>
+          <button onclick="_syncForceRun('${r.fn}', this)" style="margin-top:10px;width:100%;background:#1e3a8a;color:#fff;border:none;padding:7px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Force sync now</button>
+        </div>`;
+    }).join('');
+    grid.dataset.loaded = '1';
+  }catch(e){
+    grid.innerHTML = `<div style="padding:24px;text-align:center;color:#dc2626;font-size:12px;grid-column:1/-1;">Failed to load: ${String(e.message||e).replace(/</g,'&lt;')}</div>`;
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '↻ Refresh'; }
+  }
+}
+
+// Fire an Edge Function on demand (used by the Sync Health "Force sync now" button).
+async function _syncForceRun(fnSlug, btnEl){
+  if(btnEl){ btnEl.disabled = true; btnEl.textContent = '⏳ Running…'; }
+  try{
+    const cfg = getConfig();
+    // Use a 2-hour lookback so recent edits are caught even if the table is empty.
+    const since = new Date(Date.now() - 2*3600*1000).toISOString();
+    const url = fnSlug === 'fub-stages-sync'
+      ? `${cfg.url}/functions/v1/${fnSlug}`                              // stages sync doesn't use ?since
+      : `${cfg.url}/functions/v1/${fnSlug}?since=${encodeURIComponent(since)}`;
+    const res = await fetch(url, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'Authorization': 'Bearer ' + cfg.key },
+      body: fnSlug === 'fub-stages-sync' ? JSON.stringify({ dry_run: false }) : '{}'
+    });
+    if(!res.ok && res.status !== 207){
+      throw new Error(`HTTP ${res.status}`);
+    }
+    if(btnEl){ btnEl.textContent = '✓ Done'; }
+    // Refresh status after a short delay so the new synced_at shows up
+    setTimeout(() => _syncStatusRender(true), 1500);
+  }catch(e){
+    if(btnEl){ btnEl.textContent = '✗ Failed'; btnEl.style.background = '#dc2626'; }
+    console.warn('Force sync failed:', e);
+  }finally{
+    setTimeout(() => {
+      if(btnEl){ btnEl.disabled = false; btnEl.textContent = 'Force sync now'; btnEl.style.background = '#1e3a8a'; }
+    }, 2500);
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════

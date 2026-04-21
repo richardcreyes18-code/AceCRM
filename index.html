@@ -38503,12 +38503,15 @@ function saveFinInputs(dealId){
   // Send null instead of 0 so the DB column is actually cleared.
   fields['Gross Rental Income (Monthly)']  = aGRI_mo || null;
   if(get('fin_aVacancy'))   fields['Vacancy Rate (%)']            = get('fin_aVacancy');
-  if(aOI_mo)   fields['Other Income (Monthly)']      = aOI_mo;
-  if(aRUBS_mo) fields['RUBS/CAM Income (Monthly)']   = aRUBS_mo;
+  // v112.1: send null for zero so clearing the input actually wipes the DB.
+  // Same pattern as GRI above — the old `if(v) fields[x]=v` silently dropped
+  // zero writes and the old DB value persisted forever.
+  fields['Other Income (Monthly)']    = aOI_mo   || null;
+  fields['RUBS/CAM Income (Monthly)'] = aRUBS_mo || null;
   fields['Proforma Gross Rent (Monthly)']  = pGRI_mo || null;
   if(get('fin_pVacancy'))   fields['Vacancy Rate Proforma (%)']   = get('fin_pVacancy');
-  if(pOI_mo)   fields['Proforma Other Income (Monthly)'] = pOI_mo;
-  if(pRUBS_mo) fields['Proforma RUBS/CAM (Monthly)'] = pRUBS_mo;
+  fields['Proforma Other Income (Monthly)'] = pOI_mo   || null;
+  fields['Proforma RUBS/CAM (Monthly)']     = pRUBS_mo || null;
 
   // ── Size & Building ──────────────────────────────────────────
   if(get('fin_aNetRentSF')) fields['Net Rentable SF']    = get('fin_aNetRentSF');
@@ -38578,7 +38581,12 @@ function saveFinInputs(dealId){
     // v108: prefer yr/12 at full precision if user last edited the yearly input
     const yrId = inputId.replace(/_mo$/, '_yr');
     const v = getAuthMo(inputId, yrId);
-    if(v) fields[airtableField] = v;
+    // v112.1: always write the field — use null for empty/zero so clearing
+    // an expense in the UI actually clears the DB. The old `if(v)` pattern
+    // silently dropped the write, so the old DB value reappeared on refresh.
+    // Safe because saveFinInputs is only ever called with the Financial tab
+    // rendered (all call sites gate on hasFinInputs), so the inputs exist.
+    fields[airtableField] = v || null;
   });
 
   // v102.4: Pro forma expenses — save as a JSONB blob keyed by short item ID.
@@ -38595,28 +38603,39 @@ function saveFinInputs(dealId){
     'pm_fee','pm_other',
   ];
   const proFormaBreakdown = {};
-  let hasProForma = false;
   proFormaExpenseKeys.forEach(k => {
     // v108: prefer yr/12 at full precision when user last edited the yearly side
     const v = getAuthMo('fin_p_'+k+'_mo', 'fin_p_'+k+'_yr');
-    if(v) { proFormaBreakdown[k] = v; hasProForma = true; }
+    if(v) proFormaBreakdown[k] = v;
   });
-  if(hasProForma) fields['Pro Forma Expense Breakdown'] = proFormaBreakdown;
+  // v112.1: ALWAYS write the blob when the Financial tab is rendered, even
+  // when every proforma line was cleared. Previously we wrote only when
+  // non-empty, so clearing all proforma expenses left the stale JSONB in
+  // Supabase and the values reappeared on refresh. Send `null` to explicitly
+  // wipe the column.
+  if(document.getElementById('fin_p_ins_prop_mo')){
+    fields['Pro Forma Expense Breakdown'] = Object.keys(proFormaBreakdown).length > 0 ? proFormaBreakdown : null;
+  }
 
   // ── Mortgages ────────────────────────────────────────────────
+  // v112.1: always write each mortgage field — use null to explicitly
+  // clear. Previously clearing a mortgage field in the UI left the old
+  // value in the DB because `if(bal)` etc. skipped zero writes. Only
+  // write when the input exists in the DOM (mortgage section rendered).
   [1,2,3].forEach(n => {
+    if(!document.getElementById(`fin_mort${n}_bal`)) return;
     const bal   = get(`fin_mort${n}_bal`);
     const amort = Number(getStr(`fin_mort${n}_amort`))||0;
     const rate  = get(`fin_mort${n}_rate`);
     const type  = getStr(`fin_mort${n}_type`);
     const assm  = getChk(`fin_mort${n}_assumable`);
     const yrs   = Number(getStr(`fin_mort${n}_yrsrem`))||0;
-    if(bal)  fields[`Mortgage ${n} Principal Balance`]    = bal;
-    if(amort)fields[`Mortgage ${n} Amortization (Years)`] = amort;
-    if(rate) fields[`Mortgage ${n} Interest Rate (%)`]    = rate;
-    if(type && type !== '--') fields[`Mortgage ${n} Loan Type`] = type;
-    fields[`Mortgage ${n} Assumable`] = assm;
-    if(yrs)  fields[`Mortgage ${n} Years Remaining`]      = yrs;
+    fields[`Mortgage ${n} Principal Balance`]    = bal   || null;
+    fields[`Mortgage ${n} Amortization (Years)`] = amort || null;
+    fields[`Mortgage ${n} Interest Rate (%)`]    = rate  || null;
+    fields[`Mortgage ${n} Loan Type`]            = (type && type !== '--') ? type : null;
+    fields[`Mortgage ${n} Assumable`]            = assm;
+    fields[`Mortgage ${n} Years Remaining`]      = yrs   || null;
   });
 
   // ── Calculated Cap Rates (write back to Airtable) ────────────

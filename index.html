@@ -21887,6 +21887,18 @@ function showSettingsPage(){
           <button onclick="_fubUnmatchedOpen()" style="background:#475569;color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Open review →</button>
         </section>
 
+        <!-- v111.11: FUB auto-link audit tile -->
+        <section data-settings-tab="integrations" style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
+          <div style="font-size:28px;flex-shrink:0;">🔗</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:15px;font-weight:700;color:#0f172a;">FUB auto-link audit</div>
+            <div style="font-size:12px;color:#64748b;margin-top:3px;line-height:1.5;">
+              Every time reconcile auto-links a duplicate FUB record to an existing contact, it's logged here. Review recent auto-links and unlink one-click if a match was wrong (primary links need a merge flow).
+            </div>
+          </div>
+          <button onclick="_fubAuditOpen()" style="background:#0f766e;color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Open audit →</button>
+        </section>
+
         <!-- CONNECTION -->
         <section data-settings-tab="integrations" style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
           <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:4px;">
@@ -39326,6 +39338,229 @@ function _fubUmCloseLinkModal(){
   const modal = document.getElementById('fubUmLinkModal');
   if(modal) modal.style.display = 'none';
   _fubUmState.linkingId = null;
+}
+
+// ─── FUB auto-link audit page (v111.11) ────────────────────────────
+// Renders ace_fub_autolink_audit paginated. For active secondary links
+// we show an Unlink button that calls the unlink_fub_id RPC (primary
+// links are refused server-side — they'd orphan ace_contacts.fub_contact_id).
+const _FUB_AUDIT_PAGE_SIZE = 50;
+let _fubAuditState = { page: 0, eventType: 'all', search: '', rows: [], liveLinks: new Set(), contactNames: new Map() };
+
+function _fubAuditOpen(){
+  const main = document.getElementById('mainArea');
+  if(!main) return;
+  _fubAuditState = { page: 0, eventType: 'all', search: '', rows: [], liveLinks: new Set(), contactNames: new Map() };
+  main.innerHTML = `
+    <div style="padding:16px 22px;max-width:1400px;margin:0 auto;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <div>
+          <div style="font-size:20px;font-weight:700;color:#0f172a;">🔗 FUB auto-link audit</div>
+          <div style="font-size:12px;color:#64748b;margin-top:3px;">Every ace_contact_fub_links mutation is logged here. Unlink active secondary links one-click.</div>
+        </div>
+        <button onclick="setNav(null,'settings')" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:8px 14px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;">← Back to Settings</button>
+      </div>
+
+      <div id="fubAuditStats" style="display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px;"></div>
+
+      <section style="background:#fff;border-radius:10px;padding:14px 16px;margin-bottom:12px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
+        <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center;">
+          <input id="fubAuditSearch" type="text" placeholder="Search by ace name or FUB id..." oninput="_fubAuditDebounced()" style="flex:1;min-width:220px;padding:8px 12px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;">
+          <select id="fubAuditType" onchange="_fubAuditSet('eventType',this.value)" style="padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;background:#fff;">
+            <option value="all">All events</option>
+            <option value="autolinked">Auto-linked (secondary)</option>
+            <option value="manual_link">Manual link</option>
+            <option value="unlinked">Unlinked</option>
+            <option value="backfill">Backfill (initial import)</option>
+          </select>
+        </div>
+      </section>
+
+      <section style="background:#fff;border-radius:10px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;overflow:hidden;">
+        <div id="fubAuditTable" style="max-height:calc(100vh - 320px);overflow-y:auto;"><div style="padding:40px;text-align:center;color:#94a3b8;font-size:12px;">Loading...</div></div>
+        <div id="fubAuditPager" style="display:flex;justify-content:space-between;align-items:center;padding:10px 16px;border-top:1px solid #e2e8f0;background:#f8fafc;font-size:12px;color:#475569;"></div>
+      </section>
+    </div>`;
+  _fubAuditLoadStats();
+  _fubAuditLoad();
+}
+
+let _fubAuditTimer = null;
+function _fubAuditDebounced(){
+  if(_fubAuditTimer) clearTimeout(_fubAuditTimer);
+  _fubAuditTimer = setTimeout(() => {
+    _fubAuditState.search = (document.getElementById('fubAuditSearch')?.value||'').trim();
+    _fubAuditState.page = 0;
+    _fubAuditLoad();
+  }, 300);
+}
+function _fubAuditSet(k, v){ _fubAuditState[k] = v; _fubAuditState.page = 0; _fubAuditLoad(); }
+function _fubAuditPage(delta){
+  const n = _fubAuditState.page + delta;
+  if(n < 0) return;
+  _fubAuditState.page = n;
+  _fubAuditLoad();
+}
+
+async function _fubAuditLoadStats(){
+  const host = document.getElementById('fubAuditStats');
+  if(!host) return;
+  try {
+    // RPC avoids the 1000-row PostgREST cap on paginated selects.
+    const stats = await _sbRpc('_fub_autolink_audit_counts', {});
+    const by = (stats && stats.by_type) || {};
+    const card = (label, val, color) => `<div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:10px 14px;min-width:130px;">
+      <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;">${label}</div>
+      <div style="font-size:18px;font-weight:700;color:${color||'#0f172a'};margin-top:2px;">${val}</div>
+    </div>`;
+    host.innerHTML = [
+      card('Total events', stats?.total||0),
+      card('Last 7 days', stats?.last_7_days||0, '#0f766e'),
+      card('Auto-linked', by.autolinked||0, '#0284c7'),
+      card('Unlinked', by.unlinked||0, '#dc2626'),
+      card('Manual link', by.manual_link||0, '#7c3aed'),
+      card('Backfill', by.backfill||0, '#94a3b8'),
+    ].join('');
+  } catch(e){
+    host.innerHTML = `<div style="font-size:11px;color:#dc2626;">Stats failed: ${e.message}</div>`;
+  }
+}
+
+async function _fubAuditLoad(){
+  const body = document.getElementById('fubAuditTable');
+  if(!body) return;
+  body.innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8;font-size:12px;">Loading...</div>';
+  const s = _fubAuditState;
+  const parts = [
+    'select=id,ace_id,fub_contact_id,event_type,is_primary,linked_by,link_reason,confidence,actor,notes,created_at',
+    'order=created_at.desc',
+    `limit=${_FUB_AUDIT_PAGE_SIZE+1}`,
+    `offset=${s.page * _FUB_AUDIT_PAGE_SIZE}`
+  ];
+  if(s.eventType !== 'all') parts.push(`event_type=eq.${encodeURIComponent(s.eventType)}`);
+  if(s.search){
+    const n = Number(s.search);
+    if(!isNaN(n) && n > 0) parts.push(`fub_contact_id=eq.${n}`);
+    // name search requires a join; skip unless numeric. (v111.11 keeps scope small.)
+  }
+  try {
+    const rows = await _sbGet('ace_fub_autolink_audit', parts.join('&'));
+    const hasMore = (rows||[]).length > _FUB_AUDIT_PAGE_SIZE;
+    s.rows = (rows||[]).slice(0, _FUB_AUDIT_PAGE_SIZE);
+    // Resolve ace contact names + which links are still live, in parallel
+    const aceIds = Array.from(new Set(s.rows.map(r => r.ace_id)));
+    s.liveLinks = new Set();
+    s.contactNames = new Map();
+    if(aceIds.length){
+      const inClause = `(${aceIds.map(id => `"${id}"`).join(',')})`;
+      const [nameRows, linkRows] = await Promise.all([
+        _sbGet(SB_TABLES.contacts, `id=in.${inClause}&select=id,name`).catch(()=>[]),
+        _sbGet('ace_contact_fub_links', `ace_id=in.${inClause}&select=ace_id,fub_contact_id`).catch(()=>[])
+      ]);
+      (nameRows||[]).forEach(n => s.contactNames.set(n.id, n.name || '—'));
+      (linkRows||[]).forEach(l => s.liveLinks.add(`${l.ace_id}|${l.fub_contact_id}`));
+    }
+    _fubAuditRender();
+    _fubAuditUpdatePager(hasMore);
+  } catch(e){
+    body.innerHTML = `<div style="padding:40px;text-align:center;color:#dc2626;font-size:12px;">Load failed: ${e.message}</div>`;
+  }
+}
+
+function _fubAuditRender(){
+  const body = document.getElementById('fubAuditTable');
+  if(!body) return;
+  const s = _fubAuditState;
+  if(!s.rows.length){
+    body.innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8;font-size:12px;">No events match.</div>';
+    return;
+  }
+  const esc = v => String(v==null?'':v).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const evtPill = ev => {
+    const colors = {
+      autolinked:  ['#dbeafe','#1e40af'],
+      manual_link: ['#ede9fe','#6d28d9'],
+      unlinked:    ['#fee2e2','#b91c1c'],
+      backfill:    ['#f1f5f9','#475569']
+    };
+    const [bg,fg] = colors[ev] || ['#f1f5f9','#334155'];
+    return `<span style="background:${bg};color:${fg};font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;text-transform:uppercase;letter-spacing:0.4px;">${esc(ev)}</span>`;
+  };
+  const rowsHtml = s.rows.map(r => {
+    const name = s.contactNames.get(r.ace_id) || '(unknown contact)';
+    const when = r.created_at ? new Date(r.created_at).toLocaleString() : '—';
+    const isLive = s.liveLinks.has(`${r.ace_id}|${r.fub_contact_id}`);
+    const canUnlink = isLive && !r.is_primary && r.event_type !== 'unlinked';
+    const action = canUnlink
+      ? `<button onclick="_fubAuditUnlink('${r.ace_id}', ${r.fub_contact_id})" style="background:#dc2626;color:#fff;border:none;padding:4px 10px;font-size:11px;font-weight:600;border-radius:5px;cursor:pointer;">Unlink</button>`
+      : (r.is_primary ? '<span style="font-size:10px;color:#94a3b8;">primary (merge-only)</span>'
+         : (isLive ? '<span style="font-size:10px;color:#94a3b8;">—</span>'
+            : '<span style="font-size:10px;color:#94a3b8;">not linked</span>'));
+    const rule = (r.link_reason || '').replace(/^auto-linked FUB duplicate via /, '');
+    return `
+      <tr style="border-bottom:1px solid #f1f5f9;">
+        <td style="padding:8px 10px;font-size:11px;color:#64748b;white-space:nowrap;">${esc(when)}</td>
+        <td style="padding:8px 10px;">${evtPill(r.event_type)}${r.is_primary ? ' <span style="background:#fef3c7;color:#92400e;font-size:9px;padding:1px 6px;border-radius:8px;margin-left:4px;">primary</span>':''}</td>
+        <td style="padding:8px 10px;font-size:12px;">
+          <a href="#" onclick="event.preventDefault();showContactDetailPage('${r.ace_id}','settings')" style="color:#1e40af;font-weight:600;text-decoration:none;">${esc(name)}</a>
+        </td>
+        <td style="padding:8px 10px;font-size:12px;font-family:monospace;color:#0f172a;">#${esc(r.fub_contact_id)}</td>
+        <td style="padding:8px 10px;font-size:11px;color:#475569;max-width:320px;">${esc(rule||'—')}</td>
+        <td style="padding:8px 10px;font-size:11px;color:#64748b;">${esc(r.actor||r.linked_by||'system')}</td>
+        <td style="padding:8px 10px;text-align:right;">${action}</td>
+      </tr>`;
+  }).join('');
+  body.innerHTML = `
+    <table style="width:100%;border-collapse:collapse;">
+      <thead style="background:#f8fafc;position:sticky;top:0;z-index:1;">
+        <tr>
+          <th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid #e2e8f0;">When</th>
+          <th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid #e2e8f0;">Event</th>
+          <th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid #e2e8f0;">Ace contact</th>
+          <th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid #e2e8f0;">FUB #</th>
+          <th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid #e2e8f0;">Rule / reason</th>
+          <th style="padding:8px 10px;text-align:left;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid #e2e8f0;">Actor</th>
+          <th style="padding:8px 10px;text-align:right;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;border-bottom:1px solid #e2e8f0;">Action</th>
+        </tr>
+      </thead>
+      <tbody>${rowsHtml}</tbody>
+    </table>`;
+}
+
+function _fubAuditUpdatePager(hasMore){
+  const pager = document.getElementById('fubAuditPager');
+  if(!pager) return;
+  const s = _fubAuditState;
+  const from = s.page * _FUB_AUDIT_PAGE_SIZE + 1;
+  const to = s.page * _FUB_AUDIT_PAGE_SIZE + s.rows.length;
+  pager.innerHTML = `
+    <div>Showing ${from}–${to}</div>
+    <div style="display:flex;gap:6px;">
+      <button onclick="_fubAuditPage(-1)" ${s.page===0?'disabled':''} style="background:#f1f5f9;color:#0f172a;border:1px solid #cbd5e1;padding:5px 12px;font-size:11px;font-weight:600;border-radius:5px;cursor:${s.page===0?'not-allowed':'pointer'};opacity:${s.page===0?0.5:1};">← Prev</button>
+      <button onclick="_fubAuditPage(1)" ${hasMore?'':'disabled'} style="background:#f1f5f9;color:#0f172a;border:1px solid #cbd5e1;padding:5px 12px;font-size:11px;font-weight:600;border-radius:5px;cursor:${hasMore?'pointer':'not-allowed'};opacity:${hasMore?1:0.5};">Next →</button>
+    </div>`;
+}
+
+async function _fubAuditUnlink(aceId, fubId){
+  const contactName = _fubAuditState.contactNames.get(aceId) || 'this contact';
+  if(!confirm(`Unlink FUB #${fubId} from ${contactName}?\n\nNotes & calls from that FUB record will no longer show on this contact page. The primary FUB link is NOT touched.`)) return;
+  try {
+    const res = await _sbRpc('unlink_fub_id', {
+      p_ace_id: aceId,
+      p_fub_contact_id: fubId,
+      p_actor: _currentUser?.email || 'unknown@ace'
+    });
+    if(res && res.ok === false){
+      alert(`Unlink failed: ${res.reason || 'unknown'}${res.hint ? '\n\n' + res.hint : ''}`);
+      return;
+    }
+    // Refresh both the audit feed and the stats strip so the new 'unlinked'
+    // row shows at the top.
+    _fubAuditLoadStats();
+    _fubAuditLoad();
+  } catch(e){
+    alert(`Unlink failed: ${e.message || e}`);
+  }
 }
 
 // v107.2: dynamically toggle the NO FINANCIALS stamp.

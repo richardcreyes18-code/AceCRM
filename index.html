@@ -2276,15 +2276,56 @@ async function _signIn(email, password) {
   });
   const data = await resp.json();
   if(!resp.ok) throw new Error(data.error_description || data.msg || 'Login failed');
-  
+
   // Get user profile
   const profile = await _proxyCall({ table:'ace_users', method:'GET', select:'*', id: data.user.id });
   const user = Array.isArray(profile) ? profile[0] : profile;
   if(!user) throw new Error('User profile not found. Contact admin.');
-  
+
   _saveSession(data.access_token, user, data.refresh_token);
   _loadMyRelationships(true); // fire-and-forget
   return user;
+}
+
+// ─── ACTIVITY HEARTBEAT ──────────────────────────────────────────
+// Writes ace_users.last_login_at = now() via the touch_user_activity RPC so
+// the Team Management page can show "Last Active" (much more meaningful than
+// Supabase auth's last_sign_in_at, which rarely updates once a user's browser
+// has saved their password and refresh tokens keep the session alive).
+//
+// Throttled two ways:
+//   - Client: skips if we pinged in the last 60s (avoids double-firing on
+//     visibilitychange + interval collisions).
+//   - Server: RPC itself skips the write if last_login_at < now() - 30s.
+let _lastActivityPingMs = 0;
+async function _pingUserActivity(){
+  try{
+    if(!_currentUser || !_currentUser.id) return;
+    const now = Date.now();
+    if(now - _lastActivityPingMs < 60000) return; // client throttle
+    _lastActivityPingMs = now;
+    await _sbRpc('touch_user_activity', { p_user_id: _currentUser.id });
+  }catch(e){
+    // Non-fatal — activity tracking is cosmetic.
+    console.warn('activity ping failed:', e.message);
+  }
+}
+
+// Start the periodic heartbeat + visibility listener. Safe to call more than
+// once (idempotent via the _activityHeartbeatStarted flag).
+let _activityHeartbeatStarted = false;
+function _startActivityHeartbeat(){
+  if(_activityHeartbeatStarted) return;
+  _activityHeartbeatStarted = true;
+  // Fire every 2 minutes while the tab is visible.
+  setInterval(() => {
+    if(document.visibilityState === 'visible') _pingUserActivity();
+  }, 120000);
+  // Also ping when the tab comes back into focus, so idle-then-return
+  // updates the timestamp immediately without waiting for the next tick.
+  document.addEventListener('visibilitychange', () => {
+    if(document.visibilityState === 'visible') _pingUserActivity();
+  });
 }
 
 
@@ -22676,6 +22717,27 @@ async function _tmCall(action, payload){
   return data;
 }
 
+// Render a "Last Active" cell as a relative time (Just now / 5m ago / 2h ago
+// / 3d ago / Never). More scannable than a raw timestamp when the question
+// the admin actually has is "has this person used the CRM recently?"
+function _tmFmtLastActive(iso){
+  if(!iso) return '<span style="color:#94a3b8;">Never</span>';
+  const t = new Date(iso).getTime();
+  if(!t || isNaN(t)) return '<span style="color:#94a3b8;">—</span>';
+  const diffMs = Date.now() - t;
+  if(diffMs < 0) return 'Just now';
+  const s = Math.floor(diffMs / 1000);
+  if(s < 60)       return 'Just now';
+  const m = Math.floor(s / 60);
+  if(m < 60)       return m + 'm ago';
+  const h = Math.floor(m / 60);
+  if(h < 24)       return h + 'h ago';
+  const d = Math.floor(h / 24);
+  if(d < 30)       return d + 'd ago';
+  // For long-gone users, fall back to the date so "6mo ago" isn't misleading.
+  try{ return new Date(iso).toLocaleDateString(); }catch(e){ return iso; }
+}
+
 // Show a status message above the users table
 function _tmStatus(msg, type){
   const el = document.getElementById('tmStatus');
@@ -22758,7 +22820,7 @@ async function _tmLoadUsers(){
           <td style="padding:12px 10px;font-size:11px;color:#475569;font-family:monospace;">${escEmail}</td>
           <td style="padding:12px 10px;">${roleBadge(u.role)}</td>
           <td style="padding:12px 10px;font-size:11px;">${statusBadge(u.is_active !== false)}</td>
-          <td style="padding:12px 10px;font-size:11px;color:#64748b;">${fmtDate(u.last_sign_in_at)}</td>
+          <td style="padding:12px 10px;font-size:11px;color:#64748b;">${_tmFmtLastActive(u.last_active_at || u.last_login_at)}</td>
           <td style="padding:12px 10px;white-space:nowrap;text-align:right;">
             <button onclick="_tmShowEditUser('${u.id}')" style="background:#f1f5f9;border:1px solid #cbd5e1;color:#334155;padding:5px 10px;border-radius:5px;font-size:11px;cursor:pointer;margin-right:4px;">Edit</button>
             <button onclick="_tmShowResetPassword('${u.id}','${escName}')" style="background:#fef3c7;border:1px solid #fcd34d;color:#92400e;padding:5px 10px;border-radius:5px;font-size:11px;cursor:pointer;margin-right:4px;">Reset PW</button>
@@ -22776,7 +22838,7 @@ async function _tmLoadUsers(){
               <th style="padding:10px;text-align:left;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;">Email</th>
               <th style="padding:10px;text-align:left;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;">Role</th>
               <th style="padding:10px;text-align:left;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;">Status</th>
-              <th style="padding:10px;text-align:left;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;">Last Login</th>
+              <th style="padding:10px;text-align:left;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;" title="Last time this user had the CRM open. Updates every 2 minutes while the tab is active.">Last Active</th>
               <th style="padding:10px;text-align:right;font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;">Actions</th>
             </tr>
           </thead>
@@ -41100,6 +41162,11 @@ function doLogout(){
 }
 
 function _applyUserToUI(user){
+  // Fire the activity heartbeat now + start the periodic ticker. This runs
+  // on both fresh sign-in and session restore, so admins see "Last Active"
+  // tick whenever a team member actually opens the CRM.
+  _pingUserActivity();
+  _startActivityHeartbeat();
   // Update sidebar name
   const nameEl = document.getElementById('sidebarUserName');
   if(nameEl) nameEl.textContent = user.name?.split(' ')[0] || user.name;

@@ -21374,7 +21374,30 @@ function showSettingsPage(){
             <div style="padding:24px;text-align:center;color:#94a3b8;font-size:12px;grid-column:1/-1;">Loading sync status…</div>
           </div>
           <div style="font-size:10px;color:#94a3b8;margin-top:12px;line-height:1.5;">
-            Schedule: Calls every 15 min · Deal stages @ :07 hourly · Contacts @ :17 hourly · Notes @ :37 hourly
+            Schedule: Calls every 15 min · Deal stages @ :07 hourly · Contacts @ :17 hourly · Reconcile @ :27 hourly · Notes @ :37 hourly
+          </div>
+        </section>
+
+        <!-- v111.13: FUB reconciliation review queue -->
+        <section data-settings-tab="sync" style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:14px;">
+            <div>
+              <div style="font-size:15px;font-weight:700;color:#0f172a;">🧭 FUB review queue</div>
+              <div style="font-size:12px;color:#64748b;margin-top:4px;">Items from Follow Up Boss that need a human decision. Nothing is auto-deleted or overwritten.</div>
+            </div>
+            <div style="display:flex;gap:8px;align-items:center;">
+              <select id="reconQueueFilter" onchange="_reconQueueRender(true)" style="padding:6px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;background:#fff;">
+                <option value="all">All types</option>
+                <option value="conflict">Conflicts</option>
+                <option value="create">New (create)</option>
+                <option value="merge">Merge candidates</option>
+              </select>
+              <button onclick="_reconQueueRender(true)" id="reconQueueRefreshBtn" style="background:#f1f5f9;border:1px solid #cbd5e1;color:#334155;padding:7px 14px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">↻ Refresh</button>
+            </div>
+          </div>
+          <div id="reconQueueSummary" style="font-size:12px;color:#64748b;margin-bottom:10px;"></div>
+          <div id="reconQueueList">
+            <div style="padding:24px;text-align:center;color:#94a3b8;font-size:12px;">Loading review queue…</div>
           </div>
         </section>
 
@@ -21662,7 +21685,10 @@ function _settingsSwitchTab(name){
   // Persist
   try{ localStorage.setItem('settings_tab', name); }catch(e){}
   // Lazy-render sync status the first time Sync tab is opened
-  if(name === 'sync'){ _syncStatusRender(false); }
+  if(name === 'sync'){
+    _syncStatusRender(false);
+    if(typeof _reconQueueRender === 'function') _reconQueueRender(false);
+  }
 }
 
 // v111.12: FUB sync health dashboard
@@ -21785,6 +21811,167 @@ async function _syncForceRun(fnSlug, btnEl){
       if(btnEl){ btnEl.disabled = false; btnEl.textContent = 'Force sync now'; btnEl.style.background = '#1e3a8a'; }
     }, 2500);
   }
+}
+
+// v111.13: Reconciliation review queue
+//
+// Reads pending rows from ace_fub_reconcile_queue, renders grouped cards with
+// inline resolve buttons. Calls resolve_queue_* RPCs for each decision. Never
+// writes directly from the client so all rules stay server-side.
+const _RECON_STATE = { loaded:false, rows:[] };
+
+function _reconEsc(s){ return String(s==null?'':s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c])); }
+
+async function _reconQueueRender(forceRefresh){
+  const list = document.getElementById('reconQueueList');
+  const sum  = document.getElementById('reconQueueSummary');
+  if(!list) return;
+  if(!forceRefresh && _RECON_STATE.loaded && list.dataset.loaded === '1') return;
+  list.innerHTML = '<div style="padding:24px;text-align:center;color:#94a3b8;font-size:12px;">Loading review queue…</div>';
+  const btn = document.getElementById('reconQueueRefreshBtn');
+  if(btn){ btn.disabled = true; btn.textContent = '⏳'; }
+
+  try{
+    const filter = (document.getElementById('reconQueueFilter')||{}).value || 'all';
+    let qs = "select=id,entity_type,action,confidence,fub_source_id,ace_target_id,candidate_matches,conflicts,reason,created_at&status=eq.pending&order=created_at.desc&limit=100";
+    if(filter !== 'all') qs += `&action=eq.${filter}`;
+    const rows = await _sbGet('ace_fub_reconcile_queue', qs);
+    _RECON_STATE.rows = rows || [];
+    _RECON_STATE.loaded = true;
+
+    // Counts across all pending (ignores filter for accuracy)
+    const counts = await _sbGet('ace_fub_reconcile_queue',
+      'select=action&status=eq.pending').catch(()=>[]);
+    const byAction = counts.reduce((m,r)=>{ m[r.action]=(m[r.action]||0)+1; return m; }, {});
+    sum.innerHTML = `
+      <strong style="color:#0f172a;">Pending:</strong>
+      <span style="margin-left:8px;">⚠ ${byAction.conflict||0} conflicts</span>
+      <span style="margin-left:12px;">➕ ${byAction.create||0} new</span>
+      <span style="margin-left:12px;">🔗 ${byAction.merge||0} merge</span>
+      <span style="margin-left:12px;color:#94a3b8;">(showing first ${(rows||[]).length} for "${_reconEsc(filter)}")</span>`;
+
+    if(!rows || rows.length === 0){
+      list.innerHTML = '<div style="padding:24px;text-align:center;color:#16a34a;font-size:13px;">✓ Nothing to review</div>';
+    } else {
+      // Hydrate FUB/ace lookups for context display
+      const fubIds = [...new Set(rows.map(r=>r.fub_source_id).filter(Boolean))];
+      const aceIds = [...new Set(rows.map(r=>r.ace_target_id).filter(Boolean))];
+      const [fubDetails, aceDetails] = await Promise.all([
+        fubIds.length ? _sbGet('fub_contacts', `select=id,name,phones,emails,stage,source&id=in.(${fubIds.join(',')})`).catch(()=>[]) : [],
+        aceIds.length ? _sbGet('ace_contacts', `select=id,name,email,phone_number&id=in.(${aceIds.join(',')})`).catch(()=>[]) : [],
+      ]);
+      const fubBy = Object.fromEntries((fubDetails||[]).map(r => [r.id, r]));
+      const aceBy = Object.fromEntries((aceDetails||[]).map(r => [r.id, r]));
+      list.innerHTML = rows.map(r => _reconRowHtml(r, fubBy, aceBy)).join('');
+    }
+    list.dataset.loaded = '1';
+  }catch(e){
+    list.innerHTML = `<div style="padding:24px;text-align:center;color:#dc2626;font-size:12px;">Failed to load: ${_reconEsc(e.message||e)}</div>`;
+  }finally{
+    if(btn){ btn.disabled = false; btn.textContent = '↻ Refresh'; }
+  }
+}
+
+function _reconRowHtml(r, fubBy, aceBy){
+  const fub = fubBy[r.fub_source_id];
+  const ace = r.ace_target_id ? aceBy[r.ace_target_id] : null;
+  const color = r.action === 'conflict' ? '#f59e0b' : r.action === 'create' ? '#2563eb' : '#7c3aed';
+  const label = r.action === 'conflict' ? 'Conflict' : r.action === 'create' ? 'New contact' : 'Merge';
+  const fubPhone = fub && fub.phones && fub.phones[0] ? fub.phones[0].value : '';
+  const fubEmail = fub && fub.emails && fub.emails[0] ? fub.emails[0].value : '';
+
+  let body = '';
+  let actions = '';
+  if(r.action === 'conflict'){
+    const cname = r.conflicts && r.conflicts.name ? r.conflicts.name : null;
+    body = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;font-size:12px;">
+        <div><div style="color:#94a3b8;font-size:10px;font-weight:600;margin-bottom:2px;">LOCAL (keep if edited)</div>
+          <div style="color:#0f172a;font-weight:600;">${_reconEsc((cname&&cname.local)||(ace&&ace.name)||'—')}</div>
+          <div style="color:#64748b;font-size:11px;margin-top:2px;">${_reconEsc((ace&&ace.email)||'')}</div>
+        </div>
+        <div><div style="color:#94a3b8;font-size:10px;font-weight:600;margin-bottom:2px;">FROM FUB</div>
+          <div style="color:#0f172a;font-weight:600;">${_reconEsc((cname&&cname.fub)||(fub&&fub.name)||'—')}</div>
+          <div style="color:#64748b;font-size:11px;margin-top:2px;">${_reconEsc(fubEmail)}</div>
+        </div>
+      </div>`;
+    actions = `
+      <button onclick="_reconResolveConflict(${r.id},'keep_local',this)" style="background:#f1f5f9;border:1px solid #cbd5e1;color:#0f172a;padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Keep local</button>
+      <button onclick="_reconResolveConflict(${r.id},'use_fub',this)" style="background:#1e3a8a;color:#fff;border:none;padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Use FUB value</button>
+      <button onclick="_reconResolveConflict(${r.id},'ignore',this)" style="background:transparent;border:1px solid #cbd5e1;color:#64748b;padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Ignore</button>`;
+  } else if(r.action === 'create'){
+    body = `
+      <div style="font-size:12px;">
+        <div style="color:#0f172a;font-weight:600;">${_reconEsc((fub&&fub.name)||'(no name)')}</div>
+        <div style="color:#64748b;margin-top:3px;">
+          ${fubPhone ? '📞 '+_reconEsc(fubPhone) : ''}
+          ${fubPhone && fubEmail ? ' · ' : ''}
+          ${fubEmail ? '✉ '+_reconEsc(fubEmail) : ''}
+        </div>
+        <div style="color:#94a3b8;font-size:11px;margin-top:3px;">Stage: ${_reconEsc((fub&&fub.stage)||'—')} · Source: ${_reconEsc((fub&&fub.source)||'—')}</div>
+      </div>`;
+    actions = `
+      <button onclick="_reconResolveCreate(${r.id},true,this)" style="background:#16a34a;color:#fff;border:none;padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Create contact</button>
+      <button onclick="_reconResolveCreate(${r.id},false,this)" style="background:transparent;border:1px solid #cbd5e1;color:#64748b;padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Ignore</button>`;
+  } else if(r.action === 'merge'){
+    const ids = (r.candidate_matches && r.candidate_matches.candidate_ids) || [];
+    const candButtons = ids.map(id =>
+      `<button onclick="_reconResolveMerge(${r.id},'${_reconEsc(id)}',this)" style="background:#1e3a8a;color:#fff;border:none;padding:5px 10px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;margin-right:6px;margin-bottom:4px;">Link to ${_reconEsc(id).slice(0,8)}…</button>`
+    ).join('');
+    body = `
+      <div style="font-size:12px;">
+        <div style="color:#0f172a;font-weight:600;">FUB: ${_reconEsc((fub&&fub.name)||'(no name)')}</div>
+        <div style="color:#64748b;margin-top:2px;">${fubPhone ? '📞 '+_reconEsc(fubPhone)+' ' : ''}${fubEmail ? '✉ '+_reconEsc(fubEmail) : ''}</div>
+        <div style="color:#94a3b8;font-size:11px;margin-top:6px;">Matched ${ids.length} local contacts — pick the survivor:</div>
+      </div>`;
+    actions = candButtons +
+      `<button onclick="_reconResolveMerge(${r.id},null,this)" style="background:transparent;border:1px solid #cbd5e1;color:#64748b;padding:5px 10px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Ignore</button>`;
+  }
+
+  return `
+    <div id="reconRow-${r.id}" style="background:#f8fafc;border:1px solid #e2e8f0;border-left:3px solid ${color};border-radius:8px;padding:12px 14px;margin-bottom:10px;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+        <span style="background:${color};color:#fff;font-size:10px;font-weight:700;padding:2px 8px;border-radius:10px;">${label}</span>
+        <span style="color:#94a3b8;font-size:10px;">FUB #${r.fub_source_id}</span>
+        <span style="color:#cbd5e1;font-size:10px;margin-left:auto;">${_reconEsc(new Date(r.created_at).toLocaleString())}</span>
+      </div>
+      ${body}
+      <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;">${actions}</div>
+    </div>`;
+}
+
+// Small wrapper so the resolve buttons can share error handling. Uses the
+// existing _sbRpc helper (POST to crm-proxy?rpc=<fn> with body as params).
+async function _reconRpc(fn, args){
+  return _sbRpc(fn, args);
+}
+
+async function _reconResolveConflict(queueId, choice, btn){
+  if(btn){ btn.disabled = true; btn.textContent = '⏳'; }
+  try{
+    await _reconRpc('resolve_queue_conflict', { p_queue_id: queueId, p_choice: choice });
+    const row = document.getElementById(`reconRow-${queueId}`);
+    if(row) row.style.opacity = '0.4';
+    setTimeout(() => _reconQueueRender(true), 400);
+  }catch(e){ alert('Failed: ' + (e.message||e)); if(btn){ btn.disabled=false; btn.textContent='Retry'; } }
+}
+async function _reconResolveCreate(queueId, approve, btn){
+  if(btn){ btn.disabled = true; btn.textContent = '⏳'; }
+  try{
+    await _reconRpc('resolve_queue_create', { p_queue_id: queueId, p_approve: approve });
+    const row = document.getElementById(`reconRow-${queueId}`);
+    if(row) row.style.opacity = '0.4';
+    setTimeout(() => _reconQueueRender(true), 400);
+  }catch(e){ alert('Failed: ' + (e.message||e)); if(btn){ btn.disabled=false; btn.textContent='Retry'; } }
+}
+async function _reconResolveMerge(queueId, chosenAce, btn){
+  if(btn){ btn.disabled = true; btn.textContent = '⏳'; }
+  try{
+    await _reconRpc('resolve_queue_merge', { p_queue_id: queueId, p_chosen_ace: chosenAce });
+    const row = document.getElementById(`reconRow-${queueId}`);
+    if(row) row.style.opacity = '0.4';
+    setTimeout(() => _reconQueueRender(true), 400);
+  }catch(e){ alert('Failed: ' + (e.message||e)); if(btn){ btn.disabled=false; btn.textContent='Retry'; } }
 }
 
 // ═══════════════════════════════════════════════════════════════

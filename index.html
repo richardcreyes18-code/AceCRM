@@ -8863,20 +8863,26 @@ function renderFinancialTab(d){
   // v107: legacy fields (gross_revenue_yearly, gross_revenue_monthly) have
   // been migrated to gross_rental_income_monthly and nulled. Read only the
   // canonical field now.
-  // v108: Legacy data where monthly was stored at 2-decimal precision (from
-  // syncMoYr's toFixed(2) rounding) round-trips with artifacts — e.g.
-  // $400,000/yr → 33333.33/mo → 399,999.96/yr on reload. Snap yearly to the
-  // nearest whole dollar when (a) the stored monthly is precisely 2-decimal
-  // rounded AND (b) the resulting yearly is within 5¢ of a whole dollar.
-  // Real rents below $1/year don't exist, so this is safe.
+  // v108: Legacy data where monthly was stored at 2- or 3-decimal precision
+  // round-trips with artifacts — e.g. $400,000/yr → 33333.33/mo → 399,999.96/yr,
+  // or 33333.333/mo → 399,999.996/yr (the latter happens after an autosave
+  // that went through the DOM, which renders via toLocaleString max 3 decimals).
+  // Snap yearly to the nearest whole dollar when (a) the stored monthly has
+  // ≤3 decimals of precision AND (b) the resulting yearly is within 5¢ of a
+  // whole dollar. 4+ decimal mo values are treated as real user intent
+  // (e.g. typing yr=$399,999.99 → mo=33,333.3325) and preserved as-is.
   const _cleanYr = moRaw => {
     const mo = Number(moRaw)||0;
     if(!mo) return 0;
     const yr = mo * 12;
-    const moAt2 = Math.round(mo * 100) / 100;
     const yrRound = Math.round(yr);
-    if(Math.abs(mo - moAt2) < 1e-9 && Math.abs(yr - yrRound) < 0.05){
-      return yrRound;
+    if(Math.abs(yr - yrRound) < 0.05){
+      for(const d of [2, 3]){
+        const f = Math.pow(10, d);
+        if(Math.abs(mo * f - Math.round(mo * f)) < 1e-5){
+          return yrRound;
+        }
+      }
     }
     return yr;
   };
@@ -37212,11 +37218,15 @@ function saveFinInputs(dealId){
       return mo;
     }
     // Fallback heuristic (no explicit edit, e.g. autosave post-load):
-    // recover yr precision when mo looks like a 2-decimal rounding of yr/12
-    if(yr > 0){
-      const moAt2 = Math.round(mo * 100) / 100;
-      if(Math.abs(mo - moAt2) < 1e-9 && Math.abs(mo * 12 - yr) < 0.05){
-        return yr / 12;
+    // recover yr precision when mo looks like a 2- or 3-decimal rounding of yr/12.
+    // 4+ decimals = real user intent (e.g. 33333.3325 from yr=399999.99),
+    // preserve as-is.
+    if(yr > 0 && Math.abs(mo * 12 - yr) < 0.05){
+      for(const d of [2, 3]){
+        const f = Math.pow(10, d);
+        if(Math.abs(mo * f - Math.round(mo * f)) < 1e-5){
+          return yr / 12;
+        }
       }
     }
     return mo;

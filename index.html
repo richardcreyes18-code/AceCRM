@@ -27351,7 +27351,29 @@ function _ddRenderList(){
     if(names.length <= 3) return names.map(escape).join(' · ');
     return names.slice(0, 3).map(escape).join(' · ') + ` · +${names.length - 3} more`;
   };
+  // v108.4: Auto-merge banner on the High tab — one-click batch-merge every
+  // high-confidence candidate whose BC resolves cleanly (no field conflicts).
+  // Low-risk because: high tier = phone OR email exact match, survivor =
+  // most-deals contact, BC conflicts bail out to manual review, and every
+  // merge is reversible for 30 days from Settings.
+  const highCount = _ddCandidates.filter(c => c.tier === 'high').length;
+  const autoBanner = (_ddTierFilter === 'high' && highCount > 0)
+    ? `
+      <div style="background:linear-gradient(135deg,#ecfdf5 0%,#dbeafe 100%);border:1px solid #16a34a;border-radius:10px;padding:14px 18px;margin-bottom:12px;display:flex;align-items:center;gap:14px;">
+        <div style="font-size:22px;flex-shrink:0;">✨</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13px;font-weight:700;color:#065f46;">Auto-merge high-confidence duplicates</div>
+          <div style="font-size:11px;color:#047857;margin-top:3px;line-height:1.5;">
+            Pick survivor = contact with most deals. Auto-combines notes (dedupes identical paragraphs), merges duplicate properties, and consolidates buyer-criteria when fields don't conflict. Skips any group that needs a human decision — you'll get a list at the end. Reversible for 30 days.
+          </div>
+        </div>
+        <button onclick="_ddConfirmAutoMerge()" id="ddAutoMergeBtn" style="font-size:12px;padding:9px 16px;background:#16a34a;color:#fff;border:none;border-radius:6px;font-weight:700;cursor:pointer;flex-shrink:0;white-space:nowrap;">
+          ⚡ Auto-merge ${highCount}
+        </button>
+      </div>`
+    : '';
   el.innerHTML = `
+    ${autoBanner}
     <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
       ${slice.map((c, i) => `
         <div style="padding:14px 18px;${i>0?'border-top:1px solid #f1f5f9;':''}display:flex;align-items:center;gap:12px;">
@@ -28745,6 +28767,477 @@ async function _ddSubmitMerge(candidateId){
     showSaveConfirm('Merge failed: ' + (e.message||'unknown'));
     if(btn){ btn.disabled = false; btn.textContent = 'Merge into 1 contact'; }
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// v108.4: AUTO-MERGE HIGH-CONFIDENCE BATCH FLOW
+// ═══════════════════════════════════════════════════════════════════════
+// Answer to the user's original ask: "Whats a way we can automate this
+// match making process if it feels confident its a duplicate". Loops every
+// High-tier candidate and merges it if — and only if — everything resolves
+// cleanly without human judgment. Specifically, a candidate is auto-merged
+// when ALL of the following hold:
+//   1. At least 2 contact rows still exist (not already merged/deleted).
+//   2. preview_merge_contacts does NOT return a blocker.
+//   3. _ddResolveBCMerge(...).isClean === true (0 BC field conflicts).
+// Otherwise it's skipped and surfaced in the final results modal with a
+// reason, so the user can still do those manually via Review & merge.
+//
+// Every successful auto-merge uses:
+//   - Survivor = contact with most deals (ties broken by oldest date_added).
+//   - Contact fields: survivor's value if non-empty, else first non-empty
+//     value from any loser. Notes combined via paragraph-level dedup.
+//   - Tags (type[]): union of all contacts' tag arrays (the RPC already
+//     does this when we omit `type`, so we just don't pass it).
+//   - Properties: each duplicate-address group auto-picked via
+//     _ddAutoPickPropertyGroup. Merged BEFORE the contact merge.
+//   - Buyer criteria: auto-resolved via _ddResolveBCMerge (since isClean).
+//
+// All of this is reversible for 30 days via Settings → Restore merged
+// contacts, which is why we show a confirmation dialog but don't require
+// per-candidate approval.
+
+// Running state of the auto-merge batch
+let _ddAutoMergeRunning = false;
+let _ddAutoMergeTotal   = 0;
+let _ddAutoMergeDone    = 0;
+let _ddAutoMergeMerged  = [];  // [{ candidateId, survivorId, loserCount, propCount, bcMerged }]
+let _ddAutoMergeSkipped = [];  // [{ candidateId, reason, names, tier, matchSignal }]
+let _ddAutoMergeAborted = false;
+
+// Show a confirmation dialog before starting the batch. Lists how many
+// candidates will be attempted + the exact guardrails used.
+function _ddConfirmAutoMerge(){
+  const highCount = _ddCandidates.filter(c => c.tier === 'high').length;
+  if(highCount === 0){ showSaveConfirm('No high-confidence candidates to merge.'); return; }
+  const overlay = document.getElementById('ddMergeOverlay');
+  if(!overlay) return;
+  overlay.style.display = 'block';
+  overlay.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9500;display:flex;align-items:center;justify-content:center;padding:20px;">
+      <div style="background:#fff;border-radius:12px;max-width:560px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.3);overflow:hidden;">
+        <div style="background:linear-gradient(135deg,#ecfdf5 0%,#dbeafe 100%);padding:20px 24px;border-bottom:1px solid #bbf7d0;">
+          <div style="font-size:18px;font-weight:700;color:#065f46;">✨ Auto-merge ${highCount} high-confidence group${highCount===1?'':'s'}?</div>
+          <div style="font-size:12px;color:#047857;margin-top:5px;line-height:1.5;">
+            This will batch-merge every High-tier candidate that resolves cleanly. The rest will be listed at the end for manual review.
+          </div>
+        </div>
+        <div style="padding:20px 24px;">
+          <div style="font-size:12px;font-weight:700;color:#334155;margin-bottom:10px;">How each group is merged:</div>
+          <ul style="font-size:12px;color:#475569;line-height:1.75;margin:0 0 16px 18px;padding:0;">
+            <li><strong>Survivor:</strong> contact with the most deals (ties go to the oldest record).</li>
+            <li><strong>Fields:</strong> survivor's value when set, else first non-empty from the losers.</li>
+            <li><strong>Notes:</strong> all unique paragraphs combined, duplicates collapsed.</li>
+            <li><strong>Properties:</strong> duplicate addresses merged per group.</li>
+            <li><strong>Buyer criteria:</strong> merged when fields agree; skipped if any conflict.</li>
+          </ul>
+          <div style="background:#fef9c3;border:1px solid #facc15;border-radius:6px;padding:10px 12px;font-size:11px;color:#713f12;line-height:1.5;">
+            <strong>🛡 Reversible:</strong> every merge can be undone for 30 days from <strong>Settings → Restore merged contacts</strong>.
+          </div>
+        </div>
+        <div style="padding:14px 24px;background:#f8fafc;border-top:1px solid #e2e8f0;display:flex;justify-content:flex-end;gap:10px;">
+          <button onclick="_ddCloseAutoMergeDialog()" style="font-size:12px;padding:9px 16px;background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;font-weight:600;cursor:pointer;">Cancel</button>
+          <button onclick="_ddRunAutoMerge()" style="font-size:12px;padding:9px 18px;background:#16a34a;color:#fff;border:none;border-radius:6px;font-weight:700;cursor:pointer;">⚡ Start auto-merge</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function _ddCloseAutoMergeDialog(){
+  if(_ddAutoMergeRunning) return; // don't close while running
+  const overlay = document.getElementById('ddMergeOverlay');
+  if(overlay){ overlay.style.display = 'none'; overlay.innerHTML = ''; }
+}
+
+// Build the per-candidate field_values object the same way the manual
+// merge dialog does — survivor's value if non-empty, else first non-empty
+// value from any loser. Notes combined via paragraph-level dedup.
+function _ddAutoBuildFieldValues(contacts, survivorId){
+  const survivor = contacts.find(c => c.id === survivorId);
+  const losers = contacts.filter(c => c.id !== survivorId);
+  const out = {};
+  const isEmpty = v => v === null || v === undefined || String(v||'').trim() === '';
+  ['name','phone_number','secondary_phone','email','secondary_email','company'].forEach(f => {
+    if(!isEmpty(survivor[f])){ out[f] = survivor[f]; return; }
+    const fb = losers.find(c => !isEmpty(c[f]));
+    if(fb) out[f] = fb[f];
+  });
+  // Notes — combine with paragraph dedup
+  const withNotes = contacts.filter(c => (c.contact_notes||'').trim());
+  if(withNotes.length > 0){
+    out.contact_notes = _ddCombineNotes(withNotes);
+  }
+  // Tags (type[]): intentionally left OFF. merge_contacts_rpc auto-unions
+  // when `type` is absent from p_field_values, which is exactly what we want.
+  return out;
+}
+
+// Core driver — iterate high-tier candidates, merge each one that qualifies.
+async function _ddRunAutoMerge(){
+  if(_ddAutoMergeRunning) return;
+  const candidates = _ddCandidates.filter(c => c.tier === 'high');
+  if(candidates.length === 0){ _ddCloseAutoMergeDialog(); return; }
+
+  _ddAutoMergeRunning = true;
+  _ddAutoMergeTotal   = candidates.length;
+  _ddAutoMergeDone    = 0;
+  _ddAutoMergeMerged  = [];
+  _ddAutoMergeSkipped = [];
+  _ddAutoMergeAborted = false;
+  _ddRenderAutoMergeProgress(null);
+
+  const userId = (_currentUser && _currentUser.id) || null;
+
+  for(const cand of candidates){
+    if(_ddAutoMergeAborted) break;
+    _ddRenderAutoMergeProgress(cand);
+
+    try{
+      await _ddAutoMergeOne(cand, userId);
+    }catch(e){
+      console.error('auto-merge candidate failed:', cand.id, e);
+      _ddAutoMergeSkipped.push({
+        candidateId: cand.id,
+        reason: 'Unexpected error: ' + (e.message||'unknown'),
+        names: _ddAutoMergeNames(cand),
+        tier: cand.tier,
+        matchSignal: cand.match_signal
+      });
+    }
+    _ddAutoMergeDone++;
+    _ddRenderAutoMergeProgress(cand);
+  }
+
+  _ddAutoMergeRunning = false;
+
+  // Refresh the queue so merged candidates (and any subsumed groups)
+  // disappear from the list behind the results modal.
+  try{
+    await _ddLoadCandidates();
+  }catch(e){ console.warn('post-automerge reload failed:', e.message); }
+
+  _ddRenderAutoMergeResults();
+}
+
+// Attempt to auto-merge a single candidate. Throws on unexpected error;
+// pushes to _ddAutoMergeSkipped when a clean bail-out is needed (e.g.
+// BC conflicts, blocker, not enough live contacts).
+async function _ddAutoMergeOne(cand, userId){
+  const pushSkip = reason => {
+    _ddAutoMergeSkipped.push({
+      candidateId: cand.id,
+      reason,
+      names: _ddAutoMergeNames(cand),
+      tier: cand.tier,
+      matchSignal: cand.match_signal
+    });
+  };
+
+  // 1. Fetch live contact rows (skip soft-deleted)
+  const filter = 'in.(' + cand.contact_ids.map(encodeURIComponent).join(',') + ')';
+  let contacts;
+  try{
+    contacts = await _sbGet('ace_contacts',
+      'select=id,name,phone_number,secondary_phone,email,secondary_email,company,contact_notes,type,date_added,deleted_at&id=' + filter);
+  }catch(e){
+    pushSkip('Contact fetch failed: ' + (e.message||'unknown'));
+    return;
+  }
+  contacts = (Array.isArray(contacts) ? contacts : []).filter(c => !c.deleted_at);
+  if(contacts.length < 2){
+    pushSkip('Fewer than 2 live contacts (already merged?)');
+    return;
+  }
+  contacts.sort((a,b) => String(a.date_added||'').localeCompare(String(b.date_added||'')));
+
+  // 2. Pick survivor = most deals (ties → oldest date_added, i.e. contacts[0])
+  const allIds = contacts.map(c => c.id);
+  const idFilter = 'in.(' + allIds.map(encodeURIComponent).join(',') + ')';
+  let dealCounts = {};
+  try{
+    const props = await _sbGet('ace_properties',
+      'select=id,owner_contact_id&owner_contact_id=' + idFilter + '&limit=2000');
+    (Array.isArray(props) ? props : []).forEach(p => {
+      dealCounts[p.owner_contact_id] = (dealCounts[p.owner_contact_id]||0) + 1;
+    });
+  }catch(e){ console.warn('deal count fetch failed:', e.message); }
+  let survivorId = contacts[0].id;
+  let bestDeals = -1;
+  contacts.forEach(c => {
+    const d = dealCounts[c.id] || 0;
+    if(d > bestDeals){ bestDeals = d; survivorId = c.id; }
+  });
+  const loserIds = contacts.filter(c => c.id !== survivorId).map(c => c.id);
+
+  // 3. Preview check — bail on any blocker (e.g. edge-case BC_COLLISION
+  // from phantom rows or some other future blocker the RPC adds)
+  let preview;
+  try{
+    preview = await _sbRpc('preview_merge_contacts', {
+      p_surviving_id: survivorId, p_loser_ids: loserIds
+    });
+  }catch(e){
+    pushSkip('Preview failed: ' + (e.message||'unknown'));
+    return;
+  }
+  if(preview && preview.blocker){
+    pushSkip('Preview blocker: ' + preview.blocker);
+    return;
+  }
+
+  // 4. Fetch per-contact detail (properties + BC) for property + BC merge planning
+  const detail = { byContact: {} };
+  allIds.forEach(id => { detail.byContact[id] = { properties: [], buyerCriteria: null }; });
+  try{
+    const [propRows, bcRows] = await Promise.all([
+      _sbGet('ace_properties',
+        'select=id,address,property_name,asking_price,offer_price,pipeline_stage,deal_tag,owner_contact_id,deal_notes,next_steps,general_property_notes,crm_asset_classification,date_added,deleted_at'
+        + '&owner_contact_id=' + idFilter + '&limit=2000'),
+      _sbGet('ace_buyer_criteria',
+        'select=*&deleted_at=is.null&contact_id=' + idFilter + '&limit=2000')
+    ]);
+    (Array.isArray(propRows) ? propRows : []).forEach(p => {
+      if(p.deleted_at) return;
+      if(detail.byContact[p.owner_contact_id]) detail.byContact[p.owner_contact_id].properties.push(p);
+    });
+    (Array.isArray(bcRows) ? bcRows : []).forEach(bc => {
+      if(detail.byContact[bc.contact_id]) detail.byContact[bc.contact_id].buyerCriteria = bc;
+    });
+  }catch(e){
+    pushSkip('Detail fetch failed: ' + (e.message||'unknown'));
+    return;
+  }
+
+  // 5. BC conflict gate — the whole point of auto-merge is to skip the
+  // ones that need human judgment.
+  const contactsById = {};
+  contacts.forEach(c => { contactsById[c.id] = c; });
+  const bcRowsForMerge = [];
+  Object.keys(detail.byContact).forEach(cid => {
+    const bc = detail.byContact[cid].buyerCriteria;
+    if(bc) bcRowsForMerge.push(bc);
+  });
+  const bcMerge = _ddResolveBCMerge(bcRowsForMerge, contactsById);
+  if(bcMerge && bcMerge.needsMerge && !bcMerge.isClean){
+    const n = bcMerge.conflicts.length;
+    pushSkip(n + ' buyer-criteria field' + (n===1?'':'s') + ' conflict — needs manual pick');
+    return;
+  }
+
+  // 6. Detect property groups and auto-pick each
+  const propertyGroups = _ddDetectPropertyGroups(detail);
+  const propertyPicks = {};
+  propertyGroups.forEach(g => {
+    propertyPicks[g.key] = _ddAutoPickPropertyGroup(g);
+  });
+
+  // 7. Execute property merges FIRST (same order as _ddSubmitMerge)
+  let propMergeCount = 0;
+  for(const group of propertyGroups){
+    const picks = propertyPicks[group.key];
+    if(!picks || !picks.surviving_id) continue;
+    const propSurv = picks.surviving_id;
+    const propLosers = group.properties.filter(p => p.id !== propSurv).map(p => p.id);
+    if(propLosers.length === 0) continue;
+    const propsById = {};
+    group.properties.forEach(p => { propsById[p.id] = p; });
+    const propFieldValues = {};
+    ['address','property_name','pipeline_stage','deal_tag','asking_price',
+     'offer_price','crm_asset_classification','deal_notes','next_steps',
+     'general_property_notes'].forEach(f => {
+      const pickedId = picks[f];
+      if(pickedId && propsById[pickedId]){
+        const v = propsById[pickedId][f];
+        if(v !== null && v !== undefined) propFieldValues[f] = String(v);
+      }
+    });
+    const pres = await _sbRpc('merge_properties', {
+      p_surviving_id: propSurv,
+      p_loser_ids:    propLosers,
+      p_field_values: propFieldValues,
+      p_user_id:      userId,
+      p_parent_contact_merge_id: null
+    });
+    if(pres && pres.error){
+      pushSkip('Property merge failed for "' + (group.addrHint||'(no address)') + '": ' + pres.error);
+      return;
+    }
+    propMergeCount++;
+  }
+
+  // 8. BC smart merge (clean only — we already gated on isClean)
+  let bcMerged = false;
+  if(bcMerge && bcMerge.needsMerge){
+    const jsonReady = {};
+    Object.keys(bcMerge.mergedValues || {}).forEach(k => {
+      const v = bcMerge.mergedValues[k];
+      if(v === null || v === undefined) return;
+      jsonReady[k] = v;
+    });
+    const bcRes = await _sbRpc('merge_buyer_criteria_smart', {
+      p_surviving_id: bcMerge.surviving_id,
+      p_loser_ids:    bcMerge.loser_ids,
+      p_field_values: jsonReady,
+      p_user_id:      userId,
+      p_parent_contact_merge_id: null
+    });
+    if(bcRes && bcRes.error){
+      pushSkip('Buyer criteria merge failed: ' + bcRes.error);
+      return;
+    }
+    bcMerged = true;
+  }
+
+  // 9. Contact merge
+  const fieldValues = _ddAutoBuildFieldValues(contacts, survivorId);
+  const res = await _sbRpc('merge_contacts', {
+    p_surviving_id: survivorId,
+    p_loser_ids:    loserIds,
+    p_field_values: fieldValues,
+    p_user_id:      userId
+  });
+  if(res && res.error){
+    pushSkip('Contact merge failed: ' + res.error);
+    return;
+  }
+
+  _ddAutoMergeMerged.push({
+    candidateId: cand.id,
+    survivorId,
+    survivorName: (contactsById[survivorId] && contactsById[survivorId].name) || '(no name)',
+    loserCount: loserIds.length,
+    propCount:  propMergeCount,
+    bcMerged
+  });
+}
+
+// Friendly list of contact names for a candidate, for the skip rows
+function _ddAutoMergeNames(cand){
+  const ids = Array.isArray(cand.contact_ids) ? cand.contact_ids : [];
+  return ids.map(id => {
+    const r = _ddContactCache[id];
+    return r && r.name ? r.name : '(no name)';
+  });
+}
+
+// Progress modal while the batch runs. Called on each iteration.
+function _ddRenderAutoMergeProgress(currentCand){
+  const overlay = document.getElementById('ddMergeOverlay');
+  if(!overlay) return;
+  const pct = _ddAutoMergeTotal ? Math.round((_ddAutoMergeDone / _ddAutoMergeTotal) * 100) : 0;
+  const mergedCount = _ddAutoMergeMerged.length;
+  const skippedCount = _ddAutoMergeSkipped.length;
+  const remaining = _ddAutoMergeTotal - _ddAutoMergeDone;
+  const currentNames = currentCand ? _ddAutoMergeNames(currentCand).slice(0, 2).join(' · ') : '';
+  const currentLabel = currentCand && _ddAutoMergeRunning
+    ? `<div style="font-size:11px;color:#64748b;margin-top:10px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">Processing: <strong style="color:#334155;">${String(currentNames||'(loading)').replace(/&/g,'&amp;').replace(/</g,'&lt;')}</strong></div>`
+    : '';
+  overlay.style.display = 'block';
+  overlay.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9500;display:flex;align-items:center;justify-content:center;padding:20px;">
+      <div style="background:#fff;border-radius:12px;max-width:520px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.3);overflow:hidden;">
+        <div style="background:linear-gradient(135deg,#1e3a8a 0%,#065f46 100%);padding:18px 24px;">
+          <div style="font-size:15px;font-weight:700;color:#fff;">⚡ Auto-merging high-confidence duplicates…</div>
+          <div style="font-size:11px;color:#bfdbfe;margin-top:4px;">${_ddAutoMergeDone} of ${_ddAutoMergeTotal} processed · ${remaining} remaining</div>
+        </div>
+        <div style="padding:22px 24px;">
+          <div style="height:10px;background:#e2e8f0;border-radius:5px;overflow:hidden;">
+            <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,#16a34a 0%,#065f46 100%);transition:width 0.2s ease;"></div>
+          </div>
+          <div style="display:flex;justify-content:space-between;margin-top:8px;font-size:11px;color:#64748b;">
+            <span><strong style="color:#16a34a;">✓ ${mergedCount}</strong> merged</span>
+            <span style="color:#334155;">${pct}%</span>
+            <span><strong style="color:#d97706;">⏸ ${skippedCount}</strong> skipped</span>
+          </div>
+          ${currentLabel}
+        </div>
+        <div style="padding:14px 24px;background:#f8fafc;border-top:1px solid #e2e8f0;text-align:right;">
+          ${_ddAutoMergeRunning
+            ? `<button onclick="_ddAbortAutoMerge()" style="font-size:11px;padding:7px 14px;background:#fff;color:#dc2626;border:1px solid #fecaca;border-radius:6px;font-weight:600;cursor:pointer;">Stop after current</button>`
+            : `<button onclick="_ddRenderAutoMergeResults()" style="font-size:12px;padding:9px 16px;background:#0f172a;color:#fff;border:none;border-radius:6px;font-weight:700;cursor:pointer;">See results</button>`}
+        </div>
+      </div>
+    </div>`;
+}
+
+function _ddAbortAutoMerge(){
+  _ddAutoMergeAborted = true;
+}
+
+// Final summary modal — merged count, skipped list with reasons, close button.
+function _ddRenderAutoMergeResults(){
+  const overlay = document.getElementById('ddMergeOverlay');
+  if(!overlay) return;
+  const mergedCount = _ddAutoMergeMerged.length;
+  const skippedCount = _ddAutoMergeSkipped.length;
+  const totalFkRows = _ddAutoMergeMerged.reduce((sum, m) => sum + (m.loserCount||0), 0);
+  const totalProps  = _ddAutoMergeMerged.reduce((sum, m) => sum + (m.propCount||0), 0);
+  const totalBC     = _ddAutoMergeMerged.filter(m => m.bcMerged).length;
+  const escape = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+
+  const skippedList = skippedCount === 0
+    ? `<div style="font-size:12px;color:#94a3b8;font-style:italic;padding:8px 0;">No candidates needed manual review — everything that could auto-merge did.</div>`
+    : `
+      <div style="max-height:260px;overflow-y:auto;border:1px solid #fde68a;border-radius:6px;background:#fffbeb;">
+        ${_ddAutoMergeSkipped.map((s, i) => {
+          const nameLine = (s.names||[]).slice(0, 3).map(escape).join(' · ') +
+            (s.names && s.names.length > 3 ? ` · +${s.names.length - 3} more` : '');
+          return `
+            <div style="padding:10px 14px;${i>0?'border-top:1px solid #fef3c7;':''}display:flex;align-items:flex-start;gap:10px;">
+              <div style="flex:1;min-width:0;">
+                <div style="font-size:12px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${nameLine || '(no name)'}</div>
+                <div style="font-size:11px;color:#92400e;margin-top:3px;">${escape(s.reason)}</div>
+              </div>
+              <button onclick="_ddOpenMerge('${s.candidateId}')" style="font-size:11px;padding:5px 10px;background:#fff;color:#0f172a;border:1px solid #cbd5e1;border-radius:5px;font-weight:600;cursor:pointer;flex-shrink:0;">Review</button>
+            </div>`;
+        }).join('')}
+      </div>`;
+
+  const abortedNotice = _ddAutoMergeAborted
+    ? `<div style="background:#fef2f2;border:1px solid #fecaca;border-radius:6px;padding:8px 12px;font-size:11px;color:#991b1b;margin-bottom:12px;">⏹ Stopped early by user. ${_ddAutoMergeTotal - _ddAutoMergeDone} candidate${_ddAutoMergeTotal - _ddAutoMergeDone === 1 ? '' : 's'} not processed.</div>`
+    : '';
+
+  overlay.style.display = 'block';
+  overlay.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9500;display:flex;align-items:flex-start;justify-content:center;padding:30px 20px;overflow-y:auto;">
+      <div style="background:#fff;border-radius:12px;max-width:640px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.3);overflow:hidden;">
+        <div style="background:linear-gradient(135deg,#ecfdf5 0%,#dbeafe 100%);padding:22px 26px;border-bottom:1px solid #bbf7d0;">
+          <div style="font-size:18px;font-weight:700;color:#065f46;">✓ Auto-merge complete</div>
+          <div style="font-size:12px;color:#047857;margin-top:4px;">
+            ${mergedCount} merged · ${skippedCount} skipped · reversible for 30 days from Settings.
+          </div>
+        </div>
+        <div style="padding:22px 26px;">
+          ${abortedNotice}
+          <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:10px;margin-bottom:18px;">
+            <div style="background:#ecfdf5;border:1px solid #bbf7d0;border-radius:8px;padding:12px;text-align:center;">
+              <div style="font-size:22px;font-weight:700;color:#16a34a;">${mergedCount}</div>
+              <div style="font-size:10px;color:#047857;font-weight:600;text-transform:uppercase;letter-spacing:0.3px;margin-top:2px;">Groups merged</div>
+            </div>
+            <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:12px;text-align:center;">
+              <div style="font-size:22px;font-weight:700;color:#1e3a8a;">${totalFkRows}</div>
+              <div style="font-size:10px;color:#1e40af;font-weight:600;text-transform:uppercase;letter-spacing:0.3px;margin-top:2px;">Losers absorbed</div>
+            </div>
+            <div style="background:#f5f3ff;border:1px solid #ddd6fe;border-radius:8px;padding:12px;text-align:center;">
+              <div style="font-size:22px;font-weight:700;color:#6d28d9;">${totalProps}</div>
+              <div style="font-size:10px;color:#5b21b6;font-weight:600;text-transform:uppercase;letter-spacing:0.3px;margin-top:2px;">Dup properties merged</div>
+            </div>
+          </div>
+          ${totalBC > 0 ? `<div style="font-size:11px;color:#64748b;margin-bottom:16px;">💼 ${totalBC} buyer-criteria record${totalBC===1?'':'s'} consolidated (no conflicts).</div>` : ''}
+          <div style="font-size:13px;font-weight:700;color:#334155;margin-bottom:8px;">⏸ Needs manual review (${skippedCount})</div>
+          ${skippedList}
+        </div>
+        <div style="padding:14px 26px;background:#f8fafc;border-top:1px solid #e2e8f0;display:flex;justify-content:flex-end;gap:10px;">
+          <button onclick="_ddCloseAutoMergeResults()" style="font-size:12px;padding:9px 18px;background:#0f172a;color:#fff;border:none;border-radius:6px;font-weight:700;cursor:pointer;">Done</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+function _ddCloseAutoMergeResults(){
+  const overlay = document.getElementById('ddMergeOverlay');
+  if(overlay){ overlay.style.display = 'none'; overlay.innerHTML = ''; }
+  _ddRenderShell();
 }
 
 // v102.41: DEAL-CARD CONTACT LOOKUP — Seller Contact Information section.

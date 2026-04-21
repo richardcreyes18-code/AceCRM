@@ -22612,7 +22612,7 @@ function _reportsRenderResults(){
           </thead>
           <tbody>
             ${rows.map(r => {
-              const name = (r.display_name || '?').replace(/</g,'&lt;');
+              const name = (r.agent_name || r.display_name || '?').replace(/</g,'&lt;');
               const initials = name.split(/\s+/).slice(0,2).map(s=>s[0]||'').join('').toUpperCase();
               const missedPct = r.received > 0 ? Math.round((r.missed / r.received) * 100) : 0;
               const missedColor = missedPct > 40 ? '#dc2626' : missedPct > 20 ? '#d97706' : '#64748b';

@@ -1701,6 +1701,12 @@ const SB_PROP_MAP = {
   is_snoozed:'Is Snoozed',
   asking_price:'Asking Price', asking_price_explanation:'Asking Price Explanation',
   offer_price:'Offer Price', pitch_out_price:'Pitch Out Price',
+  // v111.8: per-card description fields on the Offers tab. `asking_price_explanation`
+  // is reused for the "Seller Original Asking" card (same field the seller-lead
+  // intake form writes). The other three are new TEXT columns added for Offers.
+  ace_starter_note:'Ace Starter Note',
+  accepted_by_seller_note:'Accepted By Seller Note',
+  pitch_out_note:'Pitch Out Note',
   gross_revenue_monthly:'Gross Revenue Monthly',
   gross_revenue_yearly:'Gross Revenue Yearly',
   expenses_yearly:'Expenses Yearly', expenses_monthly:'Expenses Monthly',
@@ -7358,6 +7364,7 @@ function renderOffersTab(d){
             <span style="position:absolute;left:0;top:3px;font-size:17px;font-weight:700;color:#0f172a;pointer-events:none;">$</span>
             <input id="offerInAsking" type="text" inputmode="numeric" class="num-input" data-offer-type="asking" data-deal-id="${dealId}" onblur="_offerInlineSave(this)" onkeydown="if(event.key==='Enter')this.blur()" style="width:100%;padding-left:12px;border:none;border-bottom:1px dashed #cbd5e1;background:transparent;font-size:17px;font-weight:700;color:#0f172a;padding-top:3px;padding-bottom:3px;outline:none;box-sizing:border-box;" placeholder="—"/>
           </div>
+          <textarea id="offerNoteAsking" data-note-field="asking_price_explanation" data-deal-id="${dealId}" onblur="_offerNoteSave(this)" rows="2" placeholder='Why this asking? e.g. "Seller wants $1.5M, firm. Open to seller financing."' style="width:100%;margin-top:8px;padding:6px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:11px;color:#0f172a;resize:vertical;box-sizing:border-box;font-family:inherit;outline:none;"></textarea>
         </div>
         <div class="pd-field" style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px;">
           <label class="pd-lbl" style="color:#64748b;">Ace Starter Offer</label>
@@ -7365,6 +7372,7 @@ function renderOffersTab(d){
             <span style="position:absolute;left:0;top:3px;font-size:17px;font-weight:700;color:#0f172a;pointer-events:none;">$</span>
             <input id="offerInStarter" type="text" inputmode="numeric" class="num-input" data-offer-type="ace_starter" data-deal-id="${dealId}" onblur="_offerInlineSave(this)" onkeydown="if(event.key==='Enter')this.blur()" style="width:100%;padding-left:12px;border:none;border-bottom:1px dashed #cbd5e1;background:transparent;font-size:17px;font-weight:700;color:#0f172a;padding-top:3px;padding-bottom:3px;outline:none;box-sizing:border-box;" placeholder="—"/>
           </div>
+          <textarea id="offerNoteStarter" data-note-field="ace_starter_note" data-deal-id="${dealId}" onblur="_offerNoteSave(this)" rows="2" placeholder="Rationale for starter offer (comps, condition discount, seller urgency...)" style="width:100%;margin-top:8px;padding:6px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:11px;color:#0f172a;resize:vertical;box-sizing:border-box;font-family:inherit;outline:none;"></textarea>
         </div>
         <div class="pd-field" style="background:#f0fdf4;border:1px solid #86efac;border-radius:8px;padding:12px;">
           <label class="pd-lbl" style="color:#15803d;">Accepted from Seller</label>
@@ -7373,6 +7381,7 @@ function renderOffersTab(d){
             <input id="offerInAcceptedSeller" type="text" inputmode="numeric" class="num-input" data-offer-type="accepted_by_seller" data-deal-id="${dealId}" onblur="_offerInlineSave(this)" onkeydown="if(event.key==='Enter')this.blur()" style="width:100%;padding-left:12px;border:none;border-bottom:1px dashed #86efac;background:transparent;font-size:17px;font-weight:700;color:#0f172a;padding-top:3px;padding-bottom:3px;outline:none;box-sizing:border-box;" placeholder="—"/>
           </div>
           <div style="font-size:9px;color:#15803d;margin-top:3px;">Ace's lock-in price with seller</div>
+          <textarea id="offerNoteAcceptedSeller" data-note-field="accepted_by_seller_note" data-deal-id="${dealId}" onblur="_offerNoteSave(this)" rows="2" placeholder="Terms of the lock-in, contingencies, special concessions..." style="width:100%;margin-top:6px;padding:6px 8px;border:1px solid #86efac;border-radius:6px;font-size:11px;color:#0f172a;resize:vertical;box-sizing:border-box;font-family:inherit;outline:none;background:#fff;"></textarea>
         </div>
         <div class="pd-field" style="background:#eff6ff;border:1px solid #93c5fd;border-radius:8px;padding:12px;">
           <label class="pd-lbl" style="color:#1e40af;">Pitch Out Price</label>
@@ -7381,6 +7390,7 @@ function renderOffersTab(d){
             <input id="offerInPitchOut" type="text" inputmode="numeric" class="num-input" data-deal-id="${dealId}" onblur="_pitchOutSave('manual')" onkeydown="if(event.key==='Enter')this.blur()" style="width:100%;padding-left:12px;border:none;border-bottom:1px dashed #93c5fd;background:transparent;font-size:17px;font-weight:700;color:#0f172a;padding-top:3px;padding-bottom:3px;outline:none;box-sizing:border-box;" placeholder="—"/>
           </div>
           <div id="offerPitchOutCalc" style="font-size:9px;color:#1e40af;margin-top:3px;min-height:12px;">${poPrice==null?'No pitch out set':(poType==='manual'?'Manual entry':(poType==='percent'?`Accepted + ${poVal}%`:`Accepted + $${Number(poVal||0).toLocaleString()}`))}</div>
+          <textarea id="offerNotePitchOut" data-note-field="pitch_out_note" data-deal-id="${dealId}" onblur="_offerNoteSave(this)" rows="2" placeholder="Buyer pitch angle — why this price, what story to tell buyers..." style="width:100%;margin-top:6px;padding:6px 8px;border:1px solid #93c5fd;border-radius:6px;font-size:11px;color:#0f172a;resize:vertical;box-sizing:border-box;font-family:inherit;outline:none;background:#fff;"></textarea>
 
           <!-- Markup mode toggle + input -->
           <div style="margin-top:10px;padding-top:10px;border-top:1px solid #bfdbfe;">
@@ -7929,6 +7939,16 @@ function _renderOffersSummary(rows){
   setVal('offerInPitchOut', poPrice);
   _pitchOutRefreshNote();
 
+  // v111.8: populate the 4 per-card description textareas from currentDeal.
+  // Airtable-style labels come from SB_PROP_MAP: asking_price_explanation →
+  // "Asking Price Explanation" (also written by the seller-lead intake form),
+  // and 3 new columns for ace_starter_note / accepted_by_seller_note / pitch_out_note.
+  const setNote = (id, v) => { const el = document.getElementById(id); if(el && document.activeElement !== el) el.value = (v == null ? '' : String(v)); };
+  setNote('offerNoteAsking',         d['Asking Price Explanation']);
+  setNote('offerNoteStarter',        d['Ace Starter Note']);
+  setNote('offerNoteAcceptedSeller', d['Accepted By Seller Note']);
+  setNote('offerNotePitchOut',       d['Pitch Out Note']);
+
   // Spread row still shows with $ prefix since it's plain text, not an input
   const fmtDollar = (n) => n != null ? '$' + Number(n).toLocaleString(undefined,{maximumFractionDigits:0}) : '—';
   const spreadEl = document.getElementById('offerSumSpread');
@@ -8055,6 +8075,40 @@ async function _offerInlineSave(inputEl){
   } catch(e) {
     console.warn('offer inline save failed:', e.message);
     inputEl.style.borderBottomColor = '#dc2626';
+  }
+}
+
+// v111.8: save a per-card description textarea on the Offers tab.
+// Writes directly to one of four columns on ace_properties (asking_price_explanation,
+// ace_starter_note, accepted_by_seller_note, pitch_out_note) based on the textarea's
+// data-note-field attribute. Also mirrors the value onto currentDeal so the next tab
+// re-render reflects the change without a reload. Flashes green on success, red on failure.
+async function _offerNoteSave(ta){
+  if(!ta) return;
+  const col     = ta.getAttribute('data-note-field');
+  const dealId  = ta.getAttribute('data-deal-id');
+  if(!col || !dealId) return;
+  const val = (ta.value || '').trim();
+  // SB_PROP_MAP — keep these in sync with the Airtable-style labels so
+  // currentDeal reflects writes immediately.
+  const airtableLabel = {
+    asking_price_explanation: 'Asking Price Explanation',
+    ace_starter_note:         'Ace Starter Note',
+    accepted_by_seller_note:  'Accepted By Seller Note',
+    pitch_out_note:           'Pitch Out Note'
+  }[col];
+  const prevBorder = ta.style.borderColor || '';
+  try {
+    const payload = {}; payload[col] = val || null;
+    await _sbPatch('ace_properties', dealId, payload);
+    if(currentDeal && currentDeal.id === dealId && airtableLabel){
+      currentDeal[airtableLabel] = val || '';
+    }
+    ta.style.borderColor = '#86efac';
+    setTimeout(()=>{ ta.style.borderColor = prevBorder; }, 600);
+  } catch(e) {
+    console.warn('offer note save failed:', e.message);
+    ta.style.borderColor = '#dc2626';
   }
 }
 

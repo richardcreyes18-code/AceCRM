@@ -22310,18 +22310,40 @@ function _reconRowHtml(r, fubBy, aceBy, actBy){
       <button onclick="_reconResolveCreate(${r.id},true,this)" style="background:#16a34a;color:#fff;border:none;padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Create contact</button>
       <button onclick="_reconResolveCreate(${r.id},false,this)" style="background:transparent;border:1px solid #cbd5e1;color:#64748b;padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Ignore</button>`;
   } else if(r.action === 'merge'){
-    const ids = (r.candidate_matches && r.candidate_matches.candidate_ids) || [];
-    const candButtons = ids.map(id =>
-      `<button onclick="_reconResolveMerge(${r.id},'${_reconEsc(id)}',this)" style="background:#1e3a8a;color:#fff;border:none;padding:5px 10px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;margin-right:6px;margin-bottom:4px;">Link to ${_reconEsc(id).slice(0,8)}…</button>`
-    ).join('');
-    body = `
-      <div style="font-size:12px;">
-        <div style="color:#0f172a;font-weight:600;">FUB: ${_reconEsc((fub&&fub.name)||'(no name)')}</div>
-        <div style="color:#64748b;margin-top:2px;">${fubPhone ? '📞 '+_reconEsc(fubPhone)+' ' : ''}${fubEmail ? '✉ '+_reconEsc(fubEmail) : ''}</div>
-        <div style="color:#94a3b8;font-size:11px;margin-top:6px;">Matched ${ids.length} local contacts — pick the survivor:</div>
-      </div>`;
-    actions = candButtons +
-      `<button onclick="_reconResolveMerge(${r.id},null,this)" style="background:transparent;border:1px solid #cbd5e1;color:#64748b;padding:5px 10px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Ignore</button>`;
+    const cm = r.candidate_matches || {};
+    const ids = cm.candidate_ids || [];
+    const isFubDup = cm.is_fub_duplicate === true;
+    if(isFubDup){
+      // FUB-side duplicate: the matching ace contact is ALREADY linked to a different FUB id.
+      // Default action is to ignore the new FUB record so we don't overwrite an established link.
+      const existingFubId = cm.existing_fub_id;
+      const aceName = (ace && ace.name) || (ids[0] ? ids[0].slice(0,8)+'…' : '—');
+      body = `
+        <div style="font-size:12px;">
+          <div style="background:#fef3c7;border:1px solid #fcd34d;color:#78350f;padding:8px 10px;border-radius:6px;margin-bottom:8px;font-size:11px;line-height:1.5;">
+            ⚠ <strong>Likely FUB-side duplicate.</strong>
+            <strong>${_reconEsc(aceName)}</strong> is already linked to <strong>FUB #${existingFubId}</strong> in your CRM.
+            Creating or relinking would split this contact's history. Default: ignore the new FUB record.
+          </div>
+          <div style="color:#0f172a;font-weight:600;">New FUB: ${_reconEsc((fub&&fub.name)||'(no name)')} (#${r.fub_source_id})</div>
+          <div style="color:#64748b;margin-top:2px;">${fubPhone ? '📞 '+_reconEsc(fubPhone)+' ' : ''}${fubEmail ? '✉ '+_reconEsc(fubEmail) : ''}</div>
+        </div>`;
+      actions =
+        `<button onclick="_reconResolveMerge(${r.id},null,this)" style="background:#16a34a;color:#fff;border:none;padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Ignore new FUB record</button>` +
+        (ids[0] ? `<button onclick="if(confirm('This will repoint this contact from FUB #${existingFubId} to FUB #${r.fub_source_id}. Notes/calls keyed to the old FUB id may become harder to find. Continue?')) _reconResolveMerge(${r.id},'${_reconEsc(ids[0])}',this)" style="background:transparent;border:1px solid #f59e0b;color:#b45309;padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Relink to FUB #${r.fub_source_id}</button>` : '');
+    } else {
+      const candButtons = ids.map(id =>
+        `<button onclick="_reconResolveMerge(${r.id},'${_reconEsc(id)}',this)" style="background:#1e3a8a;color:#fff;border:none;padding:5px 10px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;margin-right:6px;margin-bottom:4px;">Link to ${_reconEsc(id).slice(0,8)}…</button>`
+      ).join('');
+      body = `
+        <div style="font-size:12px;">
+          <div style="color:#0f172a;font-weight:600;">FUB: ${_reconEsc((fub&&fub.name)||'(no name)')}</div>
+          <div style="color:#64748b;margin-top:2px;">${fubPhone ? '📞 '+_reconEsc(fubPhone)+' ' : ''}${fubEmail ? '✉ '+_reconEsc(fubEmail) : ''}</div>
+          <div style="color:#94a3b8;font-size:11px;margin-top:6px;">Matched ${ids.length} local contacts — pick the survivor:</div>
+        </div>`;
+      actions = candButtons +
+        `<button onclick="_reconResolveMerge(${r.id},null,this)" style="background:transparent;border:1px solid #cbd5e1;color:#64748b;padding:5px 10px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Ignore</button>`;
+    }
   }
 
   return `

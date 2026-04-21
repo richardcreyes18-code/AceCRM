@@ -22653,10 +22653,11 @@ function _reportsRenderResults(){
     </div>
 
     <div style="margin-top:14px;padding:12px 16px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;font-size:11px;color:#1e3a8a;line-height:1.6;">
-      <strong>How it works:</strong> Call data syncs from Follow Up Boss every 15 minutes automatically (via pg_cron).
-      Deal-stage updates sync hourly. Click <em>Refresh from FUB</em> above to pull new data immediately.
-      <strong>Conversations</strong> = connected outbound calls ≥ 60 seconds.
-      <strong>Missed</strong> = inbound with no answer. Numbers here match the FUB native Reports view.
+      <strong>How it works:</strong> Call data syncs from Follow Up Boss every 15 minutes (pg_cron). Deal-stage updates sync hourly. <em>Refresh from FUB</em> triggers an immediate pull.
+      Weeks run <strong>Mon–Sun</strong> to match FUB.
+      <strong>Connected</strong> = outbound marked Interested, or picked up (≥60s). <strong>Conversations</strong> = substantive talks (≥120s).
+      <strong>Missed</strong> = inbound with outcome "No Answer". <strong>Talk Time</strong> sums every call's duration.
+      Calls Made, Received, Missed, and Talk Time match FUB exactly. Connected and Conversations are within ±5% because FUB's internal answer-time signal isn't exposed in their public API.
     </div>`;
 }
 

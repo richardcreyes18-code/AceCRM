@@ -31222,6 +31222,21 @@ function _liRenderBuyerForm(){
 
       ${_liSection('📍 Target Areas', `
         <div style="font-size:12px;color:#64748b;margin-bottom:10px;">Select all NJ counties this buyer is actively looking in</div>
+
+        <!-- v112.4: Preferred Regions quick-select. Same North/Central/South
+             mapping used everywhere else in the CRM (Deal Board filters,
+             Buyer Criteria card). Clicking a region toggles on every county
+             in that region; Ocean belongs to both Central and South per the
+             house rule. "Clear" wipes whatever is currently selected. -->
+        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;align-items:center;">
+          <span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;margin-right:4px;">Preferred Regions:</span>
+          <button type="button" onclick="_liSelectRegion('All NJ')"     style="background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;padding:4px 12px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;">🗽 All NJ</button>
+          <button type="button" onclick="_liSelectRegion('North NJ')"   style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;padding:4px 12px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;">⬆ North NJ</button>
+          <button type="button" onclick="_liSelectRegion('Central NJ')" style="background:#ecfccb;color:#3f6212;border:1px solid #d9f99d;padding:4px 12px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;">▬ Central NJ</button>
+          <button type="button" onclick="_liSelectRegion('South NJ')"   style="background:#fce7f3;color:#9d174d;border:1px solid #fbcfe8;padding:4px 12px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;">⬇ South NJ</button>
+          <button type="button" onclick="_liClearRegions()"             style="background:#fef2f2;color:#991b1b;border:1px solid #fecaca;padding:4px 12px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;margin-left:4px;">✕ Clear</button>
+        </div>
+
         <div id="li_b_counties" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">
           ${NJ_COUNTIES.map(c=>`<div id="li_b_co_${c.replace(' ','_')}" onclick="_liToggleCounty('${c}')"
             style="background:#f1f5f9;border:2px solid #e2e8f0;border-radius:99px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;transition:all 0.15s;color:#475569;">${c}</div>`).join('')}
@@ -31361,6 +31376,47 @@ function _liToggleCounty(county){
     _li.counties.push(county);
     if(el){ el.style.background='#1a3a6e'; el.style.borderColor='#1a3a6e'; el.style.color='#fff'; }
   }
+}
+
+// v112.4: Preferred Regions quick-select for the Buyer Lead Intake form.
+// Mirrors _bcAddRegionCounties (used on the Buyer Criteria profile page)
+// so both entry points use the exact same North/Central/South mapping.
+// Clicking a region chip adds every county in that region as a selected
+// pill without disturbing counties the user already picked. Ocean is
+// claimed by both Central and South per Ricky's rule.
+function _liSelectRegion(regionName){
+  let counties = [];
+  if(regionName === 'All NJ'){
+    // All 21 NJ counties. Use NJ_COUNTIES directly to guarantee coverage even
+    // if the region constants ever drift.
+    counties = [...NJ_COUNTIES];
+  } else if(regionName === 'North NJ'){
+    counties = [...NJ_NORTH_COUNTIES];
+  } else if(regionName === 'Central NJ'){
+    // NJ_CENTRAL_COUNTIES already includes Ocean — don't double-add.
+    counties = [...NJ_CENTRAL_COUNTIES];
+  } else if(regionName === 'South NJ'){
+    counties = [...NJ_SOUTH_COUNTIES];
+    // Per house rule, Ocean belongs to Central AND South.
+    if(!counties.includes('Ocean')) counties.push('Ocean');
+  } else {
+    console.warn('_liSelectRegion: unknown region', regionName);
+    return;
+  }
+  counties.forEach(c => {
+    // Skip counties that are already selected — _liToggleCounty would
+    // otherwise turn them OFF. Only add the ones currently unchecked.
+    if(!_li.counties.includes(c)) _liToggleCounty(c);
+  });
+}
+
+// v112.4: Clear every currently-selected county from the intake form.
+// Keeps the chips in the DOM — just deselects them visually + in state.
+function _liClearRegions(){
+  if(!_li.counties || !_li.counties.length) return;
+  // Snapshot first — _liToggleCounty mutates _li.counties while we iterate.
+  const snapshot = [..._li.counties];
+  snapshot.forEach(c => _liToggleCounty(c));
 }
 
 

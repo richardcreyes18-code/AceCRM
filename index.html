@@ -5360,8 +5360,10 @@ function collectAllDealFields(){
   const _pegi = window._pEGI_mo  ? window._pEGI_mo*12  : 0;
   const _noi  = window._aNOI_mo  ? window._aNOI_mo*12  : (_egi - totalOpEx*12);
   const _pnoi = window._pNOI_mo  ? window._pNOI_mo*12  : (_pegi - (window._pTotalOpEx_mo||0)*12);
-  const _ask  = window._capAskPrice   || getNum('fin_askPrice');
-  const _offer= window._capOfferPrice || getNum('fin_offerPrice');
+  // v112.4: Prefer live DOM over the mount-time globals so a freshly-typed
+  // price saves the correct cap rate to Supabase (same bug as recalcFinancials).
+  const _ask  = getNum('fin_askPrice')   || window._capAskPrice   || 0;
+  const _offer= getNum('fin_offerPrice') || window._capOfferPrice || 0;
   // NOI is a formula field in Airtable — do not write
   if(_noi  && _ask)   s(fields,'Cap Rate (CRM)',          Math.round(_noi/_ask*10000)/10000);
   if(_pnoi && _offer) s(fields,'Cap Rate Proforma (CRM)', Math.round(_pnoi/_offer*10000)/10000);
@@ -41953,8 +41955,13 @@ function recalcFinancials(dealId){
   const _noi_mo  = _noi_yr/12;
   const _pnoi_mo = _pnoi_yr/12;
 
-  const _capAsk   = window._capAskPrice   || get('fin_askPrice')   || get('fin_offerPrice');
-  const _capOffer = window._capOfferPrice || get('fin_offerPrice') || get('fin_askPrice');
+  // v112.4: Prefer live DOM over window globals — the globals are set once at
+  // renderFinancialTab mount (line 9003-9004) and never refreshed. Reading them
+  // first caused cap rate to briefly update while typing, then revert to the
+  // stale render-time price when debouncedRecalc fires. Matches the order used
+  // in _finUpdateKeyMetrics (line 38265-38268).
+  const _capAsk   = get('fin_askPrice')   || get('fin_offerPrice') || window._capAskPrice   || 0;
+  const _capOffer = get('fin_offerPrice') || get('fin_askPrice')   || window._capOfferPrice || 0;
   const _mort_mo  = window._aMortgage_mo||0;
   const _pmort_mo = window._pMortgage_mo||_mort_mo;
   const _cf_yr    = _noi_yr  - (_mort_mo*12);

@@ -37587,6 +37587,10 @@ function liveDownCalc(){
   window._aTotalCash = aTotalCash;
   window._pTotalCash = pTotalCash;
 
+  // v112.3: CAP Rate depends on price, CoC depends on total cash — refresh
+  // the Key Metrics row instantly rather than waiting on the 800ms debounce.
+  if(typeof _finUpdateKeyMetrics === 'function') _finUpdateKeyMetrics();
+
   debouncedRecalc();
 }
 
@@ -37794,6 +37798,10 @@ function updateIncomeTotals(){
   if(el('cf_aCF_yr')){ el('cf_aCF_yr').textContent = fd3(aCF_yr); el('cf_aCF_yr').style.color = aCF_yr>=0?'#1a3a6e':'#c00'; }
   if(el('cf_pCF_mo')){ el('cf_pCF_mo').textContent = fd3(pCF_mo); el('cf_pCF_mo').style.color = pCF_mo>=0?'#306030':'#c00'; }
   if(el('cf_pCF_yr')){ el('cf_pCF_yr').textContent = fd3(pCF_yr); el('cf_pCF_yr').style.color = pCF_yr>=0?'#306030':'#c00'; }
+
+  // v112.3: refresh Key Metrics (CAP / CoC / DCR / GRM / BEP) instantly so
+  // they match the cash-flow numbers without waiting on the 800ms debounce.
+  if(typeof _finUpdateKeyMetrics === 'function') _finUpdateKeyMetrics();
 }
 
 function toggleExpMode(){
@@ -38150,6 +38158,112 @@ function debouncedRecalc(){
   }, 800);
 }
 
+// v112.3: Key Metrics (CAP / CoC / DCR / GRM / Break-Even) used to refresh
+// only on the 800ms debouncedRecalc. Worse, the underlying debt-service
+// figure (`window._aAnnDebt`) is only set at render time, so even that
+// debounce didn't push new values for DCR / CoC / BEP — they stayed stuck
+// until the tab was navigated away and back. This helper reads everything
+// live from the DOM and window globals and writes the five Key Metric
+// cells synchronously. Cheap to call — wired into updateIncomeTotals,
+// updateExpenseTotals (via updateIncomeTotals), mortCalc, and liveDownCalc.
+function _finUpdateKeyMetrics(){
+  const el = id => document.getElementById(id);
+  // Bail fast if the Key Metrics table isn't in the DOM (wrong tab)
+  if(!el('top_caprate_a')) return;
+
+  const v      = id => { const e=el(id); return e ? (parseFloat(String(e.value||'').replace(/,/g,''))||0) : 0; };
+  const fmtP   = n => n ? (n*100).toFixed(2)+'%' : '—';
+  const fix2   = n => n ? n.toFixed(2) : '—';
+
+  // ── Income (yearly, preferring the yr input if non-zero) ──────
+  const dual = (moId, yrId) => { const yr=v(yrId), mo=v(moId); return yr>0 ? yr : mo*12; };
+  const aGRI_yr  = dual('fin_aGrossRent_mo','fin_aGrossRent_yr');
+  const pGRI_yr  = dual('fin_pGrossRent_mo','fin_pGrossRent_yr');
+  const aOI_yr   = dual('fin_aOI_mo',       'fin_aOI_yr');
+  const pOI_yr   = dual('fin_pOI_mo',       'fin_pOI_yr');
+  const aRUBS_yr = dual('fin_aRUBS_mo',     'fin_aRUBS_yr');
+  const pRUBS_yr = dual('fin_pRUBS_mo',     'fin_pRUBS_yr');
+  const aVac     = v('fin_aVacancy');
+  const pVac     = v('fin_pVacancy');
+  const aNRU     = v('fin_aNRU_pct');
+  const pNRU     = v('fin_pNRU_pct');
+  const aBD      = v('fin_aBD_pct');
+  const pBD      = v('fin_pBD_pct');
+  const aCon     = v('fin_aCon_pct');
+  const pCon     = v('fin_pCon_pct');
+  const aDeduct  = aGRI_yr*((aVac+aNRU+aBD+aCon)/100);
+  const pDeduct  = pGRI_yr*((pVac+pNRU+pBD+pCon)/100);
+  const aEGI_yr  = aGRI_yr - aDeduct + aOI_yr + aRUBS_yr;
+  const pEGI_yr  = pGRI_yr - pDeduct + pOI_yr + pRUBS_yr;
+
+  // ── Expenses ──────────────────────────────────────────────────
+  // updateExpenseTotals already stashed the live monthly totals.
+  const aOpEx_yr = (window._aTotalOpEx_mo||0)*12;
+  const pOpEx_yr = (window._pTotalOpEx_mo||0)*12;
+
+  // ── NOI ───────────────────────────────────────────────────────
+  const aNOI_yr = aEGI_yr - aOpEx_yr;
+  const pNOI_yr = pEGI_yr - pOpEx_yr;
+
+  // ── Price (Asking drives Actual CAP; Offer drives Proforma CAP) ──
+  const ask   = v('fin_askPrice');
+  const offer = v('fin_offerPrice');
+  const capAsk   = ask   || offer;
+  const capOffer = offer || ask;
+
+  // ── Annual debt service (sum of itemized mortgages, else implied loan) ──
+  let aAnnDebt = 0;
+  for(let n=1;n<=3;n++){
+    const bal   = v('fin_mort'+n+'_bal');
+    const amort = Number(el('fin_mort'+n+'_amort')?.value)||0;
+    const rate  = Number(el('fin_mort'+n+'_rate')?.value)||0;
+    const moRate=rate/100/12, nPer=amort*12;
+    if(moRate>0 && nPer>0 && bal>0)
+      aAnnDebt += (bal*moRate*Math.pow(1+moRate,nPer)/(Math.pow(1+moRate,nPer)-1))*12;
+  }
+  if(!aAnnDebt){
+    // No itemized mortgages — derive from Asking price, down %, global rate/amort
+    const aDpType = document.querySelector('input[name="aDP"]:checked')?.value||'percent';
+    const aDpVal  = v('fin_a_downPct');
+    const aDown   = aDpType==='amount' ? aDpVal : ask*(aDpVal/100);
+    const aLoan   = ask - aDown;
+    const rate    = v('fin_intRate') || 7;
+    const amort   = v('fin_amort')   || 30;
+    const moRate  = rate/100/12, nPer = amort*12;
+    if(moRate>0 && nPer>0 && aLoan>0)
+      aAnnDebt = (aLoan*moRate*Math.pow(1+moRate,nPer)/(Math.pow(1+moRate,nPer)-1))*12;
+  }
+  // Keep the cached global fresh so the debounced recalc + any later reader
+  // sees the same debt figure.
+  window._aAnnDebt = aAnnDebt;
+
+  // ── Cash totals (set live by liveDownCalc) ────────────────────
+  const aTotalCash = window._aTotalCash || 0;
+  const pTotalCash = window._pTotalCash || 0;
+  const aCashFlow  = aNOI_yr - aAnnDebt;
+  const pCashFlow  = pNOI_yr - aAnnDebt;
+
+  // ── Write Key Metrics cells ───────────────────────────────────
+  if(el('top_caprate_a')){
+    el('top_caprate_a').textContent = (aNOI_yr>0 && capAsk>0) ? fmtP(aNOI_yr/capAsk) : 'Enter NOI + Price below';
+    el('top_caprate_a').style.color      = (aNOI_yr>0 && capAsk>0) ? '#000' : '#aaa';
+    el('top_caprate_a').style.fontWeight = (aNOI_yr>0 && capAsk>0) ? 'bold' : 'normal';
+  }
+  if(el('top_caprate_p')){
+    el('top_caprate_p').textContent = (pNOI_yr>0 && capOffer>0) ? fmtP(pNOI_yr/capOffer) : 'Enter Proforma NOI below';
+    el('top_caprate_p').style.color      = (pNOI_yr>0 && capOffer>0) ? '#000' : '#aaa';
+    el('top_caprate_p').style.fontWeight = (pNOI_yr>0 && capOffer>0) ? 'bold' : 'normal';
+  }
+  if(el('top_coc_a')) el('top_coc_a').textContent = (aCashFlow && aTotalCash) ? fmtP(aCashFlow/aTotalCash) : '—';
+  if(el('top_coc_p')) el('top_coc_p').textContent = (pCashFlow && pTotalCash) ? fmtP(pCashFlow/pTotalCash) : '—';
+  if(el('top_dcr_a')) el('top_dcr_a').textContent = (aNOI_yr && aAnnDebt)     ? fix2(aNOI_yr/aAnnDebt)    : '—';
+  if(el('top_dcr_p')) el('top_dcr_p').textContent = (pNOI_yr && aAnnDebt)     ? fix2(pNOI_yr/aAnnDebt)    : '—';
+  if(el('top_grm_a')) el('top_grm_a').textContent = (aGRI_yr && capAsk)       ? fix2(capAsk/aGRI_yr)      : '—';
+  if(el('top_grm_p')) el('top_grm_p').textContent = (pGRI_yr && capOffer)     ? fix2(capOffer/pGRI_yr)    : '—';
+  if(el('top_be_a'))  el('top_be_a').textContent  = (aGRI_yr)                 ? ((aOpEx_yr+aAnnDebt)/aGRI_yr*100).toFixed(2)+'%' : '—';
+  if(el('top_be_p'))  el('top_be_p').textContent  = (pGRI_yr)                 ? ((pOpEx_yr+aAnnDebt)/pGRI_yr*100).toFixed(2)+'%' : '—';
+}
+
 function toggleExpCat(catId){
   const rows = document.querySelectorAll('.exp-subrow-'+catId);
   const icon = document.getElementById('exp-icon-'+catId);
@@ -38315,6 +38429,9 @@ function mortCalc(){
   if(el('top_cf_yr')){ el('top_cf_yr').textContent = fd4(aCF*12); }
   if(el('top_pcf_mo')){ el('top_pcf_mo').textContent = fd4(pCF);    }
   if(el('top_pcf_yr')){ el('top_pcf_yr').textContent = fd4(pCF*12); }
+
+  // v112.3: DCR / CoC / BEP all depend on annual debt — refresh them instantly.
+  if(typeof _finUpdateKeyMetrics === 'function') _finUpdateKeyMetrics();
 
   markDirty();
   debouncedRecalc();

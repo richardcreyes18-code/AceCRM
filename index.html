@@ -20447,11 +20447,23 @@ async function _showMyPipelineBoard(){
 
   // v113.3: stage filter hides whole columns. If stages filter is empty,
   // show all columns. If active, show ONLY those stages.
-  const visibleStages = _myPipelineFilters.stages.length
+  // v113.4: when ANY filter is active (search, asset class, county, stages),
+  // also hide columns that ended up empty after filtering — parity with the
+  // company pipeline board so the viewport collapses to "just the matches".
+  let visibleStages = _myPipelineFilters.stages.length
     ? stages.filter(s => _myPipelineFilters.stages.includes(s.key))
     : stages;
+  if(filtersActive){
+    visibleStages = visibleStages.filter(s => (byStage.get(s.id) || []).length > 0);
+  }
 
   const scopeToggleHTML = _myPipelineScopeToggleHTML();
+  const viewMode = getMyPipelineViewMode();
+  const viewToggleHTML = ''
+    + '<div style="display:inline-flex;border:1px solid #cbd5e1;border-radius:6px;overflow:hidden;">'
+    +   '<button onclick="setMyPipelineViewMode(\'board\')" title="Board view" style="background:' + (viewMode==='board'?'#1e3a8a':'#fff') + ';color:' + (viewMode==='board'?'#fff':'#475569') + ';border:none;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;border-right:1px solid #cbd5e1;">▦ Board</button>'
+    +   '<button onclick="setMyPipelineViewMode(\'table\')" title="Table view" style="background:' + (viewMode==='table'?'#1e3a8a':'#fff') + ';color:' + (viewMode==='table'?'#fff':'#475569') + ';border:none;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;">☰ Table</button>'
+    + '</div>';
 
   const columnsHTML = visibleStages.map(s => {
     const cards = byStage.get(s.id) || [];
@@ -20487,13 +20499,31 @@ async function _showMyPipelineBoard(){
 
   const filterBarHTML = totalInPipeline > 0 ? _myPipelineFilterBarHTML() : '';
 
+  // v113.4: body content swaps between board columns and a sortable table.
+  // Both consume the same filtered/grouped data via `byStage` + `visibleStages`.
+  let bodyContent;
+  if(viewMode === 'table'){
+    bodyContent = _buildMyPipelineTableHTML(byStage, stages);
+  } else if(visibleStages.length === 0){
+    bodyContent = '<div style="padding:40px 20px;color:#94a3b8;font-size:13px;font-style:italic;text-align:center;">'
+      + (filtersActive ? 'No items match your filters.' : 'No stages match your filter.')
+      + '</div>';
+  } else {
+    bodyContent = '<div style="display:flex;gap:12px;padding-bottom:10px;">' + columnsHTML + '</div>';
+  }
+
+  const tipText = viewMode === 'table'
+    ? '💡 <strong>Tip:</strong> Click any column header to sort. Click a row to open the deal. Switch back to Board view to drag cards between stages.'
+    : '💡 <strong>Tip:</strong> Drag cards between columns to change stage. Click the card to open the deal snapshot. Use the <em>×</em> on a card to remove it from your personal pipeline. Save your favorite filter combos as <em>views</em> with the 💾 button.';
+
   const mainArea = document.getElementById('mainArea');
   if(!mainArea) return;
   mainArea.innerHTML = ''
     + '<div id="myPipelineBoardRoot" style="padding:14px 16px;">'
     +   '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:10px;flex-wrap:wrap;">'
     +     '<div style="font-size:17px;font-weight:bold;color:#1a3a6e;">' + _esc(headline) + '</div>'
-    +     '<div style="display:flex;gap:8px;align-items:center;">'
+    +     '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
+    +       viewToggleHTML
     +       scopeToggleHTML
     +       '<button onclick="_myPipelineRefresh()" title="Refresh from server" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:7px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">↻ Refresh</button>'
     +     '</div>'
@@ -20504,15 +20534,208 @@ async function _showMyPipelineBoard(){
           + '</div>'
         : filterBarHTML)
     +   '<div style="overflow-x:auto;">'
-    +     (visibleStages.length === 0
-        ? '<div style="padding:40px 20px;color:#94a3b8;font-size:13px;font-style:italic;text-align:center;">No stages match your filter.</div>'
-        : '<div style="display:flex;gap:12px;padding-bottom:10px;">' + columnsHTML + '</div>')
+    +     bodyContent
     +   '</div>'
     +   '<div style="margin-top:14px;padding:10px 14px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;font-size:11px;color:#1e3a8a;">'
-    +     '💡 <strong>Tip:</strong> Drag cards between columns to change stage. Click the card to open the deal snapshot. Use the <em>×</em> on a card to remove it from your personal pipeline. Save your favorite filter combos as <em>views</em> with the 💾 button.'
+    +     tipText
     +   '</div>'
     + '</div>';
   _myPipelineBoardMounted = true;
+}
+
+// v113.4: Personal Pipeline Table view.
+// Receives the same `byStage` map and `stages` list the board uses, unpacks
+// them into a flat row set {kind, obj, stage}, then renders a sortable
+// HTML table with optional group-by buckets. Click a row to open the deal
+// / portfolio snapshot. Portfolio rows are styled with an amber accent.
+// Columns: Stage · Address/Name · Price · Asset · Agent · County · Added.
+const MY_PIPELINE_TABLE_COLS = [
+  {key:'stage',     label:'Stage',    align:'left',  sortable:true},
+  {key:'address',   label:'Name',     align:'left',  sortable:true},
+  {key:'price',     label:'Price',    align:'right', sortable:true},
+  {key:'assetType', label:'Asset',    align:'left',  sortable:true},
+  {key:'agent',     label:'Agent',    align:'left',  sortable:true},
+  {key:'county',    label:'County',   align:'left',  sortable:true},
+  {key:'dateAdded', label:'Added',    align:'left',  sortable:true},
+];
+
+function _myPipelineRowValue(row, key){
+  const o = row.obj;
+  if(row.kind === 'portfolio'){
+    if(key === 'stage')     return row.stage ? String(row.stage.label || '') : '';
+    if(key === 'address')   return String(o['Name'] || '');
+    if(key === 'price')     return Number(o['Package Price']) || 0;
+    if(key === 'assetType') return String(o['Status'] || '');
+    if(key === 'agent')     return String(o['Assigned Agent'] || '');
+    if(key === 'county')    return String(o['County'] || '');
+    if(key === 'dateAdded') return String(o['Date Added'] || o['created_at'] || '');
+  } else {
+    if(key === 'stage')     return row.stage ? String(row.stage.label || '') : '';
+    if(key === 'address')   return String(o['Address'] || '');
+    if(key === 'price')     return Number(o['Asking Price']) || 0;
+    if(key === 'assetType') return String(o['CRM Asset Classification'] || o['Asset Type'] || '');
+    if(key === 'agent')     return String(o['Agent'] || o['Assigned Agent'] || '');
+    if(key === 'county')    return String(o['County'] || o['Simple County'] || '');
+    if(key === 'dateAdded') return String(o['Date Added'] || o['created_at'] || '');
+  }
+  return '';
+}
+
+function _sortMyPipelineRows(rows){
+  if(!_myPipelineTableSort.col) return rows;
+  const key = _myPipelineTableSort.col;
+  const dir = _myPipelineTableSort.dir === 'asc' ? 1 : -1;
+  return [...rows].sort((a, b) => {
+    const va = _myPipelineRowValue(a, key);
+    const vb = _myPipelineRowValue(b, key);
+    if(typeof va === 'number' && typeof vb === 'number') return (va - vb) * dir;
+    const sa = String(va||'').toLowerCase();
+    const sb = String(vb||'').toLowerCase();
+    if(sa < sb) return -1 * dir;
+    if(sa > sb) return  1 * dir;
+    return 0;
+  });
+}
+
+function _groupMyPipelineRows(rows, stages){
+  const mode = _myPipelineTableGroupBy;
+  if(mode === 'none') return [{ label:'All Items', rows }];
+  const buckets = {};
+  const colorFor = {};
+  const getKey = (r) => {
+    if(mode === 'stage')     return r.stage ? String(r.stage.label || 'No Stage') : 'No Stage';
+    if(mode === 'agent')     return _myPipelineRowValue(r, 'agent') || 'Unassigned';
+    if(mode === 'assetType') return _myPipelineRowValue(r, 'assetType') || 'Uncategorized';
+    if(mode === 'county')    return _myPipelineRowValue(r, 'county') || 'No County';
+    return 'All';
+  };
+  rows.forEach(r => {
+    const k = getKey(r);
+    if(!buckets[k]) buckets[k] = [];
+    buckets[k].push(r);
+    if(mode === 'stage' && r.stage && !colorFor[k]) colorFor[k] = r.stage.color || '#1e3a8a';
+  });
+  let ordered;
+  if(mode === 'stage'){
+    const stageOrder = stages.map(s => s.label);
+    ordered = stageOrder
+      .filter(lab => buckets[lab] && buckets[lab].length)
+      .map(lab => ({ label: lab, rows: buckets[lab], color: colorFor[lab] }));
+    // Any orphan buckets (rows whose stage wasn't in stages list)
+    Object.keys(buckets).forEach(k => {
+      if(!stageOrder.includes(k)) ordered.push({ label:k, rows:buckets[k] });
+    });
+  } else {
+    ordered = Object.keys(buckets).sort().map(k => ({ label:k, rows:buckets[k] }));
+  }
+  return ordered;
+}
+
+function _buildMyPipelineTableHTML(byStage, stages){
+  // Unpack byStage -> flat row list {kind, obj, stage}
+  const stageById = new Map();
+  stages.forEach(s => stageById.set(s.id, s));
+  const rows = [];
+  byStage.forEach((entries, stageId) => {
+    const stage = stageById.get(stageId) || null;
+    entries.forEach(e => rows.push({ kind: e.kind, obj: e.obj, stage }));
+  });
+
+  // Group-by controls — mirrors the company pipeline table
+  const groupControls = ''
+    + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap;">'
+    +   '<span style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;">Group by:</span>'
+    + [
+        {k:'none',      label:'None (1 table)'},
+        {k:'stage',     label:'Stage'},
+        {k:'agent',     label:'Agent'},
+        {k:'assetType', label:'Asset'},
+        {k:'county',    label:'County'},
+      ].map(o => {
+        const active = _myPipelineTableGroupBy === o.k;
+        return '<button onclick="setMyPipelineTableGroupBy(\'' + o.k + '\')" style="background:' + (active?'#1e3a8a':'#fff') + ';color:' + (active?'#fff':'#475569') + ';border:1px solid ' + (active?'#1e3a8a':'#cbd5e1') + ';padding:5px 12px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;">' + o.label + '</button>';
+      }).join('')
+    + '</div>';
+
+  if(!rows.length){
+    return groupControls + '<div style="padding:40px 20px;color:#94a3b8;font-size:13px;font-style:italic;text-align:center;">No items match your filters.</div>';
+  }
+
+  const groups = _groupMyPipelineRows(rows, stages);
+
+  // Header cells with sort indicators
+  const headerCellsHTML = MY_PIPELINE_TABLE_COLS.map(c => {
+    const isSort = _myPipelineTableSort.col === c.key;
+    const arrow = isSort ? (_myPipelineTableSort.dir === 'desc' ? ' ↓' : ' ↑') : '';
+    const cursor = c.sortable ? 'cursor:pointer;' : 'cursor:default;';
+    const hover = c.sortable ? 'onmouseenter="this.style.background=\'#e2e8f0\'" onmouseleave="this.style.background=\'#f8fafc\'"' : '';
+    const click = c.sortable ? 'onclick="sortMyPipelineTable(\'' + c.key + '\')"' : '';
+    const color = isSort ? '#1e3a8a' : '#64748b';
+    return '<th ' + click + ' ' + hover + ' style="padding:10px;text-align:' + c.align + ';font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:' + color + ';font-weight:700;' + cursor + 'background:#f8fafc;border-bottom:2px solid #cbd5e1;user-select:none;white-space:nowrap;">' + c.label + arrow + '</th>';
+  }).join('');
+
+  const fmtDate = (s) => {
+    if(!s) return '—';
+    const d = new Date(s);
+    if(isNaN(d.getTime())) return String(s).slice(0,10);
+    return d.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
+  };
+
+  const renderRow = (r) => {
+    const o = r.obj;
+    const isPortfolio = r.kind === 'portfolio';
+    const stage = r.stage;
+    const stageLabel = stage ? String(stage.label || '—') : '—';
+    const stageColor = stage ? (stage.color || '#6b7280') : '#6b7280';
+    const name = isPortfolio ? String(o['Name'] || 'Untitled portfolio') : String(o['Address'] || 'Unnamed');
+    const priceNum = isPortfolio ? Number(o['Package Price']||0) : Number(o['Asking Price']||0);
+    const priceStr = priceNum > 0 ? fmtMoney(priceNum) : '—';
+    const assetStr = _myPipelineRowValue(r, 'assetType') || '—';
+    const agentStr = _myPipelineRowValue(r, 'agent') || '—';
+    const countyStr = _myPipelineRowValue(r, 'county') || '—';
+    const dateStr = fmtDate(_myPipelineRowValue(r, 'dateAdded'));
+    const onclick = isPortfolio ? ('openPortfolioDetail(\'' + o.id + '\')') : ('openDealSnapshot(\'' + o.id + '\')');
+    const badge = isPortfolio
+      ? '<span style="display:inline-block;margin-right:6px;padding:1px 7px;background:#fef3c7;color:#b45309;border:1px solid #fde68a;border-radius:99px;font-size:9px;font-weight:700;letter-spacing:0.3px;vertical-align:middle;">📁 PORTFOLIO</span>'
+      : '';
+    const rowBg = isPortfolio ? 'background:#fffbeb;' : '';
+    return '<tr onclick="' + onclick + '" style="cursor:pointer;border-bottom:1px solid #e2e8f0;' + rowBg + '" onmouseenter="this.style.background=\'#f1f5f9\'" onmouseleave="this.style.background=\'' + (isPortfolio?'#fffbeb':'') + '\'">'
+      + '<td style="padding:8px 10px;"><span style="display:inline-block;padding:2px 10px;border-radius:99px;background:' + stageColor + ';color:#fff;font-size:10px;font-weight:700;white-space:nowrap;">' + _esc(stageLabel) + '</span></td>'
+      + '<td style="padding:8px 10px;font-weight:600;color:#0f172a;max-width:320px;">' + badge + _esc(name) + '</td>'
+      + '<td style="padding:8px 10px;color:#b91c1c;font-weight:700;white-space:nowrap;text-align:right;">' + priceStr + '</td>'
+      + '<td style="padding:8px 10px;color:#334155;">' + _esc(assetStr) + '</td>'
+      + '<td style="padding:8px 10px;color:#334155;">' + _esc(agentStr) + '</td>'
+      + '<td style="padding:8px 10px;color:#334155;">' + _esc(countyStr) + '</td>'
+      + '<td style="padding:8px 10px;color:#334155;white-space:nowrap;">' + _esc(dateStr) + '</td>'
+      + '</tr>';
+  };
+
+  const tablesHTML = groups.map(g => {
+    const sorted = _sortMyPipelineRows(g.rows);
+    const totalPrice = g.rows.reduce((s, r) => s + (Number(_myPipelineRowValue(r, 'price'))||0), 0);
+    const totalLabel = totalPrice >= 1000 ? fmtMoney(totalPrice) : '';
+    const isNone = _myPipelineTableGroupBy === 'none';
+    const headerBar = isNone ? '' : ''
+      + '<div style="display:flex;align-items:center;gap:10px;padding:10px 14px;background:' + (g.color||'#f1f5f9') + ';color:' + (g.color?'#fff':'#0f172a') + ';border-radius:6px 6px 0 0;font-size:13px;font-weight:700;">'
+      +   '<span>' + _esc(g.label) + '</span>'
+      +   '<span style="font-size:11px;font-weight:500;opacity:' + (g.color?0.9:0.7) + ';">' + g.rows.length + ' item' + (g.rows.length===1?'':'s') + (totalLabel ? ' · ' + totalLabel : '') + '</span>'
+      + '</div>';
+    const radius = isNone ? '8px' : '0 0 8px 8px';
+    return ''
+      + '<div style="margin-bottom:' + (isNone?'0':'18px') + ';">'
+      +   headerBar
+      +   '<div style="background:#fff;border:1px solid #e2e8f0;' + (isNone?'':'border-top:none;') + 'border-radius:' + radius + ';overflow:auto;max-height:' + (isNone?'calc(100vh - 320px)':'520px') + ';">'
+      +     '<table style="width:100%;border-collapse:collapse;font-size:12px;">'
+      +       '<thead style="position:sticky;top:0;z-index:1;">'
+      +         '<tr>' + headerCellsHTML + '</tr>'
+      +       '</thead>'
+      +       '<tbody>' + sorted.map(renderRow).join('') + '</tbody>'
+      +     '</table>'
+      +   '</div>'
+      + '</div>';
+  }).join('');
+
+  return groupControls + tablesHTML;
 }
 
 // Small helpers
@@ -20604,6 +20827,55 @@ let _myPipelineActiveViewId = null;  // null = ad-hoc filters, otherwise saved v
 let _myPipelineSavedViews   = [];    // cache of {id, name, filter_config}
 let _myPipelinePanelOpen    = false; // filter panel collapsed by default
 
+// v113.4: board/table view toggle, persisted per-browser. Mirrors the
+// company pipeline toggle but keeps state on its own key so the two
+// scopes remember independent preferences.
+let _myPipelineViewMode = null; // 'board' | 'table'
+let _myPipelineTableSort = { col: null, dir: 'desc' }; // col: stage|price|assetType|agent|county|dateAdded
+let _myPipelineTableGroupBy = 'none'; // 'none' | 'stage' | 'agent' | 'assetType' | 'county'
+
+function getMyPipelineViewMode(){
+  if(_myPipelineViewMode) return _myPipelineViewMode;
+  try {
+    const saved = _store.get('my_pipeline_view_mode');
+    if(saved === 'table' || saved === 'board'){ _myPipelineViewMode = saved; return saved; }
+  } catch(e) {}
+  _myPipelineViewMode = 'board';
+  return _myPipelineViewMode;
+}
+
+function setMyPipelineViewMode(mode){
+  if(mode !== 'board' && mode !== 'table') mode = 'board';
+  _myPipelineViewMode = mode;
+  try { _store.set('my_pipeline_view_mode', mode); } catch(e) {}
+  _myPipelineRerenderIfVisible();
+}
+
+function sortMyPipelineTable(colKey){
+  if(_myPipelineTableSort.col === colKey){
+    _myPipelineTableSort.dir = _myPipelineTableSort.dir === 'desc' ? 'asc' : 'desc';
+  } else {
+    _myPipelineTableSort.col = colKey;
+    _myPipelineTableSort.dir = 'desc';
+  }
+  _myPipelineRerenderIfVisible();
+}
+
+function setMyPipelineTableGroupBy(key){
+  _myPipelineTableGroupBy = key;
+  try { _store.set('my_pipeline_group_by', key); } catch(e) {}
+  _myPipelineRerenderIfVisible();
+}
+
+(function _loadMyPipelineGroupBy(){
+  try {
+    const saved = _store.get('my_pipeline_group_by');
+    if(saved && ['none','stage','agent','assetType','county'].includes(saved)){
+      _myPipelineTableGroupBy = saved;
+    }
+  } catch(e){}
+})();
+
 function _myPipelineFilterCount(){
   const f = _myPipelineFilters;
   return (f.search?1:0) + f.stages.length + f.assetTypes.length + f.counties.length;
@@ -20624,7 +20896,20 @@ function _myPipelineTogglePanel(){
 function _myPipelineSetSearch(v){
   _myPipelineFilters.search = (v||'').trim();
   _myPipelineActiveViewId = null; // ad-hoc
+  // v113.4: full innerHTML rerender blows away focus on the search <input>,
+  // so we snapshot focus + caret before the rerender and restore it after.
+  // Both board and table views share the same stable id on the input.
+  const input = document.getElementById('myPipelineSearchBox');
+  const wasFocused = !!(input && document.activeElement === input);
+  const caret = input ? input.selectionStart : null;
   _myPipelineRerenderIfVisible();
+  if(wasFocused){
+    const fresh = document.getElementById('myPipelineSearchBox');
+    if(fresh){
+      fresh.focus();
+      if(caret != null){ try { fresh.setSelectionRange(caret, caret); } catch(e){} }
+    }
+  }
 }
 
 function _myPipelineToggleMulti(group, value){
@@ -20868,7 +21153,7 @@ function _myPipelineFilterBarHTML(){
     +       '🔍 Filters' + (count>0?' ('+count+')':'')
     +       ' <span style="font-size:9px;margin-left:4px;">' + (_myPipelinePanelOpen?'▲':'▼') + '</span>'
     +     '</button>'
-    +     '<input type="text" placeholder="Search address, owner, agent, asset type, county…" value="' + _esc(f.search||'') + '"'
+    +     '<input type="text" id="myPipelineSearchBox" placeholder="Search address, owner, agent, asset type, county…" value="' + _esc(f.search||'') + '"'
     +       ' oninput="_myPipelineSetSearch(this.value)"'
     +       ' style="flex:1;min-width:240px;padding:7px 12px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;" />'
     +     saveControls

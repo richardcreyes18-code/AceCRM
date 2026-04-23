@@ -26873,7 +26873,8 @@ const BC_TYPE_COLORS = {
 function getBcTypeBadge(typeStr){
   if(!typeStr) return '<span style="color:#aaa;">—</span>';
   const clean = typeStr.replace(/[🔴🟠🟡🟢🔵🟣]/g,'').trim();
-  return clean.split(',').map(t=>t.trim()).filter(Boolean).map(t=>{
+  // v113.8: filter ✕ junk left over from the old buggy _bcGetPillTexts
+  return clean.split(',').map(t=>t.trim()).filter(t => t && t !== '✕' && t !== '✖' && t !== '×').map(t=>{
     const c = BC_TYPE_COLORS[t] || {bg:'#475569',color:'#fff'};
     return `<span style="display:inline-block;background:${c.bg};color:${c.color};padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;margin:1px 2px;white-space:nowrap;">${t}</span>`;
   }).join('');
@@ -27120,7 +27121,10 @@ async function bcOpenExpanded(recordId){
   const contact = contactId ? allBuyerContacts[contactId] : null;
   const buyerName = contact?.Name || f['Name']?.split(' - ')[0] || '—';
   const assetStr  = (f['Simple Text Desired Property Type']||'').replace(/[🔴🟠🟡🟢🔵🟣]/g,'').trim();
-  const assets    = assetStr.split(',').map(t=>t.trim()).filter(Boolean);
+  // v113.8: filter out ✕ junk that older buggy _bcGetPillTexts may have
+  // written to the DB. On the next save this string gets rewritten clean.
+  const _bcCleanPill = t => t && t !== '✕' && t !== '✖' && t !== '×';
+  const assets    = assetStr.split(',').map(t=>t.trim()).filter(_bcCleanPill);
 
   // Pre-fetch call notes for this buyer so the Review & Apply panel can scan them
   // along with other_requirements. Single query scoped to this one buyer's fub_contact_id.
@@ -27358,12 +27362,12 @@ async function bcOpenExpanded(recordId){
                   </div>
                 </div>
               </div>
-              <input type="hidden" id="bcf_assets_hidden" value="${assetStr}"/>
+              <input type="hidden" id="bcf_assets_hidden" value="${assets.join(', ')}"/>
 
               <!-- STATES — multi-select pill UI -->
               <div class="bc-label" style="margin-bottom:6px;">🗺 States <span style="color:#888;font-weight:400;">(click ✕ to remove · leave empty for NJ default)</span></div>
               <div id="bcf_state_pills" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px;min-height:28px;padding:4px;background:#fffbeb;border:1px solid #fde68a;border-radius:5px;">
-                ${(f['Preferred States']||'').split(',').map(s=>s.trim()).filter(Boolean).map(s=>`
+                ${(f['Preferred States']||'').split(',').map(s=>s.trim()).filter(_bcCleanPill).map(s=>`
                   <span style="background:#f59e0b;color:#fff;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:600;display:flex;align-items:center;gap:5px;cursor:pointer;"
                     onclick="this.remove();_bcSyncStates();document.getElementById('bcf_county_input').placeholder=_bcCountyPlaceholder();"
                     title="Click to remove">${s} <span style="opacity:0.7;font-size:10px;">✕</span></span>`).join('')}
@@ -27375,7 +27379,7 @@ async function bcOpenExpanded(recordId){
                   autocomplete="off"/>
                 <div id="bcf_state_dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid #fde68a;border-radius:0 0 5px 5px;max-height:180px;overflow-y:auto;z-index:200;box-shadow:0 4px 12px rgba(0,0,0,0.15);"></div>
               </div>
-              <input type="hidden" id="bcf_states_hidden" value="${f['Preferred States']||''}"/>
+              <input type="hidden" id="bcf_states_hidden" value="${(f['Preferred States']||'').split(',').map(s=>s.trim()).filter(_bcCleanPill).join(', ')}"/>
 
               <!-- COUNTIES — searchable pill input -->
               <div class="bc-label" style="margin-bottom:6px;">Counties <span style="color:#888;font-weight:400;">(click ✕ to remove)</span></div>
@@ -27398,8 +27402,8 @@ async function bcOpenExpanded(recordId){
                   // v102.15: Read both the legacy Simple Area Preference field
                   // (pre-v102.9 buyers) and the new preferred_counties field
                   // (v102.9+ intake), de-duplicating so each county only renders once.
-                  const legacy = (f['Simple Area Preference']||'').split(',').map(c=>c.trim()).filter(Boolean);
-                  const newer  = (f['Preferred Counties']||'').split(',').map(c=>c.trim()).filter(Boolean);
+                  const legacy = (f['Simple Area Preference']||'').split(',').map(c=>c.trim()).filter(_bcCleanPill);
+                  const newer  = (f['Preferred Counties']||'').split(',').map(c=>c.trim()).filter(_bcCleanPill);
                   const merged = [...new Set([...legacy, ...newer])];
                   return merged.map(c=>`
                     <span style="background:#0ea5e9;color:#fff;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:600;display:flex;align-items:center;gap:5px;cursor:pointer;"
@@ -27416,8 +27420,8 @@ async function bcOpenExpanded(recordId){
               </div>
               <div style="font-size:10px;color:#888;margin-top:2px;">NJ, NY, FL, CT, PA, MA have curated county lists · free-text supported for other states.</div>
               <input type="hidden" id="bcf_counties_hidden" value="${(() => {
-                const legacy = (f['Simple Area Preference']||'').split(',').map(c=>c.trim()).filter(Boolean);
-                const newer  = (f['Preferred Counties']||'').split(',').map(c=>c.trim()).filter(Boolean);
+                const legacy = (f['Simple Area Preference']||'').split(',').map(c=>c.trim()).filter(_bcCleanPill);
+                const newer  = (f['Preferred Counties']||'').split(',').map(c=>c.trim()).filter(_bcCleanPill);
                 return [...new Set([...legacy, ...newer])].join(', ');
               })()}"/>
 
@@ -27456,7 +27460,7 @@ async function bcOpenExpanded(recordId){
               <!-- PREFERRED CITIES -->
               <div class="bc-label" style="margin-bottom:6px;">📍 Preferred Cities / Towns <span style="color:#888;font-weight:400;">(click ✕ to remove)</span></div>
               <div id="bcf_city_pills" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px;min-height:28px;padding:4px;background:#f8faff;border:1px solid #c0d0e8;border-radius:5px;">
-                ${(f['Preferred Cities']||'').split(',').map(c=>c.trim()).filter(Boolean).map(c=>`
+                ${(f['Preferred Cities']||'').split(',').map(c=>c.trim()).filter(_bcCleanPill).map(c=>`
                   <span style="background:#7c3aed;color:#fff;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:600;display:flex;align-items:center;gap:5px;cursor:pointer;"
                     onclick="this.remove();_bcSyncCities()"
                     title="Click to remove">${c} <span style="opacity:0.7;font-size:10px;">✕</span></span>`).join('')}
@@ -27469,7 +27473,7 @@ async function bcOpenExpanded(recordId){
                 <div id="bcf_city_dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid #c0d0e8;border-radius:0 0 5px 5px;max-height:180px;overflow-y:auto;z-index:200;box-shadow:0 4px 12px rgba(0,0,0,0.15);"></div>
               </div>
               <div style="font-size:10px;color:#888;margin-top:2px;">Searchable list of all NJ municipalities — uniform spelling guaranteed.</div>
-              <input type="hidden" id="bcf_cities_hidden" value="${f['Preferred Cities']||''}"/>
+              <input type="hidden" id="bcf_cities_hidden" value="${(f['Preferred Cities']||'').split(',').map(c=>c.trim()).filter(_bcCleanPill).join(', ')}"/>
             </div>
           </div>
         </div>
@@ -27651,8 +27655,17 @@ function bcExpandedAssetSection(asset, f){
 }
 
 // ── Buyer Criteria pill editor helpers ───────────────────────────
+// v113.8: previously used `#container span` which matched BOTH the outer pill
+// wrapper AND the inner `<span>✕</span>` close-button. That made sync write
+// literal "✕" entries into the hidden input, which saved to the DB, which
+// re-rendered as ghost "✕ ✕" pills on reload. Fix: only read DIRECT children,
+// and strip any pills whose text is just the close icon or empty.
 function _bcGetPillTexts(containerId){
-  return [...document.querySelectorAll(`#${containerId} span`)].map(s=>s.childNodes[0]?.textContent?.trim()).filter(Boolean);
+  const el = document.getElementById(containerId);
+  if(!el) return [];
+  return [...el.children]
+    .map(s => (s.childNodes[0]?.textContent || '').trim())
+    .filter(t => t && t !== '✕' && t !== '✖' && t !== '×');
 }
 // v113.7: every sync also triggers _bcAutoSave. The buyer-criteria page has
 // no "you have unsaved changes" indicator, so users can easily make pill
@@ -28050,20 +28063,26 @@ function _bcAttachFieldStatusListeners(){
   root.addEventListener('change', handler);
 
   // Pill-based fields don't fire input events when pills are added/removed.
-  // Watch for mutations on the 4 pill container divs and re-render when
-  // their contents change.
+  // Watch for mutations on the 4 pill container divs and re-render the
+  // checklist so counts stay accurate.
+  //
+  // v113.8: previously this also called _bcSync* and _bcFieldStatusApplyStamps.
+  // Both were harmful:
+  //   1. _bcFieldStatusApplyStamps mutates CHILDREN of these same pill
+  //      containers (adds/removes a .bc-field-stamp div). That triggers this
+  //      observer again → infinite DOM churn loop.
+  //   2. With the new sync-triggers-autosave behavior, sync calls here
+  //      schedule a save on every mutation in the loop, so the "Saving..."
+  //      indicator cycles forever.
+  // Sync is already called by the add/remove paths (_bcAddPill, inline
+  // pill onclick, _bcAddRegionCounties, _bcClearCounties), so calling it
+  // here was redundant. Stamps only change when the user explicitly sets
+  // field status, which re-applies stamps directly.
   const pillContainers = ['bcf_asset_pills','bcf_county_pills','bcf_state_pills','bcf_city_pills']
     .map(id => document.getElementById(id))
     .filter(Boolean);
   if(pillContainers.length){
     const mo = new MutationObserver(() => {
-      // Any pill add/remove might have changed the has-value status of the
-      // corresponding hidden input. Sync first, then re-render.
-      if(typeof _bcSyncAssets === 'function') _bcSyncAssets();
-      if(typeof _bcSyncCounties === 'function') _bcSyncCounties();
-      if(typeof _bcSyncCities === 'function') _bcSyncCities();
-      if(typeof _bcSyncStates === 'function') _bcSyncStates();
-      _bcFieldStatusApplyStamps();
       _bcFieldStatusRenderChecklist();
     });
     pillContainers.forEach(el => mo.observe(el, { childList: true, subtree: false }));

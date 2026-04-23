@@ -17718,6 +17718,53 @@ window._ddDebugDeal = function(needle){
   return rows;
 };
 
+// One-shot rescue for deals merged before the 'General Property Notes' fix:
+// any deal whose hidden `Property Description` column contains a 'Merged from
+// LEAD' block gets that block appended to its user-visible `General Property
+// Notes` field (idempotent — skips if the General Property Notes already
+// contains the marker). Call from the console:  _ddRescueMergedNotes()
+//   Pass {dryRun:true} to preview without writing.
+//   Pass {only:'1616 Highway 77'} to limit to matching addresses.
+window._ddRescueMergedNotes = async function(opts){
+  opts = opts || {};
+  const filter = (opts.only||'').toLowerCase();
+  const dryRun = !!opts.dryRun;
+  const marker = 'Merged from LEAD';
+  const targets = (allDeals||[]).filter(d => {
+    const pd = d['Property Description']||'';
+    if(!pd.includes(marker)) return false;
+    if(filter && !((d['Address']||'').toLowerCase().includes(filter))) return false;
+    const gpn = d['General Property Notes']||'';
+    if(gpn.includes(marker)) return false; // already rescued
+    return true;
+  });
+  console.log(`Found ${targets.length} deal${targets.length===1?'':'s'} with merged notes in the hidden field.`);
+  if(!targets.length) return [];
+  const previews = targets.map(d => ({
+    id: d.id.substring(0,8).toUpperCase(),
+    Address: d['Address']||'',
+    pdChars: (d['Property Description']||'').length,
+    gpnChars: (d['General Property Notes']||'').length
+  }));
+  console.table(previews);
+  if(dryRun){
+    console.log('dryRun=true, no writes performed. Call without dryRun to apply.');
+    return previews;
+  }
+  if(!confirm(`Move merged-note blocks into General Property Notes on ${targets.length} deal${targets.length===1?'':'s'}?`)) return [];
+  let ok=0, fail=0;
+  for(const d of targets){
+    const pd = d['Property Description']||'';
+    const gpn = (d['General Property Notes']||'').trim();
+    const newGpn = gpn ? (gpn + '\n\n' + pd) : pd;
+    const r = await airtableUpdate(d.id, { 'General Property Notes': newGpn });
+    if(r){ ok++; } else { fail++; }
+  }
+  console.log(`Rescue complete: ${ok} updated, ${fail} failed.`);
+  if(typeof buildSidebar === 'function') buildSidebar();
+  return { ok, fail };
+};
+
 function openDealDedupeModal(){
   _dealDedupeState.groups = _ddScanDealDuplicates();
   _dealDedupeState.modalOpen = true;
@@ -17969,7 +18016,7 @@ async function _ddMergeGroup(groupIdx){
     `Merge ${losers.length} duplicate${losers.length>1?'s':''} into:\n\n` +
     `  ${survivor['Address']||'(no address)'}\n` +
     `  Lead ${(survivor.id||'').substring(0,8).toUpperCase()}\n\n` +
-    `• All notes from duplicates will be added to this deal's Property Description.\n` +
+    `• All notes from duplicates will be appended to this deal's Property Description field.\n` +
     `• Assigned agents from duplicates will be combined onto this deal.\n` +
     `• Duplicates will be archived (reversible — see archived deals).\n\n` +
     `Continue?`
@@ -17996,7 +18043,11 @@ async function _ddMergeGroup(groupIdx){
     return blocks.length ? `${header}\n\n${blocks.join('\n\n')}` : `${header}\n(no notes on this duplicate)`;
   }).join('\n\n');
 
-  const existingDesc = (survivor['Property Description']||'').trim();
+  // IMPORTANT: the textarea the user sees labeled "Property Description"
+  // (id=prop_propDesc) is actually bound to the `General Property Notes`
+  // column, not the unused `Property Description` column. Write to the field
+  // the user actually reads.
+  const existingDesc = (survivor['General Property Notes']||'').trim();
   const newDesc = existingDesc ? `${existingDesc}\n\n${mergedBlocks}` : mergedBlocks;
 
   // Union agents — survivor's existing list + every loser's list
@@ -18012,20 +18063,24 @@ async function _ddMergeGroup(groupIdx){
   if(btnRow){ btnRow.disabled = true; btnRow.textContent = 'Merging…'; }
   try {
     const ok1 = await airtableUpdate(survivor.id, {
-      'Property Description': newDesc,
+      'General Property Notes': newDesc,
       'Assigned Agent': mergedAgents || null
     });
     if(!ok1) throw new Error('Failed to update survivor');
+    // Keep the in-memory copy in sync so a follow-up merge on the same group
+    // sees the already-appended notes instead of the pre-merge value.
+    survivor['General Property Notes'] = newDesc;
+    survivor['Assigned Agent'] = mergedAgents || null;
     // Archive losers one at a time (sequential — order matters less than simplicity here)
     for(const l of losers){
       const ok = await airtableUpdate(l.id, { 'Is Archived': true });
       if(!ok) console.warn('Failed to archive', l.id);
-      // Also tag the loser's Property Description so its history is visible
-      // if anyone un-archives it later.
+      // Also tag the loser's notes so its history is visible if anyone
+      // un-archives it later. Same field as above — General Property Notes.
       try {
         const tag = `\n\n[MERGED INTO LEAD ${(survivor.id||'').substring(0,8).toUpperCase()} on ${new Date().toLocaleDateString()}]`;
         await airtableUpdate(l.id, {
-          'Property Description': (l['Property Description']||'') + tag
+          'General Property Notes': (l['General Property Notes']||'') + tag
         });
       } catch(e){ /* non-fatal */ }
     }

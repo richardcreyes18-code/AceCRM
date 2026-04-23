@@ -33000,7 +33000,12 @@ function _liBuildDealForProperty(propIdx){
 
   const dealFields = {
     'Address': address,
-    'Pipeline Stage': 'New Lead',
+    // Seller leads land on the first real pipeline stage ('Lead'), NOT on the
+    // legacy 'New Lead' string. 'New Lead' is a FUB-era label that isn't a
+    // stage in NEW_PIPELINE_STAGES — it rendered as a detached orange pill
+    // with no corresponding Progress-Tracker circle. 'Lead' is the intended
+    // first stage in the 17-stage company pipeline.
+    'Pipeline Stage': 'Lead',
     'Date Added': new Date().toISOString().slice(0,10),
     'General Property Notes': userGeneralNotes || '',
     'Simple County': gv(`${pfx}_county`) || '',
@@ -33207,7 +33212,9 @@ async function _liSubmitSeller(){
           name: pfName,
           description: null,
           status: 'Active',
-          pipeline_stage: 'New Lead',
+          // Match the per-deal change above: 'Lead' is the real first stage
+          // in the modern pipeline, 'New Lead' is a legacy label.
+          pipeline_stage: 'Lead',
           is_archived: false,
           portfolio_notes: pfNotes || null,
           package_asking_notes: pfAskWords || null,

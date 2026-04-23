@@ -17562,16 +17562,72 @@ async function deleteDeal(dealId, addr){
 // the archive flag.
 let _dealDedupeState = { groups: [], modalOpen: false, search: '' };
 
-// Normalize "13 State Route 57, Hackettstown, NJ 07840" → "13stateroute57|07840"
-// Only street1 + zip to avoid grouping distant properties with the same street name.
+// Street-suffix canonicalization so "Street"↔"St" and "Boulevard"↔"Blvd" group together
+const _DD_SUFFIX_MAP = {
+  'boulevard':'blvd','avenue':'ave','street':'st','road':'rd','drive':'dr',
+  'lane':'ln','court':'ct','place':'pl','terrace':'ter','circle':'cir',
+  'highway':'hwy','parkway':'pkwy','route':'rt','turnpike':'tpke','pike':'pike'
+};
+const _DD_SUFFIX_ALT = 'blvd|boulevard|ave|avenue|st|street|rd|road|dr|drive|ln|lane|ct|court|pl|place|way|ter|terrace|cir|circle|hwy|highway|pkwy|parkway|pike|plaza|sq|square|tpke|turnpike';
+
+// Normalize any address into a stable "street+zip" key for dedupe grouping.
+//   "2 Kennedy Blvd, East Brunswick, NJ 08816"        → "2kennedyblvd|08816"
+//   "Med - 2 Kennedy Blvd, East Brunswick, NJ 08816"  → "2kennedyblvd|08816"  (prefix stripped)
+//   "2 Kennedy Blvd East Brunswick, NJ 08816"         → "2kennedyblvd|08816"  (no comma needed)
+//   "13 State Route 57, Hackettstown, NJ 07840"       → "13stateroute57|07840"
+//   "1616 Highway 77, Elmer, NJ"                      → "1616highway77"       (route-style)
+// Strategy: strip common deal-name prefixes → extract street via regex (suffix-anchored
+// first, then route-style, then generic fallback) → canonicalize suffix words → alphanum.
 function _ddNormalizeDealAddr(addr){
   if(!addr) return '';
-  const s = String(addr);
-  const street1 = (s.split(',')[0] || '').toLowerCase().replace(/[^a-z0-9]/g,'');
+  let s = String(addr).trim();
+
+  // Strip common deal-naming prefixes that come before the real address:
+  //   "WH - 13 State Route 57"  → "13 State Route 57"
+  //   "Med - 2 Kennedy Blvd"    → "2 Kennedy Blvd"
+  //   "LSE - 1616 Highway 77"   → "1616 Highway 77"
+  // Pattern: 1–20 non-digit, non-comma characters, followed by a dash/hyphen.
+  s = s.replace(/^\s*[^\d,]{1,20}[-–—]\s*/, '').trim();
+
+  // Pull the zip (anywhere in the string; first 5-digit run wins)
   const zipM = s.match(/\b(\d{5})\b/);
-  const zip = zipM ? zipM[1] : '';
-  if(street1.length < 3) return ''; // too short to be reliable
-  return zip ? `${street1}|${zip}` : street1;
+  const zip  = zipM ? zipM[1] : '';
+
+  const lower = s.toLowerCase();
+
+  // Try (in order): route-style → suffix-anchored → generic <num> + words fallback.
+  // Route-style FIRST because "Highway" / "Route" are also in the suffix list
+  // but for route-style addresses we want to capture the route number too.
+  let street = '';
+  const routeRe = /(\d+[-\d]*\s+(?:(?:state|us|county|nj|ny|pa)\s+)?(?:highway|hwy|route|rt|road)\s+\d+)/i;
+  const suffixRe = new RegExp(
+    '(\\d+[-\\d]*\\s+(?:[a-z][a-z\\-\'\\.]*\\s+){0,4}?(?:' + _DD_SUFFIX_ALT + ')\\b)', 'i'
+  );
+  const genericRe = /(\d+[-\d]*(?:\s+[a-z][a-z\-'\.]*){1,2})/i;
+
+  const rm = lower.match(routeRe);
+  if(rm){
+    street = rm[1];
+  } else {
+    const sm = lower.match(suffixRe);
+    if(sm){
+      street = sm[1];
+    } else {
+      const gm = lower.match(genericRe);
+      if(gm) street = gm[1];
+      else   street = lower.split(',')[0] || '';
+    }
+  }
+
+  // Canonicalize suffix words: "street" → "st", "boulevard" → "blvd", etc.
+  let norm = street.toLowerCase();
+  Object.entries(_DD_SUFFIX_MAP).forEach(([full, abbr]) => {
+    norm = norm.replace(new RegExp('\\b' + full + '\\b', 'g'), abbr);
+  });
+
+  const key = norm.replace(/[^a-z0-9]/g,'');
+  if(key.length < 3) return '';
+  return zip ? `${key}|${zip}` : key;
 }
 
 // Pick the deal with most content as default survivor; tiebreak on UUID (stable).

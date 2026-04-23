@@ -19508,6 +19508,7 @@ async function showContactDetailPage(recordId, returnTo){
             <button id="ctab_props" onclick="_contactTabSwitch('props')" style="background:transparent;border:none;border-bottom:3px solid transparent;padding:16px 20px;font-size:14px;font-weight:600;color:#64748b;cursor:pointer;margin-bottom:-1px;">🏢 Properties <span id="ctabPropsCount" style="background:#f1f5f9;color:#64748b;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:700;">…</span></button>
             <button id="ctab_buyer" onclick="_contactTabSwitch('buyer')" style="background:transparent;border:none;border-bottom:3px solid transparent;padding:16px 20px;font-size:14px;font-weight:600;color:#64748b;cursor:pointer;margin-bottom:-1px;">🎯 Buyer Criteria <span id="ctabBuyerCount" style="background:#f1f5f9;color:#64748b;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:700;">…</span></button>
             <button id="ctab_pitches" onclick="_contactTabSwitch('pitches')" style="background:transparent;border:none;border-bottom:3px solid transparent;padding:16px 20px;font-size:14px;font-weight:600;color:#64748b;cursor:pointer;margin-bottom:-1px;">📨 Pitches <span id="ctabPitchesCount" style="background:#f1f5f9;color:#64748b;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:700;">…</span></button>
+            <button id="ctab_tasks" onclick="_contactTabSwitch('tasks')" style="background:transparent;border:none;border-bottom:3px solid transparent;padding:16px 20px;font-size:14px;font-weight:600;color:#64748b;cursor:pointer;margin-bottom:-1px;">☑ Tasks <span id="ctabTasksCount" style="background:#f1f5f9;color:#64748b;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:700;">…</span></button>
           </div>
 
           <!-- Content panes -->
@@ -19546,6 +19547,19 @@ async function showContactDetailPage(recordId, returnTo){
               </div>
               <div id="contactPitchesList" style="color:#64748b;font-size:13px;"><div style="text-align:center;padding:40px;">⏳ Loading pitch history...</div></div>
             </div>
+
+            <!-- v113.5: Tasks tab — mirrors the deal card's task list, but scoped
+                 by ace_tasks.contact_id instead of .property_id. Tasks created
+                 here also surface on the global Tasks page with a contact chip. -->
+            <div id="cpane_tasks" style="display:none;">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;gap:12px;flex-wrap:wrap;">
+                <div style="font-size:13px;color:#64748b;">Tasks linked to this contact — follow-ups, call-backs, reminders. Also shows in the global Tasks page.</div>
+                <button onclick="_contactOpenCreateTaskModal('${recordId}')" style="background:#7c3aed;color:#fff;border:none;padding:10px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;font-family:'Inter',system-ui,sans-serif;white-space:nowrap;">
+                  + Create Task
+                </button>
+              </div>
+              <div id="contactTasksList" style="color:#64748b;font-size:13px;"><div style="text-align:center;padding:40px;">⏳ Loading tasks...</div></div>
+            </div>
           </div>
         </div>
       </div>
@@ -19559,6 +19573,12 @@ async function showContactDetailPage(recordId, returnTo){
   _contactLoadPitches(recordId);
   // v111.14: load rich FUB profile (all phones, emails, tags, stage, etc.)
   _contactLoadRichProfile(recordId);
+  // v113.5: load tasks linked to this contact. Also stash the id on a module
+  // var so task mutation handlers (submitEdit/toggleDone/delete) know which
+  // contact to refresh after the write lands.
+  _currentContactTasksId = recordId;
+  _currentContactTasksName = (f.Name || '');
+  _contactLoadLinkedTasks(recordId);
 
   // v102.39: sync the "+ Add to Workbench" button with the warm-cache state
   // so the button paints in its already-added form when this contact is
@@ -19583,8 +19603,8 @@ async function showContactDetailPage(recordId, returnTo){
 // inactive tabs have a transparent bottom border. Count pills switch between
 // blue-filled (active) and grey (inactive).
 function _contactTabSwitch(tab){
-  const tabs = ['props','buyer','comm','info','pitches'];
-  const pillIdMap = { props:'ctabPropsCount', buyer:'ctabBuyerCount', comm:'ctabCommCount', pitches:'ctabPitchesCount' };
+  const tabs = ['props','buyer','comm','info','pitches','tasks'];
+  const pillIdMap = { props:'ctabPropsCount', buyer:'ctabBuyerCount', comm:'ctabCommCount', pitches:'ctabPitchesCount', tasks:'ctabTasksCount' };
   tabs.forEach(t=>{
     const btn = document.getElementById('ctab_'+t);
     const pane = document.getElementById('cpane_'+t);
@@ -34712,19 +34732,31 @@ function _fmtTaskDue(dateStr){
 
 // ── CREATE TASK MODAL ──────────────────────────────────────────
 let _taskModalDealId=null, _taskModalDealAddr='', _taskModalSrc='deal';
+// v113.5: task-to-contact linking. The task modal can be opened from the
+// contact card (source='contact'), in which case _taskModalContactId is
+// stamped onto the new row's contact_id column. The contact card's Tasks
+// tab uses _currentContactTasksId to know what to refresh after mutations.
+let _taskModalContactId=null, _taskModalContactName='';
+let _currentContactTasksId=null, _currentContactTasksName='';
 
-function openCreateTaskModal(dealId=null,address='',source='deal'){
+function openCreateTaskModal(dealId=null,address='',source='deal',contactId=null,contactName=''){
   _taskModalDealId=dealId; _taskModalDealAddr=address; _taskModalSrc=source;
+  _taskModalContactId=contactId; _taskModalContactName=contactName;
   let modal=document.getElementById('createTaskModal');
   if(!modal){ modal=document.createElement('div'); modal.id='createTaskModal'; document.body.appendChild(modal); }
   modal.style.cssText='position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;';
   const tomorrow=new Date(Date.now()+86400000).toISOString().split('T')[0];
+  // v113.5: subtitle describes the link — deal address, contact name, or "General".
+  // Priority: deal (most specific) → contact → general.
+  let subtitle = 'General Task (no link)';
+  if(dealId) subtitle = '📍 ' + address;
+  else if(contactId) subtitle = '👤 ' + (contactName || 'Linked contact');
   modal.innerHTML=`
     <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:480px;max-width:94vw;box-shadow:0 20px 60px rgba(0,0,0,0.25);overflow:hidden;">
       <div style="background:linear-gradient(135deg,#0f172a,#4c1d95);padding:14px 18px;display:flex;align-items:center;justify-content:space-between;">
         <div>
           <div style="font-size:15px;font-weight:600;color:#fff;">☑ Create Task</div>
-          <div style="font-size:11px;color:#c4b5fd;margin-top:2px;">${dealId?address:'General Task (no deal linked)'}</div>
+          <div style="font-size:11px;color:#c4b5fd;margin-top:2px;">${subtitle.replace(/</g,'&lt;')}</div>
         </div>
         <button onclick="closeTaskModal()" style="background:none;border:none;color:#94a3b8;font-size:20px;cursor:pointer;line-height:1;">✕</button>
       </div>
@@ -34830,6 +34862,7 @@ async function submitEditTask(taskId, source){
     }
     closeTaskModal(); showSaveConfirm('✓ Task updated');
     if(source==='deal'&&currentDeal?.id) _loadAndRenderDealTasks(currentDeal.id, currentDeal['Address']||'');
+    else if(source==='contact' && _currentContactTasksId) _contactLoadLinkedTasks(_currentContactTasksId);
     else if(source==='global') showTasksPage();
   }catch(e){
     if(btn){btn.disabled=false;btn.textContent='Save Changes';}
@@ -34858,6 +34891,10 @@ async function submitCreateTask(){
     if(isSupabase()){
       const sbTask={task:name, status:'Pending', priority:prio||null, due_date:due||null, notes:notes||null};
       if(_taskModalDealId&&!_taskModalDealId.startsWith('demo')) sbTask.property_id=_taskModalDealId;
+      // v113.5: stamp contact_id when the task was created from a contact card.
+      // A task can optionally have both (deal + contact), though today the UI
+      // only sets one or the other.
+      if(_taskModalContactId) sbTask.contact_id=_taskModalContactId;
       // Stamp ownership so Dashboard + Tasks page can filter to the current user
       if(_currentUser && _currentUser.id) sbTask.created_by_user_id = _currentUser.id;
       await _sbPost(SB_TABLES.tasks, sbTask);
@@ -34870,6 +34907,7 @@ async function submitCreateTask(){
     }
     closeTaskModal(); showSaveConfirm('☑ Task created: '+name);
     if(_taskModalSrc==='deal'&&document.getElementById('dealTasksContent')) _loadAndRenderDealTasks(_taskModalDealId,_taskModalDealAddr);
+    else if(_taskModalSrc==='contact' && _taskModalContactId) _contactLoadLinkedTasks(_taskModalContactId);
     else if(_taskModalSrc==='global') showTasksPage();
   }catch(e){
     if(btn){btn.disabled=false;btn.textContent='Create Task';}
@@ -34953,6 +34991,88 @@ async function _loadAndRenderDealTasks(dealId, address){
   }
 }
 
+// ── CONTACT TASKS (v113.5) ─────────────────────────────────────
+// Opens the Create Task modal pre-linked to a contact. Resolves the
+// contact name at click time (cheaper than escaping it into the HTML)
+// and pipes it through `openCreateTaskModal(... 'contact', id, name)`.
+function _contactOpenCreateTaskModal(contactId){
+  let name = '';
+  try {
+    const c = (Array.isArray(allContacts) ? allContacts : []).find(r => r.id === contactId);
+    if(c) name = (c.fields && c.fields.Name) || '';
+  } catch(e){}
+  openCreateTaskModal(null, '', 'contact', contactId, name);
+}
+
+// Load tasks linked to this contact (ace_tasks.contact_id = contactId) and
+// paint them into #contactTasksList + update the tab count pill. Mirrors
+// _loadAndRenderDealTasks shape so edit/toggle/delete buttons can reuse the
+// same handlers with source='contact'.
+async function _contactLoadLinkedTasks(contactId){
+  const el = document.getElementById('contactTasksList');
+  const badge = document.getElementById('ctabTasksCount');
+  if(!el) return;
+  const cfg = getConfig();
+  if(!cfg.key && !isSupabase()){
+    el.innerHTML = '<div style="text-align:center;padding:24px;color:var(--text3);font-size:12px;">Connect your database to view tasks.</div>';
+    if(badge) badge.textContent = '—';
+    return;
+  }
+  try {
+    let tasks = [];
+    if(isSupabase()){
+      const rows = await _sbGet(SB_TABLES.tasks, `contact_id=eq.${contactId}&select=*&order=due_date.asc.nullslast`);
+      tasks = (rows||[]).map(r => ({ id:r.id, 'Task':r.task, 'Status':r.status, 'Priority':r.priority, 'Due Date':r.due_date, 'Notes':r.notes, 'Related Property': r.property_id?[r.property_id]:[] }));
+    } else {
+      // Airtable fallback — tasks linked to contacts aren't supported in the
+      // legacy Airtable-only mode; show an empty state.
+      tasks = [];
+    }
+    if(badge) badge.textContent = String(tasks.filter(t => t['Status'] !== 'Done').length);
+    if(!tasks.length){
+      el.innerHTML = '<div style="text-align:center;padding:36px;color:var(--text3);">'
+        + '<div style="font-size:32px;margin-bottom:8px;">☑</div>'
+        + '<div style="font-size:13px;font-weight:600;margin-bottom:4px;color:#334155;">No tasks yet for this contact</div>'
+        + '<div style="font-size:12px;margin-bottom:14px;">Log call-backs, follow-up reminders, and any to-dos tied to this person.</div>'
+        + '<button onclick="_contactOpenCreateTaskModal(\'' + contactId + '\')" style="background:#7c3aed;color:#fff;border:none;padding:8px 18px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">+ Create First Task</button>'
+        + '</div>';
+      return;
+    }
+    const pending = tasks.filter(t => t['Status'] !== 'Done');
+    const done    = tasks.filter(t => t['Status'] === 'Done');
+    const row = t => {
+      const isDone = t['Status'] === 'Done';
+      const due = _fmtTaskDue(t['Due Date']);
+      const prio = t['Priority'] ? '<span style="' + _taskPrioStyle(t['Priority']) + 'padding:2px 8px;border-radius:99px;font-size:10px;font-weight:600;white-space:nowrap;">' + t['Priority'].trim() + '</span>' : '';
+      // If this task also has a property link, show a chip so the agent sees
+      // both links at a glance. Click the chip to jump to the deal.
+      const linkedDealId = (t['Related Property']||[])[0];
+      const linkedDeal = linkedDealId ? (allDeals||[]).find(d => d.id === linkedDealId) : null;
+      const dealChip = linkedDeal
+        ? '<span onclick="event.stopPropagation();openDeal(allDeals.find(x=>x.id===\'' + linkedDealId + '\'))" style="cursor:pointer;background:var(--primary-light);color:var(--primary);border-radius:4px;padding:2px 7px;font-size:10px;font-weight:500;white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis;display:inline-block;" title="' + ((linkedDeal['Address']||'').replace(/"/g,'&quot;')) + '">📍 ' + ((linkedDeal['Address']||'Deal').split(',')[0]) + '</span>'
+        : '';
+      const safeTask = (t['Task']||'').replace(/'/g,"\\'");
+      const safePrio = (t['Priority']||'').trim();
+      const safeNotes = (t['Notes']||'').replace(/'/g,"\\'").replace(/\n/g,' ');
+      return '<div style="background:var(--surface);border:1px solid ' + (due.overdue && !isDone ? '#fca5a5' : 'var(--border)') + ';border-radius:var(--radius-sm);padding:11px 14px;margin-bottom:7px;display:flex;align-items:flex-start;gap:12px;' + (isDone ? 'opacity:0.55;' : '') + '">'
+        + '<input type="checkbox" ' + (isDone?'checked':'') + ' onchange="toggleTaskDone(\'' + t.id + '\',\'' + t['Status'] + '\',\'contact\')" style="width:16px;height:16px;margin-top:2px;cursor:pointer;flex-shrink:0;accent-color:#7c3aed;">'
+        + '<div style="flex:1;min-width:0;">'
+        +   '<div style="font-size:13px;font-weight:600;' + (isDone?'text-decoration:line-through;':'') + 'margin-bottom:4px;">' + (t['Task']||'Untitled') + '</div>'
+        +   (t['Notes'] ? '<div style="font-size:12px;color:var(--text2);margin-bottom:5px;">' + t['Notes'] + '</div>' : '')
+        +   '<div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">' + prio + dealChip + '<span style="font-size:11px;color:' + due.color + ';font-weight:500;">' + due.text + '</span></div>'
+        + '</div>'
+        + '<button onclick="openEditTaskModal(\'' + t.id + '\',\'' + safeTask + '\',\'' + safePrio + '\',\'' + (t['Due Date']||'') + '\',\'' + safeNotes + '\',\'contact\')" title="Edit" style="background:none;border:none;color:var(--text3);font-size:14px;cursor:pointer;padding:0 4px;flex-shrink:0;" onmouseover="this.style.color=\'#7c3aed\'" onmouseout="this.style.color=\'var(--text3)\'">✏️</button>'
+        + '<button onclick="deleteTaskRecord(\'' + t.id + '\',\'contact\')" title="Delete" style="background:none;border:none;color:var(--text3);font-size:16px;cursor:pointer;padding:0 4px;flex-shrink:0;" onmouseover="this.style.color=\'#dc2626\'" onmouseout="this.style.color=\'var(--text3)\'">✕</button>'
+        + '</div>';
+    };
+    el.innerHTML =
+      (pending.length ? '<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:8px;">Open (' + pending.length + ')</div>' + pending.map(row).join('') : '')
+      + (done.length ? '<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-top:16px;margin-bottom:8px;">Completed (' + done.length + ')</div>' + done.map(row).join('') : '');
+  } catch(e) {
+    el.innerHTML = '<div style="padding:16px;color:#dc2626;font-size:12px;">Failed to load tasks: ' + e.message + '</div>';
+  }
+}
+
 // ── TASK ACTIONS ───────────────────────────────────────────────
 async function toggleTaskDone(taskId, currentStatus, source){
   const cfg=getConfig();
@@ -34967,6 +35087,7 @@ async function toggleTaskDone(taskId, currentStatus, source){
       });
     }
     if(source==='deal'&&currentDeal?.id) _loadAndRenderDealTasks(currentDeal.id, currentDeal['Address']||'');
+    else if(source==='contact' && _currentContactTasksId) _contactLoadLinkedTasks(_currentContactTasksId);
     else if(source==='global') showTasksPage();
   }catch(e){ alert('Failed to update task: '+e.message); }
 }
@@ -34984,6 +35105,7 @@ async function deleteTaskRecord(taskId, source){
     }
     showSaveConfirm('✓ Task deleted');
     if(source==='deal'&&currentDeal?.id) _loadAndRenderDealTasks(currentDeal.id, currentDeal['Address']||'');
+    else if(source==='contact' && _currentContactTasksId) _contactLoadLinkedTasks(_currentContactTasksId);
     else if(source==='global') showTasksPage();
   }catch(e){ alert('Failed to delete task: '+e.message); }
 }
@@ -35030,7 +35152,28 @@ async function _renderGlobalTasks(){
       if(filterVal==='pending') params+='&status=neq.Done';
       if(filterVal==='done')    params+='&status=eq.Done';
       const rows=await _sbGet(SB_TABLES.tasks, params);
-      tasks=(rows||[]).map(r=>({id:r.id,'Task':r.task,'Status':r.status,'Priority':r.priority,'Due Date':r.due_date,'Notes':r.notes,'Related Property':r.property_id?[r.property_id]:[]}));
+      tasks=(rows||[]).map(r=>({id:r.id,'Task':r.task,'Status':r.status,'Priority':r.priority,'Due Date':r.due_date,'Notes':r.notes,'Related Property':r.property_id?[r.property_id]:[],'_contact_id':r.contact_id||null}));
+
+      // v113.5: resolve contact names for any task linked to a contact.
+      // allContacts may be unloaded (heavy 5900-row list) so we fetch just
+      // the ids we need in one PostgREST call.
+      const contactIds = [...new Set(tasks.map(t=>t._contact_id).filter(Boolean))];
+      const contactNameById = new Map();
+      if(contactIds.length){
+        // Warm-cache first
+        (allContacts||[]).forEach(c => {
+          if(contactIds.includes(c.id)) contactNameById.set(c.id, (c.fields && c.fields.Name) || '');
+        });
+        const missing = contactIds.filter(id => !contactNameById.has(id));
+        if(missing.length){
+          try {
+            const list = missing.map(id => 'id.eq.' + id).join(',');
+            const cRows = await _sbGet(SB_TABLES.contacts, 'or=(' + list + ')&select=id,name');
+            (cRows||[]).forEach(r => contactNameById.set(r.id, r.name || ''));
+          } catch(e){ console.warn('Task contact-name lookup failed:', e.message); }
+        }
+      }
+      tasks.forEach(t => { if(t._contact_id) t._contact_name = contactNameById.get(t._contact_id) || 'Contact'; });
     } else {
       const res=await fetch(`https://api.airtable.com/v0/${cfg.base}/${TASKS_TABLE_ID}?maxRecords=300`,{headers:{Authorization:`Bearer ${cfg.key}`}});
       if(!res.ok) throw new Error(await res.text());
@@ -35075,14 +35218,23 @@ async function _renderGlobalTasks(){
       const linkedId=(t['Related Property']||[])[0];
       const linkedDeal=linkedId?allDeals.find(d=>d.id===linkedId):null;
       const dealChip=linkedDeal
-        ?`<span onclick="openDeal(allDeals.find(x=>x.id==='${linkedId}'))" style="cursor:pointer;background:var(--primary-light);color:var(--primary);border-radius:4px;padding:2px 7px;font-size:10px;font-weight:500;white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis;display:inline-block;" title="${linkedDeal['Address']||''}">📍 ${(linkedDeal['Address']||'Deal').split(',')[0]}</span>`
-        :`<span style="background:var(--bg);color:var(--text3);border-radius:4px;padding:2px 7px;font-size:10px;">General</span>`;
+        ?`<span onclick="event.stopPropagation();openDeal(allDeals.find(x=>x.id==='${linkedId}'))" style="cursor:pointer;background:var(--primary-light);color:var(--primary);border-radius:4px;padding:2px 7px;font-size:10px;font-weight:500;white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis;display:inline-block;" title="${(linkedDeal['Address']||'').replace(/"/g,'&quot;')}">📍 ${(linkedDeal['Address']||'Deal').split(',')[0]}</span>`
+        :'';
+      // v113.5: tasks created from a contact card get a contact chip that
+      // jumps into the contact detail. Tasks with neither a deal nor a
+      // contact fall back to the "General" chip so it's obvious at a glance.
+      const contactChip = t._contact_id
+        ? `<span onclick="event.stopPropagation();showContactDetailPage('${t._contact_id}')" style="cursor:pointer;background:#fef3c7;color:#b45309;border:1px solid #fde68a;border-radius:4px;padding:2px 7px;font-size:10px;font-weight:500;white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis;display:inline-block;" title="${String(t._contact_name||'Contact').replace(/"/g,'&quot;')}">👤 ${String(t._contact_name||'Contact').replace(/</g,'&lt;')}</span>`
+        : '';
+      const generalChip = (!linkedDeal && !t._contact_id)
+        ? `<span style="background:var(--bg);color:var(--text3);border-radius:4px;padding:2px 7px;font-size:10px;">General</span>`
+        : '';
       return `<div style="background:var(--surface);border:1px solid ${due.overdue&&!isDone?'#fca5a5':'var(--border)'};border-radius:var(--radius-sm);padding:11px 14px;margin-bottom:7px;display:flex;align-items:flex-start;gap:12px;${isDone?'opacity:0.55;':''}">
         <input type="checkbox" ${isDone?'checked':''} onchange="toggleTaskDone('${t.id}','${t['Status']}','global')" style="width:16px;height:16px;margin-top:2px;cursor:pointer;flex-shrink:0;accent-color:#7c3aed;">
         <div style="flex:1;min-width:0;">
           <div style="font-size:13px;font-weight:600;${isDone?'text-decoration:line-through;':''}margin-bottom:4px;">${t['Task']||'Untitled'}</div>
           ${t['Notes']?`<div style="font-size:12px;color:var(--text2);margin-bottom:5px;">${t['Notes']}</div>`:''}
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">${prio}${dealChip}<span style="font-size:11px;color:${due.color};font-weight:500;">${due.text}</span></div>
+          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">${prio}${dealChip}${contactChip}${generalChip}<span style="font-size:11px;color:${due.color};font-weight:500;">${due.text}</span></div>
         </div>
         <button onclick="openEditTaskModal('${t.id}','${(t['Task']||'').replace(/'/g,"\\'")}','${(t['Priority']||'').trim()}','${t['Due Date']||''}','${(t['Notes']||'').replace(/'/g,"\\'").replace(/\n/g,' ')}','global')" title="Edit" style="background:none;border:none;color:var(--text3);font-size:14px;cursor:pointer;padding:0 4px;flex-shrink:0;" onmouseover="this.style.color='#7c3aed'" onmouseout="this.style.color='var(--text3)'">✏️</button>
         <button onclick="deleteTaskRecord('${t.id}','global')" title="Delete" style="background:none;border:none;color:var(--text3);font-size:16px;cursor:pointer;padding:0 4px;flex-shrink:0;" onmouseover="this.style.color='#dc2626'" onmouseout="this.style.color='var(--text3)'">✕</button>

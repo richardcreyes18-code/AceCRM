@@ -17598,23 +17598,33 @@ function _ddNormalizeDealAddr(addr){
   // Try (in order): route-style → suffix-anchored → generic <num> + words fallback.
   // Route-style FIRST because "Highway" / "Route" are also in the suffix list
   // but for route-style addresses we want to capture the route number too.
+  //
+  // For each pattern we take the LAST match in the string, not the first. Deal
+  // names often prefix the real address with junky descriptors that contain
+  // their own numbers — "Med 3500 SqFt - 2 Kennedy Blvd". The real street is
+  // at the END. Using the last match skips the "3500 sqft" kind of noise.
   let street = '';
-  const routeRe = /(\d+[-\d]*\s+(?:(?:state|us|county|nj|ny|pa)\s+)?(?:highway|hwy|route|rt|road)\s+\d+)/i;
+  const routeRe = /(\d+[-\d]*\s+(?:(?:state|us|county|nj|ny|pa)\s+)?(?:highway|hwy|route|rt|road)\s+\d+)/gi;
   const suffixRe = new RegExp(
-    '(\\d+[-\\d]*\\s+(?:[a-z][a-z\\-\'\\.]*\\s+){0,4}?(?:' + _DD_SUFFIX_ALT + ')\\b)', 'i'
+    '(\\d+[-\\d]*\\s+(?:[a-z][a-z\\-\'\\.]*\\s+){0,4}?(?:' + _DD_SUFFIX_ALT + ')\\b)', 'gi'
   );
-  const genericRe = /(\d+[-\d]*(?:\s+[a-z][a-z\-'\.]*){1,2})/i;
+  const genericRe = /(\d+[-\d]*(?:\s+[a-z][a-z\-'\.]*){1,2})/gi;
 
-  const rm = lower.match(routeRe);
+  const lastMatch = (str, re) => {
+    const matches = [...str.matchAll(re)];
+    return matches.length ? matches[matches.length-1][1] : null;
+  };
+
+  const rm = lastMatch(lower, routeRe);
   if(rm){
-    street = rm[1];
+    street = rm;
   } else {
-    const sm = lower.match(suffixRe);
+    const sm = lastMatch(lower, suffixRe);
     if(sm){
-      street = sm[1];
+      street = sm;
     } else {
-      const gm = lower.match(genericRe);
-      if(gm) street = gm[1];
+      const gm = lastMatch(lower, genericRe);
+      if(gm) street = gm;
       else   street = lower.split(',')[0] || '';
     }
   }
@@ -17649,11 +17659,29 @@ function _ddPickDefaultSurvivor(deals){
   })[0].id;
 }
 
+// Pick the best available address-like field for dedupe keying.
+// Falls back to Name / Property Name if Address is blank OR produces no key
+// (e.g. the Address has prefix junk like "Med 3500 SqFt - 2 Kennedy Blvd" which
+// contains digits in the prefix — the prefix-strip can't strip those, but the
+// Name field may be cleaner, or vice-versa). Returns the first non-empty key.
+function _ddDealKey(d){
+  const candidates = [
+    d['Address'] || '',
+    d['Name'] || '',
+    d['Property Name'] || ''
+  ];
+  for(const c of candidates){
+    const k = _ddNormalizeDealAddr(c);
+    if(k) return k;
+  }
+  return '';
+}
+
 function _ddScanDealDuplicates(){
   const groups = {};
   (allDeals||[]).forEach(d => {
     if(d['Is Archived']) return;
-    const key = _ddNormalizeDealAddr(d['Address']||'');
+    const key = _ddDealKey(d);
     if(!key) return;
     if(!groups[key]) groups[key] = [];
     groups[key].push(d);
@@ -17663,6 +17691,32 @@ function _ddScanDealDuplicates(){
     .map(([key, arr]) => ({ key, deals: arr, survivorId: _ddPickDefaultSurvivor(arr) }))
     .sort((a,b) => b.deals.length - a.deals.length); // biggest groups first
 }
+
+// Debug helper — paste a substring like "Kennedy" in the console:
+//   _ddDebugDeal('Kennedy')
+// Prints every non-archived deal whose Address/Name/Property Name contains it,
+// along with the normalized dedupe key it gets. Lets us see why two variants
+// land in different groups.
+window._ddDebugDeal = function(needle){
+  const n = String(needle||'').toLowerCase();
+  const rows = (allDeals||[])
+    .filter(d => !d['Is Archived'])
+    .filter(d => {
+      return ['Address','Name','Property Name'].some(f => (d[f]||'').toLowerCase().includes(n));
+    })
+    .map(d => ({
+      id: d.id,
+      Address: d['Address']||'',
+      Name: d['Name']||'',
+      PropertyName: d['Property Name']||'',
+      keyFromAddress: _ddNormalizeDealAddr(d['Address']||''),
+      keyFromName:    _ddNormalizeDealAddr(d['Name']||''),
+      keyFromPropName:_ddNormalizeDealAddr(d['Property Name']||''),
+      finalKey: _ddDealKey(d)
+    }));
+  console.table(rows);
+  return rows;
+};
 
 function openDealDedupeModal(){
   _dealDedupeState.groups = _ddScanDealDuplicates();

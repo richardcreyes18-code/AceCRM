@@ -27178,7 +27178,10 @@ async function bcOpenExpanded(recordId){
           <span id="bcSaveMsg" style="color:#90ff90;font-size:11px;display:none;"></span>
         </div>
       </div>
-      <script>_bcCurrentRecordId='${recordId}';<\/script>
+      <!-- v113.7: _bcCurrentRecordId is now set in JS below. Script tags
+           injected via innerHTML don't execute, which was silently breaking
+           auto-save (the guard clause returned on every keystroke). -->
+
 
       <div style="padding:20px;font-size:11px;font-family:Tahoma,Arial,sans-serif;max-width:1100px;">
 
@@ -27494,6 +27497,11 @@ async function bcOpenExpanded(recordId){
 
       </div>
     </div>`;
+  // v113.7: set the record id HERE (not via an embedded <script> tag,
+  // since script tags injected via innerHTML don't execute). Without
+  // this, _bcAutoSave() bailed on its first guard clause and no edits
+  // to this page ever persisted until the user hit the manual Save.
+  _bcCurrentRecordId = recordId;
   // v102.39: sync the "+ Add to Workbench" button on the BC card with the
   // warm-cache state so it paints in its already-added form when this
   // contact is already on the agent's Workbench.

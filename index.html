@@ -2081,6 +2081,9 @@ function _aceSyncDispatch(ev){
       case 'mypipeline.add':      return _aceSyncHandleMyPipelineAdd(msg.payload);
       case 'mypipeline.remove':   return _aceSyncHandleMyPipelineRemove(msg.payload);
       case 'mypipeline.move':     return _aceSyncHandleMyPipelineMove(msg.payload);
+      case 'mypipeline.portfolio_add':    return _aceSyncHandleMyPipelinePortfolioAdd(msg.payload);
+      case 'mypipeline.portfolio_remove': return _aceSyncHandleMyPipelinePortfolioRemove(msg.payload);
+      case 'mypipeline.portfolio_move':   return _aceSyncHandleMyPipelinePortfolioMove(msg.payload);
       case 'mypipeline.views':    return _aceSyncHandleViewsDirty();
     }
   }catch(e){
@@ -2166,6 +2169,51 @@ function _aceSyncHandleMyPipelineMove(payload){
   if(!payload || !payload.dealId || !payload.stageId) return;
   if(typeof _myPipelineDealStage === 'undefined') return;
   _myPipelineDealStage.set(payload.dealId, payload.stageId);
+  if(typeof _myPipelineRerenderIfVisible === 'function') _myPipelineRerenderIfVisible();
+}
+
+// Portfolio siblings of the above three. Mirror the same guard +
+// mutate-Set/Map + rerender pattern.
+function _aceSyncHandleMyPipelinePortfolioAdd(payload){
+  if(!payload || !payload.portfolioId) return;
+  if(typeof _myPipelinePortfolioIds === 'undefined') return;
+  _myPipelinePortfolioIds.add(payload.portfolioId);
+  if(payload.stageId && typeof _myPipelinePortfolioStage !== 'undefined'){
+    _myPipelinePortfolioStage.set(payload.portfolioId, payload.stageId);
+  }
+  if(typeof _renderPortfolioDetail === 'function'
+     && typeof _currentPortfolioId !== 'undefined'
+     && _currentPortfolioId === payload.portfolioId){
+    const p = (allPortfolios||[]).find(x => x.id === payload.portfolioId);
+    if(p) _renderPortfolioDetail(p);
+  }
+  if(typeof _myPipelineRerenderIfVisible === 'function') _myPipelineRerenderIfVisible();
+}
+
+function _aceSyncHandleMyPipelinePortfolioRemove(payload){
+  if(!payload || !payload.portfolioId) return;
+  if(typeof _myPipelinePortfolioIds === 'undefined') return;
+  _myPipelinePortfolioIds.delete(payload.portfolioId);
+  if(typeof _myPipelinePortfolioStage !== 'undefined') _myPipelinePortfolioStage.delete(payload.portfolioId);
+  if(typeof _renderPortfolioDetail === 'function'
+     && typeof _currentPortfolioId !== 'undefined'
+     && _currentPortfolioId === payload.portfolioId){
+    const p = (allPortfolios||[]).find(x => x.id === payload.portfolioId);
+    if(p) _renderPortfolioDetail(p);
+  }
+  if(typeof _myPipelineRerenderIfVisible === 'function') _myPipelineRerenderIfVisible();
+}
+
+function _aceSyncHandleMyPipelinePortfolioMove(payload){
+  if(!payload || !payload.portfolioId || !payload.stageId) return;
+  if(typeof _myPipelinePortfolioStage === 'undefined') return;
+  _myPipelinePortfolioStage.set(payload.portfolioId, payload.stageId);
+  if(typeof _renderPortfolioDetail === 'function'
+     && typeof _currentPortfolioId !== 'undefined'
+     && _currentPortfolioId === payload.portfolioId){
+    const p = (allPortfolios||[]).find(x => x.id === payload.portfolioId);
+    if(p) _renderPortfolioDetail(p);
+  }
   if(typeof _myPipelineRerenderIfVisible === 'function') _myPipelineRerenderIfVisible();
 }
 
@@ -20101,7 +20149,8 @@ function _myPipelineHideRemoveModal(){
 // _myPipelineDealStage. Drag between columns calls agent_pipeline_move.
 
 let _myPipelineBoardMounted = false; // tracks whether _showMyPipelineBoard rendered into #mainArea
-let _myPipelineDragId       = null;  // deal id currently being dragged (namespaced to avoid collision)
+let _myPipelineDragId       = null;  // id currently being dragged (deal OR portfolio)
+let _myPipelineDragKind     = null;  // 'deal' | 'portfolio' — route the drop to the correct mover
 
 // Called from add/remove paths to re-paint the board if it's the active view.
 function _myPipelineRerenderIfVisible(){
@@ -20183,6 +20232,9 @@ async function addPortfolioToMyPipeline(portfolioId, btnEl){
       const newLead = _myPipelineStageByKey('new_lead');
       if(newLead) _myPipelinePortfolioStage.set(portfolioId, newLead.id);
     }
+    // Board view may be open in a different tab/section — re-paint so the
+    // new portfolio card appears in the right column immediately.
+    if(typeof _myPipelineRerenderIfVisible === 'function') _myPipelineRerenderIfVisible();
     if(typeof showSaveConfirm === 'function'){
       showSaveConfirm(result.already_present ? 'Already in Personal Pipeline' : 'Added to Personal Pipeline');
     }
@@ -20219,6 +20271,7 @@ async function removePortfolioFromMyPipeline(portfolioId){
     }
     _myPipelinePortfolioIds.delete(portfolioId);
     _myPipelinePortfolioStage.delete(portfolioId);
+    if(typeof _myPipelineRerenderIfVisible === 'function') _myPipelineRerenderIfVisible();
     if(typeof showSaveConfirm === 'function') showSaveConfirm('Removed from Personal Pipeline');
     if(typeof _aceSyncPost === 'function'){
       _aceSyncPost('mypipeline.portfolio_remove', { portfolioId: portfolioId });
@@ -20241,6 +20294,7 @@ async function _myPipelineMovePortfolio(portfolioId, newStageKey){
   if(prevStageId === targetStage.id) return;
   // Optimistic
   _myPipelinePortfolioStage.set(portfolioId, targetStage.id);
+  if(typeof _myPipelineRerenderIfVisible === 'function') _myPipelineRerenderIfVisible();
   try {
     const result = await _sbRpc('agent_pipeline_move_portfolio', {
       p_user_id: _currentUser.id, p_portfolio_id: portfolioId, p_new_stage_key: newStageKey
@@ -20248,6 +20302,7 @@ async function _myPipelineMovePortfolio(portfolioId, newStageKey){
     if(result && result.error){
       if(prevStageId) _myPipelinePortfolioStage.set(portfolioId, prevStageId);
       else _myPipelinePortfolioStage.delete(portfolioId);
+      if(typeof _myPipelineRerenderIfVisible === 'function') _myPipelineRerenderIfVisible();
       if(typeof showSaveConfirm === 'function') showSaveConfirm('Pipeline: ' + result.error);
       return;
     }
@@ -20260,6 +20315,7 @@ async function _myPipelineMovePortfolio(portfolioId, newStageKey){
   } catch(e){
     if(prevStageId) _myPipelinePortfolioStage.set(portfolioId, prevStageId);
     else _myPipelinePortfolioStage.delete(portfolioId);
+    if(typeof _myPipelineRerenderIfVisible === 'function') _myPipelineRerenderIfVisible();
     console.error('_myPipelineMovePortfolio failed:', e);
     if(typeof showSaveConfirm === 'function') showSaveConfirm('Pipeline: ' + (e.message || 'move failed'));
   }
@@ -20269,8 +20325,19 @@ async function _myPipelineMovePortfolio(portfolioId, newStageKey){
 // pipeline's pipelineDragStart/Drop).
 function _myPipelineDragStart(e, dealId){
   _myPipelineDragId = dealId;
+  _myPipelineDragKind = 'deal';
   e.dataTransfer.effectAllowed = 'move';
   try { e.dataTransfer.setData('text/plain', dealId); } catch(err) {}
+  if(e.currentTarget) e.currentTarget.style.opacity = '0.4';
+}
+// Portfolio drag-start mirrors the deal one but flags the drop-kind so
+// _myPipelineDrop routes to _myPipelineMovePortfolio (portfolios live in
+// a separate table and need the portfolio-specific RPC).
+function _myPipelineDragStartPortfolio(e, portfolioId){
+  _myPipelineDragId = portfolioId;
+  _myPipelineDragKind = 'portfolio';
+  e.dataTransfer.effectAllowed = 'move';
+  try { e.dataTransfer.setData('text/plain', portfolioId); } catch(err) {}
   if(e.currentTarget) e.currentTarget.style.opacity = '0.4';
 }
 function _myPipelineDragEnd(e){
@@ -20291,12 +20358,15 @@ function _myPipelineDragLeave(e){
 }
 function _myPipelineDrop(e, newStageKey){
   e.preventDefault();
-  const dealId = _myPipelineDragId;
+  const id   = _myPipelineDragId;
+  const kind = _myPipelineDragKind;
   _myPipelineDragId = null;
+  _myPipelineDragKind = null;
   const body = e.currentTarget.querySelector('.my-pipeline-col-body');
   if(body) body.style.outline = '';
-  if(!dealId) return;
-  _myPipelineMove(dealId, newStageKey);
+  if(!id) return;
+  if(kind === 'portfolio') _myPipelineMovePortfolio(id, newStageKey);
+  else _myPipelineMove(id, newStageKey);
 }
 
 // Manual refresh button
@@ -20333,17 +20403,42 @@ async function _showMyPipelineBoard(){
     const d = allList.find(x => x.id === dealId);
     if(d) pipelineDeals.push(d);
   });
-  const totalInPipeline = pipelineDeals.length;
   const filteredDeals = _myPipelineApplyFilters(pipelineDeals);
+
+  // Portfolios live in a sibling set (_myPipelinePortfolioIds /
+  // _myPipelinePortfolioStage). They share the same stage table, so we
+  // slot them into the same byStage map as deals and let the column
+  // renderer tell them apart via the {kind} wrapper.
+  const allPfList = (typeof allPortfolios !== 'undefined' ? allPortfolios : []);
+  const pipelinePortfolios = [];
+  if(_myPipelinePortfolioStage && _myPipelinePortfolioStage.forEach){
+    _myPipelinePortfolioStage.forEach((stageId, portfolioId) => {
+      const p = allPfList.find(x => x.id === portfolioId);
+      if(p) pipelinePortfolios.push(p);
+    });
+  }
+  const filteredPortfolios = _myPipelineApplyFiltersPortfolio(pipelinePortfolios);
+
+  const totalInPipeline = pipelineDeals.length + pipelinePortfolios.length;
 
   const byStage = new Map();
   stages.forEach(s => byStage.set(s.id, []));
   filteredDeals.forEach(d => {
     const stageId = _myPipelineDealStage.get(d.id);
-    if(byStage.has(stageId)) byStage.get(stageId).push(d);
+    const entry = { kind:'deal', obj:d };
+    if(byStage.has(stageId)) byStage.get(stageId).push(entry);
     else {
       const first = stages[0];
-      if(first) byStage.get(first.id).push(d);
+      if(first) byStage.get(first.id).push(entry);
+    }
+  });
+  filteredPortfolios.forEach(p => {
+    const stageId = _myPipelinePortfolioStage.get(p.id);
+    const entry = { kind:'portfolio', obj:p };
+    if(byStage.has(stageId)) byStage.get(stageId).push(entry);
+    else {
+      const first = stages[0];
+      if(first) byStage.get(first.id).push(entry);
     }
   });
 
@@ -20361,6 +20456,8 @@ async function _showMyPipelineBoard(){
   const columnsHTML = visibleStages.map(s => {
     const cards = byStage.get(s.id) || [];
     const color = s.color || '#1e3a8a';
+    // "N items" reads right whether the column holds deals, portfolios, or both.
+    const countLabel = cards.length + ' item' + (cards.length===1?'':'s');
     return ''
       + '<div class="my-pipeline-col-wrap" data-stage-key="' + s.key + '"'
       +   ' ondragover="_myPipelineDragOver(event)"'
@@ -20369,22 +20466,23 @@ async function _showMyPipelineBoard(){
       +   ' style="flex-shrink:0;width:280px;">'
       +   '<div style="background:#fff;border-top:4px solid ' + color + ';border-radius:6px 6px 0 0;padding:12px 14px 10px;border:1px solid #e2e8f0;border-bottom:none;">'
       +     '<div style="font-weight:700;font-size:14px;color:' + color + ';">' + _esc(s.label) + '</div>'
-      +     '<div style="font-size:11px;color:#64748b;margin-top:3px;">' + cards.length + ' deal' + (cards.length===1?'':'s') + '</div>'
+      +     '<div style="font-size:11px;color:#64748b;margin-top:3px;">' + countLabel + '</div>'
       +   '</div>'
       +   '<div class="my-pipeline-col-body" style="border:1px solid #e2e8f0;border-top:none;background:#f8fafc;min-height:400px;max-height:calc(100vh - 320px);overflow-y:auto;padding:10px;border-radius:0 0 6px 6px;">'
-      +     cards.map(d => _myPipelineCardHTML(d)).join('')
+      +     cards.map(e => e.kind === 'portfolio' ? _myPipelineCardHTMLPortfolio(e.obj) : _myPipelineCardHTML(e.obj)).join('')
       +     (cards.length===0 ? '<div style="font-size:11px;color:#94a3b8;text-align:center;padding:20px;font-style:italic;">Empty</div>' : '')
       +   '</div>'
       + '</div>';
   }).join('');
 
   let headline;
+  const itemWord = (pipelinePortfolios.length > 0) ? 'item' : 'deal';
   if(totalInPipeline === 0){
-    headline = 'My Personal Pipeline — No deals yet. Add deals from the deal board or any deal\'s detail page.';
+    headline = 'My Personal Pipeline — No items yet. Add from any deal or portfolio\'s detail page.';
   } else if(filtersActive){
-    headline = 'My Personal Pipeline — ' + totalCards + ' of ' + totalInPipeline + ' deal' + (totalInPipeline===1?'':'s');
+    headline = 'My Personal Pipeline — ' + totalCards + ' of ' + totalInPipeline + ' ' + itemWord + (totalInPipeline===1?'':'s');
   } else {
-    headline = 'My Personal Pipeline — ' + totalCards + ' deal' + (totalCards===1?'':'s');
+    headline = 'My Personal Pipeline — ' + totalCards + ' ' + itemWord + (totalCards===1?'':'s');
   }
 
   const filterBarHTML = totalInPipeline > 0 ? _myPipelineFilterBarHTML() : '';
@@ -20443,6 +20541,36 @@ function _myPipelineCardHTML(d){
     +   (asset  ? '<div class="pc-row"><span class="pc-icon">🏷️</span><span>' + _esc(asset) + '</span></div>' : '')
     +   (agent  ? '<div class="pc-row"><span class="pc-icon">👤</span><span>' + _esc(agent) + '</span></div>' : '')
     +   (county ? '<div class="pc-row"><span class="pc-icon">📍</span><span>' + _esc(county) + '</span></div>' : '')
+    + '</div>';
+}
+
+// Portfolio variant of _myPipelineCardHTML. Renders a distinct card
+// (amber "📁 Portfolio" badge, child count, package price) so portfolios
+// are visually separable from deals on the same board column. Drag routes
+// through _myPipelineDragStartPortfolio → _myPipelineMovePortfolio so the
+// move hits the portfolio RPC, not the deal RPC.
+function _myPipelineCardHTMLPortfolio(p){
+  const name  = String(p['Name'] || 'Untitled portfolio');
+  const pkg   = (typeof fmtMoney === 'function' && Number(p['Package Price'])) ? fmtMoney(Number(p['Package Price'])) : '';
+  const agent = String(p['Assigned Agent'] || '');
+  const status= String(p['Status'] || '');
+  const kids  = (typeof _portfolioChildren === 'function') ? _portfolioChildren(p.id).length : 0;
+  return ''
+    + '<div class="pipeline-card" draggable="true"'
+    +   ' ondragstart="_myPipelineDragStartPortfolio(event, \'' + p.id + '\')"'
+    +   ' ondragend="_myPipelineDragEnd(event)"'
+    +   ' onclick="openPortfolioDetail(\'' + p.id + '\')"'
+    +   ' style="position:relative;border-left:3px solid #b45309;background:#fffbeb;">'
+    +   '<button onclick="event.stopPropagation();removePortfolioFromMyPipeline(\'' + p.id + '\')"'
+    +     ' title="Remove from my personal pipeline"'
+    +     ' style="position:absolute;top:4px;right:4px;background:transparent;border:none;color:#94a3b8;font-size:16px;font-weight:700;cursor:pointer;line-height:1;padding:2px 6px;border-radius:4px;"'
+    +     ' onmouseenter="this.style.background=\'#fee2e2\';this.style.color=\'#b91c1c\';"'
+    +     ' onmouseleave="this.style.background=\'transparent\';this.style.color=\'#94a3b8\';">×</button>'
+    +   '<div style="display:inline-block;margin-bottom:5px;padding:1px 7px;background:#fef3c7;color:#b45309;border:1px solid #fde68a;border-radius:99px;font-size:9px;font-weight:700;letter-spacing:0.3px;">📁 PORTFOLIO · ' + kids + ' deal' + (kids===1?'':'s') + '</div>'
+    +   '<div class="pc-addr" style="padding-right:18px;">' + _esc(name) + '</div>'
+    +   (pkg    ? '<div class="pc-price">' + _esc(pkg) + '</div>' : '')
+    +   (status ? '<div class="pc-row"><span class="pc-icon">🏷️</span><span>' + _esc(status) + '</span></div>' : '')
+    +   (agent  ? '<div class="pc-row"><span class="pc-icon">👤</span><span>' + _esc(agent) + '</span></div>' : '')
     + '</div>';
 }
 
@@ -20527,6 +20655,28 @@ function _myPipelineApplyFilters(deals){
     if(f.counties.length){
       const c = String(d['County'] || '');
       if(!f.counties.includes(c)) return false;
+    }
+    // stages are applied at the column level in the render — no-op here.
+    return true;
+  });
+}
+
+// Portfolio-side variant. Portfolios don't have assetType/county fields
+// directly (those live on the child deals), so when the user applies an
+// asset-type or county filter, portfolios drop out — the user is scoping
+// to a specific deal attribute and portfolios can't match. Search still
+// works; it targets the portfolio's own metadata.
+function _myPipelineApplyFiltersPortfolio(portfolios){
+  const f = _myPipelineFilters;
+  if(f.assetTypes.length || f.counties.length) return [];
+  const q = (f.search||'').toLowerCase();
+  return portfolios.filter(p => {
+    if(q){
+      const hay = [
+        p['Name'], p['Assigned Agent'], p['Status'],
+        p['Description'], p['Pipeline Stage']
+      ].map(v => String(v||'').toLowerCase()).join(' | ');
+      if(hay.indexOf(q) === -1) return false;
     }
     // stages are applied at the column level in the render — no-op here.
     return true;

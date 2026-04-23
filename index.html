@@ -28774,6 +28774,12 @@ async function _clkSearch(prefix, query){
     const rows = await _sbGet(SB_TABLES.contacts,
       'select=id,name,phone_number,email,company,type,date_added'
       + '&or=(' + conds.join(',') + ')'
+      // Exclude soft-deleted rows. The contact merge RPC (merge_contacts)
+      // sets deleted_at on losers; the Contacts page already filters these
+      // out. Without this guard, the dropdown shows both the survivor and
+      // the dead-but-still-in-table loser, which made a user see two
+      // "Filippo F Bellome" results after a successful dedupe merge.
+      + '&deleted_at=is.null'
       + '&limit=8');
     // Race-guard again — query may have changed during fetch
     if(_clkLastQuery[prefix] !== query) return;
@@ -31478,6 +31484,9 @@ async function _dcLookupSearch(query, propertyId){
     const rows = await _sbGet(SB_TABLES.contacts,
       'select=id,name,phone_number,email,company,type'
       + '&or=(' + conds.join(',') + ')'
+      // Same soft-delete guard as _clkSearch — merge_contacts sets
+      // deleted_at on losers, and the dropdown must not surface them.
+      + '&deleted_at=is.null'
       + '&limit=8');
     if(_dcLookupLastQuery !== query) return;
     _dcLookupRenderDropdown(query, Array.isArray(rows) ? rows : [], propertyId);
@@ -33141,8 +33150,10 @@ async function _liSubmitSeller(){
         contactId = _liPrefillContext.contactId;
       } else {
         try{
+          // Exclude soft-deleted contacts from the phone-dedup lookup so a
+          // new seller lead never gets re-linked to a merged-away loser row.
           const existing = contactPhone
-            ? await _sbGet(SB_TABLES.contacts, `phone_number=eq.${encodeURIComponent(contactPhone)}&select=id&limit=1`)
+            ? await _sbGet(SB_TABLES.contacts, `phone_number=eq.${encodeURIComponent(contactPhone)}&deleted_at=is.null&select=id&limit=1`)
             : [];
           if(existing && existing.length > 0){
             contactId = existing[0].id;

@@ -17560,7 +17560,7 @@ async function deleteDeal(dealId, addr){
 // (organized by address + lead ID), agents → unioned pipe-delimited, and
 // losers → soft-archived (is_archived=true). Reversible for 30 days via
 // the archive flag.
-let _dealDedupeState = { groups: [], modalOpen: false };
+let _dealDedupeState = { groups: [], modalOpen: false, search: '' };
 
 // Normalize "13 State Route 57, Hackettstown, NJ 07840" → "13stateroute57|07840"
 // Only street1 + zip to avoid grouping distant properties with the same street name.
@@ -17611,7 +17611,58 @@ function _ddScanDealDuplicates(){
 function openDealDedupeModal(){
   _dealDedupeState.groups = _ddScanDealDuplicates();
   _dealDedupeState.modalOpen = true;
+  // Seed the modal's filter from the sidebar search so a user who's already
+  // narrowed to a known address gets scoped dedupe results on open.
+  const sideEl = document.getElementById('sideSearch');
+  const seed = sideEl ? (sideEl.value||'').trim() : '';
+  _dealDedupeState.search = seed;
   _ddRenderModal();
+  // After render, focus the in-modal search box so the user can refine
+  // without an extra click. Defer to next tick so the element exists.
+  requestAnimationFrame(() => {
+    const s = document.getElementById('ddSearchInput');
+    if(s){ s.focus(); if(seed) s.select(); }
+  });
+}
+
+let _ddSearchTimer = null;
+function _ddSetSearch(v){
+  const val = String(v||'');
+  _dealDedupeState.search = val;
+  // Debounce the re-render — the modal re-innerHTMLs on every filter change
+  // and we may have hundreds of groups. 150 ms feels instant while skipping
+  // work during rapid typing.
+  if(_ddSearchTimer) clearTimeout(_ddSearchTimer);
+  _ddSearchTimer = setTimeout(() => {
+    _ddSearchTimer = null;
+    _ddRenderModal();
+    // Restore focus + caret position after innerHTML replace.
+    requestAnimationFrame(() => {
+      const s = document.getElementById('ddSearchInput');
+      if(s){
+        s.focus();
+        const n = s.value.length;
+        try { s.setSelectionRange(n, n); } catch(e){}
+      }
+    });
+  }, 150);
+}
+
+function _ddClearSearch(){
+  _dealDedupeState.search = '';
+  _ddRenderModal();
+  requestAnimationFrame(() => { const s = document.getElementById('ddSearchInput'); if(s) s.focus(); });
+}
+
+// Returns groups filtered by the current search string. Match is a
+// case-insensitive substring test against every deal's address in a group —
+// if ANY deal in the group matches, the whole group is shown.
+function _ddFilteredGroups(){
+  const q = (_dealDedupeState.search||'').trim().toLowerCase();
+  if(!q) return _dealDedupeState.groups;
+  return _dealDedupeState.groups.filter(g =>
+    g.deals.some(d => (d['Address']||'').toLowerCase().includes(q))
+  );
 }
 
 function closeDealDedupeModal(){
@@ -17634,37 +17685,82 @@ function _ddRenderModal(){
     modal.onclick = (e) => { if(e.target === modal) closeDealDedupeModal(); };
     document.body.appendChild(modal);
   }
-  const groups = _dealDedupeState.groups;
-  const totalDupes = groups.reduce((n,g) => n + (g.deals.length - 1), 0);
+  const allGroups    = _dealDedupeState.groups;
+  const groups       = _ddFilteredGroups();
+  const totalDupes   = groups.reduce((n,g) => n + (g.deals.length - 1), 0);
+  const searchQ      = _dealDedupeState.search || '';
+  const isFiltered   = searchQ.trim().length > 0;
+  const safeSearch   = _ddEsc(searchQ);
 
   let body;
-  if(groups.length === 0){
+  if(allGroups.length === 0){
     body = `
       <div style="padding:60px 40px;text-align:center;">
         <div style="font-size:48px;margin-bottom:12px;">✅</div>
         <div style="font-size:16px;font-weight:600;color:#0f172a;margin-bottom:6px;">No duplicate deals found</div>
         <div style="font-size:12px;color:#64748b;">Scanned ${allDeals.length} deals — all unique addresses.</div>
       </div>`;
+  } else if(groups.length === 0 && isFiltered){
+    body = `
+      <div style="padding:50px 40px;text-align:center;">
+        <div style="font-size:40px;margin-bottom:10px;">🔎</div>
+        <div style="font-size:14px;font-weight:600;color:#0f172a;margin-bottom:4px;">No duplicate groups match "${safeSearch}"</div>
+        <div style="font-size:11px;color:#64748b;margin-bottom:14px;">
+          ${allGroups.length} group${allGroups.length>1?'s':''} exist overall, but none contain that address.
+        </div>
+        <button onclick="_ddClearSearch()" style="background:#1a3a6e;color:#fff;border:none;border-radius:6px;padding:7px 14px;font-size:11px;font-weight:600;cursor:pointer;">
+          Clear filter — show all ${allGroups.length}
+        </button>
+      </div>`;
   } else {
-    body = groups.map((g, idx) => _ddRenderGroup(g, idx)).join('');
+    body = groups.map((g, idx) => {
+      // Preserve original index so _ddMergeGroup / _ddSetSurvivor still target the right group
+      const origIdx = _dealDedupeState.groups.indexOf(g);
+      return _ddRenderGroup(g, origIdx);
+    }).join('');
   }
+
+  // Subtitle line changes when filtered
+  const subtitle = allGroups.length === 0
+    ? 'Scan complete'
+    : (isFiltered
+        ? `Showing ${groups.length} of ${allGroups.length} group${allGroups.length>1?'s':''} · filter: "${safeSearch}"`
+        : `${allGroups.length} group${allGroups.length>1?'s':''} · ${allGroups.reduce((n,g)=>n+(g.deals.length-1),0)} duplicate${allGroups.reduce((n,g)=>n+(g.deals.length-1),0)>1?'s':''} to merge`);
 
   modal.innerHTML = `
     <div style="background:#fff;border-radius:12px;width:100%;max-width:900px;max-height:90vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 25px 60px rgba(0,0,0,0.25);">
       <div style="padding:16px 20px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;gap:12px;">
         <div>
           <div style="font-size:15px;font-weight:700;color:#0f172a;">🔍 Duplicate Deal Finder</div>
-          <div style="font-size:11px;color:#64748b;margin-top:2px;">
-            ${groups.length > 0
-              ? `${groups.length} group${groups.length>1?'s':''} · ${totalDupes} duplicate${totalDupes>1?'s':''} to merge`
-              : 'Scan complete'}
-          </div>
+          <div style="font-size:11px;color:#64748b;margin-top:2px;">${subtitle}</div>
         </div>
         <div style="display:flex;gap:8px;align-items:center;">
           <button onclick="openDealDedupeModal()" style="background:#f1f5f9;color:#334155;border:1px solid #e2e8f0;border-radius:6px;padding:6px 12px;font-size:11px;font-weight:600;cursor:pointer;">↻ Rescan</button>
           <button onclick="closeDealDedupeModal()" style="background:none;border:none;color:#94a3b8;font-size:20px;line-height:1;cursor:pointer;padding:4px 8px;">×</button>
         </div>
       </div>
+      ${allGroups.length > 0 ? `
+      <div style="padding:10px 20px;border-bottom:1px solid #e2e8f0;background:#fff;display:flex;align-items:center;gap:8px;">
+        <div style="position:relative;flex:1;max-width:420px;">
+          <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:#94a3b8;font-size:12px;pointer-events:none;">🔎</span>
+          <input id="ddSearchInput" type="text" value="${safeSearch}"
+            placeholder="Filter groups by address…"
+            oninput="_ddSetSearch(this.value)"
+            onkeydown="if(event.key==='Escape'){ _ddClearSearch(); }"
+            style="width:100%;padding:7px 30px 7px 30px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;outline:none;box-sizing:border-box;"
+            onfocus="this.style.borderColor='#1a3a6e'"
+            onblur="this.style.borderColor='#cbd5e1'" />
+          ${isFiltered ? `<span onclick="_ddClearSearch()" title="Clear filter"
+            style="position:absolute;right:8px;top:50%;transform:translateY(-50%);cursor:pointer;color:#94a3b8;font-size:14px;line-height:1;padding:2px 4px;"
+            onmouseenter="this.style.color='#0f172a'"
+            onmouseleave="this.style.color='#94a3b8'">×</span>` : ''}
+        </div>
+        <div style="font-size:10px;color:#94a3b8;">
+          ${isFiltered
+            ? `${totalDupes} duplicate${totalDupes===1?'':'s'} in filtered groups`
+            : 'Type an address to narrow results'}
+        </div>
+      </div>` : ''}
       <div style="padding:16px 20px;overflow-y:auto;flex:1;background:#f8fafc;">
         ${body}
       </div>

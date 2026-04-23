@@ -4564,24 +4564,42 @@ function openEditAddressModal(){
   }
   document.getElementById('editAddrModalMsg').style.display = 'none';
   document.getElementById('editAddrModal').style.display = 'flex';
-  // Wire up Places autocomplete on the street input if available
-  if(typeof attachPlacesAutocomplete === 'function'){
+  // Wire up Places autocomplete on the street input — same behavior as the seller
+  // lead form (li_s_address): on selection, auto-populate street / city / state /
+  // zip / county, normalizing county to "<Name> County" against NJ_COUNTIES.
+  if(typeof attachPlacesAutocomplete === 'function' && _store.get('google_places_key')){
     setTimeout(() => {
       try { attachPlacesAutocomplete('nameStreet1', (c) => {
         const s1 = document.getElementById('nameStreet1');
-        if(s1 && c.street) s1.value = c.street;
+        if(s1){ s1.value = c.street || c.formatted || s1.value; }
         const city = document.getElementById('nameCity');
         if(city && c.city) city.value = c.city;
         const stateEl = document.getElementById('nameState');
-        if(stateEl && c.state) stateEl.value = c.state;
+        if(stateEl && c.state){
+          const opts = [...stateEl.options];
+          const match = opts.find(o => o.value === c.state || o.value === c.stateShort || o.text === c.state);
+          if(match) stateEl.value = match.value;
+        }
         const zip = document.getElementById('nameZip');
         if(zip && c.zip) zip.value = c.zip;
         const county = document.getElementById('nameCounty');
-        if(county && c.county) county.value = c.county;
+        if(county && c.county){
+          // Normalize to canonical "<Name> County" against NJ_COUNTIES (matches seller-lead form).
+          const bareName = c.county.replace(/\s+County$/i,'').trim();
+          const match = (typeof NJ_COUNTIES !== 'undefined')
+            ? NJ_COUNTIES.find(n => n.toLowerCase() === bareName.toLowerCase())
+            : null;
+          county.value = match ? (match + ' County') : (bareName + ' County');
+        }
         const muni = document.getElementById('nameMunicipality');
-        if(muni && c.municipality) muni.value = c.municipality;
+        if(muni && !muni.value && c.city) muni.value = c.city;
+        // Stash lat/lng on the current deal so save can persist them if schema supports it
+        if(c.lat && typeof currentDeal !== 'undefined' && currentDeal){
+          currentDeal['_pendingLat'] = c.lat;
+          currentDeal['_pendingLng'] = c.lng;
+        }
         _liveUpdateHeader();
-      }); } catch(e) {}
+      }); } catch(e){ console.warn('editAddr places attach failed:', e.message); }
     }, 100);
   }
   setTimeout(() => { document.getElementById('nameStreet1')?.focus(); }, 150);
@@ -4965,7 +4983,10 @@ function _openDealDirect(d){
   _lf.loadOnto(d);
   buildSidebar(document.getElementById('sideSearch').value);
   renderDealPage();
-  if(d.id) setTimeout(()=>{ loadSellerContact(d.id); initPropertyDetailsAutocomplete(); _renderHeaderPhoto(); }, 100);
+  // NOTE: Places autocomplete for the edit-address modal is wired inside openEditAddressModal()
+  // so it attaches to the live (visible) input. Attaching here — to the hidden #nameStreet1
+  // inside #editAddrModal — used to burn the _placesAttached flag and block the modal handler.
+  if(d.id) setTimeout(()=>{ loadSellerContact(d.id); _renderHeaderPhoto(); }, 100);
 }
 
 function renderDealPage(){

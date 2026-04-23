@@ -2020,6 +2020,161 @@ async function _sbRpc(fn, params = {}) {
   return data;
 }
 
+// ═══════════════════════════════════════════════════════════════════════
+// v113.4 (Phase 4a): SAME-BROWSER TAB-TO-TAB SYNC via BroadcastChannel
+// ═══════════════════════════════════════════════════════════════════════
+// When one tab writes a change (deal edit, stage move, personal-pipeline
+// add/remove/move, saved view), it posts a message on a shared channel.
+// Other tabs of the same origin receive it, patch their in-memory caches,
+// and re-render whichever list view is currently visible. Zero network,
+// zero infrastructure — browser-native. Same-user, same-browser only.
+// For cross-user cross-device sync, Phase 4b (Supabase Realtime) is next.
+
+let _aceSyncChannel = null;
+let _aceSyncTabId   = null;
+const _ACE_SYNC_CHANNEL_NAME = 'ace_crm_sync_v1';
+
+function _aceSyncInit(){
+  if(_aceSyncChannel) return;
+  if(typeof BroadcastChannel === 'undefined') return; // old browsers: silent no-op
+  try{
+    _aceSyncChannel = new BroadcastChannel(_ACE_SYNC_CHANNEL_NAME);
+    _aceSyncTabId   = Math.random().toString(36).slice(2) + Date.now().toString(36);
+    _aceSyncChannel.addEventListener('message', _aceSyncDispatch);
+    window.addEventListener('pagehide', () => {
+      try { _aceSyncChannel && _aceSyncChannel.close(); } catch(e) {}
+      _aceSyncChannel = null;
+    });
+  }catch(e){
+    console.warn('BroadcastChannel init failed:', e);
+  }
+}
+
+// Post a typed message. Self-originated events are filtered out on receive
+// (via tabId comparison) so the sender never processes its own broadcast.
+function _aceSyncPost(type, payload){
+  if(!_aceSyncChannel) return;
+  try{
+    _aceSyncChannel.postMessage({
+      type:    type,
+      payload: payload || {},
+      tabId:   _aceSyncTabId,
+      ts:      Date.now()
+    });
+  }catch(e){
+    console.warn('BroadcastChannel post failed:', e);
+  }
+}
+
+function _aceSyncDispatch(ev){
+  const msg = ev && ev.data;
+  if(!msg || typeof msg !== 'object') return;
+  if(msg.tabId === _aceSyncTabId) return; // ignore own messages
+  try{
+    switch(msg.type){
+      case 'deal.patched':        return _aceSyncHandleDealPatch(msg.payload);
+      case 'mypipeline.add':      return _aceSyncHandleMyPipelineAdd(msg.payload);
+      case 'mypipeline.remove':   return _aceSyncHandleMyPipelineRemove(msg.payload);
+      case 'mypipeline.move':     return _aceSyncHandleMyPipelineMove(msg.payload);
+      case 'mypipeline.views':    return _aceSyncHandleViewsDirty();
+    }
+  }catch(e){
+    console.warn('_aceSyncDispatch error:', e);
+  }
+}
+
+// ── VIEW VISIBILITY PROBES ────────────────────────────────────────
+// These are DOM-marker checks rather than route flags — safer because
+// they never cause an unexpected mount if the view isn't currently up.
+function _aceSyncDealBoardVisible(){      return !!document.getElementById('db_tbody'); }
+function _aceSyncCompanyPipelineVisible(){ return !!document.getElementById('pipelineBody'); }
+function _aceSyncPersonalPipelineVisible(){return !!document.getElementById('myPipelineBoardRoot'); }
+function _aceSyncSidebarVisible(){         return !!document.getElementById('sidebar'); }
+
+// Re-render the deal board + sidebar if they're visible. Guarded so a
+// render can't throw and tank the sync loop.
+function _aceSyncRefreshListViews(){
+  try{
+    if(_aceSyncDealBoardVisible() && typeof renderDealBoard === 'function'){
+      renderDealBoard();
+    }
+  }catch(e){ console.warn('renderDealBoard sync failed:', e); }
+  try{
+    if(_aceSyncSidebarVisible() && typeof buildSidebar === 'function'){
+      const q = document.getElementById('sideSearch')?.value || '';
+      buildSidebar(q);
+    }
+  }catch(e){ console.warn('buildSidebar sync failed:', e); }
+  try{
+    if(_aceSyncCompanyPipelineVisible() && typeof showPipelineView === 'function'){
+      // Only re-render if scope is 'company' — personal board has its own
+      // marker and re-renders through _myPipelineRerenderIfVisible.
+      if(typeof getPipelineScope !== 'function' || getPipelineScope() === 'company'){
+        showPipelineView();
+      }
+    }
+  }catch(e){ console.warn('showPipelineView sync failed:', e); }
+  try{
+    if(_aceSyncPersonalPipelineVisible() && typeof _myPipelineRerenderIfVisible === 'function'){
+      _myPipelineRerenderIfVisible();
+    }
+  }catch(e){ console.warn('personal pipeline sync failed:', e); }
+}
+
+// ── INCOMING HANDLERS ─────────────────────────────────────────────
+
+function _aceSyncHandleDealPatch(payload){
+  if(!payload || !payload.dealId || !payload.fields) return;
+  const list = (typeof allDeals !== 'undefined' && Array.isArray(allDeals)) ? allDeals : [];
+  const d = list.find(x => x.id === payload.dealId);
+  if(d) Object.assign(d, payload.fields);
+  // If the detail page for this deal is mounted, update the cache but do
+  // NOT force a full re-render — it would blow away whatever the user is
+  // currently typing. We only re-render list/board views.
+  if(typeof currentDeal !== 'undefined' && currentDeal && currentDeal.id === payload.dealId){
+    Object.assign(currentDeal, payload.fields);
+  }
+  _aceSyncRefreshListViews();
+}
+
+function _aceSyncHandleMyPipelineAdd(payload){
+  if(!payload || !payload.dealId) return;
+  if(typeof _myPipelineDealIds === 'undefined') return;
+  _myPipelineDealIds.add(payload.dealId);
+  if(payload.stageId && typeof _myPipelineDealStage !== 'undefined'){
+    _myPipelineDealStage.set(payload.dealId, payload.stageId);
+  }
+  if(typeof _myPipelineSyncButtons === 'function') _myPipelineSyncButtons(payload.dealId);
+  if(typeof _myPipelineRerenderIfVisible === 'function') _myPipelineRerenderIfVisible();
+}
+
+function _aceSyncHandleMyPipelineRemove(payload){
+  if(!payload || !payload.dealId) return;
+  if(typeof _myPipelineDealIds === 'undefined') return;
+  _myPipelineDealIds.delete(payload.dealId);
+  if(typeof _myPipelineDealStage !== 'undefined') _myPipelineDealStage.delete(payload.dealId);
+  if(typeof _myPipelineSyncButtons === 'function') _myPipelineSyncButtons(payload.dealId);
+  if(typeof _myPipelineRerenderIfVisible === 'function') _myPipelineRerenderIfVisible();
+}
+
+function _aceSyncHandleMyPipelineMove(payload){
+  if(!payload || !payload.dealId || !payload.stageId) return;
+  if(typeof _myPipelineDealStage === 'undefined') return;
+  _myPipelineDealStage.set(payload.dealId, payload.stageId);
+  if(typeof _myPipelineRerenderIfVisible === 'function') _myPipelineRerenderIfVisible();
+}
+
+function _aceSyncHandleViewsDirty(){
+  if(typeof _myPipelineLoadViews !== 'function') return;
+  _myPipelineLoadViews().then(() => {
+    if(typeof _myPipelineRerenderIfVisible === 'function') _myPipelineRerenderIfVisible();
+  });
+}
+
+// Initialize immediately — BroadcastChannel is cheap and we want to
+// receive messages as soon as the tab is alive.
+_aceSyncInit();
+
 // ─── AGENT RELATIONSHIPS (ace_agent_contacts) ────────────────────
 // Personal relationship list per agent. A contact can belong to
 // multiple agents' lists (shared-claim model). In My Deals mode,
@@ -18966,6 +19121,10 @@ async function addToMyPipeline(dealId, btnEl){
     _myPipelineSyncButtons(dealId);
     // v113.2: if the Personal Pipelines board is currently visible, re-render.
     if(typeof _myPipelineRerenderIfVisible === 'function') _myPipelineRerenderIfVisible();
+    // v113.4: broadcast to sibling tabs so their checkbox/button/board updates.
+    if(typeof _aceSyncPost === 'function'){
+      _aceSyncPost('mypipeline.add', { dealId: dealId, stageId: _myPipelineDealStage.get(dealId) || null });
+    }
   }catch(e){
     console.error('addToMyPipeline failed:', e);
     if(typeof showSaveConfirm === 'function') showSaveConfirm('Pipeline: ' + (e.message || 'add failed'));
@@ -18996,6 +19155,10 @@ async function _myPipelineConfirmRemove(dealId){
     _myPipelineSyncButtons(dealId);
     // v113.2: re-render the board if it's currently visible
     if(typeof _myPipelineRerenderIfVisible === 'function') _myPipelineRerenderIfVisible();
+    // v113.4: broadcast to sibling tabs
+    if(typeof _aceSyncPost === 'function'){
+      _aceSyncPost('mypipeline.remove', { dealId: dealId });
+    }
   }catch(e){
     console.error('removeFromMyPipeline failed:', e);
     if(typeof showSaveConfirm === 'function') showSaveConfirm('Pipeline: ' + (e.message || 'remove failed'));
@@ -19129,6 +19292,10 @@ async function _myPipelineMove(dealId, newStageKey){
       return;
     }
     if(typeof showSaveConfirm === 'function') showSaveConfirm('Moved to ' + targetStage.label);
+    // v113.4: broadcast to sibling tabs so their personal-pipeline board updates
+    if(typeof _aceSyncPost === 'function'){
+      _aceSyncPost('mypipeline.move', { dealId: dealId, stageId: targetStage.id, stageKey: targetStage.key });
+    }
   }catch(e){
     if(prevStageId) _myPipelineDealStage.set(dealId, prevStageId);
     else _myPipelineDealStage.delete(dealId);
@@ -19481,6 +19648,8 @@ async function _myPipelineSaveAsView(){
     _myPipelineActiveViewId = result.view_id || null;
     _myPipelineRerenderIfVisible();
     if(typeof showSaveConfirm === 'function') showSaveConfirm('Saved view: ' + trimmed);
+    // v113.4: nudge sibling tabs to refresh their views cache
+    if(typeof _aceSyncPost === 'function') _aceSyncPost('mypipeline.views', {});
   }catch(e){
     console.error('save view failed:', e);
     alert('Could not save view: ' + (e.message||'unknown error'));
@@ -19502,6 +19671,8 @@ async function _myPipelineUpdateActiveView(){
     await _myPipelineLoadViews(true);
     _myPipelineRerenderIfVisible();
     if(typeof showSaveConfirm === 'function') showSaveConfirm('Updated view: ' + v.name);
+    // v113.4: nudge sibling tabs
+    if(typeof _aceSyncPost === 'function') _aceSyncPost('mypipeline.views', {});
   }catch(e){
     console.error('update view failed:', e);
     alert('Update failed: ' + (e.message||'unknown error'));
@@ -19524,6 +19695,8 @@ async function _myPipelineDeleteView(viewId){
     await _myPipelineLoadViews(true);
     _myPipelineRerenderIfVisible();
     if(typeof showSaveConfirm === 'function') showSaveConfirm('Deleted view');
+    // v113.4: nudge sibling tabs
+    if(typeof _aceSyncPost === 'function') _aceSyncPost('mypipeline.views', {});
   }catch(e){
     console.error('delete view failed:', e);
     alert('Delete failed: ' + (e.message||'unknown error'));
@@ -43273,6 +43446,10 @@ async function airtableUpdate(recordId, fields){
         const idx = allDeals.findIndex(d=>d.id===recordId);
         if(idx>-1) Object.assign(allDeals[idx], remoteFields);
       }
+      // v113.4: broadcast to sibling tabs so they update their cache + re-render
+      if(typeof _aceSyncPost === 'function'){
+        _aceSyncPost('deal.patched', { dealId: recordId, fields: remoteFields });
+      }
       return true;
     }
     if(!cfg.key) return false;
@@ -43299,6 +43476,10 @@ async function airtableUpdate(recordId, fields){
           const updated2 = await r2.json();
           const idx2 = allDeals.findIndex(d=>d.id===recordId);
           if(idx2>-1) Object.assign(allDeals[idx2], updated2.fields);
+          // v113.4: broadcast to sibling tabs (Airtable retry path)
+          if(typeof _aceSyncPost === 'function'){
+            _aceSyncPost('deal.patched', { dealId: recordId, fields: (updated2 && updated2.fields) ? updated2.fields : retryFields });
+          }
         }
         return true;
       }
@@ -43307,6 +43488,10 @@ async function airtableUpdate(recordId, fields){
     const updated = await res.json();
     const idx = allDeals.findIndex(d=>d.id===recordId);
     if(idx>-1) Object.assign(allDeals[idx], updated.fields);
+    // v113.4: broadcast to sibling tabs (Airtable path)
+    if(typeof _aceSyncPost === 'function'){
+      _aceSyncPost('deal.patched', { dealId: recordId, fields: (updated && updated.fields) ? updated.fields : remoteFields });
+    }
     return true;
   }catch(e){
     alert('Save failed: '+e.message);

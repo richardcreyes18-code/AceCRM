@@ -1678,7 +1678,11 @@ const SB_TABLES = {
   // v102.38: per-agent Workbench (private triage queue)
   workbench:         'ace_workbench_items',
   // v111.2: AI asset type classification suggestions (Haiku-powered)
-  aiAssetSuggestions:'ace_ai_asset_suggestions'
+  aiAssetSuggestions:'ace_ai_asset_suggestions',
+  // v113.1: per-agent Personal Pipelines (parallel to company pipeline)
+  agentPipelines:      'ace_agent_pipelines',
+  agentPipelineStages: 'ace_agent_pipeline_stages',
+  agentPipelineDeals:  'ace_agent_pipeline_deals'
 };
 
 // ─── SUPABASE ↔ AIRTABLE FIELD MAPS ───────────────────────────
@@ -2290,6 +2294,7 @@ async function _signIn(email, password) {
 
   _saveSession(data.access_token, user, data.refresh_token);
   _loadMyRelationships(true); // fire-and-forget
+  if(typeof _myPipelineLoad === 'function') _myPipelineLoad(true); // v113.1
   return user;
 }
 
@@ -4896,6 +4901,14 @@ function renderDealPage(){
             background:#1e3a8a;color:#fff;border:none;padding:5px 10px;font-size:12px;font-weight:600;
             border-radius:6px;cursor:pointer;white-space:nowrap;">
             + Add to Workbench
+          </button>
+          <!-- v113.1: Personal Pipeline toggle -->
+          <button class="my-pipeline-btn" data-my-pipeline-deal="${d.id}"
+            onclick="toggleMyPipelineHeader('${d.id}', this, '${addr.replace(/'/g,"\\'")}')"
+            title="${_isInMyPipeline(d.id)?'In your personal pipeline — click to remove':'Add this deal to your personal pipeline'}" style="
+            background:${_isInMyPipeline(d.id)?'#16a34a':'#1e3a8a'};color:#fff;border:none;padding:5px 10px;font-size:12px;font-weight:600;
+            border-radius:6px;cursor:pointer;white-space:nowrap;">
+            ${_isInMyPipeline(d.id)?'✓ In My Pipeline':'+ Add to My Pipeline'}
           </button>
           <button id="headerStarBtn" onclick="toggleStar('${d.id}')" style="
             background:${d['Top Priority']?'#f59e0b':'#94a3b8'};
@@ -15551,6 +15564,22 @@ const DB_COLUMNS = [
       return `<td style="padding:6px 8px;border-right:1px solid #e8ecf4;font-size:10px;color:#475569;white-space:nowrap;">${disp}</td>`;
     }
   },
+  // v113.1: Personal Pipeline membership checkbox. Off by default — each
+  // agent enables from the ⚙ Columns menu. Check = adds at "New Lead" stage.
+  // Uncheck = opens the remove-confirmation modal. See toggleMyPipelineCheckbox.
+  { id:'mypipeline', label:'Add to My Personal Pipeline', width:'120px',
+    sortKey: d => (typeof _isInMyPipeline === 'function' && _isInMyPipeline(d.id)) ? 0 : 1,
+    cell: (d) => {
+      const isIn = typeof _isInMyPipeline === 'function' && _isInMyPipeline(d.id);
+      const addrSafe = String(d['Address']||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;');
+      return `<td style="padding:6px 8px;border-right:1px solid #e8ecf4;text-align:center;" onclick="event.stopPropagation()">
+        <input type="checkbox" class="my-pipeline-cb" data-my-pipeline-deal="${d.id}"
+          ${isIn?'checked':''}
+          onchange="toggleMyPipelineCheckbox(this, '${d.id}', '${addrSafe}')"
+          style="cursor:pointer;width:16px;height:16px;" title="${isIn?'In your personal pipeline':'Add to your personal pipeline'}"/>
+      </td>`;
+    }
+  },
 ];
 
 // Default visible columns — matches the historical hardcoded layout.
@@ -18806,6 +18835,206 @@ async function _contactLoadLinkedBuyerCriteria(contactId){
   }catch(e){
     listEl.innerHTML = '<div style="padding:20px;color:#dc2626;font-size:12px;">Error loading buyer criteria: '+e.message+'</div>';
   }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// v113.1: PERSONAL PIPELINES — per-agent private pipeline
+// ═══════════════════════════════════════════════════════════════════════
+// Each agent has their own pipeline with 12 default stages (New Lead,
+// Organize Information, Discuss in Meeting, Henry Starter Offer, Create
+// Email Template, Collect Additional Information, Analyze Deal /
+// Proforma, Pitch-Out Ready, LOI Presented, LOI Accepted, Under
+// Contract, Closed). Decoupled from the 17-stage company pipeline.
+// Membership is manual: agents explicitly add each deal. A deal can
+// live in BOTH pipelines simultaneously — adding to personal does not
+// remove from company, and stage changes are independent.
+//
+// Storage:
+//   - ace_agent_pipelines       (one default pipeline per agent)
+//   - ace_agent_pipeline_stages (12 stages seeded per pipeline)
+//   - ace_agent_pipeline_deals  (membership rows)
+//
+// Server-side RPCs (agent_pipeline_init / _add / _remove) do the work.
+//
+// UI surfaces in v113.1 (Phase 1):
+//   - "+ Add to My Pipeline" button in the deal detail header
+//   - Optional "Add to My Personal Pipeline" checkbox column on the
+//     deal board (off by default; toggled via the ⚙ Columns menu)
+//   - Confirmation modal when removing (prevents accidental removals)
+
+// Session cache — Set of deal IDs currently in the logged-in agent's
+// personal pipeline. Populated on login and after each add/remove.
+// Lets the deal-board checkbox column and header button paint correct
+// state without a DB round-trip per row.
+let _myPipelineDealIds = new Set();
+let _myPipelineLoadMs  = 0;
+
+// Idempotent load of the agent's pipeline membership.
+// Auto-creates the pipeline + seeds the 12 default stages on first
+// call via the agent_pipeline_init RPC (server-side guard).
+async function _myPipelineLoad(force){
+  if(!_currentUser || !_currentUser.id){
+    _myPipelineDealIds = new Set();
+    return;
+  }
+  if(!force && _myPipelineLoadMs && (Date.now() - _myPipelineLoadMs) < 120000) return;
+  try{
+    await _sbRpc('agent_pipeline_init', { p_user_id: _currentUser.id });
+    const pipes = await _sbGet(SB_TABLES.agentPipelines,
+      'select=id&user_id=eq.' + encodeURIComponent(_currentUser.id)
+      + '&is_default=eq.true&limit=1');
+    const pipelineId = (Array.isArray(pipes) && pipes[0]) ? pipes[0].id : null;
+    if(!pipelineId){ _myPipelineDealIds = new Set(); return; }
+    const rows = await _sbGet(SB_TABLES.agentPipelineDeals,
+      'select=deal_id&pipeline_id=eq.' + encodeURIComponent(pipelineId)
+      + '&limit=5000');
+    _myPipelineDealIds = new Set((rows||[]).map(r => r.deal_id));
+    _myPipelineLoadMs  = Date.now();
+  }catch(e){
+    console.warn('_myPipelineLoad failed:', e.message);
+    // Don't wipe existing state on transient failure
+  }
+}
+
+function _isInMyPipeline(dealId){ return _myPipelineDealIds.has(dealId); }
+
+// Add a deal to the logged-in agent's Personal Pipeline at stage "New Lead".
+// Optimistic UI — disables the button while in-flight.
+async function addToMyPipeline(dealId, btnEl){
+  if(!_currentUser || !_currentUser.id){
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('Sign in to use Personal Pipeline');
+    return;
+  }
+  if(!dealId){ console.warn('addToMyPipeline: no dealId'); return; }
+  const origText = btnEl ? btnEl.textContent : '';
+  if(btnEl){ btnEl.disabled = true; btnEl.textContent = 'Adding…'; }
+  try{
+    const result = await _sbRpc('agent_pipeline_add', {
+      p_user_id: _currentUser.id, p_deal_id: dealId
+    });
+    if(result && result.error){
+      if(typeof showSaveConfirm === 'function') showSaveConfirm('Pipeline: ' + result.error);
+      if(btnEl){ btnEl.disabled = false; btnEl.textContent = origText; }
+      return;
+    }
+    _myPipelineDealIds.add(dealId);
+    if(typeof showSaveConfirm === 'function'){
+      showSaveConfirm(result.already_present ? 'Already in Personal Pipeline' : 'Added to Personal Pipeline');
+    }
+    _myPipelineSyncButtons(dealId);
+  }catch(e){
+    console.error('addToMyPipeline failed:', e);
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('Pipeline: ' + (e.message || 'add failed'));
+    if(btnEl){ btnEl.disabled = false; btnEl.textContent = origText; }
+  }
+}
+
+// Kick off the remove flow — always shows a confirmation modal first.
+function removeFromMyPipeline(dealId, addressHint){
+  if(!dealId) return;
+  _myPipelineShowRemoveModal(dealId, addressHint || '');
+}
+
+async function _myPipelineConfirmRemove(dealId){
+  if(!_currentUser || !_currentUser.id) return;
+  _myPipelineHideRemoveModal();
+  try{
+    const result = await _sbRpc('agent_pipeline_remove', {
+      p_user_id: _currentUser.id, p_deal_id: dealId
+    });
+    if(result && result.error){
+      if(typeof showSaveConfirm === 'function') showSaveConfirm('Pipeline: ' + result.error);
+      return;
+    }
+    _myPipelineDealIds.delete(dealId);
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('Removed from Personal Pipeline');
+    _myPipelineSyncButtons(dealId);
+  }catch(e){
+    console.error('removeFromMyPipeline failed:', e);
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('Pipeline: ' + (e.message || 'remove failed'));
+  }
+}
+
+// Update every UI surface reflecting membership for this dealId.
+// Walks the DOM for elements tagged with data-my-pipeline-deal.
+// Called after add/remove (via cache) or after a fresh _myPipelineLoad.
+function _myPipelineSyncButtons(dealId){
+  const isIn = _myPipelineDealIds.has(dealId);
+  // Header buttons (deal detail page)
+  document.querySelectorAll('.my-pipeline-btn[data-my-pipeline-deal="' + dealId + '"]').forEach(btn => {
+    btn.disabled = false;
+    btn.textContent = isIn ? '✓ In My Pipeline' : '+ Add to My Pipeline';
+    btn.style.background = isIn ? '#16a34a' : '#1e3a8a';
+  });
+  // Deal-board checkboxes
+  document.querySelectorAll('.my-pipeline-cb[data-my-pipeline-deal="' + dealId + '"]').forEach(cb => {
+    cb.checked = isIn;
+  });
+}
+
+// Click handler for the deal-header button.
+// Adds immediately; removal triggers the confirmation modal.
+function toggleMyPipelineHeader(dealId, btnEl, addressHint){
+  if(_isInMyPipeline(dealId)){
+    removeFromMyPipeline(dealId, addressHint);
+  }else{
+    addToMyPipeline(dealId, btnEl);
+  }
+}
+
+// Click handler for the deal-board checkbox column.
+// When the user un-checks a checked box, revert the visual state
+// immediately and open the confirmation modal. If they cancel, the
+// checkbox stays checked. If they confirm, _myPipelineSyncButtons
+// will flip it to unchecked after the RPC returns.
+function toggleMyPipelineCheckbox(cb, dealId, addressHint){
+  if(!cb) return;
+  if(cb.checked){
+    // User just checked it → add (no confirmation needed)
+    addToMyPipeline(dealId, null);
+  }else{
+    // User just unchecked it → revert visual, open confirm modal
+    cb.checked = true;
+    removeFromMyPipeline(dealId, addressHint);
+  }
+}
+
+// ── Remove Confirmation Modal (lazy, single instance) ─────────────
+function _myPipelineShowRemoveModal(dealId, addressHint){
+  let modal = document.getElementById('myPipelineRemoveModal');
+  if(!modal){
+    modal = document.createElement('div');
+    modal.id = 'myPipelineRemoveModal';
+    modal.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:10000;align-items:center;justify-content:center;';
+    modal.innerHTML = ''
+      + '<div style="background:#fff;border-radius:10px;padding:24px;max-width:440px;width:90%;box-shadow:0 20px 50px rgba(0,0,0,0.3);">'
+      +   '<div style="font-size:17px;font-weight:700;color:#0f172a;margin-bottom:8px;">Remove from Personal Pipeline?</div>'
+      +   '<div id="myPipelineRemoveAddr" style="font-size:13px;font-weight:600;color:#1a3a6e;margin-bottom:14px;word-break:break-word;"></div>'
+      +   '<div style="font-size:12px;color:#64748b;margin-bottom:20px;line-height:1.5;">The deal stays on the company pipeline — only your personal pipeline entry is removed.</div>'
+      +   '<div style="display:flex;gap:10px;justify-content:flex-end;">'
+      +     '<button onclick="_myPipelineHideRemoveModal()" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">Cancel</button>'
+      +     '<button id="myPipelineRemoveConfirmBtn" style="background:#dc2626;color:#fff;border:none;padding:8px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">Remove</button>'
+      +   '</div>'
+      + '</div>';
+    document.body.appendChild(modal);
+    // Dismiss on backdrop click
+    modal.addEventListener('click', e => { if(e.target === modal) _myPipelineHideRemoveModal(); });
+    // Dismiss on Escape
+    document.addEventListener('keydown', e => {
+      if(e.key === 'Escape' && modal.style.display !== 'none') _myPipelineHideRemoveModal();
+    });
+  }
+  document.getElementById('myPipelineRemoveAddr').textContent = addressHint || '(this deal)';
+  const btn = document.getElementById('myPipelineRemoveConfirmBtn');
+  btn.onclick = () => _myPipelineConfirmRemove(dealId);
+  modal.style.display = 'flex';
+}
+
+function _myPipelineHideRemoveModal(){
+  const modal = document.getElementById('myPipelineRemoveModal');
+  if(modal) modal.style.display = 'none';
+  // Note: checkboxes reverted-to-checked stay that way — the cache
+  // wasn't mutated, and _myPipelineSyncButtons isn't called on cancel.
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -43337,6 +43566,7 @@ document.addEventListener('DOMContentLoaded', ()=>{
     hideLogin();
     syncData();
     _loadMyRelationships(true); // fire-and-forget; contacts page also awaits it
+    if(typeof _myPipelineLoad === 'function') _myPipelineLoad(true); // v113.1: fire-and-forget
   } else {
     showLogin();
   }

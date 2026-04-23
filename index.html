@@ -37448,6 +37448,69 @@ function renderDealStatusTab(d){
       border:1px solid ${t.key===curTag?t.border:'var(--border)'};
       transition:all 0.1s;">${t.label}</button>`).join('');
 
+  // Personal Pipeline section — only renders if the LOGGED-IN user has a
+  // personal pipeline AND this deal is a member of it. Never shows other
+  // users' pipelines.
+  let myPipelineBlock = '';
+  const ppIsMember = typeof _myPipelineDealIds !== 'undefined'
+    && _myPipelineDealIds && _myPipelineDealIds.has(d.id);
+  const ppHasStages = typeof _myPipelineStages !== 'undefined'
+    && Array.isArray(_myPipelineStages) && _myPipelineStages.length > 0;
+  if(ppIsMember && ppHasStages && _currentUser && _currentUser.id){
+    const curStageId = _myPipelineDealStage.get(d.id) || null;
+    const curStage   = curStageId ? _myPipelineStages.find(s => s.id === curStageId) : null;
+    const curStageKey= curStage ? curStage.key : '';
+    const curStageIdx= curStage ? _myPipelineStages.findIndex(s => s.id === curStage.id) : -1;
+
+    // Progress tracker dots — same pattern as the main pipeline above so the
+    // UX is identical; just sourced from the user's personal stage list.
+    const ppTracker = _myPipelineStages.map((s,i) => {
+      const active = s.id === curStageId;
+      const past   = curStageIdx > i;
+      const color  = s.color || '#6b7280';
+      return `
+      <div style="text-align:center;flex:1;min-width:0;">
+        <div style="width:30px;height:30px;border-radius:50%;margin:0 auto 4px;
+          background:${active?color:past?'#9ca3af':'#e5e7eb'};
+          border:2px solid ${active?color:past?'#6b7280':'#d1d5db'};
+          display:flex;align-items:center;justify-content:center;
+          font-size:11px;color:${past||active?'#fff':'#9ca3af'};font-weight:600;
+          ${active?'box-shadow:0 0 0 4px '+color+'33;':''}"
+        >${past?'✓':i+1}</div>
+        <div style="font-size:9px;font-weight:${active?700:400};color:${active?color:'#6b7280'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_esc(s.label)}</div>
+      </div>`;
+    }).join('<div style="flex:0 0 12px;height:2px;background:#e5e7eb;margin-top:15px;"></div>');
+
+    // Set-Stage buttons — call changeMyPipelineStage so the re-render path
+    // mirrors changeStage(): patch, re-render deal page, stay on this tab.
+    const ppStageButtons = _myPipelineStages.map(s => {
+      const color = s.color || '#6b7280';
+      const active = s.key === curStageKey;
+      return `
+      <button onclick="changeMyPipelineStage('${s.key.replace(/'/g,"\\'")}')" style="
+        padding:7px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;
+        background:${active?color:'var(--surface)'};
+        color:${active?'#fff':'var(--text2)'};
+        border:1px solid ${active?color:'var(--border)'};
+        transition:all 0.1s;">${_esc(s.label)}</button>`;
+    }).join('');
+
+    const ownerName = (_currentUser.name || _currentUser.fub_name || 'You').split(' ')[0];
+    myPipelineBlock = `
+      <!-- PERSONAL PIPELINE (only you see this; only shows if this deal is in your pipeline) -->
+      <div class="info-box" style="margin-top:12px;border-color:#7c3aed;">
+        <div class="info-box-title" style="color:#6d28d9;">
+          ⭐ ${_esc(ownerName)}'s Personal Pipeline
+          &nbsp;<span style="font-size:11px;font-weight:400;color:var(--text3);">Only visible to you · move independently of the company stage</span>
+        </div>
+        <div style="display:flex;align-items:center;padding:12px 0;overflow-x:auto;">${ppTracker}</div>
+        <div style="margin-top:10px;">
+          <div style="font-size:11px;font-weight:600;color:var(--text2);margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em;">Set Personal Stage</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;">${ppStageButtons}</div>
+        </div>
+      </div>`;
+  }
+
   return `
     <div class="section-hdr"><span class="icon">📋</span> Deal Status / Pipeline</div>
 
@@ -37460,6 +37523,8 @@ function renderDealStatusTab(d){
         <div style="display:flex;flex-wrap:wrap;gap:6px;">${stageButtons}</div>
       </div>
     </div>
+
+    ${myPipelineBlock}
 
     <!-- DEAL TAG (Secondary Status) -->
     <div class="info-box" style="margin-top:12px;">
@@ -37535,6 +37600,23 @@ function changeStage(s){
       setTimeout(()=>switchTab('dealstatus',null),10);
     }
   });
+}
+
+// Personal-pipeline sibling to changeStage: moves the current deal to a new
+// stage in the LOGGED-IN user's personal pipeline, then re-renders the deal
+// page and stays on the Deal Status tab. Only callable from the Personal
+// Pipeline block in renderDealStatusTab, which is itself only rendered when
+// the current user owns the pipeline and this deal is a member.
+async function changeMyPipelineStage(stageKey){
+  if(!currentDeal) return;
+  if(typeof _myPipelineMove !== 'function') return;
+  try {
+    await _myPipelineMove(currentDeal.id, stageKey);
+    renderDealPage();
+    setTimeout(() => switchTab('dealstatus', null), 10);
+  } catch(e){
+    console.warn('changeMyPipelineStage failed:', e);
+  }
 }
 
 function setDealTag(tag){

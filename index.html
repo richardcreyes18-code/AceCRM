@@ -18869,12 +18869,20 @@ async function _contactLoadLinkedBuyerCriteria(contactId){
 let _myPipelineDealIds = new Set();
 let _myPipelineLoadMs  = 0;
 
+// v113.2 (Phase 2) additions — state needed by the Personal Pipelines board view
+let _myPipelineId        = null;               // current agent's default pipeline id
+let _myPipelineStages    = [];                 // [{id, key, label, order, color}, ...]
+let _myPipelineDealStage = new Map();          // dealId -> stage_id
+
 // Idempotent load of the agent's pipeline membership.
 // Auto-creates the pipeline + seeds the 12 default stages on first
 // call via the agent_pipeline_init RPC (server-side guard).
 async function _myPipelineLoad(force){
   if(!_currentUser || !_currentUser.id){
-    _myPipelineDealIds = new Set();
+    _myPipelineDealIds   = new Set();
+    _myPipelineDealStage = new Map();
+    _myPipelineStages    = [];
+    _myPipelineId        = null;
     return;
   }
   if(!force && _myPipelineLoadMs && (Date.now() - _myPipelineLoadMs) < 120000) return;
@@ -18884,17 +18892,40 @@ async function _myPipelineLoad(force){
       'select=id&user_id=eq.' + encodeURIComponent(_currentUser.id)
       + '&is_default=eq.true&limit=1');
     const pipelineId = (Array.isArray(pipes) && pipes[0]) ? pipes[0].id : null;
-    if(!pipelineId){ _myPipelineDealIds = new Set(); return; }
-    const rows = await _sbGet(SB_TABLES.agentPipelineDeals,
-      'select=deal_id&pipeline_id=eq.' + encodeURIComponent(pipelineId)
-      + '&limit=5000');
-    _myPipelineDealIds = new Set((rows||[]).map(r => r.deal_id));
-    _myPipelineLoadMs  = Date.now();
+    _myPipelineId = pipelineId;
+    if(!pipelineId){
+      _myPipelineDealIds   = new Set();
+      _myPipelineDealStage = new Map();
+      _myPipelineStages    = [];
+      return;
+    }
+    // Fetch stages + membership in parallel
+    const [stageRows, dealRows] = await Promise.all([
+      _sbGet(SB_TABLES.agentPipelineStages,
+        'select=id,stage_key,stage_label,stage_order,color'
+        + '&pipeline_id=eq.' + encodeURIComponent(pipelineId)
+        + '&order=stage_order.asc&limit=100'),
+      _sbGet(SB_TABLES.agentPipelineDeals,
+        'select=deal_id,stage_id'
+        + '&pipeline_id=eq.' + encodeURIComponent(pipelineId)
+        + '&limit=5000')
+    ]);
+    _myPipelineStages = (stageRows||[]).map(s => ({
+      id: s.id, key: s.stage_key, label: s.stage_label,
+      order: s.stage_order, color: s.color
+    }));
+    _myPipelineDealIds   = new Set((dealRows||[]).map(r => r.deal_id));
+    _myPipelineDealStage = new Map((dealRows||[]).map(r => [r.deal_id, r.stage_id]));
+    _myPipelineLoadMs    = Date.now();
   }catch(e){
     console.warn('_myPipelineLoad failed:', e.message);
     // Don't wipe existing state on transient failure
   }
 }
+
+// Helpers used by the board view and add/remove handlers
+function _myPipelineStageByKey(key){ return _myPipelineStages.find(s => s.key === key) || null; }
+function _myPipelineStageById(id){  return _myPipelineStages.find(s => s.id  === id ) || null; }
 
 function _isInMyPipeline(dealId){ return _myPipelineDealIds.has(dealId); }
 
@@ -18918,10 +18949,20 @@ async function addToMyPipeline(dealId, btnEl){
       return;
     }
     _myPipelineDealIds.add(dealId);
+    // v113.2: keep dealId->stage_id map in sync so the board view reflects the add.
+    // The RPC returns stage_id on fresh add; on duplicate we leave the existing value.
+    if(result && result.stage_id){
+      _myPipelineDealStage.set(dealId, result.stage_id);
+    } else if(!_myPipelineDealStage.has(dealId)){
+      const newLead = _myPipelineStageByKey('new_lead');
+      if(newLead) _myPipelineDealStage.set(dealId, newLead.id);
+    }
     if(typeof showSaveConfirm === 'function'){
       showSaveConfirm(result.already_present ? 'Already in Personal Pipeline' : 'Added to Personal Pipeline');
     }
     _myPipelineSyncButtons(dealId);
+    // v113.2: if the Personal Pipelines board is currently visible, re-render.
+    if(typeof _myPipelineRerenderIfVisible === 'function') _myPipelineRerenderIfVisible();
   }catch(e){
     console.error('addToMyPipeline failed:', e);
     if(typeof showSaveConfirm === 'function') showSaveConfirm('Pipeline: ' + (e.message || 'add failed'));
@@ -18947,8 +18988,11 @@ async function _myPipelineConfirmRemove(dealId){
       return;
     }
     _myPipelineDealIds.delete(dealId);
+    _myPipelineDealStage.delete(dealId); // v113.2
     if(typeof showSaveConfirm === 'function') showSaveConfirm('Removed from Personal Pipeline');
     _myPipelineSyncButtons(dealId);
+    // v113.2: re-render the board if it's currently visible
+    if(typeof _myPipelineRerenderIfVisible === 'function') _myPipelineRerenderIfVisible();
   }catch(e){
     console.error('removeFromMyPipeline failed:', e);
     if(typeof showSaveConfirm === 'function') showSaveConfirm('Pipeline: ' + (e.message || 'remove failed'));
@@ -19035,6 +19079,227 @@ function _myPipelineHideRemoveModal(){
   if(modal) modal.style.display = 'none';
   // Note: checkboxes reverted-to-checked stay that way — the cache
   // wasn't mutated, and _myPipelineSyncButtons isn't called on cancel.
+}
+
+// ═══════════════════════════════════════════════════════════════════════
+// v113.2 (Phase 2): PERSONAL PIPELINES BOARD VIEW
+// ═══════════════════════════════════════════════════════════════════════
+// Renders the logged-in agent's personal pipeline as a 12-column board.
+// Columns are driven by ace_agent_pipeline_stages (NOT the hardcoded
+// NEW_PIPELINE_STAGES — the personal and company pipelines evolve
+// independently). Cards are deals from allDeals whose id appears in
+// _myPipelineDealStage. Drag between columns calls agent_pipeline_move.
+
+let _myPipelineBoardMounted = false; // tracks whether _showMyPipelineBoard rendered into #mainArea
+let _myPipelineDragId       = null;  // deal id currently being dragged (namespaced to avoid collision)
+
+// Called from add/remove paths to re-paint the board if it's the active view.
+function _myPipelineRerenderIfVisible(){
+  if(!_myPipelineBoardMounted) return;
+  if(typeof getPipelineScope === 'function' && getPipelineScope() !== 'personal') return;
+  const marker = document.getElementById('myPipelineBoardRoot');
+  if(!marker) { _myPipelineBoardMounted = false; return; }
+  try { _showMyPipelineBoard(); } catch(e){ console.warn('_myPipelineRerenderIfVisible failed:', e); }
+}
+
+// Move a deal between stages. Optimistic UI: updates cache + re-renders
+// immediately, then rolls back on RPC error.
+async function _myPipelineMove(dealId, newStageKey){
+  if(!_currentUser || !_currentUser.id) return;
+  const targetStage = _myPipelineStageByKey(newStageKey);
+  if(!targetStage) { console.warn('_myPipelineMove: unknown stage_key', newStageKey); return; }
+  const prevStageId = _myPipelineDealStage.get(dealId);
+  if(prevStageId === targetStage.id) return; // no-op
+  // Optimistic
+  _myPipelineDealStage.set(dealId, targetStage.id);
+  _myPipelineRerenderIfVisible();
+  try{
+    const result = await _sbRpc('agent_pipeline_move', {
+      p_user_id: _currentUser.id, p_deal_id: dealId, p_new_stage_key: newStageKey
+    });
+    if(result && result.error){
+      // Roll back
+      if(prevStageId) _myPipelineDealStage.set(dealId, prevStageId);
+      else _myPipelineDealStage.delete(dealId);
+      _myPipelineRerenderIfVisible();
+      if(typeof showSaveConfirm === 'function') showSaveConfirm('Pipeline: ' + result.error);
+      return;
+    }
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('Moved to ' + targetStage.label);
+  }catch(e){
+    if(prevStageId) _myPipelineDealStage.set(dealId, prevStageId);
+    else _myPipelineDealStage.delete(dealId);
+    _myPipelineRerenderIfVisible();
+    console.error('_myPipelineMove failed:', e);
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('Pipeline: ' + (e.message || 'move failed'));
+  }
+}
+
+// Drag handlers (namespaced so they don't collide with the company
+// pipeline's pipelineDragStart/Drop).
+function _myPipelineDragStart(e, dealId){
+  _myPipelineDragId = dealId;
+  e.dataTransfer.effectAllowed = 'move';
+  try { e.dataTransfer.setData('text/plain', dealId); } catch(err) {}
+  if(e.currentTarget) e.currentTarget.style.opacity = '0.4';
+}
+function _myPipelineDragEnd(e){
+  if(e.currentTarget) e.currentTarget.style.opacity = '';
+  document.querySelectorAll('.my-pipeline-col-body').forEach(b => b.style.outline = '');
+}
+function _myPipelineDragOver(e){
+  e.preventDefault();
+  e.dataTransfer.dropEffect = 'move';
+  const body = e.currentTarget.querySelector('.my-pipeline-col-body');
+  if(body) body.style.outline = '2px dashed #2563eb';
+}
+function _myPipelineDragLeave(e){
+  const wrap = e.currentTarget;
+  if(wrap.contains(e.relatedTarget)) return;
+  const body = wrap.querySelector('.my-pipeline-col-body');
+  if(body) body.style.outline = '';
+}
+function _myPipelineDrop(e, newStageKey){
+  e.preventDefault();
+  const dealId = _myPipelineDragId;
+  _myPipelineDragId = null;
+  const body = e.currentTarget.querySelector('.my-pipeline-col-body');
+  if(body) body.style.outline = '';
+  if(!dealId) return;
+  _myPipelineMove(dealId, newStageKey);
+}
+
+// Manual refresh button
+async function _myPipelineRefresh(){
+  await _myPipelineLoad(true);
+  _myPipelineRerenderIfVisible();
+}
+
+// Main board render — mounts into #mainArea. Assumes _myPipelineLoad has
+// been called. If stages are empty (first visit, still loading), awaits
+// the load and then re-renders.
+async function _showMyPipelineBoard(){
+  // If stages aren't loaded yet, kick off the load and show a placeholder.
+  if(!_myPipelineStages.length){
+    const m = document.getElementById('mainArea');
+    if(m) m.innerHTML = '<div style="padding:40px;text-align:center;color:#64748b;font-size:13px;">Loading your personal pipeline…</div>';
+    await _myPipelineLoad(true);
+    // Fall through to render below
+  }
+
+  const stages = _myPipelineStages.slice().sort((a,b) => (a.order||0) - (b.order||0));
+
+  // Group deals by stage_id
+  const byStage = new Map();
+  stages.forEach(s => byStage.set(s.id, []));
+  _myPipelineDealStage.forEach((stageId, dealId) => {
+    const d = (typeof allDeals !== 'undefined' ? allDeals : []).find(x => x.id === dealId);
+    if(!d) return; // deal was deleted or not loaded yet
+    if(!byStage.has(stageId)){
+      // Stage membership points at a stage we don't know about — stash in first column
+      const first = stages[0];
+      if(first) byStage.get(first.id).push(d);
+    } else {
+      byStage.get(stageId).push(d);
+    }
+  });
+
+  const totalCards = Array.from(byStage.values()).reduce((n, arr) => n + arr.length, 0);
+
+  // Scope toggle (same buttons used in the company pipeline header)
+  const scopeToggleHTML = _myPipelineScopeToggleHTML();
+
+  const columnsHTML = stages.map(s => {
+    const cards = byStage.get(s.id) || [];
+    const color = s.color || '#1e3a8a';
+    return ''
+      + '<div class="my-pipeline-col-wrap" data-stage-key="' + s.key + '"'
+      +   ' ondragover="_myPipelineDragOver(event)"'
+      +   ' ondragleave="_myPipelineDragLeave(event)"'
+      +   ' ondrop="_myPipelineDrop(event, \'' + s.key + '\')"'
+      +   ' style="flex-shrink:0;width:280px;">'
+      +   '<div style="background:#fff;border-top:4px solid ' + color + ';border-radius:6px 6px 0 0;padding:12px 14px 10px;border:1px solid #e2e8f0;border-bottom:none;">'
+      +     '<div style="font-weight:700;font-size:14px;color:' + color + ';">' + _esc(s.label) + '</div>'
+      +     '<div style="font-size:11px;color:#64748b;margin-top:3px;">' + cards.length + ' deal' + (cards.length===1?'':'s') + '</div>'
+      +   '</div>'
+      +   '<div class="my-pipeline-col-body" style="border:1px solid #e2e8f0;border-top:none;background:#f8fafc;min-height:400px;max-height:calc(100vh - 260px);overflow-y:auto;padding:10px;border-radius:0 0 6px 6px;">'
+      +     cards.map(d => _myPipelineCardHTML(d)).join('')
+      +     (cards.length===0 ? '<div style="font-size:11px;color:#94a3b8;text-align:center;padding:20px;font-style:italic;">Empty</div>' : '')
+      +   '</div>'
+      + '</div>';
+  }).join('');
+
+  const headline = totalCards === 0
+    ? 'My Personal Pipeline — No deals yet. Add deals from the deal board or any deal\'s detail page.'
+    : 'My Personal Pipeline — ' + totalCards + ' deal' + (totalCards===1?'':'s');
+
+  const mainArea = document.getElementById('mainArea');
+  if(!mainArea) return;
+  mainArea.innerHTML = ''
+    + '<div id="myPipelineBoardRoot" style="padding:14px 16px;">'
+    +   '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:10px;flex-wrap:wrap;">'
+    +     '<div style="font-size:17px;font-weight:bold;color:#1a3a6e;">' + _esc(headline) + '</div>'
+    +     '<div style="display:flex;gap:8px;align-items:center;">'
+    +       scopeToggleHTML
+    +       '<button onclick="_myPipelineRefresh()" title="Refresh from server" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:7px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">↻ Refresh</button>'
+    +     '</div>'
+    +   '</div>'
+    +   (totalCards === 0
+        ? '<div style="background:#fef9c3;border:1px solid #facc15;border-radius:8px;padding:16px 18px;margin-bottom:14px;font-size:13px;color:#713f12;line-height:1.55;">'
+          + '<strong>Your personal pipeline is empty.</strong> Open any deal and click <em>“+ Add to My Pipeline”</em> in the header, or flip on the <em>“Add to My Personal Pipeline”</em> column in the deal board (⚙ Columns) and check any deal.'
+          + '</div>'
+        : '')
+    +   '<div style="overflow-x:auto;">'
+    +     '<div style="display:flex;gap:12px;padding-bottom:10px;">' + columnsHTML + '</div>'
+    +   '</div>'
+    +   '<div style="margin-top:14px;padding:10px 14px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;font-size:11px;color:#1e3a8a;">'
+    +     '💡 <strong>Tip:</strong> Drag cards between columns to change stage. Click the card to open the deal snapshot. Use the <em>×</em> on a card to remove it from your personal pipeline (the deal stays on the company pipeline).'
+    +   '</div>'
+    + '</div>';
+  _myPipelineBoardMounted = true;
+}
+
+// Small helpers
+function _esc(s){ return String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;'); }
+
+function _myPipelineCardHTML(d){
+  const addr  = String(d['Address'] || 'Untitled');
+  const price = (typeof fmtMoney === 'function' && Number(d['Asking Price'])) ? fmtMoney(Number(d['Asking Price'])) : '';
+  const agent = String(d['Agent'] || '');
+  const county= String(d['County'] || '');
+  const asset = String(d['CRM Asset Classification'] || d['Asset Type'] || '');
+  const addrSafe = addr.replace(/\\/g,'\\\\').replace(/'/g,"\\'").replace(/"/g,'&quot;');
+  return ''
+    + '<div class="pipeline-card" draggable="true"'
+    +   ' ondragstart="_myPipelineDragStart(event, \'' + d.id + '\')"'
+    +   ' ondragend="_myPipelineDragEnd(event)"'
+    +   ' onclick="openDealSnapshot(\'' + d.id + '\')"'
+    +   ' style="position:relative;">'
+    +   '<button onclick="event.stopPropagation();removeFromMyPipeline(\'' + d.id + '\', \'' + addrSafe + '\')"'
+    +     ' title="Remove from my personal pipeline"'
+    +     ' style="position:absolute;top:4px;right:4px;background:transparent;border:none;color:#94a3b8;font-size:16px;font-weight:700;cursor:pointer;line-height:1;padding:2px 6px;border-radius:4px;"'
+    +     ' onmouseenter="this.style.background=\'#fee2e2\';this.style.color=\'#b91c1c\';"'
+    +     ' onmouseleave="this.style.background=\'transparent\';this.style.color=\'#94a3b8\';">×</button>'
+    +   '<div class="pc-addr" style="padding-right:18px;">' + _esc(addr) + '</div>'
+    +   (price  ? '<div class="pc-price">' + _esc(price) + '</div>' : '')
+    +   (asset  ? '<div class="pc-row"><span class="pc-icon">🏷️</span><span>' + _esc(asset) + '</span></div>' : '')
+    +   (agent  ? '<div class="pc-row"><span class="pc-icon">👤</span><span>' + _esc(agent) + '</span></div>' : '')
+    +   (county ? '<div class="pc-row"><span class="pc-icon">📍</span><span>' + _esc(county) + '</span></div>' : '')
+    + '</div>';
+}
+
+// Shared scope toggle HTML — used by BOTH _showMyPipelineBoard and the
+// existing showPipelineView so the button group looks identical on both
+// views. Only renders the segmented Company | Personal pair.
+function _myPipelineScopeToggleHTML(){
+  const scope = (typeof getPipelineScope === 'function') ? getPipelineScope() : 'company';
+  const companyActive  = scope === 'company';
+  const personalActive = scope === 'personal';
+  return ''
+    + '<div style="display:inline-flex;border:1px solid #cbd5e1;border-radius:6px;overflow:hidden;">'
+    +   '<button onclick="setPipelineScope(\'company\')" title="Full 17-stage company pipeline" style="background:' + (companyActive?'#1e3a8a':'#fff') + ';color:' + (companyActive?'#fff':'#475569') + ';border:none;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;border-right:1px solid #cbd5e1;">Full Pipeline</button>'
+    +   '<button onclick="setPipelineScope(\'personal\')" title="Your private 12-stage personal pipeline" style="background:' + (personalActive?'#1e3a8a':'#fff') + ';color:' + (personalActive?'#fff':'#475569') + ';border:none;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;">Personal Pipelines</button>'
+    + '</div>';
 }
 
 // ═══════════════════════════════════════════════════════════════════════
@@ -36577,6 +36842,9 @@ let _pipelineViewMode = null; // 'board' | 'table'
 let _pipelineSort = { col: null, dir: 'desc' }; // col: address|stage|price|assetType|owner|agent|county|units|sf|cap|comm
 let _pipelineGroupBy = 'none'; // 'none' | 'stage' | 'agent' | 'assetType' | 'county'
 
+// v113.2: scope toggle — 'company' (existing 17-stage board) or 'personal' (per-agent 12-stage board)
+let _pipelineScope = null;
+
 function getPipelineViewMode(){
   if(_pipelineViewMode) return _pipelineViewMode;
   try {
@@ -36590,6 +36858,25 @@ function getPipelineViewMode(){
 function setPipelineViewMode(mode){
   _pipelineViewMode = mode;
   try { _store.set('pipeline_view_mode', mode); } catch(e) {}
+  showPipelineView();
+}
+
+// v113.2: Personal Pipelines scope — persisted per agent so each logged-in
+// user keeps their own preference.
+function getPipelineScope(){
+  if(_pipelineScope) return _pipelineScope;
+  try {
+    const saved = _store.get('pipeline_scope');
+    if(saved === 'personal' || saved === 'company'){ _pipelineScope = saved; return saved; }
+  } catch(e) {}
+  _pipelineScope = 'company';
+  return _pipelineScope;
+}
+
+function setPipelineScope(scope){
+  if(scope !== 'personal' && scope !== 'company') scope = 'company';
+  _pipelineScope = scope;
+  try { _store.set('pipeline_scope', scope); } catch(e) {}
   showPipelineView();
 }
 
@@ -37446,6 +37733,17 @@ function _cityFilterSearch(q){
 }
 
 function showPipelineView(){
+  // v113.2: dispatch to the Personal Pipelines board when scope = 'personal'.
+  // The company pipeline below is left completely untouched.
+  if(typeof getPipelineScope === 'function' && getPipelineScope() === 'personal'){
+    if(typeof _showMyPipelineBoard === 'function'){
+      _showMyPipelineBoard();
+      return;
+    }
+  }
+  // v113.2: the board was previously mounted but we're leaving it now
+  if(typeof _myPipelineBoardMounted !== 'undefined') _myPipelineBoardMounted = false;
+
   const stages = NEW_PIPELINE_STAGES;
   const colors = NEW_PIPELINE_COLORS;
   const enabledFields = getPipelineCardFields();
@@ -37532,6 +37830,10 @@ function showPipelineView(){
       </button>
     </div>`;
 
+  // v113.2: scope toggle (Full Pipeline | Personal Pipelines). Shared HTML
+  // with _showMyPipelineBoard so both views render an identical control.
+  const scopeToggle = (typeof _myPipelineScopeToggleHTML === 'function') ? _myPipelineScopeToggleHTML() : '';
+
   // Board / Table body content
   let bodyContent;
   if(viewMode === 'table'){
@@ -37613,6 +37915,7 @@ function showPipelineView(){
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:10px;flex-wrap:wrap;">
         <div style="font-size:17px;font-weight:bold;color:#1a3a6e;">Full Pipeline — <span id="pipelineHeaderCount">${countLabel}</span></div>
         <div style="display:flex;gap:8px;align-items:center;">
+          ${scopeToggle}
           ${viewToggle}
           <button onclick="openConfig();setTimeout(()=>document.getElementById('pipelineCardFieldsSection')?.scrollIntoView({behavior:'smooth',block:'start'}),200)"
             style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:7px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">

@@ -27420,20 +27420,20 @@ async function bcOpenExpanded(recordId){
 
               <!-- LOCATION FREE TEXT -->
               <div class="bc-label" style="margin-top:10px;">Location Notes (free text)</div>
-              <textarea id="bcf_location" style="width:100%;height:50px;font-size:11px;font-family:Tahoma,Arial,sans-serif;border:1px inset #808080;padding:6px;resize:vertical;">${f['Location Preferences']||''}</textarea>
+              <textarea id="bcf_location" oninput="_bcAutoSave()" style="width:100%;height:50px;font-size:11px;font-family:Tahoma,Arial,sans-serif;border:1px inset #808080;padding:6px;resize:vertical;">${f['Location Preferences']||''}</textarea>
             </div>
 
             <div>
               <div class="bc-label">Minimum CAP Rate (%)</div>
-              <input class="form-input" id="bcf_caprate" value="${f['Minumum Cap Rate']||''}" placeholder="e.g. 6.5" style="width:120px;margin-bottom:12px;"/>
+              <input class="form-input" id="bcf_caprate" oninput="_bcAutoSave()" value="${f['Minumum Cap Rate']||''}" placeholder="e.g. 6.5" style="width:120px;margin-bottom:12px;"/>
               <div class="bc-label">Purchase Price Range</div>
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
-                <input class="form-input num-input" id="bcf_minprice" value="${_fmtNum(f['Min Purchase Price'])}" placeholder="Min $" style="width:115px;" type="text" inputmode="numeric"/>
+                <input class="form-input num-input" id="bcf_minprice" oninput="_bcAutoSave()" value="${_fmtNum(f['Min Purchase Price'])}" placeholder="Min $" style="width:115px;" type="text" inputmode="numeric"/>
                 <span style="color:#888;font-size:12px;">to</span>
-                <input class="form-input num-input" id="bcf_maxprice" value="${_fmtNum(f['Max Purchase Price'])}" placeholder="Max $" style="width:115px;" type="text" inputmode="numeric"/>
+                <input class="form-input num-input" id="bcf_maxprice" oninput="_bcAutoSave()" value="${_fmtNum(f['Max Purchase Price'])}" placeholder="Max $" style="width:115px;" type="text" inputmode="numeric"/>
               </div>
               <div class="bc-label">Date Added</div>
-              <input class="form-input" id="bcf_dateadded" type="date" value="${f['Date Added Buyer']||''}" style="width:160px;margin-bottom:14px;"/>
+              <input class="form-input" id="bcf_dateadded" type="date" value="${f['Date Added Buyer']||''}" onchange="_bcAutoSave()" style="width:160px;margin-bottom:14px;"/>
 
               <!-- v102.15: How They Buy — Deal Dependent flag + Financing Type -->
               <div class="bc-label" style="margin-bottom:6px;">💰 How They Buy</div>
@@ -27480,11 +27480,11 @@ async function bcOpenExpanded(recordId){
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
             <div>
               <div class="bc-label">Other Requirements</div>
-              <textarea id="bcf_requirements" style="width:100%;height:120px;font-size:11px;font-family:Tahoma,Arial,sans-serif;border:1px inset #808080;padding:6px;resize:vertical;">${f['Other Requirements ']||''}</textarea>
+              <textarea id="bcf_requirements" oninput="_bcAutoSave()" style="width:100%;height:120px;font-size:11px;font-family:Tahoma,Arial,sans-serif;border:1px inset #808080;padding:6px;resize:vertical;">${f['Other Requirements ']||''}</textarea>
             </div>
             <div>
               <div class="bc-label">Deals Sent Notes</div>
-              <textarea id="bcf_dealsnotes" style="width:100%;height:120px;font-size:11px;font-family:Tahoma,Arial,sans-serif;border:1px inset #808080;padding:6px;resize:vertical;">${f['Deals Sent Notes']||''}</textarea>
+              <textarea id="bcf_dealsnotes" oninput="_bcAutoSave()" style="width:100%;height:120px;font-size:11px;font-family:Tahoma,Arial,sans-serif;border:1px inset #808080;padding:6px;resize:vertical;">${f['Deals Sent Notes']||''}</textarea>
             </div>
           </div>
         </div>
@@ -27646,9 +27646,13 @@ function bcExpandedAssetSection(asset, f){
 function _bcGetPillTexts(containerId){
   return [...document.querySelectorAll(`#${containerId} span`)].map(s=>s.childNodes[0]?.textContent?.trim()).filter(Boolean);
 }
-function _bcSyncAssets(){ document.getElementById('bcf_assets_hidden').value = _bcGetPillTexts('bcf_asset_pills').join(', '); }
-function _bcSyncCounties(){ document.getElementById('bcf_counties_hidden').value = _bcGetPillTexts('bcf_county_pills').join(', '); }
-function _bcSyncCities(){ document.getElementById('bcf_cities_hidden').value = _bcGetPillTexts('bcf_city_pills').join(', '); }
+// v113.7: every sync also triggers _bcAutoSave. The buyer-criteria page has
+// no "you have unsaved changes" indicator, so users can easily make pill
+// edits, navigate away, and lose them. Piggy-backing the 1.2s debounced
+// autosave onto every sync means every add/remove persists automatically.
+function _bcSyncAssets(){ document.getElementById('bcf_assets_hidden').value = _bcGetPillTexts('bcf_asset_pills').join(', '); if(typeof _bcAutoSave==='function') _bcAutoSave(); }
+function _bcSyncCounties(){ document.getElementById('bcf_counties_hidden').value = _bcGetPillTexts('bcf_county_pills').join(', '); if(typeof _bcAutoSave==='function') _bcAutoSave(); }
+function _bcSyncCities(){ document.getElementById('bcf_cities_hidden').value = _bcGetPillTexts('bcf_city_pills').join(', '); if(typeof _bcAutoSave==='function') _bcAutoSave(); }
 
 // v110.3: NJ Region quick-add for buyer criteria counties. Adds every
 // county in the named region as a pill. Dedupes against existing pills.
@@ -28286,6 +28290,7 @@ const _COUNTIES_BY_STATE = {
 function _bcSyncStates(){
   const h = document.getElementById('bcf_states_hidden');
   if(h) h.value = _bcGetPillTexts('bcf_state_pills').join(', ');
+  if(typeof _bcAutoSave==='function') _bcAutoSave();
 }
 function _bcStateSearch(q){
   const dd = document.getElementById('bcf_state_dropdown');

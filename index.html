@@ -1684,9 +1684,10 @@ const SB_TABLES = {
   // v111.2: AI asset type classification suggestions (Haiku-powered)
   aiAssetSuggestions:'ace_ai_asset_suggestions',
   // v113.1: per-agent Personal Pipelines (parallel to company pipeline)
-  agentPipelines:      'ace_agent_pipelines',
-  agentPipelineStages: 'ace_agent_pipeline_stages',
-  agentPipelineDeals:  'ace_agent_pipeline_deals',
+  agentPipelines:        'ace_agent_pipelines',
+  agentPipelineStages:   'ace_agent_pipeline_stages',
+  agentPipelineDeals:    'ace_agent_pipeline_deals',
+  agentPipelinePortfolios:'ace_agent_pipeline_portfolios',
   agentPipelineViews:  'ace_agent_pipeline_views' // v113.3: saved filter presets
 };
 
@@ -14623,6 +14624,92 @@ function _renderPortfolioDetail(p){
   };
   const fmtPct = n => (n != null && !isNaN(n)) ? n.toFixed(2) + '%' : '—';
 
+  // ── PIPELINE SECTION ──────────────────────────────────────────────
+  // Mirrors the deal detail's "Deal Status / Pipeline" UX: a company-wide
+  // 17-stage tracker + Set-Stage grid, plus (if membership exists) a personal
+  // pipeline block for the logged-in user only. Built as HTML strings here
+  // and injected between the header card and the tab bar below.
+  const PF_STAGES = (typeof NEW_PIPELINE_STAGES !== 'undefined' ? NEW_PIPELINE_STAGES : []).map(key => ({
+    key, label: key, color: (typeof NEW_PIPELINE_COLORS !== 'undefined' && NEW_PIPELINE_COLORS[key]) || '#6b7280'
+  }));
+  const pfCurIdx = PF_STAGES.findIndex(s => s.key === stage);
+  const pfTracker = PF_STAGES.map((s,i) => {
+    const active = s.key === stage;
+    const past   = pfCurIdx > i;
+    return `
+    <div style="text-align:center;flex:1;min-width:0;">
+      <div style="width:30px;height:30px;border-radius:50%;margin:0 auto 4px;
+        background:${active?s.color:past?'#9ca3af':'#e5e7eb'};
+        border:2px solid ${active?s.color:past?'#6b7280':'#d1d5db'};
+        display:flex;align-items:center;justify-content:center;
+        font-size:11px;color:${past||active?'#fff':'#9ca3af'};font-weight:600;
+        ${active?'box-shadow:0 0 0 4px '+s.color+'33;':''}"
+      >${past?'✓':i+1}</div>
+      <div style="font-size:9px;font-weight:${active?700:400};color:${active?s.color:'#6b7280'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${s.label}</div>
+    </div>`;
+  }).join('<div style="flex:0 0 12px;height:2px;background:#e5e7eb;margin-top:15px;"></div>');
+  const pfStageButtons = PF_STAGES.map(s => `
+    <button onclick="changePortfolioStage('${p.id}','${s.key.replace(/'/g,"\\'")}')" style="
+      padding:7px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;
+      background:${s.key===stage?s.color:'#fff'};
+      color:${s.key===stage?'#fff':'#334155'};
+      border:1px solid ${s.key===stage?s.color:'#e2e8f0'};
+      transition:all 0.1s;">${s.label}</button>`).join('');
+
+  // Personal pipeline section — only if logged-in user has this portfolio in
+  // their pipeline AND stages are loaded.
+  let pfMyPipelineBlock = '';
+  const pfPpIsMember = typeof _myPipelinePortfolioIds !== 'undefined'
+    && _myPipelinePortfolioIds && _myPipelinePortfolioIds.has(p.id);
+  const pfPpHasStages = typeof _myPipelineStages !== 'undefined'
+    && Array.isArray(_myPipelineStages) && _myPipelineStages.length > 0;
+  if(pfPpIsMember && pfPpHasStages && _currentUser && _currentUser.id){
+    const curStageId = _myPipelinePortfolioStage.get(p.id) || null;
+    const curStage   = curStageId ? _myPipelineStages.find(s => s.id === curStageId) : null;
+    const curStageKey= curStage ? curStage.key : '';
+    const curStageIdx= curStage ? _myPipelineStages.findIndex(s => s.id === curStage.id) : -1;
+    const ppTracker = _myPipelineStages.map((s,i) => {
+      const active = s.id === curStageId;
+      const past   = curStageIdx > i;
+      const color  = s.color || '#6b7280';
+      return `
+      <div style="text-align:center;flex:1;min-width:0;">
+        <div style="width:30px;height:30px;border-radius:50%;margin:0 auto 4px;
+          background:${active?color:past?'#9ca3af':'#e5e7eb'};
+          border:2px solid ${active?color:past?'#6b7280':'#d1d5db'};
+          display:flex;align-items:center;justify-content:center;
+          font-size:11px;color:${past||active?'#fff':'#9ca3af'};font-weight:600;
+          ${active?'box-shadow:0 0 0 4px '+color+'33;':''}"
+        >${past?'✓':i+1}</div>
+        <div style="font-size:9px;font-weight:${active?700:400};color:${active?color:'#6b7280'};white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_esc(s.label)}</div>
+      </div>`;
+    }).join('<div style="flex:0 0 12px;height:2px;background:#e5e7eb;margin-top:15px;"></div>');
+    const ppStageButtons = _myPipelineStages.map(s => {
+      const color = s.color || '#6b7280';
+      const active = s.key === curStageKey;
+      return `
+      <button onclick="changeMyPipelinePortfolioStage('${p.id}','${s.key.replace(/'/g,"\\'")}')" style="
+        padding:7px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;
+        background:${active?color:'#fff'};
+        color:${active?'#fff':'#334155'};
+        border:1px solid ${active?color:'#e2e8f0'};
+        transition:all 0.1s;">${_esc(s.label)}</button>`;
+    }).join('');
+    const ownerName = (_currentUser.name || _currentUser.fub_name || 'You').split(' ')[0];
+    pfMyPipelineBlock = `
+      <div style="background:#fff;border:1px solid #7c3aed;border-radius:10px;padding:16px 20px;margin-bottom:16px;">
+        <div style="font-size:13px;font-weight:700;color:#6d28d9;margin-bottom:6px;">
+          ⭐ ${_esc(ownerName)}'s Personal Pipeline
+          <span style="font-size:11px;font-weight:400;color:#94a3b8;margin-left:6px;">Only visible to you · independent of the company stage</span>
+        </div>
+        <div style="display:flex;align-items:center;padding:8px 0;overflow-x:auto;">${ppTracker}</div>
+        <div style="margin-top:8px;">
+          <div style="font-size:11px;font-weight:600;color:#64748b;margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em;">Set Personal Stage</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;">${ppStageButtons}</div>
+        </div>
+      </div>`;
+  }
+
   // Tab content rendered lazily based on _currentPortfolioTab.
   let tabContent;
   if(_currentPortfolioTab === 'financials'){
@@ -14665,6 +14752,18 @@ function _renderPortfolioDetail(p){
           </div>
           <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">
             ${stage ? `<span style="font-size:11px;font-weight:700;padding:5px 12px;border-radius:99px;background:${stageColor}22;color:${stageColor};border:1px solid ${stageColor}55;">${stage}</span>` : ''}
+            ${_currentUser && _currentUser.id ? (
+              _isPortfolioInMyPipeline(p.id)
+                ? `<button onclick="removePortfolioFromMyPipeline('${p.id}')"
+                     title="Remove this portfolio from your Personal Pipeline"
+                     style="background:#fff;color:#6d28d9;border:1px solid #c4b5fd;padding:6px 14px;font-size:11px;font-weight:600;border-radius:6px;cursor:pointer;">
+                     ⭐ In My Pipeline
+                   </button>`
+                : `<button onclick="addPortfolioToMyPipeline('${p.id}', this)"
+                     style="background:#7c3aed;color:#fff;border:1px solid #7c3aed;padding:6px 14px;font-size:11px;font-weight:600;border-radius:6px;cursor:pointer;">
+                     + Add to My Pipeline
+                   </button>`
+            ) : ''}
             <button onclick="openEditPortfolioModal('${p.id}')"
               style="background:#fff;color:#b45309;border:1px solid #fde68a;padding:6px 14px;font-size:11px;font-weight:600;border-radius:6px;cursor:pointer;">
               ✏️ Edit
@@ -14695,6 +14794,18 @@ function _renderPortfolioDetail(p){
           </div>
         </div>
       </div>
+
+      <!-- PIPELINE: COMPANY 17-stage tracker + Set Stage buttons -->
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px 20px;margin-bottom:16px;">
+        <div style="font-size:13px;font-weight:700;color:#0f172a;margin-bottom:6px;">📋 Portfolio Pipeline Stage</div>
+        <div style="display:flex;align-items:center;padding:8px 0;overflow-x:auto;">${pfTracker}</div>
+        <div style="margin-top:8px;">
+          <div style="font-size:11px;font-weight:600;color:#64748b;margin-bottom:6px;text-transform:uppercase;letter-spacing:.05em;">Set Stage</div>
+          <div style="display:flex;flex-wrap:wrap;gap:6px;">${pfStageButtons}</div>
+        </div>
+      </div>
+
+      ${pfMyPipelineBlock}
 
       <!-- TAB BAR -->
       <div style="background:#f1f5f9;border-radius:10px 10px 0 0;border:1px solid #e2e8f0;border-bottom:none;display:flex;gap:2px;padding:4px 4px 0;">
@@ -14963,6 +15074,46 @@ async function _portfolioUpdate(portfolioId, fields){
   const idx = (allPortfolios || []).findIndex(p => p.id === portfolioId);
   if(idx > -1){
     Object.assign(allPortfolios[idx], fields);
+  }
+}
+
+// Portfolio pipeline-stage setter (company pipeline). Mirror of changeStage
+// for deals — patches Pipeline Stage and re-renders the detail page so the
+// tracker + buttons reflect the new state.
+async function changePortfolioStage(portfolioId, stageKey){
+  if(!portfolioId || !stageKey) return;
+  const p = (allPortfolios || []).find(x => x.id === portfolioId);
+  if(!p) return;
+  if(p['Pipeline Stage'] === stageKey) return;
+  const prev = p['Pipeline Stage'];
+  // Optimistic
+  p['Pipeline Stage'] = stageKey;
+  try {
+    await _portfolioUpdate(portfolioId, { 'Pipeline Stage': stageKey });
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('Stage → ' + stageKey);
+    if(typeof _currentPortfolioId !== 'undefined' && _currentPortfolioId === portfolioId){
+      _renderPortfolioDetail(p);
+    }
+  } catch(e){
+    p['Pipeline Stage'] = prev;
+    console.error('changePortfolioStage failed:', e);
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('Stage update failed');
+  }
+}
+
+// Personal-pipeline sibling. Delegates to _myPipelineMovePortfolio (optimistic
+// cache update + RPC) then re-renders the detail page so the tracker shifts.
+async function changeMyPipelinePortfolioStage(portfolioId, stageKey){
+  if(!portfolioId || !stageKey) return;
+  if(typeof _myPipelineMovePortfolio !== 'function') return;
+  try {
+    await _myPipelineMovePortfolio(portfolioId, stageKey);
+    if(typeof _currentPortfolioId !== 'undefined' && _currentPortfolioId === portfolioId){
+      const p = (allPortfolios || []).find(x => x.id === portfolioId);
+      if(p) _renderPortfolioDetail(p);
+    }
+  } catch(e){
+    console.warn('changeMyPipelinePortfolioStage failed:', e);
   }
 }
 
@@ -19708,16 +19859,22 @@ let _myPipelineLoadMs  = 0;
 let _myPipelineId        = null;               // current agent's default pipeline id
 let _myPipelineStages    = [];                 // [{id, key, label, order, color}, ...]
 let _myPipelineDealStage = new Map();          // dealId -> stage_id
+// Portfolio siblings — same pipeline, separate membership table so we can
+// render both deals and portfolios on board / detail views.
+let _myPipelinePortfolioIds   = new Set();     // portfolio IDs in the user's pipeline
+let _myPipelinePortfolioStage = new Map();     // portfolioId -> stage_id
 
 // Idempotent load of the agent's pipeline membership.
 // Auto-creates the pipeline + seeds the 12 default stages on first
 // call via the agent_pipeline_init RPC (server-side guard).
 async function _myPipelineLoad(force){
   if(!_currentUser || !_currentUser.id){
-    _myPipelineDealIds   = new Set();
-    _myPipelineDealStage = new Map();
-    _myPipelineStages    = [];
-    _myPipelineId        = null;
+    _myPipelineDealIds        = new Set();
+    _myPipelineDealStage      = new Map();
+    _myPipelineStages         = [];
+    _myPipelineId             = null;
+    _myPipelinePortfolioIds   = new Set();
+    _myPipelinePortfolioStage = new Map();
     return;
   }
   if(!force && _myPipelineLoadMs && (Date.now() - _myPipelineLoadMs) < 120000) return;
@@ -19729,13 +19886,15 @@ async function _myPipelineLoad(force){
     const pipelineId = (Array.isArray(pipes) && pipes[0]) ? pipes[0].id : null;
     _myPipelineId = pipelineId;
     if(!pipelineId){
-      _myPipelineDealIds   = new Set();
-      _myPipelineDealStage = new Map();
-      _myPipelineStages    = [];
+      _myPipelineDealIds        = new Set();
+      _myPipelineDealStage      = new Map();
+      _myPipelineStages         = [];
+      _myPipelinePortfolioIds   = new Set();
+      _myPipelinePortfolioStage = new Map();
       return;
     }
     // Fetch stages + membership in parallel
-    const [stageRows, dealRows] = await Promise.all([
+    const [stageRows, dealRows, portfolioRows] = await Promise.all([
       _sbGet(SB_TABLES.agentPipelineStages,
         'select=id,stage_key,stage_label,stage_order,color'
         + '&pipeline_id=eq.' + encodeURIComponent(pipelineId)
@@ -19743,15 +19902,21 @@ async function _myPipelineLoad(force){
       _sbGet(SB_TABLES.agentPipelineDeals,
         'select=deal_id,stage_id'
         + '&pipeline_id=eq.' + encodeURIComponent(pipelineId)
+        + '&limit=5000'),
+      _sbGet(SB_TABLES.agentPipelinePortfolios,
+        'select=portfolio_id,stage_id'
+        + '&pipeline_id=eq.' + encodeURIComponent(pipelineId)
         + '&limit=5000')
     ]);
     _myPipelineStages = (stageRows||[]).map(s => ({
       id: s.id, key: s.stage_key, label: s.stage_label,
       order: s.stage_order, color: s.color
     }));
-    _myPipelineDealIds   = new Set((dealRows||[]).map(r => r.deal_id));
-    _myPipelineDealStage = new Map((dealRows||[]).map(r => [r.deal_id, r.stage_id]));
-    _myPipelineLoadMs    = Date.now();
+    _myPipelineDealIds        = new Set((dealRows||[]).map(r => r.deal_id));
+    _myPipelineDealStage      = new Map((dealRows||[]).map(r => [r.deal_id, r.stage_id]));
+    _myPipelinePortfolioIds   = new Set((portfolioRows||[]).map(r => r.portfolio_id));
+    _myPipelinePortfolioStage = new Map((portfolioRows||[]).map(r => [r.portfolio_id, r.stage_id]));
+    _myPipelineLoadMs         = Date.now();
     // v113.3: warm the saved-views cache in the background
     if(typeof _myPipelineLoadViews === 'function') _myPipelineLoadViews();
   }catch(e){
@@ -19980,6 +20145,122 @@ async function _myPipelineMove(dealId, newStageKey){
     else _myPipelineDealStage.delete(dealId);
     _myPipelineRerenderIfVisible();
     console.error('_myPipelineMove failed:', e);
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('Pipeline: ' + (e.message || 'move failed'));
+  }
+}
+
+// ── PORTFOLIO SIBLINGS ─────────────────────────────────────────────
+// Same shape as addToMyPipeline / _myPipelineMove / removeFromMyPipeline, but
+// keyed on a portfolio_id. Backed by ace_agent_pipeline_portfolios + three
+// dedicated RPCs. Exists because a deal and a portfolio can share a primary
+// key (both UUIDs) but the pipeline needs to know which table to reference.
+
+function _isPortfolioInMyPipeline(portfolioId){
+  return !!(_myPipelinePortfolioIds && _myPipelinePortfolioIds.has(portfolioId));
+}
+
+async function addPortfolioToMyPipeline(portfolioId, btnEl){
+  if(!_currentUser || !_currentUser.id){
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('Sign in to use Personal Pipeline');
+    return;
+  }
+  if(!portfolioId){ console.warn('addPortfolioToMyPipeline: no portfolioId'); return; }
+  const origText = btnEl ? btnEl.textContent : '';
+  if(btnEl){ btnEl.disabled = true; btnEl.textContent = 'Adding…'; }
+  try {
+    const result = await _sbRpc('agent_pipeline_add_portfolio', {
+      p_user_id: _currentUser.id, p_portfolio_id: portfolioId
+    });
+    if(result && result.error){
+      if(typeof showSaveConfirm === 'function') showSaveConfirm('Pipeline: ' + result.error);
+      if(btnEl){ btnEl.disabled = false; btnEl.textContent = origText; }
+      return;
+    }
+    _myPipelinePortfolioIds.add(portfolioId);
+    if(result && result.stage_id){
+      _myPipelinePortfolioStage.set(portfolioId, result.stage_id);
+    } else if(!_myPipelinePortfolioStage.has(portfolioId)){
+      const newLead = _myPipelineStageByKey('new_lead');
+      if(newLead) _myPipelinePortfolioStage.set(portfolioId, newLead.id);
+    }
+    if(typeof showSaveConfirm === 'function'){
+      showSaveConfirm(result.already_present ? 'Already in Personal Pipeline' : 'Added to Personal Pipeline');
+    }
+    if(typeof _aceSyncPost === 'function'){
+      _aceSyncPost('mypipeline.portfolio_add', {
+        portfolioId: portfolioId,
+        stageId: _myPipelinePortfolioStage.get(portfolioId) || null
+      });
+    }
+    // Re-render the portfolio detail page if it's the current view so the
+    // new personal-pipeline block shows up without a navigation.
+    if(typeof _currentPortfolioId !== 'undefined' && _currentPortfolioId === portfolioId){
+      const p = (allPortfolios||[]).find(x => x.id === portfolioId);
+      if(p && typeof _renderPortfolioDetail === 'function') _renderPortfolioDetail(p);
+    }
+  } catch(e){
+    console.error('addPortfolioToMyPipeline failed:', e);
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('Pipeline: ' + (e.message || 'add failed'));
+    if(btnEl){ btnEl.disabled = false; btnEl.textContent = origText; }
+  }
+}
+
+async function removePortfolioFromMyPipeline(portfolioId){
+  if(!_currentUser || !_currentUser.id) return;
+  if(!portfolioId) return;
+  if(!confirm('Remove this portfolio from your Personal Pipeline?')) return;
+  try {
+    const result = await _sbRpc('agent_pipeline_remove_portfolio', {
+      p_user_id: _currentUser.id, p_portfolio_id: portfolioId
+    });
+    if(result && result.error){
+      if(typeof showSaveConfirm === 'function') showSaveConfirm('Pipeline: ' + result.error);
+      return;
+    }
+    _myPipelinePortfolioIds.delete(portfolioId);
+    _myPipelinePortfolioStage.delete(portfolioId);
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('Removed from Personal Pipeline');
+    if(typeof _aceSyncPost === 'function'){
+      _aceSyncPost('mypipeline.portfolio_remove', { portfolioId: portfolioId });
+    }
+    if(typeof _currentPortfolioId !== 'undefined' && _currentPortfolioId === portfolioId){
+      const p = (allPortfolios||[]).find(x => x.id === portfolioId);
+      if(p && typeof _renderPortfolioDetail === 'function') _renderPortfolioDetail(p);
+    }
+  } catch(e){
+    console.error('removePortfolioFromMyPipeline failed:', e);
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('Pipeline: ' + (e.message || 'remove failed'));
+  }
+}
+
+async function _myPipelineMovePortfolio(portfolioId, newStageKey){
+  if(!_currentUser || !_currentUser.id) return;
+  const targetStage = _myPipelineStageByKey(newStageKey);
+  if(!targetStage){ console.warn('_myPipelineMovePortfolio: unknown stage_key', newStageKey); return; }
+  const prevStageId = _myPipelinePortfolioStage.get(portfolioId);
+  if(prevStageId === targetStage.id) return;
+  // Optimistic
+  _myPipelinePortfolioStage.set(portfolioId, targetStage.id);
+  try {
+    const result = await _sbRpc('agent_pipeline_move_portfolio', {
+      p_user_id: _currentUser.id, p_portfolio_id: portfolioId, p_new_stage_key: newStageKey
+    });
+    if(result && result.error){
+      if(prevStageId) _myPipelinePortfolioStage.set(portfolioId, prevStageId);
+      else _myPipelinePortfolioStage.delete(portfolioId);
+      if(typeof showSaveConfirm === 'function') showSaveConfirm('Pipeline: ' + result.error);
+      return;
+    }
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('Moved to ' + targetStage.label);
+    if(typeof _aceSyncPost === 'function'){
+      _aceSyncPost('mypipeline.portfolio_move', {
+        portfolioId: portfolioId, stageId: targetStage.id, stageKey: targetStage.key
+      });
+    }
+  } catch(e){
+    if(prevStageId) _myPipelinePortfolioStage.set(portfolioId, prevStageId);
+    else _myPipelinePortfolioStage.delete(portfolioId);
+    console.error('_myPipelineMovePortfolio failed:', e);
     if(typeof showSaveConfirm === 'function') showSaveConfirm('Pipeline: ' + (e.message || 'move failed'));
   }
 }

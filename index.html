@@ -10889,7 +10889,22 @@ async function loadSellerContact(propertyId){
   const cfg = getConfig();
   if((!cfg.key && !isSupabase()) || !propertyId) return;
   try{
-    const ownerIds = currentDeal?.['Owner'];
+    let ownerIds = currentDeal?.['Owner'];
+    // v113.6: The in-memory deal cache can be stale if owner_contact_id was
+    // set after the initial allDeals load (e.g. via another tab, another
+    // session, or a very recent link-contact action). If the cache says no
+    // owner but the DB knows about one, hydrate from the DB so the Contacts/
+    // Buyers tab and header chip both reflect reality.
+    if((!ownerIds || !ownerIds.length) && isSupabase()){
+      try {
+        const props = await _sbGet(SB_TABLES.properties, `id=eq.${propertyId}&select=owner_contact_id&limit=1`);
+        const ocid = props?.[0]?.owner_contact_id;
+        if(ocid){
+          ownerIds = [ocid];
+          if(currentDeal) currentDeal['Owner'] = ownerIds;
+        }
+      } catch(e){ console.warn('owner_contact_id refresh failed:', e.message); }
+    }
     if(!ownerIds || !ownerIds.length) return;
     const contactId = ownerIds[0];
 
@@ -10915,6 +10930,7 @@ async function loadSellerContact(propertyId){
     }
 
     // Cache on currentDeal for save operations
+    const hadSellerContactId = !!(currentDeal && currentDeal._sellerContactId);
     if(currentDeal){
       currentDeal._sellerContactId    = contactId;
       currentDeal._sellerName         = contactFields['Name']||'';
@@ -10942,6 +10958,18 @@ async function loadSellerContact(propertyId){
       if(ownerEl){
         const phoneDigits = phone.replace(/[^0-9+]/g,'');
         ownerEl.innerHTML = `👤 <strong style="color:var(--text);cursor:pointer;text-decoration:underline;text-decoration-color:#c0d0e8;text-underline-offset:3px;" onclick="openContactModal('${contactId}')" title="Open contact view">${name}</strong>${phone?`<span style="margin-left:10px;color:var(--text3);font-weight:normal;font-size:12px;">📞 <a href="tel:${phoneDigits}" style="color:var(--text2);text-decoration:none;">${phone}</a></span>`:''}`;
+      }
+    }
+
+    // v113.6: If we just hydrated from the DB (cache was stale), the
+    // Contacts/Buyers tab may still be showing the empty "Seller Contact
+    // Information" form because it was rendered before we knew about the
+    // link. Re-render that tab in place so the user sees the linked-owner
+    // card without reopening the deal.
+    if(!hadSellerContactId && typeof _dcRefreshContactsTab === 'function'){
+      const tabContentEl = document.getElementById('tabContent');
+      if(tabContentEl && tabContentEl.innerHTML.indexOf('Seller Contact Information') !== -1){
+        try{ _dcRefreshContactsTab(); }catch(e){}
       }
     }
   }catch(e){ /* silent fail */ }

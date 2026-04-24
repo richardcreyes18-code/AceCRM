@@ -46857,10 +46857,17 @@ function _aiGetCostSummary(){
 }
 
 // v104: ACE AI ASSISTANT — floating chat widget
+// v113.10: pasted-email → deal extraction. Adds PDF/image attachments,
+// passes currentDeal + companyDirectory context to the edge function, and
+// enforces required fields (owner name/phone/email + assigned agent) in the
+// preview before commit.
 // ═══════════════════════════════════════════════════════════════════════
 let _aiOpen = false;
 let _aiMessages = [];
 let _aiPendingResult = null;
+// v113.10: staged PDF/image attachments for the NEXT send. Cleared after send.
+// Shape: [{ name, media_type, data /* base64 (no data: prefix) */, size }, …]
+let _aiAttachments = [];
 
 function _aiToggle(){
   _aiOpen = !_aiOpen;
@@ -46877,15 +46884,129 @@ function _aiClearChat(){ _aiMessages=[]; _aiPendingResult=null; const el=documen
 function _aiAddBotMessage(text, isHtml){ const el=document.getElementById('aiAssistMessages'); if(!el) return; const div=document.createElement('div'); div.style.cssText='margin-bottom:12px;display:flex;gap:8px;align-items:flex-start;'; const safe=isHtml?text:text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\n/g,'<br>'); div.innerHTML='<div style="width:26px;height:26px;border-radius:50%;background:linear-gradient(135deg,#7c3aed,#4f46e5);color:#fff;display:flex;align-items:center;justify-content:center;font-size:12px;flex-shrink:0;margin-top:2px;">✦</div><div style="flex:1;min-width:0;background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:10px 14px;font-size:13px;color:#0f172a;line-height:1.5;">'+safe+'</div>'; el.appendChild(div); el.scrollTop=el.scrollHeight; }
 function _aiAddUserMessage(text){ const el=document.getElementById('aiAssistMessages'); if(!el) return; const div=document.createElement('div'); div.style.cssText='margin-bottom:12px;display:flex;gap:8px;align-items:flex-start;justify-content:flex-end;'; div.innerHTML='<div style="max-width:85%;background:#eef2fb;border:1px solid #c7d2fe;border-radius:12px;padding:10px 14px;font-size:13px;color:#0f172a;line-height:1.5;">'+text.replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/\n/g,'<br>')+'</div>'; el.appendChild(div); el.scrollTop=el.scrollHeight; }
 
+// v113.10: attachment helpers ──────────────────────────────────────────
+// Encode a File to base64 (strip the "data:...;base64," prefix). Claude's
+// document / image content blocks want the raw base64 body only.
+function _aiFileToBase64(file){
+  return new Promise((resolve, reject) => {
+    const r = new FileReader();
+    r.onload = () => {
+      const s = String(r.result || '');
+      const comma = s.indexOf(',');
+      resolve(comma >= 0 ? s.slice(comma + 1) : s);
+    };
+    r.onerror = () => reject(r.error || new Error('file read failed'));
+    r.readAsDataURL(file);
+  });
+}
+
+async function _aiOnFileSelect(ev){
+  const files = Array.from(ev?.target?.files || []);
+  if(!files.length) return;
+  for(const f of files){
+    // Anthropic caps individual documents at 32MB. Images are much smaller
+    // in practice but we apply the same ceiling for simplicity.
+    if(f.size > 30 * 1024 * 1024){
+      alert('"'+f.name+'" is too large (30MB limit).');
+      continue;
+    }
+    const allowed = f.type === 'application/pdf' || f.type.startsWith('image/');
+    if(!allowed){
+      alert('"'+f.name+'" is not a PDF or image.');
+      continue;
+    }
+    try{
+      const data = await _aiFileToBase64(f);
+      _aiAttachments.push({ name: f.name, media_type: f.type, data, size: f.size });
+    }catch(e){
+      alert('Failed to read "'+f.name+'": '+e.message);
+    }
+  }
+  ev.target.value = '';  // allow re-picking the same file
+  _aiRenderAttachments();
+}
+
+function _aiRenderAttachments(){
+  const wrap = document.getElementById('aiAssistAttachments');
+  if(!wrap) return;
+  if(!_aiAttachments.length){
+    wrap.style.display = 'none';
+    wrap.innerHTML = '';
+    return;
+  }
+  wrap.style.display = 'flex';
+  const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  wrap.innerHTML = _aiAttachments.map((a, i) => {
+    const icon = a.media_type === 'application/pdf' ? '📄' : '🖼';
+    const kb = Math.round(a.size/1024);
+    return `<span style="display:inline-flex;align-items:center;gap:4px;background:#eef2fb;border:1px solid #c7d2fe;border-radius:6px;padding:3px 8px;font-size:11px;color:#1e3a8a;">
+      ${icon} ${esc(a.name)} <span style="color:#64748b;">(${kb}KB)</span>
+      <button onclick="_aiAttachments.splice(${i},1);_aiRenderAttachments();" style="background:none;border:none;color:#64748b;cursor:pointer;padding:0;margin-left:2px;font-size:13px;">×</button>
+    </span>`;
+  }).join('');
+}
+
+// Build a compact directory snapshot for the edge function. Includes name +
+// role only — emails/phones are PII and the AI doesn't need them to fuzzy-match.
+function _aiBuildDirectorySnapshot(){
+  try{
+    const src = (typeof _companyDirectory !== 'undefined' && Array.isArray(_companyDirectory)) ? _companyDirectory : [];
+    return src
+      .filter(a => a && a.name && a.is_active !== false)
+      .map(a => ({ name: String(a.name).trim(), role: a.role || '' }));
+  }catch(e){ return []; }
+}
+
 async function _aiSend(){
-  const input=document.getElementById('aiAssistInput'); const text=(input?.value||'').trim(); if(!text) return; input.value='';
-  _aiAddUserMessage(text); _aiMessages.push({role:'user',content:text});
+  const input = document.getElementById('aiAssistInput');
+  const text  = (input?.value||'').trim();
+  const atts  = _aiAttachments.slice();          // snapshot before clearing
+  // Require EITHER text or an attachment (image-only upload is valid).
+  if(!text && !atts.length) return;
+  if(input) input.value = '';
+
+  // Show the user's turn — include attachment chips so they see what was sent.
+  const attLabels = atts.map(a => (a.media_type==='application/pdf'?'📄 ':'🖼 ') + a.name).join(', ');
+  const userDisplay = [text, attLabels].filter(Boolean).join(attLabels && text ? '\n\n[attached] ' : '[attached] ');
+  _aiAddUserMessage(userDisplay);
+
+  // The model sees text as the message body; attachments ride as content blocks.
+  _aiMessages.push({ role:'user', content: text || '(see attachment)' });
+
+  // Clear the staging tray NOW so the user sees immediate feedback; the send
+  // still uses `atts` for this request.
+  _aiAttachments = [];
+  _aiRenderAttachments();
+
   if(!document.getElementById('aiPulseStyle')){ const s=document.createElement('style'); s.id='aiPulseStyle'; s.textContent='@keyframes aipulse{0%,100%{opacity:0.3}50%{opacity:1}}'; document.head.appendChild(s); }
   const tId='_aiT'+Date.now();
   _aiAddBotMessage('<div id="'+tId+'" style="display:flex;gap:4px;padding:4px 0;"><div style="width:8px;height:8px;border-radius:50%;background:#94a3b8;animation:aipulse 1s infinite;"></div><div style="width:8px;height:8px;border-radius:50%;background:#94a3b8;animation:aipulse 1s infinite 0.2s;"></div><div style="width:8px;height:8px;border-radius:50%;background:#94a3b8;animation:aipulse 1s infinite 0.4s;"></div></div>',true);
   const btn=document.getElementById('aiAssistSendBtn'); if(btn) btn.disabled=true;
   try{
-    const cfg=getConfig(); const res=await fetch(cfg.url+'/functions/v1/crm-ai-assist',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({messages:_aiMessages})});
+    // Make sure the directory is loaded (5-min cache) before we send.
+    if(typeof _loadAgentDirectory === 'function'){
+      try{ await _loadAgentDirectory(); }catch(_e){ /* non-fatal */ }
+    }
+    const companyDirectory = _aiBuildDirectorySnapshot();
+
+    // Tell the edge function which deal is open so it can target update_deal.
+    // Pass only what the prompt actually needs — keep the payload tight.
+    const currentDealCtx = (typeof currentDeal !== 'undefined' && currentDeal && currentDeal.id) ? {
+      id: currentDeal.id,
+      address: currentDeal['Address'] || '',
+      state:   currentDeal['Pipeline Stage'] || ''
+    } : null;
+
+    const cfg=getConfig();
+    const res=await fetch(cfg.url+'/functions/v1/crm-ai-assist',{
+      method:'POST',
+      headers:{'Content-Type':'application/json'},
+      body: JSON.stringify({
+        messages: _aiMessages,
+        attachments: atts,
+        context: { companyDirectory, currentDeal: currentDealCtx }
+      })
+    });
     const data=await res.json();
     document.getElementById(tId)?.closest('div[style*="margin-bottom"]')?.remove();
     if(data.error){ _aiAddBotMessage('Error: '+data.error); return; }
@@ -46902,15 +47023,123 @@ async function _aiSend(){
   finally{ if(btn) btn.disabled=false; }
 }
 
+// v113.10: resolve an AI-supplied agent name against the directory.
+// Returns {name, confidence:'exact'|'fuzzy'|'none'} where `name` is the
+// canonical directory name (or the raw input if no match).
+function _aiResolveAgent(input){
+  const raw = String(input||'').trim();
+  if(!raw) return { name:'', confidence:'none' };
+  const dir = (typeof _companyDirectory !== 'undefined' && Array.isArray(_companyDirectory)) ? _companyDirectory : [];
+  const active = dir.filter(a => a && a.name && a.is_active !== false);
+  const low = raw.toLowerCase();
+  // Exact (case-insensitive)
+  const exact = active.find(a => String(a.name).trim().toLowerCase() === low);
+  if(exact) return { name: exact.name, confidence:'exact' };
+  // Last-name or first-name partial
+  const tokens = low.split(/\s+/).filter(Boolean);
+  const fuzzy = active.find(a => {
+    const n = String(a.name).toLowerCase();
+    return tokens.every(t => n.includes(t));
+  });
+  if(fuzzy) return { name: fuzzy.name, confidence:'fuzzy' };
+  // Any shared token
+  const loose = active.find(a => {
+    const parts = String(a.name).toLowerCase().split(/\s+/);
+    return tokens.some(t => parts.some(p => p === t));
+  });
+  if(loose) return { name: loose.name, confidence:'fuzzy' };
+  return { name: raw, confidence:'none' };
+}
+
+// v113.10: render the assigned-agent control. Either a confirmed chip
+// (exact match — still swappable) or a <select> of all active directory
+// agents, optionally pre-selecting a fuzzy match.
+function _aiRenderAgentControl(aiInput){
+  const dir = (typeof _companyDirectory !== 'undefined' && Array.isArray(_companyDirectory)) ? _companyDirectory : [];
+  const active = dir.filter(a => a && a.name && a.is_active !== false)
+                    .sort((a,b) => String(a.name).localeCompare(String(b.name)));
+  const res = _aiResolveAgent(aiInput);
+  const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  let opts = '<option value="">— Select agent —</option>';
+  active.forEach(a => {
+    const sel = (a.name === res.name) ? ' selected' : '';
+    opts += '<option value="'+esc(a.name)+'"'+sel+'>'+esc(a.name)+(a.role?' · '+esc(a.role):'')+'</option>';
+  });
+  const badge = res.confidence === 'exact'
+    ? '<span style="background:#dcfce7;color:#166534;font-size:10px;padding:2px 6px;border-radius:10px;margin-left:6px;">✓ matched</span>'
+    : res.confidence === 'fuzzy'
+      ? '<span style="background:#fef3c7;color:#92400e;font-size:10px;padding:2px 6px;border-radius:10px;margin-left:6px;">? fuzzy — confirm</span>'
+      : (aiInput ? '<span style="background:#fee2e2;color:#991b1b;font-size:10px;padding:2px 6px;border-radius:10px;margin-left:6px;">no match — pick one</span>' : '');
+  const hint = aiInput && res.confidence !== 'exact'
+    ? '<div style="font-size:10px;color:#64748b;margin-top:2px;">AI suggested: <em>'+esc(aiInput)+'</em></div>'
+    : '';
+  return {
+    html: '<select id="aiReqAgent" onchange="_aiRecheckRequired()" style="width:100%;padding:6px 8px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;">'+opts+'</select>'+badge+hint,
+    resolvedName: res.name,
+    confidence: res.confidence
+  };
+}
+
+// v113.10: re-evaluate required inputs and toggle the commit button.
+// Name/phone/agent are mandatory; email is soft (shown but not blocking).
+function _aiRecheckRequired(){
+  const name  = (document.getElementById('aiReqName')?.value||'').trim();
+  const phone = (document.getElementById('aiReqPhone')?.value||'').trim();
+  const agent = (document.getElementById('aiReqAgent')?.value||'').trim();
+  const btn = document.getElementById('aiSellerCommitBtn');
+  if(!btn) return;
+  const missing = [];
+  if(!name)  missing.push('name');
+  if(!phone) missing.push('phone');
+  if(!agent) missing.push('agent');
+  btn.disabled = missing.length > 0;
+  btn.style.opacity = missing.length ? '0.5' : '1';
+  btn.style.cursor  = missing.length ? 'not-allowed' : 'pointer';
+  btn.title = missing.length ? 'Fill required: '+missing.join(', ') : '';
+}
+
 function _aiShowSellerPreview(r){
-  const d=r.data||{},c=d.contact||{},p=d.property||{},esc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const d=r.data||{},c=d.contact||{},p=d.property||{},esc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
   const fm=n=>{const v=Number(n);if(!v)return'';return v>=1e6?'$'+(v/1e6).toFixed(2).replace(/\.?0+$/,'')+'M':v>=1e3?'$'+Math.round(v/1e3)+'K':'$'+v;};
-  let h='<div style="font-size:12px;font-weight:700;color:#1e3a8a;margin-bottom:8px;">📋 Seller Lead Preview</div><div style="background:#f0fdf4;border:1px solid #a7f3d0;border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.6;">';
-  if(c.name) h+='<div><strong>Contact:</strong> '+esc(c.name)+'</div>';
-  if(c.phone_number) h+='<div><strong>Phone:</strong> '+esc(c.phone_number)+'</div>';
-  if(c.email) h+='<div><strong>Email:</strong> '+esc(c.email)+'</div>';
+  const missing = Array.isArray(r.missing_required) ? r.missing_required : [];
+  const miss = k => missing.includes(k) || missing.includes('contact.'+k) || missing.includes('property.'+k);
+  const red = '#dc2626', amber='#d97706';
+  const inpStyle = (bad) => 'width:100%;padding:6px 8px;font-size:12px;border:1px solid '+(bad?red:'#cbd5e1')+';border-radius:6px;background:#fff;';
+  const agentCtrl = _aiRenderAgentControl(p.assigned_agent || '');
+
+  let h = '<div style="font-size:12px;font-weight:700;color:#1e3a8a;margin-bottom:8px;">📋 Seller Lead Preview</div>';
+
+  // ── Required fields section ──────────────────────────────────────────
+  h += '<div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:10px 12px;margin-bottom:8px;">';
+  h += '<div style="font-size:11px;font-weight:700;color:#9a3412;margin-bottom:8px;">⚠ REQUIRED — verify before creating</div>';
+  h += '<div style="display:grid;grid-template-columns:1fr;gap:8px;">';
+  // Owner name
+  h += '<div>';
+  h += '<label style="font-size:10px;color:#475569;font-weight:600;display:block;margin-bottom:2px;">Owner Name *</label>';
+  h += '<input id="aiReqName" oninput="_aiRecheckRequired()" value="'+esc(c.name||'')+'" style="'+inpStyle(!c.name)+'" placeholder="e.g. John Smith">';
+  h += '</div>';
+  // Owner phone
+  h += '<div>';
+  h += '<label style="font-size:10px;color:#475569;font-weight:600;display:block;margin-bottom:2px;">Owner Phone *</label>';
+  h += '<input id="aiReqPhone" oninput="_aiRecheckRequired()" value="'+esc(c.phone_number||'')+'" style="'+inpStyle(!c.phone_number)+'" placeholder="e.g. 848-420-9972">';
+  h += '</div>';
+  // Owner email (optional but shown)
+  h += '<div>';
+  h += '<label style="font-size:10px;color:#475569;font-weight:600;display:block;margin-bottom:2px;">Owner Email <span style="font-weight:400;color:#94a3b8;">(if you have it)</span></label>';
+  h += '<input id="aiReqEmail" value="'+esc(c.email||'')+'" style="'+inpStyle(false)+'" placeholder="owner@example.com">';
+  h += '</div>';
+  // Assigned agent
+  h += '<div>';
+  h += '<label style="font-size:10px;color:#475569;font-weight:600;display:block;margin-bottom:2px;">Assigned Agent *</label>';
+  h += agentCtrl.html;
+  h += '</div>';
+  h += '</div></div>';
+
+  // ── Detected fields (read-only summary) ──────────────────────────────
+  h += '<div style="background:#f0fdf4;border:1px solid #a7f3d0;border-radius:8px;padding:10px 12px;font-size:12px;line-height:1.6;">';
+  h += '<div style="font-size:11px;font-weight:700;color:#166534;margin-bottom:4px;">✓ DETECTED</div>';
   if(c.company) h+='<div><strong>Company:</strong> '+esc(c.company)+'</div>';
-  if(p.address) h+='<div style="margin-top:6px;"><strong>Property:</strong> '+esc(p.address)+(p.municipality?', '+esc(p.municipality):'')+(p.state?', '+p.state:'')+'</div>';
+  if(p.address) h+='<div><strong>Property:</strong> '+esc(p.address)+(p.municipality?', '+esc(p.municipality):'')+(p.state?', '+p.state:'')+'</div>';
   if(p.crm_asset_classification) h+='<div><strong>Type:</strong> '+esc(p.crm_asset_classification)+'</div>';
   if(p.asking_price) h+='<div><strong>Asking:</strong> '+fm(p.asking_price)+'</div>';
   if(p.noi) h+='<div><strong>NOI:</strong> '+fm(p.noi)+'</div>';
@@ -46918,11 +47147,28 @@ function _aiShowSellerPreview(r){
   if(p.square_footage) h+='<div><strong>SF:</strong> '+Number(p.square_footage).toLocaleString()+'</div>';
   if(p.why_selling) h+='<div><strong>Why selling:</strong> '+esc(p.why_selling)+'</div>';
   if(p.pipeline_stage) h+='<div><strong>Stage:</strong> '+esc(p.pipeline_stage)+'</div>';
-  h+='</div>';
+  if(!c.company && !p.address && !p.asking_price) h+='<div style="color:#64748b;font-style:italic;">(no extra fields detected)</div>';
+  h += '</div>';
+
   if(r.summary) h+='<div style="font-size:11px;color:#475569;margin-top:6px;font-style:italic;">'+esc(r.summary)+'</div>';
   if(r.clarifying_questions?.length) h+='<div style="margin-top:6px;font-size:11px;color:#b45309;">⚠ '+r.clarifying_questions.map(esc).join('<br>⚠ ')+'</div>';
-  h+='<div style="display:flex;gap:8px;margin-top:10px;"><button onclick="_aiCommitSellerLead()" style="background:#16a34a;color:#fff;border:none;padding:7px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">✓ Create in CRM</button><button onclick="_aiAddBotMessage(\'Skipped.\')" style="background:#fff;color:#475569;border:1px solid #cbd5e1;padding:7px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Skip</button></div>';
+
+  // Start-state: evaluate whether commit should be enabled. We compute
+  // missing-at-render-time and honor it in the button attributes; the
+  // oninput handlers keep it fresh as the user fills things in.
+  const nameOk  = !!(c.name && String(c.name).trim());
+  const phoneOk = !!(c.phone_number && String(c.phone_number).trim());
+  const agentOk = !!(agentCtrl.resolvedName && agentCtrl.confidence === 'exact');
+  const okNow   = nameOk && phoneOk && agentOk;
+
+  h += '<div style="display:flex;gap:8px;margin-top:10px;">';
+  h += '<button id="aiSellerCommitBtn" onclick="_aiCommitSellerLead()" '+(okNow?'':'disabled ')+
+       'style="background:#16a34a;color:#fff;border:none;padding:7px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:'+(okNow?'pointer':'not-allowed')+';opacity:'+(okNow?'1':'0.5')+';">✓ Create in CRM</button>';
+  h += '<button onclick="_aiAddBotMessage(\'Skipped.\')" style="background:#fff;color:#475569;border:1px solid #cbd5e1;padding:7px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Skip</button>';
+  h += '</div>';
   _aiAddBotMessage(h,true);
+  // One more re-check after render to sync button state with DOM values.
+  setTimeout(_aiRecheckRequired, 0);
 }
 function _aiShowBuyerPreview(r){
   const d=r.data||{},c=d.contact||{},bc=d.buyer_criteria||{},esc=s=>String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
@@ -46955,7 +47201,24 @@ function _aiShowPitchPreview(r){
 
 async function _aiCommitSellerLead(){
   if(!_aiPendingResult?.data){ _aiAddBotMessage('Nothing to commit.'); return; }
-  const d=_aiPendingResult.data, c=d.contact||{}, p=d.property||{};
+  const d=_aiPendingResult.data, c={...(d.contact||{})}, p={...(d.property||{})};
+
+  // v113.10: pull the authoritative values from the inline required-field
+  // inputs — the user may have edited them, and they MUST have filled the
+  // mandatory ones (name/phone/agent) for the button to be enabled.
+  const nameIn  = (document.getElementById('aiReqName')?.value||'').trim();
+  const phoneIn = (document.getElementById('aiReqPhone')?.value||'').trim();
+  const emailIn = (document.getElementById('aiReqEmail')?.value||'').trim();
+  const agentIn = (document.getElementById('aiReqAgent')?.value||'').trim();
+  if(!nameIn || !phoneIn || !agentIn){
+    _aiAddBotMessage('❌ Missing required: owner name, phone, and assigned agent are all required.');
+    return;
+  }
+  // Override AI-detected values with what's in the inputs.
+  c.name = nameIn;
+  c.phone_number = phoneIn;
+  c.email = emailIn || null;
+
   _aiAddBotMessage('Creating records…');
   try{
     let existing=null;
@@ -46975,7 +47238,11 @@ async function _aiCommitSellerLead(){
       _aiAddBotMessage('Created contact <strong>'+(c.name||'')+'</strong>.',true);
     }
     if(p.address||p.municipality){
-      const row={address:[p.address,p.municipality,p.state].filter(Boolean).join(', ')||p.address, municipality:p.municipality||null, state:p.state||'NJ', owner_contact_id:cid, crm_asset_classification:p.crm_asset_classification||null, pipeline_stage:p.pipeline_stage||'New Lead', asking_price:p.asking_price||null, noi:p.noi||null, number_of_units:p.number_of_units||p.no_of_units||null, square_footage:p.square_footage||null, deal_notes:p.deal_notes||null, general_property_notes:p.general_property_notes||null, why_selling:p.why_selling||null, gross_revenue_yearly:p.gross_revenue_yearly||null, expenses_yearly:p.expenses_yearly||null, date_added:new Date().toISOString().split('T')[0]};
+      // v113.10: write the assigned agent in pipe-delimited format to
+      // fub_assigned_to — that's the column the sidebar/filters/permissions
+      // actually read. assigned_agent (Airtable legacy) mirrors it.
+      const agentFub = _agentJoin([agentIn]);
+      const row={address:[p.address,p.municipality,p.state].filter(Boolean).join(', ')||p.address, municipality:p.municipality||null, state:p.state||'NJ', owner_contact_id:cid, crm_asset_classification:p.crm_asset_classification||null, pipeline_stage:p.pipeline_stage||'New Lead', asking_price:p.asking_price||null, noi:p.noi||null, number_of_units:p.number_of_units||p.no_of_units||null, square_footage:p.square_footage||null, deal_notes:p.deal_notes||null, general_property_notes:p.general_property_notes||null, why_selling:p.why_selling||null, gross_revenue_yearly:p.gross_revenue_yearly||null, expenses_yearly:p.expenses_yearly||null, fub_assigned_to:agentFub, assigned_agent:agentFub, date_added:new Date().toISOString().split('T')[0]};
       const pr=await _sbPost('ace_properties',row);
       if(pr?.id){
         // v105.4: instantly add to allDeals and open the new deal card
@@ -47243,8 +47510,13 @@ function _aiSelectDealForUpdate(dealId){
     <div id="aiAssistMessages" style="flex:1;overflow-y:auto;padding:14px 16px;background:#f8fafc;"></div>
     <!-- Input -->
     <div style="border-top:1px solid #e2e8f0;padding:12px 14px;background:#fff;flex-shrink:0;">
-      <div style="display:flex;gap:8px;">
-        <textarea id="aiAssistInput" rows="2" placeholder="Paste call notes, describe a lead, or log pitches..." style="flex:1;border:1px solid #cbd5e1;border-radius:8px;padding:10px 12px;font-size:13px;font-family:inherit;resize:none;line-height:1.4;outline:none;" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();_aiSend();}"></textarea>
+      <!-- v113.10: staged attachments (chips rendered by _aiRenderAttachments) -->
+      <div id="aiAssistAttachments" style="display:none;flex-wrap:wrap;gap:6px;margin-bottom:8px;"></div>
+      <input type="file" id="aiAssistFileInput" accept="application/pdf,image/*" multiple style="display:none;" onchange="_aiOnFileSelect(event)"/>
+      <div style="display:flex;gap:8px;align-items:flex-end;">
+        <button onclick="document.getElementById('aiAssistFileInput').click()" title="Attach PDF or image"
+          style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;width:42px;height:42px;border-radius:10px;cursor:pointer;font-size:16px;flex-shrink:0;display:flex;align-items:center;justify-content:center;">📎</button>
+        <textarea id="aiAssistInput" rows="2" placeholder="Paste call notes, an email, or attach a PDF/screenshot..." style="flex:1;border:1px solid #cbd5e1;border-radius:8px;padding:10px 12px;font-size:13px;font-family:inherit;resize:none;line-height:1.4;outline:none;" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();_aiSend();}"></textarea>
         <button onclick="_aiSend()" id="aiAssistSendBtn" style="background:linear-gradient(135deg,#7c3aed,#4f46e5);color:#fff;border:none;width:42px;height:42px;border-radius:10px;cursor:pointer;font-size:18px;flex-shrink:0;display:flex;align-items:center;justify-content:center;">↑</button>
       </div>
     </div>

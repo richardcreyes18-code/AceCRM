@@ -612,6 +612,13 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   pointer-events: none;
 }
 
+/* Tasks drag-to-reorder feedback */
+.task-drop-over{
+  outline: 2px dashed #7c3aed !important;
+  outline-offset: 2px;
+  background: rgba(124,58,237,0.06) !important;
+}
+
 /* Status checklist UI (at bottom of buyer criteria page) */
 .bc-status-section{
   margin-top: 14px;
@@ -35171,6 +35178,102 @@ async function deleteTaskRecord(taskId, source){
 }
 
 // ── GLOBAL TASKS PAGE ──────────────────────────────────────────
+// v113.6: section + priority filters + drag-to-reorder within priority.
+//   Section bucket: overdue / today / future / nodate / done
+//   Priority tier:  Top / High / Medium / Low / None
+// Custom drag order is persisted to localStorage per (user, section, priority),
+// since ace_tasks has no sort_order column — order is device-local.
+let _tasksSectionFilter  = 'all';   // 'all' | 'overdue' | 'today' | 'future'
+let _tasksPriorityFilter = 'all';   // 'all' | 'Top' | 'High' | 'Medium' | 'Low' | 'None'
+
+function _tasksPrioTier(priority){
+  const p = (priority || '').trim();
+  if(p === '🔥 Top Priority')  return 'Top';
+  if(p === '⚡️ High Priority') return 'High';
+  if(p === 'Medium Priority')  return 'Medium';
+  if(p === 'Low Priority')     return 'Low';
+  return 'None';
+}
+const _TASKS_PRIO_ORDER = ['Top','High','Medium','Low','None'];
+const _TASKS_PRIO_META = {
+  Top:    { label:'🔥 Top Priority',  color:'#dc2626', bg:'#fee2e2',      border:'#fca5a5' },
+  High:   { label:'⚡ High Priority', color:'#ea580c', bg:'#fff7ed',      border:'#fdba74' },
+  Medium: { label:'Medium Priority',  color:'#0891b2', bg:'#e0f2fe',      border:'#7dd3fc' },
+  Low:    { label:'Low Priority',     color:'#6b7280', bg:'#f3f4f6',      border:'#d1d5db' },
+  None:   { label:'— No Priority',    color:'var(--text3)', bg:'var(--bg)', border:'var(--border)' }
+};
+
+function _tasksOrderKey(section, prio){
+  const uid = (_currentUser && _currentUser.id) || 'anon';
+  return `ace_tasks_order_${uid}_${section}_${prio}`;
+}
+function _tasksGetOrder(section, prio){
+  try { const v = _store.get(_tasksOrderKey(section,prio)); return v ? (JSON.parse(v)||[]) : []; }
+  catch(e){ return []; }
+}
+function _tasksSaveOrder(section, prio, ids){
+  try { _store.set(_tasksOrderKey(section,prio), JSON.stringify(ids)); } catch(e){}
+}
+function _tasksApplyOrder(section, prio, tasks){
+  const order = _tasksGetOrder(section, prio);
+  if(!order.length) return tasks;
+  const pos = new Map(order.map((id,i)=>[id,i]));
+  return [...tasks].sort((a,b)=>{
+    const ai = pos.has(a.id) ? pos.get(a.id) : Infinity;
+    const bi = pos.has(b.id) ? pos.get(b.id) : Infinity;
+    if(ai === Infinity && bi === Infinity) return 0;
+    return ai - bi;
+  });
+}
+
+let _tasksDragState = null;   // { taskId, section, prio }
+function _tasksDragStart(ev, taskId, section, prio){
+  _tasksDragState = { taskId, section, prio };
+  try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', taskId); } catch(e){}
+  ev.currentTarget.style.opacity = '0.4';
+}
+function _tasksDragEnd(ev){
+  ev.currentTarget.style.opacity = '';
+  _tasksDragState = null;
+  document.querySelectorAll('.task-drop-over').forEach(n => n.classList.remove('task-drop-over'));
+}
+function _tasksDragOver(ev){
+  if(!_tasksDragState) return;
+  const target = ev.currentTarget;
+  if(target.getAttribute('data-section') !== _tasksDragState.section
+  || target.getAttribute('data-prio')    !== _tasksDragState.prio) return;
+  ev.preventDefault();
+  try { ev.dataTransfer.dropEffect = 'move'; } catch(e){}
+  target.classList.add('task-drop-over');
+}
+function _tasksDragLeave(ev){ ev.currentTarget.classList.remove('task-drop-over'); }
+function _tasksDrop(ev){
+  if(!_tasksDragState) return;
+  const target  = ev.currentTarget;
+  const section = target.getAttribute('data-section');
+  const prio    = target.getAttribute('data-prio');
+  target.classList.remove('task-drop-over');
+  if(section !== _tasksDragState.section || prio !== _tasksDragState.prio){ _tasksDragState = null; return; }
+  ev.preventDefault();
+  const dragId = _tasksDragState.taskId;
+  const dropId = target.getAttribute('data-task-id');
+  _tasksDragState = null;
+  if(!dragId || !dropId || dragId === dropId) return;
+  const container = document.querySelector(`[data-tasks-container="${section}_${prio}"]`);
+  if(!container) return;
+  const currentIds = [...container.querySelectorAll('[data-task-id]')].map(n => n.getAttribute('data-task-id'));
+  const fromIdx = currentIds.indexOf(dragId);
+  const toIdx   = currentIds.indexOf(dropId);
+  if(fromIdx < 0 || toIdx < 0) return;
+  currentIds.splice(fromIdx, 1);
+  currentIds.splice(toIdx, 0, dragId);
+  _tasksSaveOrder(section, prio, currentIds);
+  _renderGlobalTasks();
+}
+
+function _tasksSetSectionFilter(v){ _tasksSectionFilter = v; _renderGlobalTasks(); }
+function _tasksSetPriorityFilter(v){ _tasksPriorityFilter = v; _renderGlobalTasks(); }
+
 async function showTasksPage(){
   const main=document.getElementById('mainArea');
   main.innerHTML=`
@@ -35252,44 +35355,110 @@ async function _renderGlobalTasks(){
       return;
     }
 
-    // Group by date urgency
-    const today=new Date(); today.setHours(0,0,0,0);
-    const groups=[
-      {key:'overdue',  label:'Overdue',      color:'#dc2626', tasks:[]},
-      {key:'today',    label:'Due Today',     color:'#ea580c', tasks:[]},
-      {key:'week',     label:'This Week',     color:'#d97706', tasks:[]},
-      {key:'upcoming', label:'Upcoming',      color:'var(--primary)', tasks:[]},
-      {key:'nodate',   label:'No Due Date',   color:'var(--text3)', tasks:[]},
-      {key:'done',     label:'Completed',     color:'var(--text3)', tasks:[]},
-    ];
+    // Bucket by section (overdue/today/future/nodate/done)
+    const today = new Date(); today.setHours(0,0,0,0);
+    const sections = {
+      overdue: { key:'overdue', label:'Overdue',       color:'#dc2626',       tasks:[] },
+      today:   { key:'today',   label:'Due Today',     color:'#ea580c',       tasks:[] },
+      future:  { key:'future',  label:'Due in Future', color:'var(--primary)', tasks:[] },
+      nodate:  { key:'nodate',  label:'No Due Date',   color:'var(--text3)',  tasks:[] },
+      done:    { key:'done',    label:'Completed',     color:'var(--text3)',  tasks:[] },
+    };
     tasks.forEach(t=>{
-      if(t['Status']==='Done'){groups[5].tasks.push(t);return;}
-      if(!t['Due Date']){groups[4].tasks.push(t);return;}
-      const diff=Math.round((new Date(t['Due Date']+'T00:00:00')-today)/86400000);
-      if(diff<0) groups[0].tasks.push(t);
-      else if(diff===0) groups[1].tasks.push(t);
-      else if(diff<=7)  groups[2].tasks.push(t);
-      else              groups[3].tasks.push(t);
+      if(t['Status']==='Done'){ sections.done.tasks.push(t); return; }
+      if(!t['Due Date']){ sections.nodate.tasks.push(t); return; }
+      const diff = Math.round((new Date(t['Due Date']+'T00:00:00') - today)/86400000);
+      if(diff < 0)       sections.overdue.tasks.push(t);
+      else if(diff===0)  sections.today.tasks.push(t);
+      else               sections.future.tasks.push(t);
     });
 
-    const row=t=>{
-      const isDone=t['Status']==='Done', due=_fmtTaskDue(t['Due Date']);
-      const prio=t['Priority']?`<span style="${_taskPrioStyle(t['Priority'])}padding:2px 8px;border-radius:99px;font-size:10px;font-weight:600;white-space:nowrap;">${t['Priority'].trim()}</span>`:'';
-      const linkedId=(t['Related Property']||[])[0];
-      const linkedDeal=linkedId?allDeals.find(d=>d.id===linkedId):null;
-      const dealChip=linkedDeal
-        ?`<span onclick="event.stopPropagation();openDeal(allDeals.find(x=>x.id==='${linkedId}'))" style="cursor:pointer;background:var(--primary-light);color:var(--primary);border-radius:4px;padding:2px 7px;font-size:10px;font-weight:500;white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis;display:inline-block;" title="${(linkedDeal['Address']||'').replace(/"/g,'&quot;')}">📍 ${(linkedDeal['Address']||'Deal').split(',')[0]}</span>`
-        :'';
-      // v113.5: tasks created from a contact card get a contact chip that
-      // jumps into the contact detail. Tasks with neither a deal nor a
-      // contact fall back to the "General" chip so it's obvious at a glance.
+    // ── Filter chip row (section + priority) ──
+    const sectionChipOpts = [
+      { k:'all',     label:'All' },
+      { k:'overdue', label:`Overdue (${sections.overdue.tasks.length})` },
+      { k:'today',   label:`Due Today (${sections.today.tasks.length})` },
+      { k:'future',  label:`Due in Future (${sections.future.tasks.length})` },
+    ];
+    const prioChipOpts = [
+      { k:'all',    label:'All' },
+      { k:'Top',    label:'🔥 Top' },
+      { k:'High',   label:'⚡ High' },
+      { k:'Medium', label:'Medium' },
+      { k:'Low',    label:'Low' },
+      { k:'None',   label:'— No Priority' },
+    ];
+    const chip = (active, label, onclick) => `<button onclick="${onclick}" style="background:${active?'#7c3aed':'var(--surface)'};color:${active?'#fff':'var(--text2)'};border:1px solid ${active?'#7c3aed':'var(--border)'};border-radius:99px;padding:5px 11px;font-size:11px;font-weight:600;cursor:pointer;margin-right:6px;margin-bottom:6px;">${label}</button>`;
+    const filtersHtml = `
+      <div style="margin-bottom:14px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px;flex-wrap:wrap;">
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);min-width:62px;">Section</div>
+          ${sectionChipOpts.map(o => chip(o.k===_tasksSectionFilter, o.label, `_tasksSetSectionFilter('${o.k}')`)).join('')}
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);min-width:62px;">Priority</div>
+          ${prioChipOpts.map(o => chip(o.k===_tasksPriorityFilter, o.label, `_tasksSetPriorityFilter('${o.k}')`)).join('')}
+        </div>
+      </div>`;
+
+    if(!tasks.length){
+      el.innerHTML = filtersHtml + `<div style="text-align:center;padding:48px;color:var(--text3);">
+        <div style="font-size:40px;margin-bottom:10px;">☑</div>
+        <div style="font-size:14px;font-weight:600;margin-bottom:6px;">${filterVal==='done'?'No completed tasks yet':'All clear — no pending tasks!'}</div>
+        <div style="font-size:12px;margin-bottom:16px;">Create tasks to track follow-ups, deadlines, and action items across all your deals.</div>
+        <button onclick="openCreateTaskModal(null,'','global')" style="background:#7c3aed;color:#fff;border:none;padding:9px 22px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">+ Create First Task</button>
+      </div>`;
+      return;
+    }
+
+    // Which sections to render.
+    //   - sectionFilter='all': show any section that has tasks, but hide
+    //     'done' when the top-level Pending/All/Done select is on 'pending'
+    //     (redundant — done tasks are filtered out at the query level anyway).
+    //   - sectionFilter ∈ {overdue,today,future}: show only that one; hide
+    //     nodate & done.
+    const sectionOrder = ['overdue','today','future','nodate','done'];
+    const visibleSections = sectionOrder.filter(k => {
+      if(!sections[k].tasks.length) return false;
+      if(_tasksSectionFilter === 'all'){
+        if(k === 'done' && filterVal === 'pending') return false;
+        return true;
+      }
+      return k === _tasksSectionFilter;
+    });
+
+    // Row renderer — wires drag-and-drop only for buckets where reorder makes
+    // sense (overdue/today/future). nodate & done are non-draggable.
+    const row = (t, section, prioTier) => {
+      const isDone = t['Status']==='Done', due = _fmtTaskDue(t['Due Date']);
+      const prio = t['Priority']
+        ? `<span style="${_taskPrioStyle(t['Priority'])}padding:2px 8px;border-radius:99px;font-size:10px;font-weight:600;white-space:nowrap;">${t['Priority'].trim()}</span>`
+        : '';
+      const linkedId = (t['Related Property']||[])[0];
+      const linkedDeal = linkedId ? allDeals.find(d=>d.id===linkedId) : null;
+      const dealChip = linkedDeal
+        ? `<span onclick="event.stopPropagation();openDeal(allDeals.find(x=>x.id==='${linkedId}'))" style="cursor:pointer;background:var(--primary-light);color:var(--primary);border-radius:4px;padding:2px 7px;font-size:10px;font-weight:500;white-space:nowrap;max-width:200px;overflow:hidden;text-overflow:ellipsis;display:inline-block;" title="${(linkedDeal['Address']||'').replace(/"/g,'&quot;')}">📍 ${(linkedDeal['Address']||'Deal').split(',')[0]}</span>`
+        : '';
       const contactChip = t._contact_id
         ? `<span onclick="event.stopPropagation();showContactDetailPage('${t._contact_id}')" style="cursor:pointer;background:#fef3c7;color:#b45309;border:1px solid #fde68a;border-radius:4px;padding:2px 7px;font-size:10px;font-weight:500;white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis;display:inline-block;" title="${String(t._contact_name||'Contact').replace(/"/g,'&quot;')}">👤 ${String(t._contact_name||'Contact').replace(/</g,'&lt;')}</span>`
         : '';
       const generalChip = (!linkedDeal && !t._contact_id)
         ? `<span style="background:var(--bg);color:var(--text3);border-radius:4px;padding:2px 7px;font-size:10px;">General</span>`
         : '';
-      return `<div style="background:var(--surface);border:1px solid ${due.overdue&&!isDone?'#fca5a5':'var(--border)'};border-radius:var(--radius-sm);padding:11px 14px;margin-bottom:7px;display:flex;align-items:flex-start;gap:12px;${isDone?'opacity:0.55;':''}">
+      const canDrag = (section==='overdue' || section==='today' || section==='future');
+      const dragHandle = canDrag
+        ? `<div title="Drag to reorder" style="cursor:grab;color:var(--text3);font-size:14px;padding:2px 4px;line-height:1;flex-shrink:0;user-select:none;letter-spacing:-2px;">⋮⋮</div>`
+        : '';
+      const dragAttrs = canDrag
+        ? `draggable="true" data-task-id="${t.id}" data-section="${section}" data-prio="${prioTier}"
+           ondragstart="_tasksDragStart(event,'${t.id}','${section}','${prioTier}')"
+           ondragend="_tasksDragEnd(event)"
+           ondragover="_tasksDragOver(event)"
+           ondragleave="_tasksDragLeave(event)"
+           ondrop="_tasksDrop(event)"`
+        : '';
+      return `<div ${dragAttrs} style="background:var(--surface);border:1px solid ${due.overdue&&!isDone?'#fca5a5':'var(--border)'};border-radius:var(--radius-sm);padding:11px 14px;margin-bottom:7px;display:flex;align-items:flex-start;gap:10px;${isDone?'opacity:0.55;':''}">
+        ${dragHandle}
         <input type="checkbox" ${isDone?'checked':''} onchange="toggleTaskDone('${t.id}','${t['Status']}','global')" style="width:16px;height:16px;margin-top:2px;cursor:pointer;flex-shrink:0;accent-color:#7c3aed;">
         <div style="flex:1;min-width:0;">
           <div style="font-size:13px;font-weight:600;${isDone?'text-decoration:line-through;':''}margin-bottom:4px;">${t['Task']||'Untitled'}</div>
@@ -35301,17 +35470,48 @@ async function _renderGlobalTasks(){
       </div>`;
     };
 
-    el.innerHTML=groups.filter(g=>g.tasks.length>0).map(g=>`
-      <div style="margin-bottom:22px;">
+    // Render each visible section, sub-grouped by priority tier.
+    const bodyHtml = visibleSections.map(secKey => {
+      const sec = sections[secKey];
+      const byPrio = { Top:[], High:[], Medium:[], Low:[], None:[] };
+      sec.tasks.forEach(t => byPrio[_tasksPrioTier(t['Priority'])].push(t));
+
+      const tiersToShow = _TASKS_PRIO_ORDER.filter(p => {
+        if(_tasksPriorityFilter !== 'all' && _tasksPriorityFilter !== p) return false;
+        return byPrio[p].length > 0;
+      });
+      const visibleCount = tiersToShow.reduce((n,p)=>n+byPrio[p].length, 0);
+
+      // When a priority filter is active and nothing in this section matches, skip the section entirely.
+      if(!tiersToShow.length && _tasksPriorityFilter !== 'all') return '';
+
+      const subHtml = tiersToShow.map(p => {
+        const meta = _TASKS_PRIO_META[p];
+        const ordered = _tasksApplyOrder(secKey, p, byPrio[p]);
+        return `<div style="margin-left:16px;margin-bottom:12px;">
+          <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
+            <span style="background:${meta.bg};color:${meta.color};border:1px solid ${meta.border};padding:2px 9px;border-radius:99px;font-size:10px;font-weight:700;white-space:nowrap;">${meta.label}</span>
+            <span style="font-size:10px;color:var(--text3);">(${byPrio[p].length})</span>
+          </div>
+          <div data-tasks-container="${secKey}_${p}">
+            ${ordered.map(t => row(t, secKey, p)).join('')}
+          </div>
+        </div>`;
+      }).join('');
+
+      return `<div style="margin-bottom:22px;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:9px;">
-          <div style="width:9px;height:9px;border-radius:50%;background:${g.color};flex-shrink:0;"></div>
-          <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:${g.color};">${g.label}</div>
-          <div style="font-size:11px;color:var(--text3);">(${g.tasks.length})</div>
+          <div style="width:9px;height:9px;border-radius:50%;background:${sec.color};flex-shrink:0;"></div>
+          <div style="font-size:12px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:${sec.color};">${sec.label}</div>
+          <div style="font-size:11px;color:var(--text3);">(${visibleCount})</div>
         </div>
-        ${g.tasks.map(row).join('')}
-      </div>`).join('');
+        ${subHtml || `<div style="margin-left:16px;font-size:11px;color:var(--text3);">No tasks in this section.</div>`}
+      </div>`;
+    }).filter(Boolean).join('');
+
+    el.innerHTML = filtersHtml + (bodyHtml || `<div style="padding:32px;text-align:center;color:var(--text3);font-size:12px;">No tasks match the current filters.</div>`);
   }catch(e){
-    el.innerHTML=`<div style="padding:16px;color:#dc2626;font-size:12px;">Failed to load tasks: ${e.message}</div>`;
+    el.innerHTML = `<div style="padding:16px;color:#dc2626;font-size:12px;">Failed to load tasks: ${e.message}</div>`;
   }
 }
 function renderPitchOutTab(d){

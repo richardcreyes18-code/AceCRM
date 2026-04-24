@@ -9398,6 +9398,7 @@ function renderFinancialTab(d){
     dcr:       'Debt Coverage Ratio = NOI ÷ Annual Debt Service. Lenders want 1.25+. Shows how well income covers the mortgage.',
     grm:       'Gross Rent Multiplier = Price ÷ Gross Annual Rent. A quick valuation shortcut — lower is better.',
     bep:       'Occupancy Break-Even = (Expenses + Debt Service) ÷ Gross Rent. The minimum occupancy needed to cover all costs.',
+    ppf:       'Price Per Foot = Price ÷ Total Building SF. Actual uses the Asking Price, Proforma uses the Offer Price.',
     cf:        'Cash Flow = NOI minus all debt service payments. What actually goes in your pocket.',
     noi:       'Net Operating Income = Effective Gross Income minus Operating Expenses. Does not include debt service.'
   };
@@ -9538,6 +9539,11 @@ function renderFinancialTab(d){
             <td class="metric-label">Occupancy Break Even Point ${tip('bep',tooltips.bep)}</td>
             <td id="top_be_a">${aBreakEven?pct(aBreakEven/100):'—'}</td>
             <td id="top_be_p">${pBreakEven?pct(pBreakEven/100):'—'}</td>
+          </tr>
+          <tr>
+            <td class="metric-label">Price Per Foot ${tip('ppf',tooltips.ppf)}</td>
+            <td id="top_ppf_a">${aTotalSF>0 && capAskPrice>0   ? dol(capAskPrice  /aTotalSF) : '—'}</td>
+            <td id="top_ppf_p">${aTotalSF>0 && capOfferPrice>0 ? dol(capOfferPrice/aTotalSF) : '—'}</td>
           </tr>
         </tbody>
       </table>

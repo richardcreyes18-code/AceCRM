@@ -47221,9 +47221,34 @@ async function _aiCommitSellerLead(){
 
   _aiAddBotMessage('Creating records…');
   try{
+    // v113.10.1: normalize phone to digits-only before matching so
+    // "848-420-9972", "(848) 420-9972", "848.420.9972", and "8484209972"
+    // all find the same contact. We search with the last 7 digits (enough
+    // to disambiguate in NJ) and ilike any character between them.
     let existing=null;
-    if(c.phone_number){ const s=await _sbGet('ace_contacts','select=id,name,phone_number,email,type,contact_notes&phone_number=ilike.*'+c.phone_number.slice(-7)+'*&deleted_at=is.null&limit=1'); if(Array.isArray(s)&&s.length) existing=s[0]; }
-    if(!existing&&c.email){ const s=await _sbGet('ace_contacts','select=id,name,phone_number,email,type,contact_notes&email=ilike.*'+encodeURIComponent(c.email)+'*&deleted_at=is.null&limit=1'); if(Array.isArray(s)&&s.length) existing=s[0]; }
+    const digits = String(c.phone_number||'').replace(/\D/g,'');
+    if(digits.length >= 7){
+      const last7 = digits.slice(-7);
+      // Build a pattern that tolerates any non-digit separators
+      const pattern = last7.split('').join('*');  // "4209972" → "4*2*0*9*9*7*2"
+      const rows = await _sbGet('ace_contacts',
+        'select=id,name,phone_number,secondary_phone,email,type,contact_notes'
+        +'&or=(phone_number.ilike.*'+pattern+'*,secondary_phone.ilike.*'+pattern+'*)'
+        +'&deleted_at=is.null&limit=5');
+      if(Array.isArray(rows) && rows.length){
+        // Confirm in JS: compare digits-only to rule out false positives
+        const match = rows.find(r => {
+          const rd = String(r.phone_number||'').replace(/\D/g,'');
+          const sd = String(r.secondary_phone||'').replace(/\D/g,'');
+          return rd.endsWith(last7) || sd.endsWith(last7);
+        });
+        if(match) existing = match;
+      }
+    }
+    if(!existing&&c.email){
+      const s=await _sbGet('ace_contacts','select=id,name,phone_number,email,type,contact_notes&email=ilike.*'+encodeURIComponent(c.email)+'*&deleted_at=is.null&limit=1');
+      if(Array.isArray(s)&&s.length) existing=s[0];
+    }
     let cid;
     if(existing){
       cid=existing.id;
@@ -47231,18 +47256,19 @@ async function _aiCommitSellerLead(){
       if(c.contact_notes) patch.contact_notes=((existing.contact_notes||'')+'\n---\n'+c.contact_notes).trim();
       patch.type=[...new Set([...(existing.type||[]),'Seller'])];
       if(Object.keys(patch).length) await _sbPatch('ace_contacts',cid,patch);
-      _aiAddBotMessage('Found existing contact <strong>'+(existing.name||'')+'</strong> — updated.',true);
+      _aiAddBotMessage('🔗 Linked to existing contact <strong>'+(existing.name||'')+'</strong> — updated.',true);
     }else{
       const row={name:c.name||'(unnamed)',phone_number:c.phone_number||null,secondary_phone:c.secondary_phone||null,email:c.email||null,secondary_email:c.secondary_email||null,company:c.company||null,contact_notes:c.contact_notes||null,type:c.type||['Seller'],date_added:new Date().toISOString().split('T')[0]};
       const cr=await _sbPost('ace_contacts',row); cid=cr?.id; if(!cid) throw new Error('Contact creation failed');
-      _aiAddBotMessage('Created contact <strong>'+(c.name||'')+'</strong>.',true);
+      _aiAddBotMessage('➕ Created new contact <strong>'+(c.name||'')+'</strong>.',true);
     }
     if(p.address||p.municipality){
-      // v113.10: write the assigned agent in pipe-delimited format to
-      // fub_assigned_to — that's the column the sidebar/filters/permissions
-      // actually read. assigned_agent (Airtable legacy) mirrors it.
+      // v113.10.1: write the assigned agent in pipe-delimited format to
+      // fub_assigned_to — that's the only column that exists on
+      // ace_properties (schema does NOT have assigned_agent). Sidebar
+      // filters and permissions read from fub_assigned_to.
       const agentFub = _agentJoin([agentIn]);
-      const row={address:[p.address,p.municipality,p.state].filter(Boolean).join(', ')||p.address, municipality:p.municipality||null, state:p.state||'NJ', owner_contact_id:cid, crm_asset_classification:p.crm_asset_classification||null, pipeline_stage:p.pipeline_stage||'New Lead', asking_price:p.asking_price||null, noi:p.noi||null, number_of_units:p.number_of_units||p.no_of_units||null, square_footage:p.square_footage||null, deal_notes:p.deal_notes||null, general_property_notes:p.general_property_notes||null, why_selling:p.why_selling||null, gross_revenue_yearly:p.gross_revenue_yearly||null, expenses_yearly:p.expenses_yearly||null, fub_assigned_to:agentFub, assigned_agent:agentFub, date_added:new Date().toISOString().split('T')[0]};
+      const row={address:[p.address,p.municipality,p.state].filter(Boolean).join(', ')||p.address, municipality:p.municipality||null, state:p.state||'NJ', owner_contact_id:cid, crm_asset_classification:p.crm_asset_classification||null, pipeline_stage:p.pipeline_stage||'New Lead', asking_price:p.asking_price||null, noi:p.noi||null, number_of_units:p.number_of_units||p.no_of_units||null, square_footage:p.square_footage||null, deal_notes:p.deal_notes||null, general_property_notes:p.general_property_notes||null, why_selling:p.why_selling||null, gross_revenue_yearly:p.gross_revenue_yearly||null, expenses_yearly:p.expenses_yearly||null, fub_assigned_to:agentFub, date_added:new Date().toISOString().split('T')[0]};
       const pr=await _sbPost('ace_properties',row);
       if(pr?.id){
         // v105.4: instantly add to allDeals and open the new deal card

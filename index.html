@@ -1695,7 +1695,11 @@ const SB_TABLES = {
   agentPipelineStages:   'ace_agent_pipeline_stages',
   agentPipelineDeals:    'ace_agent_pipeline_deals',
   agentPipelinePortfolios:'ace_agent_pipeline_portfolios',
-  agentPipelineViews:  'ace_agent_pipeline_views' // v113.3: saved filter presets
+  agentPipelineViews:  'ace_agent_pipeline_views', // v113.3: saved filter presets
+  // v113.9: user-entered comparable sales. Separate records, FK to the
+  // subject deal in ace_properties. Unlike the "From Your Pipeline" comps
+  // (filtered allDeals), these are market comps the user types in manually.
+  manualComps:         'ace_manual_comps'
 };
 
 // ─── SUPABASE ↔ AIRTABLE FIELD MAPS ───────────────────────────
@@ -1935,6 +1939,22 @@ const SB_BC_MAP = {
 const SB_TASK_MAP = {
   id:'id', task:'Task', due_date:'Due Date', priority:'Priority',
   notes:'Notes', status:'Status'
+};
+
+// v113.9: Manual comps map (ace_manual_comps). Same convention —
+// Supabase snake_case column ↔ Airtable-style display label.
+const SB_MANUAL_COMP_MAP = {
+  id:'id', deal_id:'Deal ID',
+  address:'Address', city:'City', state:'State', zip:'Zip',
+  county:'County', lat:'Lat', lng:'Lng',
+  sale_date:'Sale Date', price_sold:'Price Sold',
+  square_feet:'Square Feet', lot_size_acres:'Lot Size (Acres)',
+  property_type:'Property Type',
+  owner_name:'Owner Name',
+  owner_other_properties_count:'Owner Other Properties Count',
+  owner_phone:'Owner Phone', owner_email:'Owner Email',
+  comp_source:'Comp Source', notes:'Notes', sort_order:'Sort Order',
+  created_at:'Created At', updated_at:'Updated At'
 };
 
 // ─── FIELD MAP HELPERS ─────────────────────────────────────────
@@ -5988,6 +6008,10 @@ function switchTab(name, btn){
   if(name==='aicomm' && currentDeal?.id) loadAICommTab(currentDeal.id);
   if(name==='buyermatch' && currentDeal?.id) loadBuyerMatchTab(currentDeal.id);
   if(name==='tenantmix'  && currentDeal?.id) loadTenantMixTab(currentDeal.id);
+  // v113.9: load user-entered market comps (ace_manual_comps). Pipeline comps
+  // are rendered synchronously from allDeals inside renderCompsTab — only the
+  // manual list needs an async DB fetch.
+  if(name==='comps'      && currentDeal?.id) loadCompsTab(currentDeal.id);
   if(name==='pitchout'   && currentDeal?.id) loadPitchOutTab(currentDeal.id);
   if(name==='offers'     && currentDeal?.id) loadOffersTab(currentDeal.id);
   if(name==='contacts' && currentDeal?.id) { loadBuyerPitches(currentDeal.id); loadDealPitches(currentDeal.id); }
@@ -39236,6 +39260,14 @@ function renderCal(){
 }
 
 // ─── TAB: COMPS ───────────────────────────────────────────────
+// Two kinds of comps live on this tab:
+//   1. Pipeline comps — other ace_properties rows filtered by type/county. Auto-generated.
+//   2. Manual comps — user-entered market sales stored in ace_manual_comps. One row per comp.
+// The manual-comp flow mirrors the Tenant Mix add-tenant pattern: inline form
+// toggled into #cmpFormWrap, saved via _sbPost / _sbPatch, re-rendered by cmpRenderList.
+
+let _manualComps = [];  // cached manual comps for current deal
+
 function renderCompsTab(d){
   const type=d['Simple Text Property Type']||'';
   const county=d['Simple County']||'';
@@ -39271,6 +39303,23 @@ function renderCompsTab(d){
         <div><strong>Cap Rate:</strong> ${fmtPct(d['Cap Rate (Asking Price)'])}</div>
       </div>
     </div>
+
+    <!-- MANUAL COMPS (user-entered market sales) -->
+    <div class="info-box">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
+        <div class="info-box-title" style="margin:0;">🏷 My Market Comps</div>
+        <div id="cmpStatus" style="font-size:11px;color:#888;">—</div>
+        <button class="save-btn" style="margin-left:auto;padding:4px 14px;" onclick="loadCompsTab('${d?.id||''}')">↻ Refresh</button>
+        <button onclick="cmpOpenAddForm()" style="
+          background:linear-gradient(180deg,#2a7a2a,#1a5a1a);color:#fff;
+          border:1px solid #0a4a0a;padding:5px 16px;font-size:11px;font-weight:bold;
+          border-radius:3px;cursor:pointer;">+ Add Comp</button>
+      </div>
+      <div id="cmpFormWrap" style="display:none;"></div>
+      <div id="cmpList"><div style="text-align:center;color:#888;padding:12px;font-size:12px;">Loading comps...</div></div>
+    </div>
+
+    <!-- PIPELINE COMPS (auto-generated from allDeals) -->
     <div class="info-box">
       <div class="info-box-title">Same Property Type Comps (${type}) — From Your Pipeline</div>
       <table class="comp-table">
@@ -39286,8 +39335,310 @@ function renderCompsTab(d){
       </table>
     </div>
     <div style="font-size:11px;color:#666;padding:10px;background:#f8f6f0;border:1px solid #ddd;border-radius:2px;">
-      💡 <strong>CoStar Comps:</strong> For market comps outside your pipeline, pull data from CoStar or LoopNet and paste asking prices + cap rates above. Full CoStar integration can be added later.
+      💡 <strong>CoStar Comps:</strong> For market comps outside your pipeline, use <strong>+ Add Comp</strong> above to paste data from CoStar, LoopNet, broker tips, or public records.
     </div>`;
+}
+
+// ─── MANUAL COMPS: LOAD / RENDER / FORM / SAVE ────────────────
+async function loadCompsTab(dealId){
+  if(!dealId) return;
+  const statusEl = document.getElementById('cmpStatus');
+  if(statusEl) statusEl.textContent = 'Loading comps...';
+  try{
+    const rows = await _sbGet(SB_TABLES.manualComps,
+      `deal_id=eq.${dealId}&order=sort_order.asc.nullslast,sale_date.desc.nullslast,created_at.desc`);
+    _manualComps = (rows||[]).map(r => ({ ...r, id: r.id }));
+    if(statusEl){
+      const n = _manualComps.length;
+      statusEl.textContent = n===0 ? 'No manual comps yet' : `${n} comp${n!==1?'s':''}`;
+    }
+    cmpRenderList(dealId);
+  }catch(e){
+    if(statusEl){ statusEl.textContent = 'Error: '+e.message; statusEl.style.color='#c00'; }
+    console.warn('loadCompsTab failed:', e);
+  }
+}
+
+function cmpRenderList(dealId){
+  const escapeHtml = _esc;  // local alias — reuse the global HTML-escape helper
+  const el = document.getElementById('cmpList');
+  if(!el) return;
+  if(!_manualComps.length){
+    el.innerHTML = `<div style="text-align:center;color:#888;padding:16px;font-size:12px;">
+      No manual comps yet. Click <strong>+ Add Comp</strong> to record a market sale.</div>`;
+    return;
+  }
+  const subjAsk = Number(currentDeal?.['Asking Price'])||0;
+  const rowsHtml = _manualComps.map(c => {
+    const price = Number(c.price_sold)||0;
+    const sf    = Number(c.square_feet)||0;
+    const acres = Number(c.lot_size_acres)||0;
+    const psf   = (price && sf)   ? price/sf    : 0;
+    const ppa   = (price && acres)? price/acres : 0;
+    const diff  = (subjAsk && price) ? ((price-subjAsk)/subjAsk*100).toFixed(1) : null;
+    const diffCell = diff===null ? '—'
+      : `<span style="color:${diff>0?'#080':'#c00'};">${diff>0?'+':''}${diff}%</span>`;
+    const addrCell = c.address
+      ? `<strong>${escapeHtml(c.address)}</strong>${c.city?`<br><span style="color:#666;font-size:10px;">${escapeHtml(c.city)}${c.state?', '+escapeHtml(c.state):''}${c.zip?' '+escapeHtml(c.zip):''}</span>`:''}`
+      : '—';
+    const ownerCell = c.owner_name
+      ? `${escapeHtml(c.owner_name)}${c.owner_other_properties_count?`<br><span style="color:#666;font-size:10px;">+${c.owner_other_properties_count} other</span>`:''}`
+      : '—';
+    return `<tr>
+      <td>${addrCell}</td>
+      <td>${c.property_type?escapeHtml(c.property_type):'—'}</td>
+      <td>${c.sale_date?escapeHtml(c.sale_date):'—'}</td>
+      <td style="color:#c00;font-weight:bold;">${price?fmtMoney(price):'—'}</td>
+      <td>${sf?sf.toLocaleString():'—'}</td>
+      <td>${acres?acres.toLocaleString():'—'}</td>
+      <td>${psf?'$'+psf.toFixed(2):'—'}</td>
+      <td>${ppa?fmtMoney(ppa):'—'}</td>
+      <td>${diffCell}</td>
+      <td>${ownerCell}</td>
+      <td>${c.comp_source?escapeHtml(c.comp_source):'—'}</td>
+      <td style="white-space:nowrap;">
+        <button onclick="cmpOpenEditForm('${c.id}')" style="background:#d4b020;color:#fff;border:1px solid #aa8800;padding:3px 8px;font-size:10px;border-radius:3px;cursor:pointer;margin-right:3px;">Edit</button>
+        <button onclick="cmpDelete('${c.id}')" style="background:#c00;color:#fff;border:1px solid #900;padding:3px 8px;font-size:10px;border-radius:3px;cursor:pointer;">✕</button>
+      </td>
+    </tr>`;
+  }).join('');
+  el.innerHTML = `
+    <div style="overflow-x:auto;">
+      <table class="comp-table">
+        <tr>
+          <th>Address</th><th>Type</th><th>Sale Date</th><th>Price Sold</th>
+          <th>SF</th><th>Acres</th><th>$/SF</th><th>$/Acre</th>
+          <th>vs Subject</th><th>Owner</th><th>Source</th><th></th>
+        </tr>
+        ${rowsHtml}
+      </table>
+    </div>`;
+}
+
+function cmpOpenAddForm(){
+  const w = document.getElementById('cmpFormWrap');
+  if(!w) return;
+  w.style.display='block';
+  w.innerHTML = cmpBuildForm(null);
+  cmpAttachAutocomplete();
+  w.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+function cmpOpenEditForm(compId){
+  const c = _manualComps.find(x=>x.id===compId);
+  if(!c) return;
+  const w = document.getElementById('cmpFormWrap');
+  if(!w) return;
+  w.style.display='block';
+  w.innerHTML = cmpBuildForm(c);
+  cmpAttachAutocomplete();
+  cmpRecalcPerUnit();
+  w.scrollIntoView({behavior:'smooth',block:'nearest'});
+}
+
+function cmpCloseForm(){
+  const w = document.getElementById('cmpFormWrap');
+  if(w){ w.style.display='none'; w.innerHTML=''; }
+}
+
+function cmpBuildForm(c){
+  const escapeHtml = _esc;  // local alias — reuse the global HTML-escape helper
+  const v  = (f,d='') => c ? (c[f]!=null ? c[f] : d) : d;
+  const isEdit = !!c;
+
+  // Asset-type options come from the same editable app list property details uses.
+  // Bare category rows + "Category: Subtype" combos are both included verbatim.
+  const assetOpts = ['<option value="">— Select Type —</option>']
+    .concat(((_appLists && _appLists.asset_types) || []).map(t =>
+      `<option value="${escapeHtml(t)}"${v('property_type')===t?' selected':''}>${escapeHtml(t)}</option>`))
+    .join('');
+
+  const sourceOpts = ['', 'CoStar','LoopNet','Crexi','Broker Tip','Public Record','MLS','Owner Direct','Other']
+    .map(s => `<option value="${s}"${v('comp_source')===s?' selected':''}>${s||'— Select Source —'}</option>`).join('');
+
+  const row2 = (fields) => `<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;">${fields}</div>`;
+  const row3 = (fields) => `<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;">${fields}</div>`;
+  const field = (label, input) => `<div>
+    <label style="font-size:10px;font-weight:bold;color:#444;display:block;margin-bottom:3px;">${label}</label>
+    ${input}</div>`;
+  const inp = (id,type,val,ph='',extra='') => `<input id="cmpf_${id}" type="${type}" value="${val===null||val===undefined?'':String(val).replace(/"/g,'&quot;')}"
+    placeholder="${ph}" ${extra} style="width:100%;border:1px inset #808080;padding:4px 6px;font-size:11px;box-sizing:border-box;"/>`;
+
+  return `
+  <div style="background:#fff8f0;border:2px solid #c07000;border-radius:4px;padding:16px;margin-bottom:14px;">
+    <div style="font-weight:bold;font-size:13px;color:#c07000;margin-bottom:12px;">
+      ${isEdit ? '✏ Edit Comp: '+escapeHtml(String(v('address','(no address)'))) : '+ Add New Market Comp'}
+    </div>
+
+    <!-- Hidden fields populated by Google Places onSelect -->
+    <input type="hidden" id="cmpf_city"   value="${escapeHtml(String(v('city','')))}"/>
+    <input type="hidden" id="cmpf_state"  value="${escapeHtml(String(v('state','')))}"/>
+    <input type="hidden" id="cmpf_zip"    value="${escapeHtml(String(v('zip','')))}"/>
+    <input type="hidden" id="cmpf_county" value="${escapeHtml(String(v('county','')))}"/>
+    <input type="hidden" id="cmpf_lat"    value="${v('lat','')}"/>
+    <input type="hidden" id="cmpf_lng"    value="${v('lng','')}"/>
+
+    <!-- ROW 1: Address (Google autocomplete) + Property Type -->
+    ${row2(`
+      ${field('Address <span style="color:#888;font-weight:normal;">(type to search)</span>',
+        inp('address','text',v('address'),'Start typing an address…','autocomplete="off"'))}
+      ${field('Property Type',
+        `<select id="cmpf_property_type" style="width:100%;border:1px inset #808080;padding:4px;font-size:11px;">${assetOpts}</select>`)}
+    `)}
+
+    <!-- ROW 2: City / State / Zip (auto-filled by Places, editable) -->
+    ${row3(`
+      ${field('City', `<input id="cmpf_city_d" type="text" value="${escapeHtml(String(v('city','')))}" placeholder="auto-filled" oninput="document.getElementById('cmpf_city').value=this.value;" style="width:100%;border:1px inset #808080;padding:4px 6px;font-size:11px;box-sizing:border-box;"/>`)}
+      ${field('State', `<input id="cmpf_state_d" type="text" value="${escapeHtml(String(v('state','')))}" placeholder="auto-filled" oninput="document.getElementById('cmpf_state').value=this.value;" style="width:100%;border:1px inset #808080;padding:4px 6px;font-size:11px;box-sizing:border-box;"/>`)}
+      ${field('Zip', `<input id="cmpf_zip_d" type="text" value="${escapeHtml(String(v('zip','')))}" placeholder="auto-filled" oninput="document.getElementById('cmpf_zip').value=this.value;" style="width:100%;border:1px inset #808080;padding:4px 6px;font-size:11px;box-sizing:border-box;"/>`)}
+    `)}
+
+    <!-- ROW 3: Deal terms -->
+    ${row3(`
+      ${field('Sale Date', inp('sale_date','date',v('sale_date'),''))}
+      ${field('Price Sold ($)', inp('price_sold','number',v('price_sold'),'e.g. 2500000',`oninput="cmpRecalcPerUnit()"`))}
+      ${field('Square Feet', inp('square_feet','number',v('square_feet'),'e.g. 15000',`oninput="cmpRecalcPerUnit()"`))}
+    `)}
+
+    <!-- ROW 4: Lot size + auto-calculated per-unit values -->
+    ${row3(`
+      ${field('Lot Size (Acres)', inp('lot_size_acres','number',v('lot_size_acres'),'e.g. 1.25',`step="0.01" oninput="cmpRecalcPerUnit()"`))}
+      ${field('Price Per SF <span style="color:#888;font-weight:normal;">(auto)</span>',
+        `<input id="cmpf_psf_display" type="text" readonly value="—" style="width:100%;border:1px inset #808080;padding:4px 6px;font-size:11px;box-sizing:border-box;background:#f5f5f0;color:#333;"/>`)}
+      ${field('Price Per Acre <span style="color:#888;font-weight:normal;">(auto)</span>',
+        `<input id="cmpf_ppa_display" type="text" readonly value="—" style="width:100%;border:1px inset #808080;padding:4px 6px;font-size:11px;box-sizing:border-box;background:#f5f5f0;color:#333;"/>`)}
+    `)}
+
+    <!-- ROW 5: Owner intel -->
+    ${row2(`
+      ${field('Owner Name', inp('owner_name','text',v('owner_name'),'e.g. John Smith'))}
+      ${field('# Other Properties Owned', inp('owner_other_properties_count','number',v('owner_other_properties_count'),'e.g. 3'))}
+    `)}
+    ${row2(`
+      ${field('Owner Phone', inp('owner_phone','tel',v('owner_phone'),'e.g. 201-555-0199'))}
+      ${field('Owner Email', inp('owner_email','email',v('owner_email'),'e.g. owner@example.com'))}
+    `)}
+
+    <!-- ROW 6: Provenance -->
+    ${row2(`
+      ${field('Source of Comp',
+        `<select id="cmpf_comp_source" style="width:100%;border:1px inset #808080;padding:4px;font-size:11px;">${sourceOpts}</select>`)}
+      ${field('Sort Order', inp('sort_order','number',v('sort_order'),'1, 2, 3…'))}
+    `)}
+
+    <!-- Notes -->
+    <div style="margin-top:8px;">
+      <label style="font-size:10px;font-weight:bold;color:#444;display:block;margin-bottom:3px;">Notes</label>
+      <textarea id="cmpf_notes" style="width:100%;height:60px;border:1px inset #808080;padding:4px 6px;font-size:11px;box-sizing:border-box;resize:vertical;"
+        placeholder="Sale conditions, deferred maintenance, broker comments, etc.">${escapeHtml(String(v('notes','')))}</textarea>
+    </div>
+
+    <!-- Buttons -->
+    <div style="display:flex;gap:8px;margin-top:12px;">
+      <button onclick="cmpSaveComp('${c?c.id:''}')" style="
+        background:linear-gradient(180deg,#2a7a2a,#1a5a1a);color:#fff;
+        border:1px solid #0a4a0a;padding:6px 20px;font-size:12px;font-weight:bold;
+        border-radius:3px;cursor:pointer;">${isEdit?'💾 Save Changes':'💾 Save Comp'}</button>
+      <button onclick="cmpCloseForm()" style="
+        background:#888;color:#fff;border:1px solid #555;padding:6px 16px;
+        font-size:11px;border-radius:3px;cursor:pointer;">Cancel</button>
+    </div>
+  </div>`;
+}
+
+// Live $/SF and $/Acre display below the price + size inputs.
+function cmpRecalcPerUnit(){
+  const gn = id => {
+    const raw = document.getElementById('cmpf_'+id)?.value || '';
+    if(raw==='') return null;
+    const n = parseFloat(String(raw).replace(/,/g,''));
+    return isNaN(n) ? null : n;
+  };
+  const price = gn('price_sold');
+  const sf    = gn('square_feet');
+  const acres = gn('lot_size_acres');
+  const psfEl = document.getElementById('cmpf_psf_display');
+  const ppaEl = document.getElementById('cmpf_ppa_display');
+  if(psfEl) psfEl.value = (price && sf)    ? '$'+(price/sf).toFixed(2) : '—';
+  if(ppaEl) ppaEl.value = (price && acres) ? fmtMoney(price/acres) : '—';
+}
+
+// Wire Google Places autocomplete to the address field. Populates the visible
+// city/state/zip inputs + the hidden full-precision fields (lat/lng/county).
+function cmpAttachAutocomplete(){
+  if(!_store.get('google_places_key')) return;  // no key — silent skip, manual entry still works
+  if(typeof attachPlacesAutocomplete !== 'function') return;
+  attachPlacesAutocomplete('cmpf_address', (comp) => {
+    const a = document.getElementById('cmpf_address');
+    if(a) a.value = comp.street || comp.formatted;
+    const set = (id,val) => { const el=document.getElementById(id); if(el) el.value = val||''; };
+    set('cmpf_city',    comp.city);    set('cmpf_city_d',  comp.city);
+    set('cmpf_state',   comp.stateShort || comp.state); set('cmpf_state_d', comp.stateShort || comp.state);
+    set('cmpf_zip',     comp.zip);     set('cmpf_zip_d',   comp.zip);
+    set('cmpf_county',  comp.county ? comp.county.replace(/ County$/,'') : '');
+    set('cmpf_lat',     comp.lat);    set('cmpf_lng',     comp.lng);
+  });
+}
+
+async function cmpSaveComp(existingId){
+  if(!currentDeal?.id){ alert('No deal selected'); return; }
+  const g  = id => { const v = document.getElementById('cmpf_'+id)?.value; return v==null ? null : (String(v).trim()||null); };
+  const gn = id => {
+    const raw = document.getElementById('cmpf_'+id)?.value || '';
+    if(raw==='') return null;
+    const n = parseFloat(String(raw).replace(/,/g,''));
+    return isNaN(n) ? null : n;
+  };
+
+  // Build Supabase column payload directly — simpler than going through
+  // _atToSb for a table that's only written from one place.
+  const row = {
+    deal_id: currentDeal.id,
+    address:       g('address'),
+    city:          g('city'),
+    state:         g('state'),
+    zip:           g('zip'),
+    county:        g('county'),
+    lat:           gn('lat'),
+    lng:           gn('lng'),
+    sale_date:     g('sale_date'),
+    price_sold:    gn('price_sold'),
+    square_feet:   gn('square_feet'),
+    lot_size_acres:gn('lot_size_acres'),
+    property_type: g('property_type'),
+    owner_name:    g('owner_name'),
+    owner_other_properties_count: gn('owner_other_properties_count'),
+    owner_phone:   g('owner_phone'),
+    owner_email:   g('owner_email'),
+    comp_source:   g('comp_source'),
+    sort_order:    gn('sort_order'),
+    notes:         g('notes')
+  };
+
+  try{
+    if(existingId){
+      await _sbPatch(SB_TABLES.manualComps, existingId, row);
+    } else {
+      await _sbPost(SB_TABLES.manualComps, row);
+    }
+    cmpCloseForm();
+    await loadCompsTab(currentDeal.id);
+  }catch(e){
+    alert('Error saving comp: '+e.message);
+  }
+}
+
+async function cmpDelete(compId){
+  if(!compId) return;
+  const c = _manualComps.find(x=>x.id===compId);
+  const label = c?.address ? `"${c.address}"` : 'this comp';
+  if(!confirm(`Delete ${label}? This cannot be undone.`)) return;
+  try{
+    await _sbDelete(SB_TABLES.manualComps, compId);
+    await loadCompsTab(currentDeal.id);
+  }catch(e){
+    alert('Error deleting comp: '+e.message);
+  }
 }
 
 // ─── PIPELINE VIEW (top nav) ──────────────────────────────────

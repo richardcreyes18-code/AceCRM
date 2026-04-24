@@ -9480,8 +9480,8 @@ function renderFinancialTab(d){
         </tr>
         <tr>
           <td class="row-label">Price</td>
-          <td>Offer: <strong style="color:#080;">${fmtMoney(offer)} ${aNetRentSF?'($'+( offer/aNetRentSF).toFixed(2)+' psf)':''}</strong></td>
-          <td>Asking: <strong style="color:#c00;">${fmtMoney(ask)} ${aNetRentSF?'($'+(ask/aNetRentSF).toFixed(2)+' psf)':''}</strong></td>
+          <td>Offer: <strong style="color:#080;">${fmtMoney(offer)}</strong></td>
+          <td>Asking: <strong style="color:#c00;">${fmtMoney(ask)}</strong></td>
           <td>Representation: <strong>${
             d['Is Property Listed']==='broker' ? 'Broker Listed' :
             d['Is Property Listed']==='fsbo' ? 'For Sale By Owner' :

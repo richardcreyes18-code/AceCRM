@@ -47271,8 +47271,16 @@ async function _aiCommitSellerLead(){
       const row={address:[p.address,p.municipality,p.state].filter(Boolean).join(', ')||p.address, municipality:p.municipality||null, state:p.state||'NJ', owner_contact_id:cid, crm_asset_classification:p.crm_asset_classification||null, pipeline_stage:p.pipeline_stage||'New Lead', asking_price:p.asking_price||null, noi:p.noi||null, number_of_units:p.number_of_units||p.no_of_units||null, square_footage:p.square_footage||null, deal_notes:p.deal_notes||null, general_property_notes:p.general_property_notes||null, why_selling:p.why_selling||null, gross_revenue_yearly:p.gross_revenue_yearly||null, expenses_yearly:p.expenses_yearly||null, fub_assigned_to:agentFub, date_added:new Date().toISOString().split('T')[0]};
       const pr=await _sbPost('ace_properties',row);
       if(pr?.id){
-        // v105.4: instantly add to allDeals and open the new deal card
-        const newDeal = { id: pr.id, ...pr };
+        // v113.10.2: the Supabase response uses column names (address,
+        // asking_price, fub_assigned_to, …), but everywhere else in this
+        // app the in-memory deal is read via Airtable-style field names
+        // ('Address', 'Asking Price', 'Assigned Agent', …). Run the row
+        // through _sbToAt(SB_PROP_MAP) — the same translator the full
+        // sync pipeline uses — so openDeal and buildSidebar see the
+        // populated fields immediately, not after the next bg refresh.
+        const mapped = (typeof _sbToAt === 'function' && typeof SB_PROP_MAP !== 'undefined')
+          ? _sbToAt(pr, SB_PROP_MAP) : {};
+        const newDeal = { id: pr.id, ...pr, ...mapped };
         if(typeof _lf === 'object' && _lf.loadOnto) _lf.loadOnto(newDeal);
         allDeals.unshift(newDeal);
         buildSidebar(document.getElementById('sideSearch')?.value || '');

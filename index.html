@@ -47268,7 +47268,56 @@ async function _aiCommitSellerLead(){
       // ace_properties (schema does NOT have assigned_agent). Sidebar
       // filters and permissions read from fub_assigned_to.
       const agentFub = _agentJoin([agentIn]);
-      const row={address:[p.address,p.municipality,p.state].filter(Boolean).join(', ')||p.address, municipality:p.municipality||null, state:p.state||'NJ', owner_contact_id:cid, crm_asset_classification:p.crm_asset_classification||null, pipeline_stage:p.pipeline_stage||'New Lead', asking_price:p.asking_price||null, noi:p.noi||null, number_of_units:p.number_of_units||p.no_of_units||null, square_footage:p.square_footage||null, deal_notes:p.deal_notes||null, general_property_notes:p.general_property_notes||null, why_selling:p.why_selling||null, gross_revenue_yearly:p.gross_revenue_yearly||null, expenses_yearly:p.expenses_yearly||null, fub_assigned_to:agentFub, date_added:new Date().toISOString().split('T')[0]};
+      // v113.10.3: write EVERY structured field the AI returned. Previously
+      // fields like gross_rental_income_monthly / expenses_monthly / year_built
+      // / total_building_sf / total_lot_size / unit_mix_text were silently
+      // dropped — the AI extracted them but the commit payload didn't
+      // reference them. Build the row defensively: include a key only if
+      // the AI returned a non-null value, so we don't null-out existing
+      // defaults in Postgres.
+      const _n = v => (v === undefined || v === null || v === '') ? null : v;
+      const row = {
+        address: [p.address, p.municipality, p.state].filter(Boolean).join(', ') || p.address,
+        municipality: _n(p.municipality),
+        state: p.state || 'NJ',
+        owner_contact_id: cid,
+        crm_asset_classification: _n(p.crm_asset_classification),
+        pipeline_stage: p.pipeline_stage || 'New Lead',
+        // Pricing
+        asking_price: _n(p.asking_price),
+        offer_price: _n(p.offer_price),
+        // Physical
+        square_footage: _n(p.square_footage),
+        total_building_sf: _n(p.total_building_sf),
+        total_lot_size: _n(p.total_lot_size),
+        number_of_units: _n(p.number_of_units || p.no_of_units),
+        no_of_units: _n(p.no_of_units || p.number_of_units),
+        year_built: _n(p.year_built),
+        unit_mix_text: _n(p.unit_mix_text),
+        // Financials — prefer MONTHLY fields (v5 prompt now mandates these)
+        noi: _n(p.noi),
+        gross_rental_income_monthly: _n(p.gross_rental_income_monthly),
+        expenses_monthly: _n(p.expenses_monthly),
+        // Legacy yearly fields — only write if AI explicitly returned them
+        gross_revenue_yearly: _n(p.gross_revenue_yearly),
+        expenses_yearly: _n(p.expenses_yearly),
+        // Notes
+        deal_notes: _n(p.deal_notes),
+        general_property_notes: _n(p.general_property_notes),
+        why_selling: _n(p.why_selling),
+        // Assignment + stamp
+        fub_assigned_to: agentFub,
+        date_added: new Date().toISOString().split('T')[0]
+      };
+      // Strip any null-valued keys so Postgres column defaults kick in
+      // (and so we don't clobber NOT NULL / default-populated columns)
+      Object.keys(row).forEach(k => { if(row[k] === null) delete row[k]; });
+      // Always keep these even if null (they're part of the write contract):
+      row.owner_contact_id = cid;
+      row.state = p.state || 'NJ';
+      row.pipeline_stage = p.pipeline_stage || 'New Lead';
+      row.fub_assigned_to = agentFub;
+      row.date_added = new Date().toISOString().split('T')[0];
       const pr=await _sbPost('ace_properties',row);
       if(pr?.id){
         // v113.10.2: the Supabase response uses column names (address,

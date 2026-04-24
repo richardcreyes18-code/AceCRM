@@ -1738,6 +1738,8 @@ const SB_PROP_MAP = {
   pro_forma_expenses_monthly:'Pro Forma Expenses Monthly',
   pro_forma_expenses_yearly:'Pro Forma Expenses Yearly',
   pro_forma_expense_ratio_pct:'Pro Forma Expense Ratio %',
+  actual_expense_ratio_pct:'Actual Expense Ratio %',
+  expense_mode:'Expense Mode',
   proforma_gross_rent_monthly:'Proforma Gross Rent (Monthly)',
   proforma_other_income_monthly:'Proforma Other Income (Monthly)',
   proforma_rubs_cam_monthly:'Proforma RUBS/CAM (Monthly)',
@@ -6004,8 +6006,12 @@ function switchTab(name, btn){
       _rendering = true;   // block markDirty during programmatic init
       try{
         mortApplyDefaults(currentDeal);
-        updateExpenseTotals();
+        // v113.8: income first so window._aEGI_mo / _pEGI_mo are set before
+        // updateExpenseTotals runs in % Ratio mode (ratio OpEx = EGI × ratio).
+        // updateExpenseTotals re-calls updateIncomeTotals at the end so NOI
+        // picks up the correct OpEx on the same tick.
         updateIncomeTotals();
+        updateExpenseTotals();
         liveDownCalc();
         if(typeof _refreshFinGRIFromUnitMix === 'function') _refreshFinGRIFromUnitMix();
       } finally {
@@ -10227,10 +10233,10 @@ function renderFinancialTab(d){
           <div style="margin-left:auto;display:flex;align-items:center;gap:5px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:3px 6px;">
             <span style="font-size:11px;color:var(--text2);white-space:nowrap;">Expense Mode:</span>
             <label style="display:flex;align-items:center;gap:3px;cursor:pointer;font-size:11px;font-weight:600;white-space:nowrap;">
-              <input type="radio" name="expMode" id="expModeItemized" value="itemized" checked onchange="toggleExpMode()" style="cursor:pointer;"/> Itemized
+              <input type="radio" name="expMode" id="expModeItemized" value="itemized" ${d['Expense Mode']==='ratio'?'':'checked'} onchange="toggleExpMode()" style="cursor:pointer;"/> Itemized
             </label>
             <label style="display:flex;align-items:center;gap:3px;cursor:pointer;font-size:11px;font-weight:600;white-space:nowrap;">
-              <input type="radio" name="expMode" id="expModeRatio" value="ratio" onchange="toggleExpMode()" style="cursor:pointer;"/> % Ratio
+              <input type="radio" name="expMode" id="expModeRatio" value="ratio" ${d['Expense Mode']==='ratio'?'checked':''} onchange="toggleExpMode()" style="cursor:pointer;"/> % Ratio
             </label>
           </div>
           <!-- v111.9: mirror of the Income section's one-click copy — snapshots
@@ -10261,12 +10267,13 @@ function renderFinancialTab(d){
           <button class="save-btn" style="padding:3px 12px;" onclick="hideAllExpCats()">Hide All</button>
         </div>
         <!-- Ratio override inputs — shown only in % Ratio mode -->
-        <div id="expRatioRow" style="display:none;background:#fef3c7;border:1px solid #fde68a;border-radius:6px;padding:10px 14px;margin-bottom:10px;">
+        <div id="expRatioRow" style="display:${d['Expense Mode']==='ratio'?'block':'none'};background:#fef3c7;border:1px solid #fde68a;border-radius:6px;padding:10px 14px;margin-bottom:10px;">
           <div style="font-size:11px;font-weight:600;color:#92400e;margin-bottom:8px;">% Ratio Override — expenses calculated as % of EGI. Itemized lines below are ignored.</div>
           <div style="display:flex;gap:24px;flex-wrap:wrap;">
             <label style="font-size:12px;display:flex;align-items:center;gap:6px;">
               Actual Expense Ratio:
               <input id="fin_aExpRatio" type="number" min="0" max="100" step="0.5" placeholder="e.g. 40"
+                value="${d['Actual Expense Ratio %']!=null?d['Actual Expense Ratio %']:''}"
                 class="form-input" style="width:70px;text-align:center;"
                 oninput="expenseCalc()"/>
               <span>% of EGI</span>
@@ -10274,13 +10281,14 @@ function renderFinancialTab(d){
             <label style="font-size:12px;display:flex;align-items:center;gap:6px;">
               Proforma Expense Ratio:
               <input id="fin_pExpRatio" type="number" min="0" max="100" step="0.5" placeholder="e.g. 35"
+                value="${d['Pro Forma Expense Ratio %']!=null?d['Pro Forma Expense Ratio %']:''}"
                 class="form-input" style="width:70px;text-align:center;"
                 oninput="expenseCalc()"/>
               <span>% of EGI</span>
             </label>
           </div>
         </div>
-        <div id="expItemizedWrap" style="overflow-x:auto;transition:opacity 0.2s;">
+        <div id="expItemizedWrap" style="overflow-x:auto;transition:opacity 0.2s;opacity:${d['Expense Mode']==='ratio'?'0.35':'1'};">
         <table style="width:100%;border-collapse:collapse;font-size:11px;min-width:900px;">
           <thead>
             <tr>
@@ -41821,6 +41829,25 @@ function saveFinInputs(dealId){
     // rendered (all call sites gate on hasFinInputs), so the inputs exist.
     fields[airtableField] = v || null;
   });
+
+  // v113.8: Expense Mode (itemized vs ratio) + the two % Ratio override
+  // inputs. Until now these were DOM-only — switching to % Ratio, typing a
+  // value, and changing tabs lost everything. Now persisted so teammates on
+  // other devices see the same NOI calculation.
+  const aRatioEl = document.getElementById('fin_aExpRatio');
+  const pRatioEl = document.getElementById('fin_pExpRatio');
+  const modeEl   = document.getElementById('expModeRatio');
+  if(aRatioEl){
+    const v = parseFloat(String(aRatioEl.value||'').replace(/,/g,''));
+    fields['Actual Expense Ratio %'] = (isFinite(v) && v > 0) ? v : null;
+  }
+  if(pRatioEl){
+    const v = parseFloat(String(pRatioEl.value||'').replace(/,/g,''));
+    fields['Pro Forma Expense Ratio %'] = (isFinite(v) && v > 0) ? v : null;
+  }
+  if(modeEl){
+    fields['Expense Mode'] = modeEl.checked ? 'ratio' : 'itemized';
+  }
 
   // v102.4: Pro forma expenses — save as a JSONB blob keyed by short item ID.
   // Keeps the schema clean (1 column vs 23) since pro forma values aren't

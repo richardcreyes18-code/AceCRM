@@ -36420,8 +36420,8 @@ function tmBuildForm(t){
   const field = (label, input) => `<div>
     <label style="font-size:10px;font-weight:bold;color:#444;display:block;margin-bottom:3px;">${label}</label>
     ${input}</div>`;
-  const inp = (id,type,val,ph='') => `<input id="tmf_${id}" type="${type}" value="${val}"
-    placeholder="${ph}" style="width:100%;border:1px inset #808080;padding:4px 6px;font-size:11px;box-sizing:border-box;"/>`;
+  const inp = (id,type,val,ph='',extra='') => `<input id="tmf_${id}" type="${type}" value="${val}"
+    placeholder="${ph}" ${extra} style="width:100%;border:1px inset #808080;padding:4px 6px;font-size:11px;box-sizing:border-box;"/>`;
   const selInput = `<select id="tmf_leaseType" style="width:100%;border:1px inset #808080;padding:4px;font-size:11px;">
     <option value="">-- Select --</option>${selOpts}</select>`;
 
@@ -36440,14 +36440,14 @@ function tmBuildForm(t){
     <!-- ROW 2: Space -->
     ${row3(`
       ${field('Unit / Suite', inp('unit','text',v('Unit / Suite'),'e.g. Suite 101'))}
-      ${field('Square Footage', inp('sf','number',v('Square Footage'),'e.g. 1200'))}
+      ${field('Square Footage', inp('sf','number',v('Square Footage'),'e.g. 1200',`oninput="tmRecalcRent('sf')"`))}
       ${field('Years in Unit', inp('yrsInUnit','number',v('Years in Unit'),'e.g. 5'))}
     `)}
 
-    <!-- ROW 3: Rent -->
+    <!-- ROW 3: Rent — either Monthly Rent OR Rent Per SF/Yr fills the other -->
     ${row3(`
-      ${field('Monthly Rent ($)', inp('monthlyRent','number',v('Monthly Rent'),'e.g. 3000'))}
-      ${field('Rent Per SF/Yr ($) — auto-calc', inp('psf','number',v('Rent Per SF (Annual)'),'auto-calc from rent+SF'))}
+      ${field('Monthly Rent ($) — auto-calc', inp('monthlyRent','number',v('Monthly Rent'),'e.g. 3000',`oninput="tmRecalcRent('rent')"`))}
+      ${field('Rent Per SF/Yr ($) — auto-calc', inp('psf','number',v('Rent Per SF (Annual)'),'e.g. 24.50',`oninput="tmRecalcRent('psf')"`))}
       ${field('CAM Charges/Mo ($)', inp('cam','number',v('CAM Charges (Monthly)'),'if applicable'))}
     `)}
 
@@ -36511,6 +36511,48 @@ function tmCloseForm(){
   if(w){ w.style.display='none'; w.innerHTML=''; }
 }
 
+// v113.7: bidirectional rent auto-calc.
+//   - Edit Monthly Rent  → Rent Per SF/Yr recomputed  (psf = rent*12 / sf)
+//   - Edit Rent Per SF   → Monthly Rent recomputed    (rent = psf*sf / 12)
+//   - Edit Square Footage→ whichever rent field has a value stays; the other recomputes
+// `src` names which field the user just edited so we know which direction to push.
+function tmRecalcRent(src){
+  const g = id => {
+    const raw = document.getElementById('tmf_'+id)?.value || '';
+    if(raw === '') return null;
+    const v = parseFloat(String(raw).replace(/,/g,''));
+    return isNaN(v) ? null : v;
+  };
+  const rentEl = document.getElementById('tmf_monthlyRent');
+  const psfEl  = document.getElementById('tmf_psf');
+  const sfEl   = document.getElementById('tmf_sf');
+  if(!rentEl || !psfEl || !sfEl) return;
+  const sf   = g('sf');
+  const rent = g('monthlyRent');
+  const psf  = g('psf');
+
+  // Fmt helpers — 2 decimal places, strip trailing zeros.
+  const f2 = n => {
+    if(!isFinite(n) || n <= 0) return '';
+    return (Math.round(n*100)/100).toString();
+  };
+
+  if(src === 'rent'){
+    // User typing in Monthly Rent → recompute PSF (only if SF is known).
+    if(sf && sf > 0 && rent !== null) psfEl.value = f2((rent*12)/sf);
+  } else if(src === 'psf'){
+    // User typing in Rent Per SF → recompute Monthly Rent (only if SF is known).
+    if(sf && sf > 0 && psf !== null) rentEl.value = f2((psf*sf)/12);
+  } else if(src === 'sf'){
+    // Square Footage changed. If PSF is set, let Monthly Rent follow it; else if
+    // Monthly Rent is set, recompute PSF from it.
+    if(sf && sf > 0){
+      if(psf !== null)      rentEl.value = f2((psf*sf)/12);
+      else if(rent !== null) psfEl.value  = f2((rent*12)/sf);
+    }
+  }
+}
+
 async function tmSaveTenant(existingId){
   const cfg = getConfig();
   if(!cfg.key || !currentDeal?.id) return;
@@ -36526,9 +36568,13 @@ async function tmSaveTenant(existingId){
   const gc = id => document.getElementById('tmf_'+id)?.checked||false;
 
   const sf   = gn('sf');
-  const rent = gn('monthlyRent');
+  let rent   = gn('monthlyRent');
   let psf    = gn('psf');
-  if(!psf && sf && rent) psf = parseFloat(((rent*12)/sf).toFixed(4));  // Annual PSF = monthly*12/SF
+  // Bidirectional fallback — whichever rent field was left blank, derive it
+  // from the other plus SF. Live oninput handlers usually fill both, but
+  // this catches the case where a user types PSF and saves without blurring.
+  if(!psf  && sf && rent) psf  = parseFloat(((rent*12)/sf).toFixed(4));  // Annual PSF = monthly*12/SF
+  if(!rent && sf && psf)  rent = parseFloat(((psf*sf)/12).toFixed(2));   // Monthly = psf*SF/12
 
   const fields = {};
   if(g('name'))       fields['Tenant Name']          = g('name');

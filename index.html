@@ -1830,7 +1830,7 @@ const SB_PROP_MAP = {
   latitude:'Latitude', longitude:'Longitude',
   property_description:'Property Description', location_description:'Location Description',
   pro_forma_breakdown:'Pro Forma Breakdown in Words',
-  ace_chat_summary:'Ace Chat Text Summary', main_photo_attachment_id:'Main Photo',
+  ace_chat_summary:'Ace Chat Text Summary', email_template_in_fub:'Email Template', main_photo_attachment_id:'Main Photo',
   photo_attachments:'PHOTO',
   property_name:'Property Name', complex_name:'Complex Name', municipality:'Municipality',
   x_price_per_foot:'What is the price at X Price per foot',
@@ -11578,10 +11578,10 @@ function renderAICommTab(d){
         readonly>${d['Ace Chat Text Summary']||'No legacy summary available.'}</textarea>
     </div>
 
-    <!-- EMAIL TEMPLATE -->
+    <!-- EMAIL TEMPLATE (v113.11 — Airtable-style field picker + tone + signature) -->
     <div class="info-box">
       <div class="info-box-title" style="display:flex;align-items:center;justify-content:space-between;">
-        <span>Email Template</span>
+        <span>✉️ AI Email Template</span>
         <div style="display:flex;gap:8px;align-items:center;">
           <button id="runAgentBtn" onclick="runEmailAgent()" style="
             background:linear-gradient(180deg,#7b2fff,#5a0dc8);
@@ -11600,15 +11600,161 @@ function renderAICommTab(d){
           <span id="emailSaveMsg" style="font-size:10px;color:#080;display:none;"></span>
         </div>
       </div>
-      <div style="font-size:11px;color:#555;margin-bottom:8px;">
-        Press <strong>Run Agent</strong> to generate a marketing email using your property data. Edit freely, then <strong>Save</strong>.
+      <div style="font-size:11px;color:#555;margin-bottom:10px;">
+        Pick which fields feed the email, set tone + signature, then press <strong>Run Agent</strong>. Empty fields are automatically omitted — the AI never mentions missing info.
       </div>
+
+      <!-- Template settings (collapsible) -->
+      <details id="emailTplSettings" open style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-bottom:10px;">
+        <summary style="font-size:12px;font-weight:600;color:#1e3a8a;cursor:pointer;user-select:none;">⚙️ Template settings</summary>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;">
+          <div>
+            <label style="font-size:10px;font-weight:600;color:#475569;display:block;margin-bottom:3px;">Sign off as</label>
+            <input id="emailTplSignature" style="width:100%;padding:6px 8px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;">
+          </div>
+          <div>
+            <label style="font-size:10px;font-weight:600;color:#475569;display:block;margin-bottom:3px;">Tone</label>
+            <select id="emailTplTone" style="width:100%;padding:6px 8px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;">
+              <option value="Professional, concise, and compelling">Professional (default)</option>
+              <option value="Warm and conversational, but still polished">Warm / conversational</option>
+              <option value="Urgent — emphasize opportunity and timing">Urgent — limited window</option>
+              <option value="Data-driven and analytical — lead with numbers">Analytical — lead with numbers</option>
+              <option value="Brief and punchy — four sentences max">Brief — punchy</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="margin-top:10px;">
+          <label style="font-size:10px;font-weight:600;color:#475569;display:block;margin-bottom:3px;">Additional instructions <span style="font-weight:400;color:#94a3b8;">(optional — e.g. "mention 1031 eligibility", "pitch to Core+ buyers")</span></label>
+          <textarea id="emailTplExtra" rows="2" style="width:100%;padding:6px 8px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;resize:vertical;"></textarea>
+        </div>
+
+        <div style="margin-top:10px;">
+          <div style="font-size:10px;font-weight:600;color:#475569;margin-bottom:4px;">
+            Fields to include
+            <button type="button" onclick="_emailTplToggleAll(true)" style="margin-left:8px;font-size:10px;background:none;border:none;color:#3b82f6;cursor:pointer;padding:0;">Select all</button>
+            <button type="button" onclick="_emailTplToggleAll(false)" style="margin-left:4px;font-size:10px;background:none;border:none;color:#64748b;cursor:pointer;padding:0;">Clear</button>
+          </div>
+          <div id="emailTplFieldsGrid" style="display:grid;grid-template-columns:repeat(auto-fill,minmax(180px,1fr));gap:4px 12px;font-size:12px;">
+            <!-- populated by _emailTplRenderFields() -->
+          </div>
+        </div>
+      </details>
+
       <div id="agentStatus" style="display:none;padding:8px 12px;background:#f0f0ff;border:1px solid #c0c0f0;border-radius:4px;font-size:11px;color:#3a3a99;margin-bottom:8px;">
         ✦ Generating email...
       </div>
       <textarea id="emailTemplateText" style="width:100%;height:400px;font-size:11px;font-family:Tahoma,Arial,sans-serif;border:1px inset #808080;padding:8px;resize:vertical;background:#fff;"
-      >${d['Email Template']?.value || d['Email Template'] || ''}</textarea>
+      >${((typeof d['Email Template']==='object' ? d['Email Template']?.value : d['Email Template'])||'').replace(/</g,'&lt;')}</textarea>
     </div>`;
+}
+
+// v113.11: Airtable-style field picker for the AI Email Template.
+// The list below is the MASTER — a labeled slot has (a) a human label shown
+// in the checkbox, (b) a getter that pulls the value off `currentDeal`,
+// and (c) a stable key used for the localStorage pref. Toggling a box
+// changes the pref and optionally the generated prompt on the next Run.
+const EMAIL_TPL_FIELDS = [
+  { k:'address',     label:'Address',              get:d=>d['Address'] },
+  { k:'propType',    label:'Property Type',        get:d=>d['Simple Text Property Type'] || d['CRM Asset Classification'] },
+  { k:'askingPrice', label:'Asking Price',         get:d=>d['Pitch Out Price'] ? '$'+Number(d['Pitch Out Price']).toLocaleString() : (d['Asking Price'] ? '$'+Number(d['Asking Price']).toLocaleString() : '') },
+  { k:'sqft',        label:'Square Footage',       get:d=>{const v=d['Square Footage']||d['Total Building SF'];return v?Number(v).toLocaleString()+' SF':'';} },
+  { k:'lotSize',     label:'Lot Size',             get:d=>d['Total Lot Size'] ? Number(d['Total Lot Size']).toLocaleString() + ' acres' : '' },
+  { k:'units',       label:'# of Units',           get:d=>d['Number of Units']||d['No. of Units'] },
+  { k:'unitMix',     label:'Unit Mix',             get:d=>d['Unit Mix'] },
+  { k:'yearBuilt',   label:'Year Built',           get:d=>d['Year Built'] },
+  { k:'ownerOcc',    label:'Owner Occupied?',      get:d=>{const v=d['Owner Occupied'];if(v===true)return'Yes';if(v===false)return'No';return v||'';} },
+  { k:'capRate',     label:'Cap Rate',             get:d=>d['Cap Rate (Asking Price)'] || d['X Cap Rate Pct'] },
+  { k:'noi',         label:'NOI (yearly)',         get:d=>d['NOI'] ? '$'+Number(d['NOI']).toLocaleString() : '' },
+  { k:'revenue',     label:'Gross Revenue (yr)',   get:d=>d['Calculated Revenue Yearly'] ? '$'+Number(d['Calculated Revenue Yearly']).toLocaleString() : (d['Gross Revenue (Yearly)'] ? '$'+Number(d['Gross Revenue (Yearly)']).toLocaleString() : '') },
+  { k:'expenses',    label:'Expenses (yr)',        get:d=>d['Calculated Expenses Yearly'] ? '$'+Number(d['Calculated Expenses Yearly']).toLocaleString() : (d['Expenses (Yearly)'] ? '$'+Number(d['Expenses (Yearly)']).toLocaleString() : '') },
+  { k:'pricePerSF',  label:'Price / SF',           get:d=>d['X Price Per Foot'] ? '$'+Number(d['X Price Per Foot']).toLocaleString()+'/SF' : '' },
+  { k:'genNotes',    label:'General Property Notes', get:d=>d['General Property Notes'] },
+  { k:'finNotes',    label:'Financial Property Notes', get:d=>d['Financial Property Notes'] },
+  { k:'whySelling',  label:'Why Selling',          get:d=>d['Why Selling'] },
+  { k:'pipeline',    label:'Pipeline Stage',       get:d=>d['Pipeline Stage'] },
+];
+
+// Defaults — match what the user's Airtable screenshot shows as "useful for email"
+const EMAIL_TPL_DEFAULTS = {
+  enabled: { address:true, propType:true, askingPrice:true, sqft:true, units:true, unitMix:true, ownerOcc:true, capRate:true, noi:true, revenue:true, expenses:true, genNotes:true, finNotes:true, whySelling:false, pipeline:false, lotSize:true, yearBuilt:true, pricePerSF:true },
+  signature: 'Richard Reyes, KW Commercial',
+  tone: 'Professional, concise, and compelling',
+  extra: ''
+};
+
+const EMAIL_TPL_LS_KEY = 'aceEmailTemplatePrefs_v1';
+
+function _emailTplLoadPrefs(){
+  try{
+    const raw = localStorage.getItem(EMAIL_TPL_LS_KEY);
+    if(!raw) return { ...EMAIL_TPL_DEFAULTS };
+    const p = JSON.parse(raw);
+    return {
+      enabled: { ...EMAIL_TPL_DEFAULTS.enabled, ...(p.enabled||{}) },
+      signature: p.signature || EMAIL_TPL_DEFAULTS.signature,
+      tone: p.tone || EMAIL_TPL_DEFAULTS.tone,
+      extra: p.extra || ''
+    };
+  }catch(_e){ return { ...EMAIL_TPL_DEFAULTS }; }
+}
+
+function _emailTplSavePrefs(){
+  const enabled = {};
+  EMAIL_TPL_FIELDS.forEach(f => {
+    const el = document.getElementById('emailTplF_'+f.k);
+    enabled[f.k] = !!el?.checked;
+  });
+  const prefs = {
+    enabled,
+    signature: (document.getElementById('emailTplSignature')?.value || '').trim() || EMAIL_TPL_DEFAULTS.signature,
+    tone:      (document.getElementById('emailTplTone')?.value      || '').trim() || EMAIL_TPL_DEFAULTS.tone,
+    extra:     (document.getElementById('emailTplExtra')?.value     || '').trim()
+  };
+  try{ localStorage.setItem(EMAIL_TPL_LS_KEY, JSON.stringify(prefs)); }catch(_e){}
+  return prefs;
+}
+
+function _emailTplRenderFields(){
+  const grid = document.getElementById('emailTplFieldsGrid');
+  if(!grid) return;
+  const prefs = _emailTplLoadPrefs();
+  const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  grid.innerHTML = EMAIL_TPL_FIELDS.map(f => {
+    const on = prefs.enabled[f.k] !== false;  // default on unless explicitly off
+    const val = currentDeal ? (f.get(currentDeal) || '') : '';
+    const hasVal = String(val).trim() !== '';
+    const dim = hasVal ? '' : 'color:#94a3b8;';
+    const valHint = hasVal ? ' — <span style="color:#64748b;">'+esc(String(val).slice(0,30))+(String(val).length>30?'…':'')+'</span>' : ' <span style="font-size:10px;color:#cbd5e1;">(empty)</span>';
+    return `<label style="display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;${dim}" title="${esc(String(val))}">
+      <input type="checkbox" id="emailTplF_${f.k}" ${on?'checked':''} onchange="_emailTplSavePrefs()" style="cursor:pointer;">
+      <span>${esc(f.label)}${valHint}</span>
+    </label>`;
+  }).join('');
+
+  // Restore signature / tone / extra
+  const sigEl = document.getElementById('emailTplSignature'); if(sigEl) sigEl.value = prefs.signature;
+  const toneEl = document.getElementById('emailTplTone');     if(toneEl) toneEl.value = prefs.tone;
+  const extraEl = document.getElementById('emailTplExtra');   if(extraEl) extraEl.value = prefs.extra;
+
+  // Persist on change for signature / tone / extra
+  ['emailTplSignature','emailTplTone','emailTplExtra'].forEach(id => {
+    const el = document.getElementById(id);
+    if(el && !el._emailTplBound){
+      el.addEventListener('change', _emailTplSavePrefs);
+      el.addEventListener('blur',   _emailTplSavePrefs);
+      el._emailTplBound = true;
+    }
+  });
+}
+
+function _emailTplToggleAll(on){
+  EMAIL_TPL_FIELDS.forEach(f => {
+    const el = document.getElementById('emailTplF_'+f.k);
+    if(el) el.checked = !!on;
+  });
+  _emailTplSavePrefs();
 }
 
 async function loadAICommTab(recordId){
@@ -11617,8 +11763,11 @@ async function loadAICommTab(recordId){
   try{
     let summary = '', templateVal = '';
     if(isSupabase()){
-      const rows = await _sbGet(SB_TABLES.properties, `id=eq.${recordId}&select=ace_chat_summary`);
+      // v113.11: also pull the saved Email Template (email_template_in_fub col)
+      const rows = await _sbGet(SB_TABLES.properties, `id=eq.${recordId}&select=ace_chat_summary,email_template_in_fub`);
       summary = rows?.[0]?.ace_chat_summary || '';
+      templateVal = rows?.[0]?.email_template_in_fub || '';
+      if(currentDeal) currentDeal['Email Template'] = templateVal;
     } else {
       const res = await fetch(`https://api.airtable.com/v0/${cfg.base}/${cfg.table}/${recordId}`,
         {headers:{Authorization:`Bearer ${cfg.key}`}});
@@ -11642,9 +11791,22 @@ async function loadAICommTab(recordId){
       await loadSellerContact(recordId);
     } catch(e){ /* non-fatal — TMM just won't have contact info */ }
     if(typeof _tmmUpdate === 'function') _tmmUpdate();
+
+    // v113.11: populate the AI Email Template field-picker + prefs
+    if(typeof _emailTplRenderFields === 'function') _emailTplRenderFields();
   }catch(e){}
 }
 
+// v113.11: runEmailAgent rewritten.
+// Old version called https://api.anthropic.com directly with no API key — it
+// was broken in practice. New version:
+//   1. Reads the user's saved prefs (which fields to include, tone, sig,
+//      optional extra instructions)
+//   2. Resolves each enabled field against the current deal using the
+//      EMAIL_TPL_FIELDS getter list
+//   3. Sends { fields, signature, tone, extraInstructions, recipient }
+//      to the crm-email-gen edge function (Sonnet 4.5)
+//   4. Drops the returned email into the textarea and auto-saves.
 async function runEmailAgent(){
   const btn    = document.getElementById('runAgentBtn');
   const status = document.getElementById('agentStatus');
@@ -11655,91 +11817,98 @@ async function runEmailAgent(){
   btn.disabled = true;
   btn.textContent = '⏳ Generating...';
   status.style.display = 'block';
+  status.innerHTML = '✦ Generating email...';
+  status.style.background = '#f0f0ff';
+  status.style.color = '#3a3a99';
 
-  // Build property context from current deal
-  const d = currentDeal;
-  const addr       = d['Address']||'';
-  const propType   = d['Simple Text Property Type']||'';
-  const pitchPrice = d['Pitch Out Price'] ? '$'+Number(d['Pitch Out Price']).toLocaleString() : (d['Asking Price'] ? '$'+Number(d['Asking Price']).toLocaleString() : '');
-  const units      = d['Number of Units']||d['No. of Units']||'';
-  const unitMix    = d['Unit Mix']||'';
-  const sqft       = d['Square Footage']||'';
-  const genNotes   = d['General Property Notes']||'';
-  const finNotes   = d['Financial Property Notes']||'';
-  const noi        = d['NOI'] ? '$'+Number(d['NOI']).toLocaleString() : '';
-  const revenue    = d['Calculated Revenue Yearly'] ? '$'+Number(d['Calculated Revenue Yearly']).toLocaleString() : '';
-  const expenses   = d['Calculated Expenses Yearly'] ? '$'+Number(d['Calculated Expenses Yearly']).toLocaleString() : '';
-  const ownerOcc   = d['Owner Occupied'] ? 'Yes' : 'No';
-  const capRate    = d['Cap Rate (Asking Price)']||'';
+  // Persist the current form state + get a clean prefs snapshot
+  const prefs = _emailTplSavePrefs();
 
-  const prompt = `Generate a professional marketing email for this commercial real estate property. Use only the information that is available — skip any details that are empty or missing.
+  // Resolve each enabled field against the current deal. Empty values fall
+  // through so the edge function strips them out ("don't mention missing info").
+  const fields = {};
+  EMAIL_TPL_FIELDS.forEach(f => {
+    if(prefs.enabled[f.k] === false) return;
+    try {
+      const v = f.get(currentDeal);
+      if(v !== null && v !== undefined && String(v).trim() !== '') {
+        fields[f.label] = v;
+      }
+    } catch(_e) { /* skip field */ }
+  });
 
-Property Details:
-Address: ${addr}
-Property Type: ${propType}
-Asking Price: ${pitchPrice}
-Square Footage: ${sqft}
-Number of Units: ${units}
-Unit Mix: ${unitMix}
-Owner Occupied: ${ownerOcc}
-Cap Rate: ${capRate}
-Calculated Gross Revenue: ${revenue}
-Calculated Expenses: ${expenses}
-NOI: ${noi}
-General Notes: ${genNotes}
-Financial Notes: ${finNotes}
+  if(!Object.keys(fields).length){
+    status.innerHTML = '✕ No populated fields selected. Tick at least one field that has a value on this deal.';
+    status.style.background = '#fff0f0';
+    status.style.color = '#c00';
+    btn.disabled = false;
+    btn.textContent = '✦ Run Agent';
+    return;
+  }
 
-Email Structure:
-- Subject line that highlights the property type and location
-- Opening greeting
-- Brief introduction of the opportunity
-- Key property highlights (only include metrics that have values)
-- Call to action inviting the recipient to learn more or schedule a tour
-- Professional sign-off from Richard Reyes, KW Commercial
-
-Tone: Professional, concise, and compelling. Focus on investment potential and key selling points. Do not mention or apologize for any missing information — simply omit those details.`;
+  // Optional: if we loaded a seller/owner contact earlier, personalize greeting
+  const recipient = currentDeal._sellerName
+    ? { name: String(currentDeal._sellerName).split(/\s+/)[0], company: currentDeal._sellerCompany || '' }
+    : {};
 
   try{
-    const res = await fetch('https://api.anthropic.com/v1/messages', {
+    const cfg = getConfig();
+    const res = await fetch(cfg.url + '/functions/v1/crm-email-gen', {
       method:'POST',
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
-        model: 'claude-sonnet-4-20250514',
-        max_tokens: 1000,
-        messages:[{role:'user', content: prompt}]
+        fields,
+        signature: prefs.signature,
+        tone: prefs.tone,
+        extraInstructions: prefs.extra,
+        recipient
       })
     });
     const data = await res.json();
-    const text = data.content?.map(c=>c.text||'').join('') || '';
+    if(data.error){
+      status.innerHTML = '✕ ' + String(data.error).slice(0, 200);
+      status.style.background = '#fff0f0';
+      status.style.color = '#c00';
+      return;
+    }
+    const text = (data.email || '').trim();
     if(text){
       output.value = text;
-      // Auto-save to Airtable
       await saveEmailTemplate(true);
+      status.innerHTML = '✓ Email generated & saved. Edit freely or regenerate.';
+      status.style.background = '#f0fdf4';
+      status.style.color = '#166534';
+      if(data.usage){
+        console.log('email-gen cost: ~$'+((data.usage.input_tokens*3+data.usage.output_tokens*15)/1e6).toFixed(4));
+      }
     } else {
       status.innerHTML = '✕ No response received. Try again.';
       status.style.background = '#fff0f0';
       status.style.color = '#c00';
     }
   }catch(e){
-    status.innerHTML = '✕ Error: '+e.message;
+    status.innerHTML = '✕ Error: '+(e.message||'unknown');
     status.style.background = '#fff0f0';
     status.style.color = '#c00';
   } finally {
     btn.disabled = false;
     btn.textContent = '✦ Run Agent';
-    setTimeout(()=>{ status.style.display='none'; status.style.background='#f0f0ff'; status.style.color='#3a3a99'; }, 4000);
+    setTimeout(()=>{ status.style.display='none'; }, 5000);
   }
 }
 
 async function saveEmailTemplate(silent=false){
-  const cfg = getConfig();
-  if(!cfg.key || !currentDeal?.id) return;
+  // v113.11: removed the cfg.key gate — in Supabase mode, airtableUpdate
+  // routes through _sbPatch and doesn't need the Airtable key. Also normalized
+  // the in-memory cache to a plain string so downstream reads don't have to
+  // handle both shapes.
+  if(!currentDeal?.id) return;
   const text = document.getElementById('emailTemplateText')?.value||'';
   const msg  = document.getElementById('emailSaveMsg');
 
   try{
     await airtableUpdate(currentDeal.id, {'Email Template': text});
-    if(currentDeal) currentDeal['Email Template'] = {state:'generated', value:text};
+    if(currentDeal) currentDeal['Email Template'] = text;
     if(!silent && msg){
       msg.textContent = '✓ Saved!';
       msg.style.display = 'inline';

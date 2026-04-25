@@ -3828,7 +3828,10 @@ async function runBulkGeocode(options){
       const finalAddr = geo.formatted || cleaned;
 
       // Clean county name (Google returns "Morris County" already)
-      const county = geo.county || '';
+      // v113.27: canonicalize against _appLists.counties so we never write
+      // "Monmouth County" when the canonical form is "Monmouth".
+      const countyRaw = geo.county || '';
+      const county = countyRaw ? _canonicalCounty(countyRaw) : '';
 
       try {
         await _sbPatch(SB_TABLES.properties, d.id, {
@@ -5014,7 +5017,9 @@ async function saveDealSnapshot(){
   const noiVal = _dsNum('dsNOI');           if(noiVal !== null) fields['NOI'] = noiVal;
   const unitsVal = _dsNum('dsUnits');       if(unitsVal !== null) fields['No. of Units'] = unitsVal;
   const assetVal = _dsTxt('dsAssetType');   if(assetVal) fields['Simple Text Property Type'] = assetVal;
-  const countyVal = _dsTxt('dsCounty');     if(countyVal) fields['Simple County'] = countyVal;
+  // v113.27: canonicalize on write so manual edits can't reintroduce
+  // duplicates like "Monmouth County" alongside the canonical "Monmouth".
+  const countyVal = _dsTxt('dsCounty');     if(countyVal) fields['Simple County'] = _canonicalCounty(countyVal);
 
   const msg = document.getElementById('dsSaveMsg');
   if(msg){ msg.textContent = '⏳ Saving...'; msg.style.color='#2563eb'; msg.style.opacity='1'; }
@@ -5083,7 +5088,8 @@ async function saveEditAddressModal(){
   if(newAddress) fields['Address'] = newAddress;
   if(propName) fields['Property Name'] = propName;
   if(complex !== undefined) fields['Complex Name'] = complex || null;
-  if(county) fields['Simple County'] = county;
+  // v113.27: canonicalize on write
+  if(county) fields['Simple County'] = _canonicalCounty(county);
   if(muni !== undefined) fields['Municipality'] = muni || null;
 
   msg.style.display='block';
@@ -5145,9 +5151,11 @@ async function saveEditAddressModal(){
               longitude: geo.lng,
             };
             // Only overwrite county if we didn't have one, or if Google found a better one
+            // v113.27: canonicalize against _appLists.counties on write.
             if(geo.county && !currentDeal['Simple County']){
-              update.simple_county = geo.county;
-              currentDeal['Simple County'] = geo.county;
+              const c = _canonicalCounty(geo.county);
+              update.simple_county = c;
+              currentDeal['Simple County'] = c;
             }
             currentDeal['Latitude'] = geo.lat;
             currentDeal['Longitude'] = geo.lng;
@@ -7442,7 +7450,9 @@ function saveBasicInfo(){
   const getNum = id => Number(String(document.getElementById(id)?.value||'').replace(/,/g,''))||0;
 
   const address  = getVal('bi_address');
-  const county   = getVal('bi_county');
+  // v113.27: canonicalize the county input against _appLists.counties so
+  // the basic-info edit form can't reintroduce duplicates.
+  const county   = _canonicalCounty(getVal('bi_county'));
   const region   = getVal('bi_region');
   const type     = getVal('bi_type');
   const stage    = getVal('bi_stage');
@@ -13501,6 +13511,176 @@ async function _appListAddCounty(){
   }
 }
 
+// v113.27: scan deals + buyer_criteria for non-canonical county values,
+// show a preview, then on confirm rewrite each row to its canonical match.
+//
+// Why this exists: county data accumulated over time as "Monmouth",
+// "Monmouth County", and "monmouth" — three rows in the filter dropdown
+// for the same place. The buyer-criteria CSVs have the same problem.
+// _canonicalCounty(input) is the source of truth for "what's the right
+// version" — it consults _appLists.counties.
+//
+// Safety:
+//   • Reads everything first, builds a delta list, shows it in a confirm dialog
+//   • Only writes rows where the new value actually differs
+//   • PATCHes one row at a time so a single failure doesn't poison the rest
+//   • Logs every write to console for an audit trail
+async function _adminNormalizeCounties(){
+  if(!isSupabase()){
+    alert('Supabase required for this operation.');
+    return;
+  }
+  if(!_appLists || !_appLists.counties || !_appLists.counties.length){
+    alert('No canonical counties loaded. Open Settings → App Lists and seed the counties list first.');
+    return;
+  }
+  _appListStatus('Scanning deals + buyer criteria for non-canonical county values…', false);
+
+  // ─── Phase 1: scan deals (ace_properties.simple_county) ─────────
+  // We call _proxyCall directly (rather than _sbGet) so the implicit
+  // "My Deals" agent filter inside _sbGet doesn't accidentally narrow the
+  // scan to just the current user's deals. Settings is admin-level work
+  // and must see every deal in the database.
+  let dealsToFix = [];
+  try{
+    const PAGE = 1000;
+    let off = 0;
+    let totalDeals = 0;
+    while(true){
+      const rows = await _proxyCall({
+        table: SB_TABLES.properties,
+        method: 'GET',
+        select: 'id,simple_county',
+        'simple_county': 'not.is.null',
+        limit: PAGE,
+        offset: off,
+        order: 'id.asc',
+      });
+      if(!rows || !rows.length) break;
+      totalDeals += rows.length;
+      for(const r of rows){
+        const old = String(r.simple_county || '').trim();
+        if(!old) continue;
+        const canonical = _canonicalCounty(old);
+        if(canonical && canonical !== old){
+          dealsToFix.push({ id: r.id, old, canonical });
+        }
+      }
+      if(rows.length < PAGE) break;
+      off += PAGE;
+    }
+    console.log('[v113.27] scanned', totalDeals, 'deals →', dealsToFix.length, 'need normalization');
+  }catch(e){
+    console.error('[v113.27] deal scan failed:', e);
+    _appListStatus('Deal scan failed: ' + (e.message || 'unknown error'), true);
+    return;
+  }
+
+  // ─── Phase 2: scan buyer_criteria (preferred_counties + simple_area_preference) ─
+  let bcToFix = [];
+  try{
+    const rows = await _sbGet(SB_TABLES.buyerCriteria,
+      'select=id,preferred_counties,simple_area_preference');
+    for(const r of rows || []){
+      const oldPC = r.preferred_counties || null;
+      const oldSAP = r.simple_area_preference || null;
+      const newPC = _canonicalCountyCSV(oldPC);
+      const newSAP = _canonicalCountyCSV(oldSAP);
+      const pcChanged = (oldPC || null) !== (newPC || null);
+      const sapChanged = (oldSAP || null) !== (newSAP || null);
+      if(pcChanged || sapChanged){
+        bcToFix.push({
+          id: r.id,
+          oldPC, newPC, pcChanged,
+          oldSAP, newSAP, sapChanged,
+        });
+      }
+    }
+    console.log('[v113.27] scanned', (rows||[]).length, 'buyer criteria →', bcToFix.length, 'need normalization');
+  }catch(e){
+    console.error('[v113.27] buyer criteria scan failed:', e);
+    _appListStatus('Buyer criteria scan failed: ' + (e.message || 'unknown error'), true);
+    return;
+  }
+
+  // ─── Phase 3: build a per-old-name preview tally ──────────────────
+  const dealTally = {};   // "old → canonical": count
+  for(const d of dealsToFix){
+    const k = d.old + ' → ' + d.canonical;
+    dealTally[k] = (dealTally[k] || 0) + 1;
+  }
+  const bcCount = bcToFix.length;
+  const dealCount = dealsToFix.length;
+
+  if(dealCount === 0 && bcCount === 0){
+    _appListStatus('All county data is already canonical. Nothing to fix.', false);
+    alert('All county data is already canonical — nothing to do.');
+    return;
+  }
+
+  // Build the preview message
+  let msg = 'Normalize county data?\n\n';
+  msg += 'DEALS (ace_properties.simple_county): ' + dealCount + ' rows will be rewritten\n';
+  if(dealCount > 0){
+    const lines = Object.entries(dealTally)
+      .sort((a,b) => b[1] - a[1])
+      .slice(0, 20)  // cap preview at 20 distinct mappings
+      .map(([k, n]) => '  • ' + k + '  (' + n + ' deal' + (n>1?'s':'') + ')');
+    msg += lines.join('\n');
+    if(Object.keys(dealTally).length > 20){
+      msg += '\n  …and ' + (Object.keys(dealTally).length - 20) + ' more distinct mappings';
+    }
+  }
+  msg += '\n\nBUYER CRITERIA (preferred_counties + simple_area_preference): ' + bcCount + ' rows will be rewritten';
+  msg += '\n\nThis will PATCH every affected row. Proceed?';
+
+  if(!confirm(msg)){
+    _appListStatus('Cancelled — no rows were changed.', false);
+    return;
+  }
+
+  // ─── Phase 4: apply ──────────────────────────────────────────────
+  _appListStatus('Applying normalization (' + (dealCount + bcCount) + ' rows)…', false);
+  let dealsDone = 0, dealsFailed = 0;
+  let bcDone = 0, bcFailed = 0;
+
+  for(const d of dealsToFix){
+    try{
+      await _sbPatch(SB_TABLES.properties, d.id, { simple_county: d.canonical });
+      dealsDone++;
+    }catch(e){
+      dealsFailed++;
+      console.warn('[v113.27] deal', d.id, 'PATCH failed:', e.message);
+    }
+  }
+  for(const r of bcToFix){
+    const patch = {};
+    if(r.pcChanged)  patch.preferred_counties      = r.newPC;
+    if(r.sapChanged) patch.simple_area_preference  = r.newSAP;
+    try{
+      await _sbPatch(SB_TABLES.buyerCriteria, r.id, patch);
+      bcDone++;
+    }catch(e){
+      bcFailed++;
+      console.warn('[v113.27] bc', r.id, 'PATCH failed:', e.message);
+    }
+  }
+
+  const summary =
+    'Normalization complete.\n\n' +
+    'Deals: ' + dealsDone + ' fixed' + (dealsFailed?', '+dealsFailed+' failed':'') + '\n' +
+    'Buyer criteria: ' + bcDone + ' fixed' + (bcFailed?', '+bcFailed+' failed':'');
+  console.log('[v113.27]', summary.replace(/\n/g, ' | '));
+  _appListStatus(summary, dealsFailed + bcFailed > 0);
+  alert(summary);
+
+  // Reload allDeals so the pipeline filter dropdown reflects the new
+  // canonical names without a hard refresh.
+  if(typeof loadAllDataAndRender === 'function'){
+    try{ await loadAllDataAndRender(); }catch(e){ console.warn('reload failed:', e); }
+  }
+}
+
 // v113.26: state add. Uses optional long-name prompt → metadata.name.
 async function _appListAddState(){
   const inp = document.getElementById('alInputStates');
@@ -18255,6 +18435,66 @@ function _countyRegions(county){
 function _isBadCountyName(county, deal){
   if(deal && deal['Needs County Review'] === true) return true;
   return PIPELINE_BAD_COUNTY_NAMES.has(county || '');
+}
+
+// v113.27: maps any county input to the canonical entry in
+// _appLists.counties. Used both at write-time (so new deals get clean
+// names) and by the migration tool that fixes existing dirty data.
+//
+// Match strategy (each step short-circuits on first hit):
+//   1. exact match in canonical list
+//   2. case-insensitive exact match
+//   3. strip " County" / " Co." suffix from input, then case-insensitive match
+//      against canonical list (also stripped of suffix for comparison)
+//
+// If no match, returns the input trimmed (caller can decide what to do).
+// Returns '' for empty/whitespace input.
+//
+// Examples (with canonical list ['Monmouth','Ocean','Hunterdon']):
+//   _canonicalCounty('Monmouth')        → 'Monmouth'
+//   _canonicalCounty('monmouth')        → 'Monmouth'
+//   _canonicalCounty('Monmouth County') → 'Monmouth'
+//   _canonicalCounty('MONMOUTH CO.')    → 'Monmouth'
+//   _canonicalCounty('  ocean  ')       → 'Ocean'
+//   _canonicalCounty('Random Place')    → 'Random Place'  (unchanged)
+//   _canonicalCounty('')                → ''
+function _canonicalCounty(input){
+  const raw = String(input || '').trim();
+  if(!raw) return '';
+  const list = (_appLists && _appLists.counties) ? _appLists.counties : [];
+  // 1. exact match
+  if(list.indexOf(raw) >= 0) return raw;
+  // 2. case-insensitive exact match
+  const lc = raw.toLowerCase();
+  for(const c of list){
+    if(c.toLowerCase() === lc) return c;
+  }
+  // 3. suffix-stripped match. " County" or " Co." (case-insensitive)
+  const stripSuffix = (s) => String(s||'').replace(/\s+(?:county|co\.)\s*$/i, '').trim();
+  const rawStripped = stripSuffix(raw).toLowerCase();
+  if(rawStripped){
+    for(const c of list){
+      if(stripSuffix(c).toLowerCase() === rawStripped) return c;
+    }
+  }
+  // No canonical match — return input as-is (trimmed) so we don't clobber
+  // legitimately new county names that haven't been added to App Lists yet.
+  return raw;
+}
+
+// v113.27: normalize a CSV string of counties (used for buyer_criteria's
+// preferred_counties / simple_area_preference columns). Returns null when
+// the result is empty so we don't write empty strings.
+function _canonicalCountyCSV(csv){
+  if(!csv) return null;
+  const parts = String(csv).split(',').map(s => _canonicalCounty(s)).filter(Boolean);
+  // Dedupe while preserving order
+  const seen = new Set();
+  const unique = [];
+  for(const p of parts){
+    if(!seen.has(p)){ seen.add(p); unique.push(p); }
+  }
+  return unique.length ? unique.join(', ') : null;
 }
 
 function _stateFromAddress(addr){
@@ -26651,6 +26891,12 @@ function showSettingsPage(){
               <input id="alInputCounties" placeholder="New county name (e.g. Bergen)" onkeydown="if(event.key==='Enter'){event.preventDefault();_appListAddCounty();}" style="flex:1;padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;font-family:inherit;background:#fff;"/>
               <button onclick="_appListAddCounty()" style="background:#0f172a;color:#fff;border:none;padding:7px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">+ Add County</button>
             </div>
+            <!-- v113.27: County data normalization tool -->
+            <div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:6px;padding:10px 12px;margin-bottom:10px;">
+              <div style="font-size:12px;font-weight:700;color:#78350f;margin-bottom:4px;">🔧 Normalize county data across the database</div>
+              <div style="font-size:11px;color:#92400e;line-height:1.5;margin-bottom:8px;">Scans every deal and buyer criteria row, finds county values that don't exactly match the canonical names above (e.g. <i>"monmouth"</i>, <i>"Monmouth County"</i> → <i>"Monmouth"</i>), and rewrites them so all filters/dedupes show one row per county. Shows a preview before applying — no surprise writes.</div>
+              <button onclick="_adminNormalizeCounties()" style="background:#b45309;color:#fff;border:none;padding:7px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">🔧 Scan + Normalize Counties</button>
+            </div>
             <div id="alListCounties" style="max-height:520px;overflow-y:auto;font-size:12px;">Loading…</div>
           </div>
 
@@ -30202,7 +30448,10 @@ async function bcSaveExpanded(recordId, isAuto=false){
   _bcSyncAssets(); _bcSyncCounties(); _bcSyncCities();
   if(typeof _bcSyncStates === 'function') _bcSyncStates();
   sv('Simple Text Desired Property Type', gv('bcf_assets_hidden'));
-  sv('Simple Area Preference',            gv('bcf_counties_hidden'));
+  // v113.27: canonicalize the county CSV against _appLists.counties so saves
+  // from this edit page can't reintroduce duplicates like "Monmouth County".
+  // Falls back to the raw value when _canonicalCountyCSV returns null (empty).
+  sv('Simple Area Preference',            _canonicalCountyCSV(gv('bcf_counties_hidden')) || gv('bcf_counties_hidden'));
   sv('Preferred Cities',                  gv('bcf_cities_hidden'));
   sv('Preferred States',                  gv('bcf_states_hidden'));
 
@@ -36056,10 +36305,13 @@ async function _liSubmitBuyer(){
         fub_assigned_to: agentFub,
         desired_property_types: assetLabels || null,
         preferred_states: (_li.states && _li.states.length) ? _li.states.join(', ') : null,
-        preferred_counties: _li.counties && _li.counties.length ? _li.counties.join(', ') : null,
+        // v113.27: canonicalize each county against _appLists.counties so
+        // we never write "monmouth" or "Monmouth County" — preferred_counties
+        // and simple_area_preference both get the cleaned CSV.
+        preferred_counties: _canonicalCountyCSV(_li.counties && _li.counties.length ? _li.counties.join(', ') : null),
         // v102.15: ALSO write to simple_area_preference for backwards compat
         // with legacy code paths and queries that still read from that column.
-        simple_area_preference: _li.counties && _li.counties.length ? _li.counties.join(', ') : null,
+        simple_area_preference: _canonicalCountyCSV(_li.counties && _li.counties.length ? _li.counties.join(', ') : null),
         // v102.14: Preferred Cities from the NJ municipality autocomplete
         preferred_cities: gv('li_b_cities_hidden') || null,
         location_preferences: gv('li_b_locnotes') || null,
@@ -42734,6 +42986,26 @@ function _dealCommissionAmt(d){
   return ask * (pct / 100);
 }
 
+// v113.27: canonical city extractor for a deal. Prefers the dedicated
+// `City` column (clean values) over parsing the full Address field
+// (which often contains junk like "500 SqFT - 45 Nolans Pt Lake Hopatcong - DK"
+// where the second comma-separated segment is not actually a city).
+// Falls back to address parsing only when no City column value exists.
+function _dealCity(d){
+  if(!d) return '';
+  const direct = String(d['City'] || d['Municipality'] || '').trim();
+  if(direct) return direct;
+  // Fallback: parse "123 Main St, Newark, NJ 07102" → "Newark"
+  const addr = String(d['Address'] || '').trim();
+  if(!addr) return '';
+  const parts = addr.split(',').map(s => s.trim()).filter(Boolean);
+  // Only trust the parse if there are at least 3 segments (street, city, state-zip)
+  // — fewer than that suggests the Address field is malformed and we'd just
+  // be surfacing the same garbage that bug-reported the city filter.
+  if(parts.length < 3) return '';
+  return parts[1] || '';
+}
+
 // Get the unique values present in allDeals for building the filter panel
 function _collectFilterOptions(){
   const assetTypes = new Set();
@@ -42748,10 +43020,11 @@ function _collectFilterOptions(){
     if(region) regions.add(region);
     const county = d['Simple County'];
     if(county) counties.add(county);
-    // Extract city from address: "123 Main St, Newark, NJ 07102" → "Newark"
-    const addr = d['Address'] || '';
-    const parts = addr.split(',').map(s => s.trim());
-    if(parts.length >= 2) cities.add(parts[1]);
+    // v113.27: use the City column first; address parsing is a fallback.
+    // The 3-segment guard inside _dealCity prevents junk addresses from
+    // polluting the filter dropdown with strings like "Hopatcong - TE".
+    const city = _dealCity(d);
+    if(city) cities.add(city);
     // Multi-agent: split pipe-delimited values so the filter panel lists each
     // individual agent, not the joined string.
     _agentList(d['Assigned Agent']).forEach(a => agents.add(a));
@@ -42816,10 +43089,9 @@ function applyPipelineFilters(deals){
       }
       if(!anyMatch) return false;
     }
-    // City
+    // City — v113.27: use _dealCity which prefers the City column
     if(f.cities.length){
-      const parts = (d['Address']||'').split(',').map(s=>s.trim());
-      const city = parts[1] || '';
+      const city = _dealCity(d);
       if(!f.cities.includes(city)) return false;
     }
     // Agent — multi-value: deal passes if ANY selected agent is in its list

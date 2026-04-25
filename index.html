@@ -11868,20 +11868,25 @@ function _emailTplToggleAll(on){
 //   token  — the text users type, including the braces. Case-insensitive match.
 //   label  — human-readable pill label.
 //   resolve — returns the string value for the current deal/contact/agent.
+// Each resolver takes an optional `ctx` object: { contact, agent, deal }.
+// When the contact is provided (from the send-modal recipient picker) we use it;
+// otherwise the pills-preview resolver falls back to a blank contact — we
+// DELIBERATELY don't default to the seller contact, because Send via Gmail
+// must never silently target the owner of the property.
 const EMAIL_TPL_PLACEHOLDERS = [
-  // Contact (from loaded seller contact)
-  { token:'{contact first name}', label:'Contact First Name', resolve:()=>{ const n=currentDeal?._sellerName||''; return String(n).trim().split(/\s+/)[0]||''; } },
-  { token:'{contact last name}',  label:'Contact Last Name',  resolve:()=>{ const n=currentDeal?._sellerName||''; const p=String(n).trim().split(/\s+/); return p.length>1?p.slice(1).join(' '):''; } },
-  { token:'{contact full name}',  label:'Contact Full Name',  resolve:()=>String(currentDeal?._sellerName||'').trim() },
-  { token:'{contact phone}',      label:'Contact Phone',      resolve:()=>String(currentDeal?._sellerPhone||'').trim() },
-  { token:'{contact email}',      label:'Contact Email',      resolve:()=>String(currentDeal?._sellerEmail||'').trim() },
-  { token:'{contact company}',    label:'Contact Company',    resolve:()=>String(currentDeal?._sellerCompany||'').trim() },
+  // Contact (supplied explicitly at send time)
+  { token:'{contact first name}', label:'Contact First Name', resolve:(ctx)=>{ const n=ctx?.contact?.name||''; return String(n).trim().split(/\s+/)[0]||''; } },
+  { token:'{contact last name}',  label:'Contact Last Name',  resolve:(ctx)=>{ const n=ctx?.contact?.name||''; const p=String(n).trim().split(/\s+/); return p.length>1?p.slice(1).join(' '):''; } },
+  { token:'{contact full name}',  label:'Contact Full Name',  resolve:(ctx)=>String(ctx?.contact?.name||'').trim() },
+  { token:'{contact phone}',      label:'Contact Phone',      resolve:(ctx)=>String(ctx?.contact?.phone_number||ctx?.contact?.phone||'').trim() },
+  { token:'{contact email}',      label:'Contact Email',      resolve:(ctx)=>String(ctx?.contact?.email||'').trim() },
+  { token:'{contact company}',    label:'Contact Company',    resolve:(ctx)=>String(ctx?.contact?.company||'').trim() },
   // Agent (the logged-in user)
   { token:'{agent name}',         label:'Agent Name',         resolve:()=>{ return (_currentUser?.fub_name || _currentUser?.name || '').trim(); } },
   { token:'{agent first name}',   label:'Agent First Name',   resolve:()=>{ const n=_currentUser?.fub_name||_currentUser?.name||''; return String(n).trim().split(/\s+/)[0]||''; } },
   { token:'{agent email}',        label:'Agent Email',        resolve:()=>String(_currentUser?.email||'').trim() },
   { token:'{agent phone}',        label:'Agent Phone',        resolve:()=>{ const me=(_currentUser?.fub_name||_currentUser?.name||'').trim().toLowerCase(); const dir=(typeof _companyDirectory!=='undefined'&&Array.isArray(_companyDirectory))?_companyDirectory:[]; const hit=dir.find(a=>String(a.name||'').trim().toLowerCase()===me); return String(hit?.phone||'').trim(); } },
-  // Property
+  // Property (pulled from currentDeal)
   { token:'{property address}',   label:'Property Address',   resolve:()=>String(currentDeal?.['Address']||'').trim() },
   { token:'{property type}',      label:'Property Type',      resolve:()=>String(currentDeal?.['Simple Text Property Type']||currentDeal?.['CRM Asset Classification']||'').trim() },
   { token:'{asking price}',       label:'Asking Price',       resolve:()=>{ const v=currentDeal?.['Pitch Out Price']||currentDeal?.['Asking Price']; return v?'$'+Number(v).toLocaleString():''; } },
@@ -11889,14 +11894,14 @@ const EMAIL_TPL_PLACEHOLDERS = [
 
 // Replace every known placeholder in `text` with its resolved value.
 // Case-insensitive, whitespace inside braces is tolerated ({ agent name } also matches).
-function _emailResolvePlaceholders(text){
+// ctx = { contact: {name, email, phone_number, company, ...}, ... }
+function _emailResolvePlaceholders(text, ctx){
   if(!text) return '';
   let out = String(text);
   EMAIL_TPL_PLACEHOLDERS.forEach(p => {
     const inner = p.token.replace(/^\{|\}$/g, '').trim();
-    // Build a regex that matches { <inner> } with optional surrounding whitespace, case-insensitive
     const re = new RegExp('\\{\\s*' + inner.replace(/[.*+?^${}()|[\]\\]/g,'\\$&') + '\\s*\\}', 'gi');
-    try { out = out.replace(re, p.resolve() || ''); } catch(_e){}
+    try { out = out.replace(re, p.resolve(ctx) || ''); } catch(_e){}
   });
   return out;
 }
@@ -11908,14 +11913,30 @@ function _emailTplRenderPlaceholders(){
   if(!wrap) return;
   const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
   wrap.innerHTML = EMAIL_TPL_PLACEHOLDERS.map(p => {
+    // Render with no contact context — contact tokens will show "(pick recipient)"
+    // as their preview, making it obvious they resolve at send time.
     let preview = '';
-    try { preview = p.resolve() || ''; } catch(_e){}
+    try { preview = p.resolve({ contact: null }) || ''; } catch(_e){}
+    const isContactToken = p.token.startsWith('{contact');
     const hasVal = preview && String(preview).trim() !== '';
-    const tip = hasVal ? esc(String(preview).slice(0,60)) : 'no value on current deal';
+    let tip, hint, swatch;
+    if(isContactToken){
+      tip = 'Resolved at send time from the recipient you pick';
+      hint = '(pick recipient)';
+      swatch = { bg:'#fef3c7', bd:'#fde68a', fg:'#92400e' };
+    } else if(hasVal){
+      tip = esc(String(preview).slice(0,60));
+      hint = null;
+      swatch = { bg:'#fff', bd:'#c7d2fe', fg:'#3730a3' };
+    } else {
+      tip = 'no value on current deal';
+      hint = null;
+      swatch = { bg:'#f8fafc', bd:'#e2e8f0', fg:'#94a3b8' };
+    }
     return `<button type="button" onclick="_emailInsertPlaceholder('${p.token.replace(/'/g,"\\'")}')"
       title="${tip}"
-      style="padding:3px 8px;font-size:11px;border:1px solid #c7d2fe;background:${hasVal?'#fff':'#f8fafc'};color:${hasVal?'#3730a3':'#94a3b8'};border-radius:12px;cursor:pointer;font-family:ui-monospace,Menlo,monospace;">
-      ${esc(p.token)}
+      style="padding:3px 8px;font-size:11px;border:1px solid ${swatch.bd};background:${swatch.bg};color:${swatch.fg};border-radius:12px;cursor:pointer;font-family:ui-monospace,Menlo,monospace;">
+      ${esc(p.token)}${hint?` <span style="font-family:inherit;opacity:0.7;">${hint}</span>`:''}
     </button>`;
   }).join('');
 }
@@ -12090,46 +12111,279 @@ async function deleteCurrentTemplate(){
   }catch(e){ alert('Delete failed: '+e.message); }
 }
 
-// ─── Send via Gmail ──────────────────────────────────────────────────────────
-async function sendEmailViaGmail(){
+// ─── Send via Gmail (modal flow) ─────────────────────────────────────────────
+// IMPORTANT: never auto-send to the property owner/seller. The agent must
+// explicitly pick a recipient from a modal that searches ace_contacts, with
+// the seller contact filtered out of the results.
+
+// Cached recipient for the currently-open send modal
+let _sendModalRecipient = null;       // { id, name, email, phone_number, company, type }
+let _sendModalSearchTimer = null;
+let _sendModalLastQuery = '';
+
+function sendEmailViaGmail(){
   if(!currentDeal?.id){ alert('No deal selected.'); return; }
-  const btn = document.getElementById('emailSendBtn');
   const subject = (document.getElementById('emailTemplateSubject')?.value || '').trim();
   const body    = (document.getElementById('emailTemplateText')?.value    || '').trim();
   if(!subject){ alert('Enter a subject line first.'); return; }
   if(!body){    alert('The email body is empty.'); return; }
-  const to = (currentDeal._sellerEmail || '').trim();
-  if(!to){
-    const typed = (prompt('No contact email on file. Enter recipient email:','') || '').trim();
-    if(!typed) return;
-    currentDeal._sellerEmail = typed;
-  }
-  const resolvedSubject = _emailResolvePlaceholders(subject);
-  const resolvedBody    = _emailResolvePlaceholders(body);
-  // Preview unresolved placeholders (warn if any remain)
-  const unresolved = (resolvedSubject + '\n' + resolvedBody).match(/\{[^{}]{1,60}\}/g);
-  if(unresolved && unresolved.length){
-    if(!confirm('Warning: these placeholders could not be resolved:\n\n'+unresolved.join(', ')+'\n\nSend anyway?')) return;
-  }
-  if(!confirm('Send to ' + (currentDeal._sellerEmail||to) + '?\n\nSubject: ' + resolvedSubject.slice(0,80))) return;
+  _openSendModal({ subject, body });
+}
 
+function _openSendModal({ subject, body }){
+  _sendModalRecipient = null;
+  _sendModalLastQuery = '';
+
+  // Remove any existing modal first
+  document.getElementById('sendEmailModalOverlay')?.remove();
+
+  const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const overlay = document.createElement('div');
+  overlay.id = 'sendEmailModalOverlay';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.55);z-index:9000;display:flex;align-items:flex-start;justify-content:center;padding:30px 20px;overflow-y:auto;';
+  const sellerWarn = currentDeal._sellerContactId
+    ? `<div style="font-size:10px;color:#94a3b8;margin-top:4px;">🚫 The property owner <em>${esc(currentDeal._sellerName||'(unknown)')}</em> is excluded from this search.</div>`
+    : '';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:10px;width:780px;max-width:95vw;display:flex;flex-direction:column;font-family:'Inter',system-ui,sans-serif;box-shadow:0 20px 60px rgba(0,0,0,0.3);overflow:hidden;">
+      <div style="background:linear-gradient(135deg,#1a73e8 0%,#0d47a1 100%);color:#fff;padding:18px 22px;display:flex;align-items:center;gap:14px;">
+        <div style="width:48px;height:48px;border-radius:50%;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:22px;">✉</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:17px;font-weight:700;line-height:1.2;">Send Email via Gmail</div>
+          <div style="font-size:11px;color:#bfdbfe;margin-top:2px;">${esc((currentDeal['Address']||'').slice(0,80))}</div>
+        </div>
+        <button onclick="_closeSendModal()" style="background:rgba(255,255,255,0.1);border:none;color:#fff;cursor:pointer;font-size:18px;width:32px;height:32px;border-radius:6px;">✕</button>
+      </div>
+
+      <div style="padding:20px 22px;background:#fff;max-height:72vh;overflow-y:auto;">
+        <!-- RECIPIENT PICKER -->
+        <div style="margin-bottom:14px;">
+          <label style="font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:5px;">Recipient *</label>
+          <div style="position:relative;">
+            <input id="sendModalSearch" type="text" placeholder="Start typing a contact name or email…" autocomplete="off"
+              oninput="_sendModalSearchContacts(this.value)" onfocus="_sendModalSearchContacts(this.value)"
+              style="width:100%;box-sizing:border-box;padding:9px 12px;font-size:13px;border:1px solid #cbd5e1;border-radius:6px;"/>
+            <div id="sendModalResults" style="position:absolute;top:100%;left:0;right:0;max-height:260px;overflow-y:auto;background:#fff;border:1px solid #e2e8f0;border-radius:6px;box-shadow:0 6px 20px rgba(0,0,0,0.12);z-index:10;display:none;margin-top:2px;"></div>
+          </div>
+          <div id="sendModalSelected" style="display:none;margin-top:8px;padding:10px 12px;background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;font-size:12px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+              <div style="min-width:0;flex:1;">
+                <div style="font-weight:700;color:#0f172a;" id="sendModalSelectedName">—</div>
+                <div style="font-size:10px;color:#64748b;margin-top:2px;" id="sendModalSelectedMeta">—</div>
+              </div>
+              <button onclick="_sendModalClearRecipient()" style="background:transparent;border:1px solid #bfdbfe;color:#1d4ed8;font-size:10px;padding:4px 10px;border-radius:4px;cursor:pointer;">Change</button>
+            </div>
+          </div>
+          ${sellerWarn}
+        </div>
+
+        <!-- SUBJECT (editable) -->
+        <div style="margin-bottom:12px;">
+          <label style="font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:5px;">Subject</label>
+          <input id="sendModalSubject" type="text" value="${esc(subject)}"
+            style="width:100%;box-sizing:border-box;padding:9px 12px;font-size:13px;border:1px solid #cbd5e1;border-radius:6px;"/>
+        </div>
+
+        <!-- BODY PREVIEW -->
+        <div style="margin-bottom:6px;">
+          <div style="display:flex;align-items:center;justify-content:space-between;">
+            <label style="font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.05em;">Body</label>
+            <span id="sendModalResolveHint" style="font-size:10px;color:#94a3b8;">Placeholders will resolve once you pick a recipient</span>
+          </div>
+          <textarea id="sendModalBody" style="width:100%;box-sizing:border-box;min-height:300px;padding:10px 12px;font-size:12px;font-family:Tahoma,Arial,sans-serif;border:1px solid #cbd5e1;border-radius:6px;resize:vertical;line-height:1.5;">${esc(body)}</textarea>
+        </div>
+        <div id="sendModalUnresolved" style="display:none;font-size:11px;color:#b45309;background:#fffbeb;border:1px solid #fcd34d;padding:7px 10px;border-radius:6px;margin-top:6px;"></div>
+      </div>
+
+      <div style="padding:14px 22px;background:#f8fafc;border-top:1px solid #e2e8f0;display:flex;justify-content:flex-end;align-items:center;gap:10px;">
+        <button onclick="_closeSendModal()" style="background:#fff;border:1px solid #cbd5e1;color:#475569;padding:9px 18px;font-size:13px;border-radius:6px;cursor:pointer;font-weight:600;">Cancel</button>
+        <button id="sendModalSendBtn" onclick="_sendModalConfirm()" disabled
+          style="background:#cbd5e1;color:#fff;border:none;padding:9px 22px;font-size:13px;border-radius:6px;cursor:not-allowed;font-weight:700;">
+          ✉ Send
+        </button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  setTimeout(() => document.getElementById('sendModalSearch')?.focus(), 100);
+}
+
+function _closeSendModal(){
+  document.getElementById('sendEmailModalOverlay')?.remove();
+  _sendModalRecipient = null;
+}
+
+async function _sendModalSearchContacts(q){
+  clearTimeout(_sendModalSearchTimer);
+  const box = document.getElementById('sendModalResults');
+  if(!box) return;
+  const query = (q || '').trim();
+  if(query.length < 2){
+    box.style.display = 'none';
+    box.innerHTML = '';
+    return;
+  }
+  _sendModalSearchTimer = setTimeout(async () => {
+    if(query === _sendModalLastQuery) return;
+    _sendModalLastQuery = query;
+    try{
+      // Search name OR email. Exclude the seller contact explicitly.
+      const sellerId = currentDeal?._sellerContactId || '';
+      const orFilter = `or=(name.ilike.*${encodeURIComponent(query)}*,email.ilike.*${encodeURIComponent(query)}*)`;
+      let filter = `${orFilter}&select=id,name,phone_number,email,company,type&limit=25&order=name.asc`;
+      const rows = await _sbGet('ace_contacts', filter);
+      const filtered = (rows || []).filter(r => r.id !== sellerId);
+      _sendModalRenderResults(filtered);
+    }catch(e){
+      console.warn('recipient search failed:', e.message);
+      box.innerHTML = `<div style="padding:12px;font-size:11px;color:#dc2626;">Search failed: ${e.message}</div>`;
+      box.style.display = 'block';
+    }
+  }, 220);
+}
+
+function _sendModalRenderResults(rows){
+  const box = document.getElementById('sendModalResults');
+  if(!box) return;
+  const esc = s => String(s||'').replace(/</g,'&lt;');
+  if(!rows.length){
+    box.innerHTML = '<div style="padding:12px;font-size:11px;color:#94a3b8;">No matching contacts. The property owner is excluded.</div>';
+    box.style.display = 'block';
+    return;
+  }
+  box.innerHTML = rows.map(r => {
+    if(!r.email){
+      // No email = can't send via Gmail. Grey out + explain.
+      return `<div style="padding:10px 12px;border-bottom:1px solid #f1f5f9;font-size:12px;opacity:0.55;cursor:not-allowed;">
+        <div style="font-weight:600;color:#0f172a;">${esc(r.name||'(no name)')}</div>
+        <div style="font-size:10px;color:#dc2626;margin-top:2px;">No email on file — cannot send.</div>
+      </div>`;
+    }
+    const types = Array.isArray(r.type) ? r.type : (r.type ? [r.type] : []);
+    const typeBadge = types.length
+      ? `<span style="display:inline-block;padding:1px 7px;border-radius:99px;font-size:9px;font-weight:700;color:#3730a3;background:#e0e7ff;margin-left:6px;">${esc(types.join(', '))}</span>`
+      : '';
+    const subtitle = [r.email, r.company, r.phone_number].filter(Boolean).join(' · ');
+    const payload = JSON.stringify(r).replace(/'/g,"&#39;");
+    return `
+      <div onclick='_sendModalPickRecipient(${payload})' style="padding:10px 12px;border-bottom:1px solid #f1f5f9;cursor:pointer;font-size:12px;" onmouseover="this.style.background='#eff6ff'" onmouseout="this.style.background='#fff'">
+        <div style="font-weight:600;color:#0f172a;">${esc(r.name||'(no name)')}${typeBadge}</div>
+        ${subtitle ? `<div style="font-size:10px;color:#64748b;margin-top:2px;">${esc(subtitle)}</div>` : ''}
+      </div>`;
+  }).join('');
+  box.style.display = 'block';
+}
+
+function _sendModalPickRecipient(r){
+  if(!r || !r.email) return;
+  _sendModalRecipient = r;
+  const sel   = document.getElementById('sendModalSelected');
+  const name  = document.getElementById('sendModalSelectedName');
+  const meta  = document.getElementById('sendModalSelectedMeta');
+  const box   = document.getElementById('sendModalResults');
+  const input = document.getElementById('sendModalSearch');
+  const btn   = document.getElementById('sendModalSendBtn');
+  if(name) name.textContent = r.name || '(no name)';
+  if(meta) meta.textContent = [r.email, r.company, r.phone_number].filter(Boolean).join(' · ');
+  if(sel)  sel.style.display = 'block';
+  if(box){ box.style.display = 'none'; box.innerHTML = ''; }
+  if(input) input.value = '';
+  if(btn){
+    btn.disabled = false;
+    btn.style.background = 'linear-gradient(180deg,#4285f4,#1a73e8)';
+    btn.style.cursor = 'pointer';
+  }
+  // Re-render body preview with placeholders resolved against this contact
+  _sendModalRefreshPreview();
+}
+
+function _sendModalClearRecipient(){
+  _sendModalRecipient = null;
+  const sel = document.getElementById('sendModalSelected');
+  const btn = document.getElementById('sendModalSendBtn');
+  if(sel) sel.style.display = 'none';
+  if(btn){
+    btn.disabled = true;
+    btn.style.background = '#cbd5e1';
+    btn.style.cursor = 'not-allowed';
+  }
+  _sendModalRefreshPreview();
+}
+
+// When a recipient is picked, show the user what the email will actually look
+// like with placeholders swapped in. We mutate the preview textarea non-
+// destructively — the user can still edit it before sending.
+function _sendModalRefreshPreview(){
+  const hint = document.getElementById('sendModalResolveHint');
+  const warn = document.getElementById('sendModalUnresolved');
+  if(!_sendModalRecipient){
+    if(hint) hint.textContent = 'Placeholders will resolve once you pick a recipient';
+    if(warn) warn.style.display = 'none';
+    return;
+  }
+  if(hint) hint.textContent = 'Preview: placeholders resolved against the selected recipient (edit freely)';
+  const subjEl = document.getElementById('sendModalSubject');
+  const bodyEl = document.getElementById('sendModalBody');
+  if(subjEl) subjEl.value = _emailResolvePlaceholders(subjEl.value, { contact: _sendModalRecipient });
+  if(bodyEl) bodyEl.value = _emailResolvePlaceholders(bodyEl.value, { contact: _sendModalRecipient });
+  // Warn if any placeholder leftover
+  const leftover = ((subjEl?.value||'') + '\n' + (bodyEl?.value||'')).match(/\{[^{}]{1,60}\}/g);
+  if(warn){
+    if(leftover && leftover.length){
+      const uniq = Array.from(new Set(leftover));
+      warn.textContent = '⚠ Unresolved placeholders: ' + uniq.join(', ');
+      warn.style.display = 'block';
+    } else {
+      warn.style.display = 'none';
+    }
+  }
+}
+
+async function _sendModalConfirm(){
+  if(!_sendModalRecipient?.email){ alert('Pick a recipient first.'); return; }
+  const subject = (document.getElementById('sendModalSubject')?.value || '').trim();
+  const body    = (document.getElementById('sendModalBody')?.value    || '').trim();
+  if(!subject){ alert('Subject is empty.'); return; }
+  if(!body){    alert('Body is empty.'); return; }
+
+  // Safety net: never send to the seller contact
+  if(currentDeal?._sellerContactId && _sendModalRecipient.id === currentDeal._sellerContactId){
+    alert('Blocked: that contact is the property owner. Pick a different recipient.');
+    return;
+  }
+  // Extra safety: if the recipient email matches the seller email, block.
+  if(currentDeal?._sellerEmail && _sendModalRecipient.email
+     && _sendModalRecipient.email.trim().toLowerCase() === String(currentDeal._sellerEmail).trim().toLowerCase()){
+    alert('Blocked: that email matches the property owner on file.');
+    return;
+  }
+
+  const btn = document.getElementById('sendModalSendBtn');
   if(btn){ btn.disabled = true; btn.textContent = '⏳ Sending…'; }
+
+  // Final pass — resolve any placeholder the user didn't manually resolve yet
+  const resolvedSubject = _emailResolvePlaceholders(subject, { contact: _sendModalRecipient });
+  const resolvedBody    = _emailResolvePlaceholders(body,    { contact: _sendModalRecipient });
+
   try{
     const result = await _gmailSend({
-      to: currentDeal._sellerEmail || to,
+      to: _sendModalRecipient.email,
       subject: resolvedSubject,
       body: resolvedBody,
       dealId: currentDeal.id
     });
     if(result.sent){
-      showSaveConfirm('✓ Email sent via Gmail');
+      showSaveConfirm('✓ Email sent to ' + _sendModalRecipient.name);
+      _closeSendModal();
     } else if(result.fallback){
-      showSaveConfirm('✎ Opened Gmail compose window (connect Gmail for 1-click send)');
+      showSaveConfirm('✎ Opened Gmail compose (connect Gmail in sidebar for 1-click send)');
+      _closeSendModal();
     } else if(result.error){
       alert('Send failed: '+result.error);
+      if(btn){ btn.disabled = false; btn.textContent = '✉ Send'; }
     }
-  } finally {
-    if(btn){ btn.disabled = false; btn.textContent = '✉ Send via Gmail'; }
+  }catch(e){
+    alert('Send failed: '+(e.message||'unknown'));
+    if(btn){ btn.disabled = false; btn.textContent = '✉ Send'; }
   }
 }
 

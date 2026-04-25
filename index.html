@@ -36370,6 +36370,69 @@ async function deleteTaskRecord(taskId, source){
 // since ace_tasks has no sort_order column — order is device-local.
 let _tasksSectionFilter  = 'all';   // 'all' | 'overdue' | 'today' | 'future'
 let _tasksPriorityFilter = 'all';   // 'all' | 'Top' | 'High' | 'Medium' | 'Low' | 'None'
+// v113.22: new tab + view state for the Tasks page rebuild.
+//   _taskTabFilter: which top-level tab is active.
+//   _taskAssignedToOthersAgentFilter: on the "Assigned to Others" tab, which
+//      assignee to show (specific user_id or 'all').
+//   _taskAssignedToOthersSortBy: sort key for that tab only.
+let _taskTabFilter                  = 'all';  // 'all'|'deal'|'buyer'|'contact'|'admin'|'assigned_to_others'
+let _taskAssignedToOthersAgentFilter = 'all'; // user_id or 'all'
+let _taskAssignedToOthersSortBy     = 'priority'; // 'priority'|'due_date'|'assigned_at'
+// v113.22: in-memory cache of ace_users for quick assignee-name resolution.
+// Populated lazily on first Tasks-page render; refreshed every 5 minutes.
+let _usersCache = [];
+let _usersCacheAt = 0;
+async function _ensureUsersCache(){
+  if(_usersCache.length && (Date.now() - _usersCacheAt) < 300000) return _usersCache;
+  try {
+    const rows = await _sbGet('ace_users', 'select=id,name,email,initials,role,is_active&order=name.asc');
+    _usersCache = Array.isArray(rows) ? rows : [];
+    _usersCacheAt = Date.now();
+  } catch(_e){ /* keep stale cache */ }
+  return _usersCache;
+}
+function _userById(id){
+  if(!id) return null;
+  return _usersCache.find(u => u.id === id) || null;
+}
+function _userName(id, fallback){
+  const u = _userById(id);
+  return (u && u.name) || fallback || 'Unknown';
+}
+function _userInitials(id){
+  const u = _userById(id);
+  if(u && u.initials) return u.initials;
+  const name = (u && u.name) || '';
+  return name.split(/\s+/).map(s=>s[0]).filter(Boolean).slice(0,2).join('').toUpperCase() || '?';
+}
+// v113.22: stable hue derived from a user id — gives every agent the same
+// avatar/chip color across the app without needing a color column in the DB.
+function _userColor(id){
+  if(!id) return '#64748b';
+  let h=0; for(let i=0;i<id.length;i++) h = (h*31 + id.charCodeAt(i)) >>> 0;
+  const hue = h % 360;
+  return `hsl(${hue}, 55%, 45%)`;
+}
+function _userAvatarHtml(id, title){
+  const bg = _userColor(id);
+  const initials = _userInitials(id);
+  const t = (title || _userName(id,'')).replace(/"/g,'&quot;');
+  return `<span title="${t}" style="display:inline-flex;align-items:center;justify-content:center;width:18px;height:18px;border-radius:50%;background:${bg};color:#fff;font-size:9px;font-weight:700;flex-shrink:0;">${initials}</span>`;
+}
+// v113.22: short relative-time formatter ("3d ago", "2h ago", "now").
+// Used on cross-assigned task chips: "from Sarah · 3d ago".
+function _relTime(iso){
+  if(!iso) return '';
+  const t = new Date(iso).getTime();
+  if(!isFinite(t)) return '';
+  const s = Math.max(1, Math.floor((Date.now() - t)/1000));
+  if(s < 60)        return s + 's ago';
+  if(s < 3600)      return Math.floor(s/60) + 'm ago';
+  if(s < 86400)     return Math.floor(s/3600) + 'h ago';
+  if(s < 86400*30)  return Math.floor(s/86400) + 'd ago';
+  if(s < 86400*365) return Math.floor(s/(86400*30)) + 'mo ago';
+  return Math.floor(s/(86400*365)) + 'y ago';
+}
 
 function _tasksPrioTier(priority){
   const p = (priority || '').trim();
@@ -36388,29 +36451,32 @@ const _TASKS_PRIO_META = {
   None:   { label:'— No Priority',    color:'var(--text3)', bg:'var(--bg)', border:'var(--border)' }
 };
 
-function _tasksOrderKey(section, prio){
-  const uid = (_currentUser && _currentUser.id) || 'anon';
-  return `ace_tasks_order_${uid}_${section}_${prio}`;
-}
-function _tasksGetOrder(section, prio){
-  try { const v = _store.get(_tasksOrderKey(section,prio)); return v ? (JSON.parse(v)||[]) : []; }
-  catch(e){ return []; }
-}
-function _tasksSaveOrder(section, prio, ids){
-  try { _store.set(_tasksOrderKey(section,prio), JSON.stringify(ids)); } catch(e){}
-}
-function _tasksApplyOrder(section, prio, tasks){
-  const order = _tasksGetOrder(section, prio);
-  if(!order.length) return tasks;
-  const pos = new Map(order.map((id,i)=>[id,i]));
-  return [...tasks].sort((a,b)=>{
-    const ai = pos.has(a.id) ? pos.get(a.id) : Infinity;
-    const bi = pos.has(b.id) ? pos.get(b.id) : Infinity;
-    if(ai === Infinity && bi === Infinity) return 0;
-    return ai - bi;
-  });
-}
+// v113.22: localStorage-based task ordering removed — sort_order now lives
+// in ace_tasks so every agent sees the same order on every device. The
+// rule going forward: only views/preferences are local; data of record
+// (including drag order) is in the DB. See _tasksPersistOrder below for
+// the writer and the order=sort_order.asc clause in _renderGlobalTasks
+// for the reader.
+//
+// One-time sweep to purge any old per-user order keys that were left in
+// localStorage from earlier versions. Idempotent and silent on failure.
+(function _purgeLegacyTaskOrderKeys(){
+  try {
+    if(typeof localStorage === 'undefined') return;
+    const stale = [];
+    for(let i = 0; i < localStorage.length; i++){
+      const k = localStorage.key(i);
+      if(typeof k === 'string' && k.indexOf('ace_tasks_order_') === 0) stale.push(k);
+    }
+    stale.forEach(k => { try { localStorage.removeItem(k); } catch(_e){} });
+  } catch(_e){ /* localStorage unavailable — nothing to purge */ }
+})();
 
+// v113.22: drag-to-reorder now persists sort_order to the DB. Every agent
+// sees the same order on every device. We compute a new contiguous
+// sort_order range for the visible bucket and PATCH each row whose order
+// actually changed. The drag may cross priority tiers but not sections
+// (overdue/today/future) — matching the prior UX.
 let _tasksDragState = null;   // { taskId, section, prio }
 function _tasksDragStart(ev, taskId, section, prio){
   _tasksDragState = { taskId, section, prio };
@@ -36432,7 +36498,7 @@ function _tasksDragOver(ev){
   target.classList.add('task-drop-over');
 }
 function _tasksDragLeave(ev){ ev.currentTarget.classList.remove('task-drop-over'); }
-function _tasksDrop(ev){
+async function _tasksDrop(ev){
   if(!_tasksDragState) return;
   const target  = ev.currentTarget;
   const section = target.getAttribute('data-section');
@@ -36452,95 +36518,316 @@ function _tasksDrop(ev){
   if(fromIdx < 0 || toIdx < 0) return;
   currentIds.splice(fromIdx, 1);
   currentIds.splice(toIdx, 0, dragId);
-  _tasksSaveOrder(section, prio, currentIds);
+  await _tasksPersistOrder(currentIds);
   _renderGlobalTasks();
+}
+
+// v113.22: write the new order to the DB. We issue one PATCH per row in the
+// bucket, assigning sort_order = i+1 within the bucket, but OFFSET by 1000
+// so the whole Overdue bucket comes before Today which comes before Future,
+// naturally. To keep math simple across tabs and avoid collisions between
+// buckets, we instead assign a globally-unique descending range starting
+// from Date.now()*10 + i. Since sort_order is an integer, this still
+// orders correctly and we sort ASC in queries. The new scheme:
+//   1. Read the current max sort_order for this assignee
+//   2. Assign base..base+n-1 to the bucket in the new order
+// This keeps every other bucket's rows unchanged.
+async function _tasksPersistOrder(idsInOrder){
+  if(!idsInOrder?.length) return;
+  // Figure out the owner by looking at the first row. (Every row in a
+  // drag-reorder bucket has the same assignee since we're viewing that
+  // user's list.) Query once, patch in parallel.
+  try {
+    const first = await _sbGet(SB_TABLES.tasks, `id=eq.${idsInOrder[0]}&select=assigned_to_user_id`);
+    const ownerId = Array.isArray(first) && first[0] && first[0].assigned_to_user_id;
+    if(!ownerId) return;
+    // Pick a stable base — use the current minimum sort_order in the bucket
+    // so we stay near the existing values (avoids drifting to huge numbers).
+    const rows = await _sbGet(SB_TABLES.tasks, `id=in.(${idsInOrder.join(',')})&select=id,sort_order`);
+    const existing = new Map((rows||[]).map(r => [r.id, Number(r.sort_order)||0]));
+    const sorted = [...existing.values()].sort((a,b)=>a-b);
+    const base = sorted.length ? sorted[0] : 1;
+    // Space entries by 1 starting from base.
+    await Promise.all(idsInOrder.map((id,i) =>
+      _sbPatch(SB_TABLES.tasks, id, { sort_order: base + i })
+    ));
+  } catch(e){
+    console.warn('[v113.22] reorder persist failed:', e.message);
+  }
 }
 
 function _tasksSetSectionFilter(v){ _tasksSectionFilter = v; _renderGlobalTasks(); }
 function _tasksSetPriorityFilter(v){ _tasksPriorityFilter = v; _renderGlobalTasks(); }
+// v113.22: primary tab setter. Each tab scopes the query differently:
+//   all/deal/buyer/contact/admin → assigned_to_user_id = me, type filter
+//   assigned_to_others           → assigned_by_user_id = me (see fetch)
+function _tasksSetTabFilter(v){ _taskTabFilter = v; _renderGlobalTasks(); }
+function _tasksSetAssignedToOthersAgent(v){ _taskAssignedToOthersAgentFilter = v; _renderGlobalTasks(); }
+function _tasksSetAssignedToOthersSort(v){ _taskAssignedToOthersSortBy = v; _renderGlobalTasks(); }
 
 async function showTasksPage(){
   const main=document.getElementById('mainArea');
+  // Lazy-load the user directory so assignee chips resolve on first render
+  await _ensureUsersCache();
   main.innerHTML=`
-    <div style="background:var(--surface);border-bottom:1px solid var(--border);padding:11px 18px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;position:sticky;top:0;z-index:20;">
-      <div>
-        <div style="font-size:15px;font-weight:600;">☑ All Tasks</div>
-        <div style="font-size:11px;color:var(--text2);">All deal tasks + general tasks</div>
+    <div style="background:var(--surface);border-bottom:1px solid var(--border);position:sticky;top:0;z-index:20;">
+      <div style="padding:11px 18px;display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
+        <div>
+          <div style="font-size:15px;font-weight:600;">☑ Tasks</div>
+          <div style="font-size:11px;color:var(--text2);">Your queue + tasks you've assigned to the team</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center;">
+          <select id="taskGlobalFilter" onchange="_renderGlobalTasks()" style="font-size:12px;padding:5px 8px;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--text);">
+            <option value="pending">Pending</option>
+            <option value="all">All Tasks</option>
+            <option value="done">Completed</option>
+          </select>
+          <button onclick="openCreateTaskModal(null,'','global')" style="background:#7c3aed;color:#fff;border:none;padding:7px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">+ Create Task</button>
+        </div>
       </div>
-      <div style="display:flex;gap:8px;align-items:center;">
-        <select id="taskGlobalFilter" onchange="_renderGlobalTasks()" style="font-size:12px;padding:5px 8px;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--text);">
-          <option value="pending">Pending</option>
-          <option value="all">All Tasks</option>
-          <option value="done">Completed</option>
-        </select>
-        <button onclick="openCreateTaskModal(null,'','global')" style="background:#7c3aed;color:#fff;border:none;padding:7px 16px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">+ Create Task</button>
-      </div>
+      <div id="taskTabsBar" style="padding:0 18px 2px 18px;display:flex;gap:2px;border-top:1px solid var(--border);overflow-x:auto;"></div>
     </div>
-    <div id="allTasksContent" style="max-width:860px;margin:0 auto;padding:20px 18px;">
+    <div id="allTasksContent" style="max-width:960px;margin:0 auto;padding:20px 18px;">
       <div style="text-align:center;padding:40px;color:var(--text3);font-size:12px;"><div class="spinner" style="margin:0 auto 8px;"></div>Loading tasks...</div>
     </div>`;
   await _renderGlobalTasks();
 }
 
+// v113.22: paint the primary tab bar. Counts are passed in so we only do
+// one DB sweep per render (see _renderGlobalTasks) rather than one query
+// per tab.
+function _tasksPaintTabBar(countsByTab){
+  const bar = document.getElementById('taskTabsBar');
+  if(!bar) return;
+  const TABS = [
+    { k:'all',                 label:'All',           icon:'☑' },
+    { k:'deal',                label:'Deal',          icon:'📍' },
+    { k:'buyer',               label:'Buyer',         icon:'💼' },
+    { k:'contact',             label:'Contact',       icon:'👤' },
+    { k:'admin',               label:'Admin',         icon:'⚙' },
+    { k:'assigned_to_others',  label:'Assigned to Others', icon:'➜' },
+  ];
+  bar.innerHTML = TABS.map(t => {
+    const active = t.k === _taskTabFilter;
+    const count = countsByTab[t.k];
+    const countHtml = (typeof count === 'number')
+      ? `<span style="background:${active?'rgba(255,255,255,0.25)':'var(--bg)'};color:${active?'#fff':'var(--text3)'};border-radius:99px;padding:1px 7px;font-size:10px;font-weight:700;margin-left:6px;">${count}</span>` : '';
+    return `<button onclick="_tasksSetTabFilter('${t.k}')" style="
+      background:${active?'#7c3aed':'transparent'};
+      color:${active?'#fff':'var(--text2)'};
+      border:none;
+      border-bottom:2px solid ${active?'#7c3aed':'transparent'};
+      padding:9px 16px;
+      font-size:12px;font-weight:600;
+      cursor:pointer;
+      white-space:nowrap;
+      display:flex;align-items:center;gap:4px;
+    ">${t.icon} ${t.label}${countHtml}</button>`;
+  }).join('');
+}
+
+// v113.22: full rewrite — tab-aware, DB-backed sort_order, multi-agent
+// awareness. Two scoped fetches (my queue + tasks I assigned out) feed the
+// entire page so every tab + count + queue position derives from the same
+// in-memory snapshot. No per-tab round-trips.
 async function _renderGlobalTasks(){
   const el=document.getElementById('allTasksContent'); if(!el) return;
   const cfg=getConfig();
-  if(!cfg.key&&!isSupabase()){ el.innerHTML=`<div style="padding:24px;text-align:center;color:var(--text3);">Connect your database in Settings to view tasks.</div>`; return; }
+  if(!isSupabase()){
+    el.innerHTML = `<div style="padding:24px;text-align:center;color:var(--text3);">The multi-agent task system requires the Supabase backend. Connect it in Settings to continue.</div>`;
+    _tasksPaintTabBar({});
+    return;
+  }
+  if(!cfg.key && !isSupabase()){
+    el.innerHTML=`<div style="padding:24px;text-align:center;color:var(--text3);">Connect your database in Settings to view tasks.</div>`;
+    return;
+  }
+  const userId = _currentUser && _currentUser.id;
+  if(!userId){
+    el.innerHTML = `<div style="padding:24px;text-align:center;color:var(--text3);">Sign in to see your tasks.</div>`;
+    _tasksPaintTabBar({});
+    return;
+  }
   const filterVal=document.getElementById('taskGlobalFilter')?.value||'pending';
-  try{
-    let tasks=[];
-    if(isSupabase()){
-      // Every user sees only their own tasks — no admin "view all" toggle.
-      const userId = _currentUser && _currentUser.id;
-      if(!userId){
-        el.innerHTML = `<div style="padding:24px;text-align:center;color:var(--text3);">Sign in to see your tasks.</div>`;
-        return;
-      }
-      let params = `select=*&created_by_user_id=eq.${userId}&order=due_date.asc.nullslast`;
-      if(filterVal==='pending') params+='&status=neq.Done';
-      if(filterVal==='done')    params+='&status=eq.Done';
-      const rows=await _sbGet(SB_TABLES.tasks, params);
-      tasks=(rows||[]).map(r=>({id:r.id,'Task':r.task,'Status':r.status,'Priority':r.priority,'Due Date':r.due_date,'Notes':r.notes,'Related Property':r.property_id?[r.property_id]:[],'_contact_id':r.contact_id||null}));
+  const statusClause = filterVal==='pending' ? '&status=neq.Done'
+                    : filterVal==='done'    ? '&status=eq.Done' : '';
 
-      // v113.5: resolve contact names for any task linked to a contact.
-      // allContacts may be unloaded (heavy 5900-row list) so we fetch just
-      // the ids we need in one PostgREST call.
-      const contactIds = [...new Set(tasks.map(t=>t._contact_id).filter(Boolean))];
-      const contactNameById = new Map();
-      if(contactIds.length){
-        // Warm-cache first
-        (allContacts||[]).forEach(c => {
-          if(contactIds.includes(c.id)) contactNameById.set(c.id, (c.fields && c.fields.Name) || '');
-        });
-        const missing = contactIds.filter(id => !contactNameById.has(id));
-        if(missing.length){
-          try {
-            const list = missing.map(id => 'id.eq.' + id).join(',');
-            const cRows = await _sbGet(SB_TABLES.contacts, 'or=(' + list + ')&select=id,name');
-            (cRows||[]).forEach(r => contactNameById.set(r.id, r.name || ''));
-          } catch(e){ console.warn('Task contact-name lookup failed:', e.message); }
-        }
-      }
-      tasks.forEach(t => { if(t._contact_id) t._contact_name = contactNameById.get(t._contact_id) || 'Contact'; });
+  try {
+    await _ensureUsersCache();
+
+    // Two scoped fetches — one for the agent's own queue, one for the tasks
+    // they've handed to teammates. Counts + queue-position calculations all
+    // come from these in-memory results so nothing else round-trips per tab.
+    const orderClause = '&order=sort_order.asc.nullslast,due_date.asc.nullslast';
+    const myQueueParams      = `select=*&assigned_to_user_id=eq.${userId}${statusClause}${orderClause}`;
+    const assignedOutParams  = `select=*&assigned_by_user_id=eq.${userId}&assigned_to_user_id=neq.${userId}${statusClause}${orderClause}`;
+    const [myRows, outRows] = await Promise.all([
+      _sbGet(SB_TABLES.tasks, myQueueParams),
+      _sbGet(SB_TABLES.tasks, assignedOutParams),
+    ]);
+    const my  = Array.isArray(myRows)  ? myRows  : [];
+    const out = Array.isArray(outRows) ? outRows : [];
+
+    // Per-tab counts in a single in-memory pass.
+    const counts = {
+      all:                 my.length,
+      deal:                my.filter(r => (r.task_type||'admin')==='deal').length,
+      buyer:               my.filter(r => (r.task_type||'admin')==='buyer').length,
+      contact:             my.filter(r => (r.task_type||'admin')==='contact').length,
+      admin:               my.filter(r => !r.task_type || r.task_type==='admin').length,
+      assigned_to_others:  out.length,
+    };
+    _tasksPaintTabBar(counts);
+
+    // Pick the visible row set for the active tab.
+    let raw;
+    const isAssignedToOthersTab = (_taskTabFilter === 'assigned_to_others');
+    if(isAssignedToOthersTab){
+      raw = out;
+    } else if(_taskTabFilter === 'all'){
+      raw = my;
     } else {
-      const res=await fetch(`https://api.airtable.com/v0/${cfg.base}/${TASKS_TABLE_ID}?maxRecords=300`,{headers:{Authorization:`Bearer ${cfg.key}`}});
-      if(!res.ok) throw new Error(await res.text());
-      tasks=(await res.json()).records?.map(r=>({id:r.id,...r.fields}))||[];
-      if(filterVal==='pending') tasks=tasks.filter(t=>t['Status']!=='Done');
-      if(filterVal==='done')    tasks=tasks.filter(t=>t['Status']==='Done');
+      raw = my.filter(r => (r.task_type || 'admin') === _taskTabFilter);
     }
 
+    // Assigned-to-Others-only toolbar: per-agent filter + sort selector.
+    let extraToolbar = '';
+    if(isAssignedToOthersTab){
+      const agentIds = [...new Set(out.map(r => r.assigned_to_user_id).filter(Boolean))];
+      const agentOpts = agentIds.map(id => {
+        const nm = _userName(id, 'Agent');
+        return `<option value="${id}" ${_taskAssignedToOthersAgentFilter===id?'selected':''}>${nm.replace(/</g,'&lt;')}</option>`;
+      }).join('');
+      extraToolbar = `
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;font-size:12px;">
+          <label style="color:var(--text3);font-weight:600;">Agent:</label>
+          <select onchange="_tasksSetAssignedToOthersAgent(this.value)" style="font-size:12px;padding:5px 8px;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--text);">
+            <option value="all" ${_taskAssignedToOthersAgentFilter==='all'?'selected':''}>All Agents</option>
+            ${agentOpts}
+          </select>
+          <label style="color:var(--text3);font-weight:600;margin-left:8px;">Sort:</label>
+          <select onchange="_tasksSetAssignedToOthersSort(this.value)" style="font-size:12px;padding:5px 8px;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--text);">
+            <option value="priority"     ${_taskAssignedToOthersSortBy==='priority'    ?'selected':''}>Priority</option>
+            <option value="due_date"     ${_taskAssignedToOthersSortBy==='due_date'    ?'selected':''}>Due Date</option>
+            <option value="assigned_at"  ${_taskAssignedToOthersSortBy==='assigned_at' ?'selected':''}>When Assigned</option>
+          </select>
+        </div>`;
+      if(_taskAssignedToOthersAgentFilter !== 'all'){
+        raw = raw.filter(r => r.assigned_to_user_id === _taskAssignedToOthersAgentFilter);
+      }
+      const prioRank = p => ({Top:0,High:1,Medium:2,Low:3,None:4})[_tasksPrioTier(p)];
+      raw = [...raw].sort((a,b) => {
+        if(_taskAssignedToOthersSortBy === 'priority'){
+          const r = prioRank(a.priority) - prioRank(b.priority);
+          if(r) return r;
+          return (a.due_date||'9999-12-31').localeCompare(b.due_date||'9999-12-31');
+        }
+        if(_taskAssignedToOthersSortBy === 'due_date'){
+          return (a.due_date||'9999-12-31').localeCompare(b.due_date||'9999-12-31');
+        }
+        // 'assigned_at' — most recently handed-off first
+        return (b.assigned_at||'').localeCompare(a.assigned_at||'');
+      });
+    }
+
+    // Map rows → display objects (preserve the legacy field names so the
+    // existing renderer code below stays untouched).
+    const tasks = raw.map(r => ({
+      id: r.id,
+      'Task': r.task,
+      'Status': r.status,
+      'Priority': r.priority,
+      'Due Date': r.due_date,
+      'Notes': r.notes,
+      'Related Property': r.property_id ? [r.property_id] : [],
+      _contact_id: r.contact_id || null,
+      _buyer_crit_id: r.buyer_criteria_id || null,
+      _task_type: r.task_type || 'admin',
+      _assigned_to: r.assigned_to_user_id || null,
+      _assigned_by: r.assigned_by_user_id || null,
+      _assigned_at: r.assigned_at || null,
+      _sort_order: r.sort_order || 0,
+      _overdue_plan: r.overdue_plan || null,
+    }));
+
+    // Resolve contact names (warm-cache + bulk fetch for the rest).
+    const contactIds = [...new Set(tasks.map(t => t._contact_id).filter(Boolean))];
+    const contactNameById = new Map();
+    if(contactIds.length){
+      (allContacts||[]).forEach(c => {
+        if(contactIds.includes(c.id)) contactNameById.set(c.id, (c.fields && c.fields.Name) || '');
+      });
+      const missing = contactIds.filter(id => !contactNameById.has(id));
+      if(missing.length){
+        try {
+          const list = missing.map(id => 'id.eq.' + id).join(',');
+          const cRows = await _sbGet(SB_TABLES.contacts, 'or=(' + list + ')&select=id,name');
+          (cRows||[]).forEach(r => contactNameById.set(r.id, r.name || ''));
+        } catch(e){ console.warn('Task contact-name lookup failed:', e.message); }
+      }
+    }
+    tasks.forEach(t => { if(t._contact_id) t._contact_name = contactNameById.get(t._contact_id) || 'Contact'; });
+
+    // Resolve buyer-criteria labels for chips (uses desired_property_types
+    // since ace_buyer_criteria has no single "name" column).
+    const bcIds = [...new Set(tasks.map(t => t._buyer_crit_id).filter(Boolean))];
+    const bcLabelById = new Map();
+    if(bcIds.length){
+      try {
+        const list = bcIds.map(id => 'id.eq.' + id).join(',');
+        const bRows = await _sbGet(SB_TABLES.buyerCriteria,
+          'or=(' + list + ')&select=id,desired_property_types,contact_id,ace_contacts(name)');
+        (bRows||[]).forEach(r => {
+          const cn = r.ace_contacts && r.ace_contacts.name;
+          const pt = r.desired_property_types;
+          const lbl = cn ? `${cn}${pt?' · '+pt:''}` : (pt || 'Buyer Criteria');
+          bcLabelById.set(r.id, lbl);
+        });
+      } catch(e){ console.warn('Task buyer-criteria lookup failed:', e.message); }
+    }
+    tasks.forEach(t => { if(t._buyer_crit_id) t._buyer_crit_label = bcLabelById.get(t._buyer_crit_id) || 'Buyer Criteria'; });
+
+    // Queue-position lookup — only on the Assigned-to-Others tab.
+    // Pulls every pending task for each assignee in one OR query, then
+    // maps each visible row to its index in that assignee's queue.
+    const queuePos = new Map();
+    if(isAssignedToOthersTab && tasks.length){
+      const assigneeIds = [...new Set(tasks.map(t => t._assigned_to).filter(Boolean))];
+      if(assigneeIds.length){
+        try {
+          const orList = assigneeIds.map(id => 'assigned_to_user_id.eq.' + id).join(',');
+          const queueRows = await _sbGet(SB_TABLES.tasks,
+            `select=id,assigned_to_user_id,sort_order,status&or=(${orList})&status=neq.Done&order=sort_order.asc.nullslast`);
+          const byAssignee = new Map();
+          (queueRows||[]).forEach(r => {
+            if(!byAssignee.has(r.assigned_to_user_id)) byAssignee.set(r.assigned_to_user_id, []);
+            byAssignee.get(r.assigned_to_user_id).push(r.id);
+          });
+          tasks.forEach(t => {
+            const list = byAssignee.get(t._assigned_to) || [];
+            const idx = list.indexOf(t.id);
+            if(idx >= 0) queuePos.set(t.id, { pos: idx + 1, total: list.length });
+          });
+        } catch(e){ console.warn('Queue position lookup failed:', e.message); }
+      }
+    }
+
+    // Empty state — render the toolbar so the user can still switch agents.
     if(!tasks.length){
-      el.innerHTML=`<div style="text-align:center;padding:48px;color:var(--text3);">
+      el.innerHTML = extraToolbar + `<div style="text-align:center;padding:48px;color:var(--text3);">
         <div style="font-size:40px;margin-bottom:10px;">☑</div>
-        <div style="font-size:14px;font-weight:600;margin-bottom:6px;">${filterVal==='done'?'No completed tasks yet':'All clear — no pending tasks!'}</div>
-        <div style="font-size:12px;margin-bottom:16px;">Create tasks to track follow-ups, deadlines, and action items across all your deals.</div>
-        <button onclick="openCreateTaskModal(null,'','global')" style="background:#7c3aed;color:#fff;border:none;padding:9px 22px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">+ Create First Task</button>
+        <div style="font-size:14px;font-weight:600;margin-bottom:6px;">${
+          isAssignedToOthersTab ? "You haven't assigned any tasks to other agents yet."
+          : filterVal==='done' ? 'No completed tasks yet'
+          : 'All clear — no pending tasks in this tab!'
+        }</div>
+        <div style="font-size:12px;margin-bottom:16px;">Create tasks to track follow-ups, deadlines, and action items.</div>
+        <button onclick="openCreateTaskModal(null,'','global')" style="background:#7c3aed;color:#fff;border:none;padding:9px 22px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">+ Create Task</button>
       </div>`;
       return;
     }
 
-    // Bucket by section (overdue/today/future/nodate/done)
+    // Bucket by section (overdue/today/future/nodate/done).
     const today = new Date(); today.setHours(0,0,0,0);
     const sections = {
       overdue: { key:'overdue', label:'Overdue',       color:'#dc2626',       tasks:[] },
@@ -36558,7 +36845,8 @@ async function _renderGlobalTasks(){
       else               sections.future.tasks.push(t);
     });
 
-    // ── Filter chip row (section + priority) ──
+    // Section + priority chip rows (skip on Assigned-to-Others — that tab
+    // owns its own toolbar/sort).
     const sectionChipOpts = [
       { k:'all',     label:'All' },
       { k:'overdue', label:`Overdue (${sections.overdue.tasks.length})` },
@@ -36574,7 +36862,7 @@ async function _renderGlobalTasks(){
       { k:'None',   label:'— No Priority' },
     ];
     const chip = (active, label, onclick) => `<button onclick="${onclick}" style="background:${active?'#7c3aed':'var(--surface)'};color:${active?'#fff':'var(--text2)'};border:1px solid ${active?'#7c3aed':'var(--border)'};border-radius:99px;padding:5px 11px;font-size:11px;font-weight:600;cursor:pointer;margin-right:6px;margin-bottom:6px;">${label}</button>`;
-    const filtersHtml = `
+    const filtersHtml = isAssignedToOthersTab ? '' : `
       <div style="margin-bottom:14px;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px;flex-wrap:wrap;">
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);min-width:62px;">Section</div>
@@ -36586,22 +36874,10 @@ async function _renderGlobalTasks(){
         </div>
       </div>`;
 
-    if(!tasks.length){
-      el.innerHTML = filtersHtml + `<div style="text-align:center;padding:48px;color:var(--text3);">
-        <div style="font-size:40px;margin-bottom:10px;">☑</div>
-        <div style="font-size:14px;font-weight:600;margin-bottom:6px;">${filterVal==='done'?'No completed tasks yet':'All clear — no pending tasks!'}</div>
-        <div style="font-size:12px;margin-bottom:16px;">Create tasks to track follow-ups, deadlines, and action items across all your deals.</div>
-        <button onclick="openCreateTaskModal(null,'','global')" style="background:#7c3aed;color:#fff;border:none;padding:9px 22px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">+ Create First Task</button>
-      </div>`;
-      return;
-    }
-
     // Which sections to render.
     //   - sectionFilter='all': show any section that has tasks, but hide
-    //     'done' when the top-level Pending/All/Done select is on 'pending'
-    //     (redundant — done tasks are filtered out at the query level anyway).
-    //   - sectionFilter ∈ {overdue,today,future}: show only that one; hide
-    //     nodate & done.
+    //     'done' when the top-level Pending/All/Done select is on 'pending'.
+    //   - sectionFilter ∈ {overdue,today,future}: show only that one.
     const sectionOrder = ['overdue','today','future','nodate','done'];
     const visibleSections = sectionOrder.filter(k => {
       if(!sections[k].tasks.length) return false;
@@ -36612,8 +36888,14 @@ async function _renderGlobalTasks(){
       return k === _tasksSectionFilter;
     });
 
-    // Row renderer — wires drag-and-drop only for buckets where reorder makes
-    // sense (overdue/today/future). nodate & done are non-draggable.
+    // Row renderer.
+    //   - canDrag is only true on My-Queue tabs (drag reorders the user's
+    //     own list; cross-assigned rows on the Others tab belong to
+    //     another agent so we don't let the assigner shuffle them).
+    //   - The "from <Agent>" chip surfaces only on rows handed to me by
+    //     somebody else.
+    //   - The assignee avatar + queue-position badge surface only on the
+    //     Assigned-to-Others tab.
     const row = (t, section, prioTier) => {
       const isDone = t['Status']==='Done', due = _fmtTaskDue(t['Due Date']);
       const prio = t['Priority']
@@ -36627,10 +36909,32 @@ async function _renderGlobalTasks(){
       const contactChip = t._contact_id
         ? `<span onclick="event.stopPropagation();showContactDetailPage('${t._contact_id}')" style="cursor:pointer;background:#fef3c7;color:#b45309;border:1px solid #fde68a;border-radius:4px;padding:2px 7px;font-size:10px;font-weight:500;white-space:nowrap;max-width:220px;overflow:hidden;text-overflow:ellipsis;display:inline-block;" title="${String(t._contact_name||'Contact').replace(/"/g,'&quot;')}">👤 ${String(t._contact_name||'Contact').replace(/</g,'&lt;')}</span>`
         : '';
-      const generalChip = (!linkedDeal && !t._contact_id)
-        ? `<span style="background:var(--bg);color:var(--text3);border-radius:4px;padding:2px 7px;font-size:10px;">General</span>`
+      const buyerChip = t._buyer_crit_id
+        ? `<span style="background:#dbeafe;color:#1e40af;border:1px solid #93c5fd;border-radius:4px;padding:2px 7px;font-size:10px;font-weight:500;white-space:nowrap;max-width:240px;overflow:hidden;text-overflow:ellipsis;display:inline-block;" title="${String(t._buyer_crit_label||'Buyer Criteria').replace(/"/g,'&quot;')}">💼 ${String(t._buyer_crit_label||'Buyer Criteria').replace(/</g,'&lt;')}</span>`
         : '';
-      const canDrag = (section==='overdue' || section==='today' || section==='future');
+      const generalChip = (!linkedDeal && !t._contact_id && !t._buyer_crit_id)
+        ? `<span style="background:var(--bg);color:var(--text3);border-radius:4px;padding:2px 7px;font-size:10px;text-transform:capitalize;">${t._task_type||'admin'}</span>`
+        : '';
+      const fromChip = (!isAssignedToOthersTab && t._assigned_by && t._assigned_by !== userId)
+        ? `<span style="display:inline-flex;align-items:center;gap:4px;background:#f5f3ff;color:#6d28d9;border:1px solid #ddd6fe;border-radius:4px;padding:2px 7px;font-size:10px;font-weight:500;">
+              ${_userAvatarHtml(t._assigned_by, 'Assigned by '+_userName(t._assigned_by,''))}
+              <span>from ${(_userName(t._assigned_by,'Agent').split(/\s+/)[0]||'Agent').replace(/</g,'&lt;')}${t._assigned_at?' · '+_relTime(t._assigned_at):''}</span>
+           </span>`
+        : '';
+      const toChip = (isAssignedToOthersTab && t._assigned_to)
+        ? `<span style="display:inline-flex;align-items:center;gap:4px;background:#ecfdf5;color:#047857;border:1px solid #a7f3d0;border-radius:4px;padding:2px 7px;font-size:10px;font-weight:500;">
+              ${_userAvatarHtml(t._assigned_to, _userName(t._assigned_to,''))}
+              <span>${(_userName(t._assigned_to,'Agent').split(/\s+/)[0]||'Agent').replace(/</g,'&lt;')}</span>
+           </span>`
+        : '';
+      const qp = queuePos.get(t.id);
+      const queueChip = (isAssignedToOthersTab && qp)
+        ? `<span title="Position in their queue" style="background:#1f2937;color:#fff;border-radius:99px;padding:2px 7px;font-size:10px;font-weight:700;">#${qp.pos} of ${qp.total}</span>`
+        : '';
+      const planChip = (t._overdue_plan)
+        ? `<span title="Plan: ${(t._overdue_plan||'').replace(/"/g,'&quot;')}" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:4px;padding:2px 7px;font-size:10px;font-weight:500;">📝 plan</span>`
+        : '';
+      const canDrag = !isAssignedToOthersTab && (section==='overdue' || section==='today' || section==='future');
       const dragHandle = canDrag
         ? `<div title="Drag to reorder" style="cursor:grab;color:var(--text3);font-size:14px;padding:2px 4px;line-height:1;flex-shrink:0;user-select:none;letter-spacing:-2px;">⋮⋮</div>`
         : '';
@@ -36641,21 +36945,29 @@ async function _renderGlobalTasks(){
            ondragover="_tasksDragOver(event)"
            ondragleave="_tasksDragLeave(event)"
            ondrop="_tasksDrop(event)"`
-        : '';
+        : `data-task-id="${t.id}"`;
       return `<div ${dragAttrs} style="background:var(--surface);border:1px solid ${due.overdue&&!isDone?'#fca5a5':'var(--border)'};border-radius:var(--radius-sm);padding:11px 14px;margin-bottom:7px;display:flex;align-items:flex-start;gap:10px;${isDone?'opacity:0.55;':''}">
         ${dragHandle}
-        <input type="checkbox" ${isDone?'checked':''} onchange="toggleTaskDone('${t.id}','${t['Status']}','global')" style="width:16px;height:16px;margin-top:2px;cursor:pointer;flex-shrink:0;accent-color:#7c3aed;">
+        <input type="checkbox" ${isDone?'checked':''} ${isAssignedToOthersTab?'disabled':''} onchange="toggleTaskDone('${t.id}','${t['Status']}','global')" style="width:16px;height:16px;margin-top:2px;cursor:${isAssignedToOthersTab?'not-allowed':'pointer'};flex-shrink:0;accent-color:#7c3aed;">
         <div style="flex:1;min-width:0;">
           <div style="font-size:13px;font-weight:600;${isDone?'text-decoration:line-through;':''}margin-bottom:4px;">${t['Task']||'Untitled'}</div>
           ${t['Notes']?`<div style="font-size:12px;color:var(--text2);margin-bottom:5px;">${t['Notes']}</div>`:''}
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">${prio}${dealChip}${contactChip}${generalChip}<span style="font-size:11px;color:${due.color};font-weight:500;">${due.text}</span></div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">${prio}${dealChip}${contactChip}${buyerChip}${generalChip}<span style="font-size:11px;color:${due.color};font-weight:500;">${due.text}</span>${fromChip}${toChip}${queueChip}${planChip}</div>
         </div>
-        <button onclick="openEditTaskModal('${t.id}','${(t['Task']||'').replace(/'/g,"\\'")}','${(t['Priority']||'').trim()}','${t['Due Date']||''}','${(t['Notes']||'').replace(/'/g,"\\'").replace(/\n/g,' ')}','global')" title="Edit" style="background:none;border:none;color:var(--text3);font-size:14px;cursor:pointer;padding:0 4px;flex-shrink:0;" onmouseover="this.style.color='#7c3aed'" onmouseout="this.style.color='var(--text3)'">✏️</button>
-        <button onclick="deleteTaskRecord('${t.id}','global')" title="Delete" style="background:none;border:none;color:var(--text3);font-size:16px;cursor:pointer;padding:0 4px;flex-shrink:0;" onmouseover="this.style.color='#dc2626'" onmouseout="this.style.color='var(--text3)'">✕</button>
+        ${isAssignedToOthersTab ? '' : `<button onclick="openEditTaskModal('${t.id}','${(t['Task']||'').replace(/'/g,"\\'")}','${(t['Priority']||'').trim()}','${t['Due Date']||''}','${(t['Notes']||'').replace(/'/g,"\\'").replace(/\n/g,' ')}','global')" title="Edit" style="background:none;border:none;color:var(--text3);font-size:14px;cursor:pointer;padding:0 4px;flex-shrink:0;" onmouseover="this.style.color='#7c3aed'" onmouseout="this.style.color='var(--text3)'">✏️</button>`}
+        ${isAssignedToOthersTab ? '' : `<button onclick="deleteTaskRecord('${t.id}','global')" title="Delete" style="background:none;border:none;color:var(--text3);font-size:16px;cursor:pointer;padding:0 4px;flex-shrink:0;" onmouseover="this.style.color='#dc2626'" onmouseout="this.style.color='var(--text3)'">✕</button>`}
       </div>`;
     };
 
-    // Render each visible section, sub-grouped by priority tier.
+    // The Assigned-to-Others tab uses the user's chosen sort directly — flat
+    // list, no section/priority sub-grouping (the assignee owns those).
+    if(isAssignedToOthersTab){
+      const flatHtml = tasks.map(t => row(t, 'flat', 'flat')).join('');
+      el.innerHTML = extraToolbar + (flatHtml || `<div style="padding:32px;text-align:center;color:var(--text3);font-size:12px;">No tasks match the current filters.</div>`);
+      return;
+    }
+
+    // My-Queue tabs: section → priority sub-groups, DB-sort-order preserved.
     const bodyHtml = visibleSections.map(secKey => {
       const sec = sections[secKey];
       const byPrio = { Top:[], High:[], Medium:[], Low:[], None:[] };
@@ -36667,12 +36979,14 @@ async function _renderGlobalTasks(){
       });
       const visibleCount = tiersToShow.reduce((n,p)=>n+byPrio[p].length, 0);
 
-      // When a priority filter is active and nothing in this section matches, skip the section entirely.
       if(!tiersToShow.length && _tasksPriorityFilter !== 'all') return '';
 
       const subHtml = tiersToShow.map(p => {
         const meta = _TASKS_PRIO_META[p];
-        const ordered = _tasksApplyOrder(secKey, p, byPrio[p]);
+        // v113.22: order is already DB-sorted (sort_order ASC) by the query —
+        // no localStorage shuffle. Within a priority tier, the API order is
+        // preserved.
+        const ordered = byPrio[p];
         return `<div style="margin-left:16px;margin-bottom:12px;">
           <div style="display:flex;align-items:center;gap:6px;margin-bottom:6px;">
             <span style="background:${meta.bg};color:${meta.color};border:1px solid ${meta.border};padding:2px 9px;border-radius:99px;font-size:10px;font-weight:700;white-space:nowrap;">${meta.label}</span>
@@ -36695,7 +37009,7 @@ async function _renderGlobalTasks(){
     }).filter(Boolean).join('');
 
     el.innerHTML = filtersHtml + (bodyHtml || `<div style="padding:32px;text-align:center;color:var(--text3);font-size:12px;">No tasks match the current filters.</div>`);
-  }catch(e){
+  } catch(e){
     el.innerHTML = `<div style="padding:16px;color:#dc2626;font-size:12px;">Failed to load tasks: ${e.message}</div>`;
   }
 }

@@ -20455,6 +20455,78 @@ let _contactsHasMore = false;
 let _contactsLoadedCount = 0;
 let _contactsLoadMoreInFlight = false;
 
+// v113.30: Lazy-load contacts on demand from anywhere in the app. Pages
+// that depend on `allContacts` (Buyer Activity table, pitch contact picker,
+// deal contact lookups, etc.) historically only worked after the user
+// visited the global Contacts page first. This helper backs them up by
+// pulling the full contact set the first time it's needed.
+//
+// Idempotent: skips the fetch when the cache was loaded < 5 minutes ago,
+// and de-dupes concurrent calls via the in-flight promise. Errors are
+// swallowed (logged) — callers are expected to render gracefully when
+// allContacts is empty.
+let _ensureContactsInFlight = null;
+async function _ensureAllContactsLoaded(opts){
+  const force = !!(opts && opts.force);
+  const fiveMin = 5 * 60 * 1000;
+  if(!force && Array.isArray(allContacts) && allContacts.length
+     && (Date.now() - _contactsLastLoadMs) < fiveMin){
+    return allContacts;
+  }
+  if(_ensureContactsInFlight) return _ensureContactsInFlight;
+  if(typeof isSupabase !== 'function' || !isSupabase()) return allContacts;
+  _ensureContactsInFlight = (async () => {
+    try {
+      let cRows = [], cFrom = 0;
+      while(true){
+        const batch = await _sbGet(SB_TABLES.contacts,
+          'select=*&deleted_at=is.null&order=name.asc&limit=1000&offset=' + cFrom);
+        if(!batch || !batch.length) break;
+        cRows = cRows.concat(batch);
+        if(batch.length < 1000) break;
+        cFrom += 1000;
+      }
+      // Match the shape used by showContactsPage / sidebar refresh: top-level
+      // `id` plus `fields.{Name, Email, 'Phone Number', Company, Type, ...}`.
+      allContacts = cRows.map(r => ({
+        id: r.id,
+        fields: {
+          Name: r.name, 'Phone Number': r.phone_number,
+          'Secondary Phone Number': r.secondary_phone,
+          Email: r.email, Company: r.company,
+          'Contact Notes': r.contact_notes,
+          Type: r.type, 'Date Added': r.date_added,
+          'Import Source': r.import_source || null,
+          _fubContactId: r.fub_contact_id || null,
+        },
+      }));
+      _contactsLastLoadMs = Date.now();
+    } catch(e){
+      console.warn('[v113.30] _ensureAllContactsLoaded failed:', e && e.message);
+    } finally {
+      _ensureContactsInFlight = null;
+    }
+    return allContacts;
+  })();
+  return _ensureContactsInFlight;
+}
+
+// v113.30: Read a contact's display fields regardless of which shape is
+// used in the cache. `allContacts` items are wrapped as {id, fields:{...}}
+// (legacy Airtable layout) but some code paths set top-level keys, and
+// some store snake_case from the raw Supabase row. This unifies the read.
+function _contactDisplay(c){
+  if(!c) return { name:'', email:'', phone:'', company:'', type:'' };
+  const f = c.fields || {};
+  return {
+    name:    String(f.Name || c['Name'] || c.name || '').trim(),
+    email:   String(f.Email || c['Email'] || c.email || '').trim(),
+    phone:   String(f['Phone Number'] || c['Phone Number'] || c.phone_number || '').trim(),
+    company: String(f.Company || c['Company'] || c.company || '').trim(),
+    type:    String(f.Type || c['Type'] || c.type || '').toString(),
+  };
+}
+
 async function showContactsPage(){
   // Default scope: My Deals → mine, All Deals → all. User can override.
   // Only auto-set on fresh navigation to the page (not on re-renders triggered
@@ -23753,11 +23825,22 @@ function _renderPitchesList(contactId){
       const addr = deal ? (deal['Address'] || '(no address)') : '(deal not in current view)';
       const agent = deal ? (deal['Assigned Agent'] || '') : '';
       const price = deal && deal['Asking Price'] ? fmt$(deal['Asking Price']) : '';
+      // v113.30: "Open deal →" button — only render when deal is in cache.
+      // event.stopPropagation prevents the parent card's edit-pitch handler from firing.
+      const openDealBtn = (deal && p.deal_id)
+        ? `<button type="button"
+             onclick="event.stopPropagation(); openDealSnapshot('${p.deal_id}');"
+             title="Open this deal"
+             style="background:#2563eb;color:#fff;border:none;padding:3px 10px;border-radius:6px;font-size:10px;font-weight:700;cursor:pointer;white-space:nowrap;"
+             onmouseover="this.style.background='#1d4ed8';"
+             onmouseout="this.style.background='#2563eb';">Open deal →</button>`
+        : '';
       addressHtml = `
         <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
           <span style="background:#dbeafe;color:#1e40af;border:1px solid #93c5fd;padding:2px 10px;border-radius:99px;font-size:10px;font-weight:700;">IN-SYSTEM</span>
           <span style="font-size:14px;font-weight:700;color:#0f172a;">${addr.replace(/</g,'&lt;')}</span>
           ${price ? `<span style="font-size:12px;color:#166534;font-weight:700;">${price}</span>` : ''}
+          ${openDealBtn}
         </div>`;
       metaHtml = agent ? `<span>Agent: <strong>${agent.replace(/</g,'&lt;')}</strong></span>` : '';
     } else {
@@ -23813,6 +23896,9 @@ let _pitchFromDealId = null; // the deal we're logging against
 
 function openPitchModal(contactId, pitchId){
   if(!contactId) return;
+  // v113.30: ensure allContacts is warm — the deal picker doesn't need it,
+  // but openPitchModal is also reused by other flows that read allContacts.
+  if(typeof _ensureAllContactsLoaded === 'function') _ensureAllContactsLoaded();
   _pitchTargetContactId = contactId;
   _pitchEditingId = pitchId || null;
   _pitchMode = 'onsystem';
@@ -23994,6 +24080,9 @@ function _pitchClearDealSearch(){
 // ═══════════════════════════════════════════════════════════════════════
 function openPitchModalForDeal(dealId, pitchId){
   if(!dealId) return;
+  // v113.30: contact picker depends on `allContacts` — lazy-load before the
+  // user starts typing so the search isn't a dead box on cold cache.
+  if(typeof _ensureAllContactsLoaded === 'function') _ensureAllContactsLoaded();
   _pitchFromDeal = true;
   _pitchFromDealId = dealId;
   _pitchEditingId = pitchId || null;
@@ -24133,26 +24222,45 @@ function _pitchBuyerSearchInput(){
     .filter(c => {
       // v109.1: search all contacts (Buyers, Sellers, Other) — not just Buyers
       if(c.deleted_at) return false;
-      const name = String(c['Name'] || c.name || '').toLowerCase();
-      const co = String(c['Company'] || c.company || '').toLowerCase();
-      const ph = String(c['Phone Number'] || c.phone_number || '').toLowerCase();
-      const em = String(c['Email'] || c.email || '').toLowerCase();
+      // v113.30: unified read across cache shapes (top-level vs c.fields).
+      const d = (typeof _contactDisplay === 'function') ? _contactDisplay(c)
+        : { name:String(c['Name']||c.name||''), company:String(c['Company']||c.company||''),
+            phone:String(c['Phone Number']||c.phone_number||''), email:String(c['Email']||c.email||'') };
+      const name = d.name.toLowerCase();
+      const co   = d.company.toLowerCase();
+      const ph   = d.phone.toLowerCase();
+      const em   = d.email.toLowerCase();
       return name.includes(q) || co.includes(q) || ph.includes(q) || em.includes(q);
     })
     .slice(0, 15);
 
   if(matches.length === 0){
-    results.innerHTML = '<div style="padding:10px 12px;font-size:11px;color:#94a3b8;font-style:italic;">No contacts match. Try a different search.</div>';
+    // v113.30: kick a contacts load if cache is empty so the next keystroke works.
+    if((allContacts||[]).length === 0 && typeof _ensureAllContactsLoaded === 'function'){
+      _ensureAllContactsLoaded().then(() => {
+        // Re-run the filter once contacts arrive
+        if(document.getElementById('pitchBuyerSearch')?.value === document.getElementById('pitchBuyerSearch')?.value){
+          _pitchBuyerSearchInput();
+        }
+      });
+      results.innerHTML = '<div style="padding:10px 12px;font-size:11px;color:#94a3b8;font-style:italic;">Loading contacts…</div>';
+    } else {
+      results.innerHTML = '<div style="padding:10px 12px;font-size:11px;color:#94a3b8;font-style:italic;">No contacts match. Try a different search.</div>';
+    }
     results.style.display = 'block';
     return;
   }
   results.innerHTML = matches.map(c => {
-    const name = String(c['Name'] || c.name || 'Unknown').replace(/</g,'&lt;');
-    const co = String(c['Company'] || c.company || '').replace(/</g,'&lt;');
-    const ph = String(c['Phone Number'] || c.phone_number || '').replace(/</g,'&lt;');
-    const em = String(c['Email'] || c.email || '').replace(/</g,'&lt;');
+    const d = (typeof _contactDisplay === 'function') ? _contactDisplay(c)
+      : { name:String(c['Name']||c.name||'Unknown'), company:String(c['Company']||c.company||''),
+          phone:String(c['Phone Number']||c.phone_number||''), email:String(c['Email']||c.email||''),
+          type:String(c['Type']||c.type||'') };
+    const name = (d.name || 'Unknown').replace(/</g,'&lt;');
+    const co = d.company.replace(/</g,'&lt;');
+    const ph = d.phone.replace(/</g,'&lt;');
+    const em = d.email.replace(/</g,'&lt;');
     // Type badge — show so the user can tell buyers from sellers at a glance
-    const rawType = String(c['Type'] || c.type || '').trim();
+    const rawType = (d.type || '').trim();
     const tLc = rawType.toLowerCase();
     let badge = '';
     if(tLc.includes('buyer')){
@@ -25161,6 +25269,12 @@ async function loadDealPitches(dealId){
     const rows = await _sbGet(SB_TABLES.buyerPitches,
       `deal_id=eq.${dealId}&deleted_at=is.null&select=*&order=pitch_date.desc.nullslast,created_at.desc&limit=200`);
     _dealPitches = rows || [];
+    // v113.30: Buyer Activity needs contact names. If the user hasn't visited
+    // the Contacts page yet, allContacts is empty and the table renders every
+    // row as "(contact removed)". Lazy-load before rendering.
+    if(typeof _ensureAllContactsLoaded === 'function'){
+      await _ensureAllContactsLoaded();
+    }
     _renderDealPitches(dealId);
   } catch(e) {
     listEl.innerHTML = '<div style="padding:14px;color:#dc2626;font-size:12px;">Error loading pitches: '+e.message+'</div>';
@@ -25209,7 +25323,10 @@ function _renderDealPitches(dealId){
       <tbody>
         ${pitches.map((p, i) => {
           const c = (allContacts || []).find(x => x.id === p.contact_id);
-          const name = c ? (c['Name'] || c.name || 'Unknown') : '(contact removed)';
+          // v113.30: contacts in `allContacts` are wrapped as {id, fields:{Name,...}}.
+          // Use _contactDisplay so the name resolves regardless of cache shape.
+          const disp = c ? _contactDisplay(c) : null;
+          const name = disp ? (disp.name || 'Unknown') : '(contact removed)';
           const react = reactMeta[p.reaction] || { lbl: (p.reaction || '—'), color:'#64748b', bg:'#f1f5f9' };
           const ch = p.pitch_channel ? (channelIcon[p.pitch_channel] || '·') + ' ' + p.pitch_channel : '—';
           const notes = (p.notes || '').slice(0, 80);

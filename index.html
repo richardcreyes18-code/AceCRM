@@ -12005,7 +12005,7 @@ function _renderTemplatePicker(){
 }
 
 async function loadSavedTemplate(id){
-  if(!id){ _currentTemplateId = null; return; }
+  if(!id){ _currentTemplateId = null; _renderTemplatePicker?.(); return; }
   const t = _emailTemplates.find(x => x.id === id);
   if(!t) return;
   _currentTemplateId = id;
@@ -12024,8 +12024,10 @@ async function loadSavedTemplate(id){
     });
     _emailTplSavePrefs();
   }
-  // Also save to the current deal so reopening the deal shows it
-  await saveEmailTemplate(true);
+  // v113.16: DO NOT auto-save to the current deal. Picking a template fills
+  // the UI only — the user must explicitly click Save to persist the body to
+  // this deal. This prevents cross-deal template leakage where opening a deal
+  // would overwrite it with the official template content.
   _renderTemplatePicker();
 }
 
@@ -12431,13 +12433,13 @@ async function loadAICommTab(recordId){
     if(typeof _emailBindFocus === 'function') _emailBindFocus();
     if(typeof _loadUserTemplatesList === 'function'){
       await _loadUserTemplatesList();
-      // If the deal has no saved body yet, auto-load the user's official template
-      if(!templateVal){
-        const official = _emailTemplates.find(t => t.is_official);
-        if(official && !document.getElementById('emailTemplateText')?.value){
-          await loadSavedTemplate(official.id);
-        }
-      }
+      // v113.16: Do NOT auto-load the official template into the deal. The
+      // template picker dropdown shows the user which templates are available;
+      // selecting one fills the UI but requires an explicit Save to persist
+      // to the deal. This prevents the same template body leaking into every
+      // deal that has no draft yet.
+      _currentTemplateId = null;
+      if(typeof _renderTemplatePicker === 'function') _renderTemplatePicker();
     }
   }catch(e){}
 }

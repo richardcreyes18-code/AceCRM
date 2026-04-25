@@ -2842,10 +2842,14 @@ async function syncData(){
           records.push(deal);
         });
       };
+      // v113.33: Stable tiebreak (id.asc) on the parallel page order. Without
+      // it, rows that share created_at can leak into multiple pages, leaving
+      // allDeals with duplicate ids — the dedupe modal then renders the same
+      // row 2-3× per group. Cheap fix; aligns with the server-side scripts.
       const pages = await Promise.all(
         Array.from({length: MAX_PARALLEL_PAGES}, (_, i) =>
           _sbGet(SB_TABLES.properties,
-            `select=*&order=created_at.desc&limit=${batchSize}&offset=${i*batchSize}${agentFilter}`)
+            `select=*&order=created_at.desc,id.asc&limit=${batchSize}&offset=${i*batchSize}${agentFilter}`)
           .catch(e => { console.warn('deal page '+i+' failed:', e.message); return []; })
         )
       );
@@ -2857,7 +2861,7 @@ async function syncData(){
       if(pages[MAX_PARALLEL_PAGES - 1] && pages[MAX_PARALLEL_PAGES - 1].length === batchSize){
         while(true){
           const rows = await _sbGet(SB_TABLES.properties,
-            `select=*&order=created_at.desc&limit=${batchSize}&offset=${from}${agentFilter}`);
+            `select=*&order=created_at.desc,id.asc&limit=${batchSize}&offset=${from}${agentFilter}`);
           if(!rows || !rows.length) break;
           mapRows(rows);
           if(rows.length < batchSize) break;
@@ -19885,9 +19889,31 @@ function _ddDealKey(d){
   return '';
 }
 
+// Snapshot of allDeals deduped by id. The in-memory cache can hold the same
+// id multiple times after server-side merges or tab-sync events (the bulk
+// Path A run, for example, soft-deleted rows that the local cache still
+// shows as un-archived). Defensive dedup here keeps the modal from
+// rendering the same row 2-3 times in a single group.
+function _ddUniqueDeals(){
+  const seen = new Set();
+  const out = [];
+  let dupCount = 0;
+  (allDeals||[]).forEach(d => {
+    if(!d || !d.id) return;
+    if(seen.has(d.id)) { dupCount++; return; }
+    seen.add(d.id);
+    out.push(d);
+  });
+  if(dupCount && !window._ddDupWarned){
+    console.warn(`[dedupe] allDeals had ${dupCount} duplicate id${dupCount===1?'':'s'} — using deduped snapshot.`);
+    window._ddDupWarned = true;
+  }
+  return out;
+}
+
 function _ddScanDealDuplicates(){
   const groups = {};
-  (allDeals||[]).forEach(d => {
+  _ddUniqueDeals().forEach(d => {
     if(d['Is Archived']) return;
     const key = _ddDealKey(d);
     if(!key) return;
@@ -19910,7 +19936,7 @@ function _ddScanDealDuplicates(){
 // style it as a review section (no auto-merge button at the section level).
 function _ddScanFuzzyDuplicates(){
   const byKey = new Map();
-  (allDeals||[]).forEach(d => {
+  _ddUniqueDeals().forEach(d => {
     if(d['Is Archived']) return;
     const k = _ddDealKey(d);
     if(!k) return;

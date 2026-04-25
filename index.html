@@ -3773,6 +3773,10 @@ async function googleGeocodeAddress(addr){
       city: comp('locality') || comp('sublocality') || comp('neighborhood') || '',
       state: compShort('administrative_area_level_1') || '',
       zip: comp('postal_code') || '',
+      // v113.43: surface Google's confidence flags so callers can decide
+      // whether to trust the canonical formatted_address.
+      partial_match: r.partial_match === true,
+      location_type: (r.geometry && r.geometry.location_type) || null,
     };
   } catch(e) {
     return { ok:false, error:e.message||'FETCH_FAILED' };
@@ -19932,13 +19936,21 @@ function _ddBestAddressFromGroup(deals){
   const score = a => {
     if(!a) return -1;
     let s = 0;
-    if(/\b\d{5}\b/.test(a))             s += 150;  // has a 5-digit zip
-    if(/,\s*USA\s*$/i.test(a))          s += 50;   // ends with ", USA"
-    if(/,\s*[A-Z]{2}\s+\d{5}/.test(a))  s += 30;   // "NJ 07601" state-zip pattern
+    // v113.43: structural rules first, quality bonuses second.
+    // Canonical addresses always start with the street number.
+    if(/^\s*\d/.test(a)) s += 500;
+    // Penalize deal-name junk prefixes: "WH - 1100 Route 22", "MF- 169 Reid",
+    // "L- 234 E 28th St", "Gas stations - 401 Terril Rd", "5U - 111 Maple",
+    // etc. Pattern: 1-16 alphanum/space chars + dash + whitespace + digit
+    // (the start of the real address).
+    if(!/^\s*[a-z0-9][a-z0-9 ]{0,15}[-–—]\s+\d/i.test(a)) s += 300;
+    // Quality bonuses for canonical "Street, City, ST 12345, USA" form.
+    if(/\b\d{5}\b/.test(a))             s += 150;
+    if(/,\s*USA\s*$/i.test(a))          s += 50;
+    if(/,\s*[A-Z]{2}\s+\d{5}/.test(a))  s += 30;
     s += Math.min((a.match(/,/g) || []).length, 4) * 25;
-    // Length as a final tiebreak — among equally-canonical addresses, the
-    // longer one usually has more detail (apt #, suite, etc.).
-    s += a.length * 0.1;
+    // De-weight raw length so it can't outvote the junk-prefix penalty.
+    s += a.length * 0.05;
     return s;
   };
   let best = '', bestScore = -1;
@@ -20663,20 +20675,58 @@ async function _ddCallMergeEdgeFn(survivingId, loserIds){
   return json;
 }
 
-// If the group contains an address that's more canonical than the survivor's
-// own, PATCH the survivor with that address before the merge engine fires.
-// The engine's text-curated policy on `address` is "keep survivor + log
-// conflict in deal_notes"; we want the cleaner address to actually survive.
-// In-memory survivor object is also updated so downstream UI shows the new
-// address without a refetch.
+// v113.43: pick the best raw address from the group, run it through Google
+// Geocoding to get the canonical formatted_address, and PATCH the survivor
+// with the result before the merge fires. The engine's text-curated policy
+// on `address` would otherwise keep the survivor's own value and only log
+// the conflict in deal_notes; pre-promoting + geocoding makes the cleanest
+// official address actually win.
+//
+// Geocoder fallback: if Google flags partial_match (it's guessing) or the
+// API errors / returns no result, we fall back to the raw best address from
+// _ddBestAddressFromGroup. Better to ship a clean human-entered address
+// than a wrong Google guess.
 async function _ddPrePromoteBestAddress(survivor, groupDeals){
   if(!survivor) return;
-  const best = _ddBestAddressFromGroup(groupDeals);
-  const cur  = String(survivor['Address']||'').trim();
-  if(!best || best === cur) return;
+  const bestRaw = _ddBestAddressFromGroup(groupDeals);
+  const cur     = String(survivor['Address']||'').trim();
+  if(!bestRaw) return;
+
+  // Try to canonicalize via Google. Falls back to bestRaw on any failure.
+  let final = bestRaw;
+  let geo = null;
   try {
-    await _sbPatch(SB_TABLES.properties, survivor.id, { address: best });
-    survivor['Address'] = best;
+    if(typeof googleGeocodeAddress === 'function'){
+      const r = await googleGeocodeAddress(bestRaw);
+      if(r && r.ok && r.formatted && !r.partial_match) {
+        final = r.formatted;
+        geo = r;
+      }
+    }
+  } catch(e){ /* fall through to bestRaw */ }
+
+  if(final === cur && !geo) return;
+
+  const patch = { address: final };
+  // Backfill lat/lng/county/state if the survivor is missing them and
+  // Google gave us values. Doesn't overwrite existing non-empty fields.
+  // (No `zip` column on ace_properties — zip lives inside the address.)
+  if(geo){
+    if(geo.lat && !survivor['Latitude'])    patch.latitude = geo.lat;
+    if(geo.lng && !survivor['Longitude'])   patch.longitude = geo.lng;
+    if(geo.state && !survivor['State'])     patch.state = geo.state;
+    if(geo.county && !survivor['Simple County']) patch.simple_county = geo.county;
+  }
+
+  try {
+    await _sbPatch(SB_TABLES.properties, survivor.id, patch);
+    survivor['Address'] = final;
+    if(geo){
+      if(patch.latitude)      survivor['Latitude']      = geo.lat;
+      if(patch.longitude)     survivor['Longitude']     = geo.lng;
+      if(patch.state)         survivor['State']         = geo.state;
+      if(patch.simple_county) survivor['Simple County'] = geo.county;
+    }
   } catch(e){
     // Non-fatal — the merge can still proceed with the original address.
     console.warn('[_ddPrePromoteBestAddress] failed for', survivor.id, e.message);
@@ -20732,6 +20782,159 @@ async function _ddPrePromoteNotesToGPN(survivor, losers){
     console.warn('[_ddPrePromoteNotesToGPN] failed for', survivor.id, e.message);
   }
 }
+
+// v113.43: browser-side retro fix for past merges. Walks
+// ace_property_merge_log entries (undone_at IS NULL) since the given date,
+// and for each:
+//   1. Reads `surviving_before` and `losers_snapshot` from the log entry.
+//   2. Picks the best raw address from the union (via _ddBestAddressFromGroup).
+//   3. Geocodes it via Google (browser-side — the API key is referer-locked
+//      so this only works from the running app, not from a Node script).
+//   4. PATCHes the surviving row's address to the canonical formatted_address
+//      (or the raw best if Google flagged partial_match), backfills lat/lng/
+//      state/county if empty, and appends a "Merged from LEAD …" block to
+//      the GPN if not already present.
+//
+// Idempotent — re-runs detect existing GPN headers and skip.
+//
+// Usage from browser console:
+//   _ddRetroFixMerges({dryRun:true})           // preview only
+//   _ddRetroFixMerges({sinceISO:'2026-04-25T00:00:00Z'})   // apply for given window
+//   _ddRetroFixMerges({limit:30, dryRun:true}) // spot-check 30 entries
+window._ddRetroFixMerges = async function(opts){
+  opts = opts || {};
+  const dryRun = !!opts.dryRun;
+  const sinceISO = opts.sinceISO || new Date(Date.now() - 24*60*60*1000).toISOString();
+  const limit = opts.limit || null;
+  const concurrency = opts.concurrency || 5;
+  const cfg = getConfig();
+
+  if(!dryRun && !confirm(
+    `Retro-fix today's merges?\n\n` +
+    `• Walks ace_property_merge_log since ${sinceISO}\n` +
+    `• Each survivor's address gets re-canonicalized through Google Geocoding\n` +
+    `• Each survivor's General Property Notes gets a "Merged from LEAD …" block with all loser fields (idempotent)\n` +
+    `• Backfills lat/lng/state/county where empty\n\n` +
+    `Continue?`
+  )) return;
+
+  console.log('[retro] fetching merge log entries since', sinceISO);
+  const fetchHeaders = { apikey: cfg.key, Authorization: 'Bearer ' + cfg.key };
+  const entries = [];
+  let from = 0;
+  while(true){
+    const url = `${cfg.url}/rest/v1/ace_property_merge_log?select=id,surviving_id,losers_snapshot,surviving_before&undone_at=is.null&merged_at=gte.${encodeURIComponent(sinceISO)}&order=merged_at.asc`;
+    const res = await fetch(url, { headers: { ...fetchHeaders, Range: `${from}-${from+499}` } });
+    if(!res.ok){ console.error('[retro] log fetch failed', res.status, await res.text()); return; }
+    const batch = await res.json();
+    entries.push(...batch);
+    if(batch.length < 500) break;
+    from += 500;
+  }
+  console.log(`[retro] fetched ${entries.length} entries`);
+  const work = limit ? entries.slice(0, limit) : entries;
+  console.log(`[retro] processing ${work.length}, concurrency=${concurrency}, dryRun=${dryRun}`);
+
+  let nextIdx = 0;
+  const stats = { addrFix:0, gpnFix:0, both:0, noChange:0, deleted:0, errors:0, geocoded:0 };
+  const failures = [];
+
+  async function processOne(entry){
+    const losers = Array.isArray(entry.losers_snapshot) ? entry.losers_snapshot : [];
+    // Pretend each snapshot row is a deal for _ddBestAddressFromGroup.
+    const candidates = [entry.surviving_before, ...losers].filter(Boolean).map(r => ({ 'Address': r.address }));
+    const bestRaw = _ddBestAddressFromGroup(candidates);
+
+    // Fetch current survivor.
+    const sUrl = `${cfg.url}/rest/v1/ace_properties?id=eq.${entry.surviving_id}&select=id,address,general_property_notes,deleted_at,latitude,longitude,state,simple_county&limit=1`;
+    const sRes = await fetch(sUrl, { headers: fetchHeaders });
+    if(!sRes.ok){ stats.errors++; return; }
+    const cur = (await sRes.json())[0];
+    if(!cur){ stats.deleted++; return; }
+    if(cur.deleted_at){ stats.deleted++; return; }
+
+    // Geocode.
+    let final = bestRaw, geo = null;
+    if(bestRaw){
+      try {
+        const r = await googleGeocodeAddress(bestRaw);
+        if(r && r.ok && r.formatted && !r.partial_match){ final = r.formatted; geo = r; stats.geocoded++; }
+      } catch(_){}
+    }
+
+    const curAddr = String(cur.address||'').trim();
+    const curGpn  = String(cur.general_property_notes||'').trim();
+    // Build consolidated GPN block from losers (mirrors _ddPrePromoteNotesToGPN).
+    const NOTE_FIELDS = [
+      ['deal_notes',                'Deal Notes'],
+      ['general_property_notes',    'General Property Notes'],
+      ['next_steps',                'Next Steps'],
+      ['property_description',      'Property Description'],
+      ['location_description',      'Location Description'],
+      ['financial_property_notes',  'Financial Property Notes'],
+      ['ai_clarifying_notes',       'AI Clarifying Notes'],
+    ];
+    const blocks = [];
+    for(const l of losers){
+      const fb = [];
+      for(const [f, label] of NOTE_FIELDS){
+        const v = String(l?.[f]||'').trim();
+        if(v) fb.push(`${label}:\n${v}`);
+      }
+      if(!fb.length) continue;
+      const leadId = String(l?.id||'').slice(0,8).toUpperCase();
+      const lAddr = l?.address || '(no address)';
+      const header = `─── Merged from LEAD ${leadId} (${lAddr}) ───`;
+      blocks.push({ header, body: `${header}\n\n${fb.join('\n\n')}` });
+    }
+    const firstHeader = blocks[0]?.header || '';
+
+    const addrFix = final && final !== curAddr;
+    const gpnFix  = blocks.length && firstHeader && !curGpn.includes(firstHeader);
+    if(!addrFix && !gpnFix){ stats.noChange++; return; }
+    if(addrFix && gpnFix) stats.both++;
+    else if(addrFix) stats.addrFix++;
+    else if(gpnFix) stats.gpnFix++;
+
+    const patch = {};
+    if(addrFix) patch.address = final;
+    if(gpnFix){
+      const consolidated = blocks.map(b => b.body).join('\n\n');
+      patch.general_property_notes = curGpn ? `${curGpn}\n\n${consolidated}` : consolidated;
+    }
+    if(geo){
+      if(geo.lat && cur.latitude == null)        patch.latitude = geo.lat;
+      if(geo.lng && cur.longitude == null)       patch.longitude = geo.lng;
+      if(geo.state && !cur.state)                patch.state = geo.state;
+      if(geo.county && !cur.simple_county)       patch.simple_county = geo.county;
+    }
+
+    if(dryRun) return { entry, patch, curAddr, final, geo: !!geo };
+
+    try {
+      await _sbPatch(SB_TABLES.properties, entry.surviving_id, patch);
+    } catch(e){
+      stats.errors++;
+      failures.push({ id: entry.id, error: e.message });
+    }
+  }
+
+  async function worker(){
+    while(true){
+      const i = nextIdx++;
+      if(i >= work.length) return;
+      await processOne(work[i]);
+      if((i+1) % 50 === 0) console.log(`[retro] ${i+1}/${work.length}`, stats);
+    }
+  }
+
+  const t0 = Date.now();
+  await Promise.all(Array.from({ length: concurrency }, () => worker()));
+  const elapsed = ((Date.now()-t0)/1000).toFixed(1);
+  console.log(`[retro] DONE in ${elapsed}s (${dryRun?'DRY':'APPLIED'})`, stats);
+  if(failures.length) console.warn('[retro] failures:', failures);
+  return stats;
+};
 
 // Refresh a single property row from Supabase and merge it into the matching
 // allDeals[] entry. Best-effort — failures are logged but non-fatal.

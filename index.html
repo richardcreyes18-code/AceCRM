@@ -19770,6 +19770,19 @@ function _ddLev1Match(a, b){
   return a.slice(i) === b.slice(i+1);
 }
 
+// v113.37: numeric-run equality check. Two address keys with different digit
+// runs are *always* different buildings (or different streets — "121st" vs
+// "131st"). This is the precision filter on top of Lev1: typos happen in
+// letters, not in street numbers. Without it, "20 Zabriskie" and "25
+// Zabriskie" pair as fuzzy because they're 1 substitution apart.
+function _ddDigitsEqual(a, b){
+  const ra = a.match(/\d+/g) || [];
+  const rb = b.match(/\d+/g) || [];
+  if(ra.length !== rb.length) return false;
+  for(let i = 0; i < ra.length; i++) if(ra[i] !== rb[i]) return false;
+  return true;
+}
+
 function _ddSplitKey(key){
   const i = key.indexOf('|');
   return i < 0 ? { street: key, zip: '' } : { street: key.slice(0,i), zip: key.slice(i+1) };
@@ -19999,6 +20012,11 @@ function _ddScanFuzzyDuplicates(){
   for(const bucket of buckets.values()){
     for(let i = 0; i < bucket.length; i++){
       for(let j = i+1; j < bucket.length; j++){
+        // v113.37: require digit runs to match exactly. A different leading
+        // number means a different building; a different ordinal ("121st"
+        // vs "131st") means a different street. Only letter-level typos
+        // count as fuzzy candidates.
+        if(!_ddDigitsEqual(bucket[i].street, bucket[j].street)) continue;
         if(_ddLev1Match(bucket[i].street, bucket[j].street)) tryPair(bucket[i], bucket[j]);
       }
     }
@@ -20026,14 +20044,29 @@ function _ddScanFuzzyDuplicates(){
 
   return pairs.map(({a,b}) => {
     const deals = [...a.deals, ...b.deals];
+    // High-confidence (Type A) when the alphanum street part is *identical*
+    // and only the zip presence differs — that's "11 Cotters Ln" vs "11
+    // Cotters Ln, East Brunswick, NJ 08816". Same building, just one row
+    // missing the zip. Safe to bulk-merge.
+    // Review-required (Type B) is everything else — Lev1 typos in the
+    // street name. Need a human to confirm "Terril" vs "Terrill" is real.
+    const sameStreet = a.street === b.street;
+    const oneMissingZip = (!a.zip && b.zip) || (a.zip && !b.zip);
+    const highConfidence = sameStreet && oneMissingZip;
     return {
       key: `fuzzy:${a.key}~${b.key}`,
       deals,
       survivorId: _ddPickDefaultSurvivor(deals),
       fuzzy: true,
       fuzzyPair: [a.key, b.key],
+      fuzzyKind: highConfidence ? 'missing-zip' : 'typo',
+      fuzzyHighConfidence: highConfidence,
     };
-  }).sort((x,y) => y.deals.length - x.deals.length);
+  }).sort((x,y) => {
+    // Sort high-confidence first, then by deal count.
+    if(x.fuzzyHighConfidence !== y.fuzzyHighConfidence) return y.fuzzyHighConfidence - x.fuzzyHighConfidence;
+    return y.deals.length - x.deals.length;
+  });
 }
 
 // Debug helper — paste a substring like "Kennedy" in the console:
@@ -20198,6 +20231,8 @@ function _ddRenderModal(){
   const allFuzzy     = _dealDedupeState.fuzzyGroups || [];
   const groups       = _ddFilteredGroups();
   const fuzzyGroups  = _ddFilteredFuzzyGroups();
+  const _fuzzyHCcount = allFuzzy.filter(g => g.fuzzyHighConfidence).length;
+  const _fuzzyTypoCount = allFuzzy.length - _fuzzyHCcount;
   const totalDupes   = groups.reduce((n,g) => n + (g.deals.length - 1), 0);
   const searchQ      = _dealDedupeState.search || '';
   const isFiltered   = searchQ.trim().length > 0;
@@ -20226,17 +20261,25 @@ function _ddRenderModal(){
   } else {
     let fuzzyBody = '';
     if(fuzzyGroups.length){
-      const fb = fuzzyGroups.map(g => {
+      // Split into high-confidence (missing-zip variants — safe) and typo
+      // (Lev1 letter difference — needs review).
+      const hc   = fuzzyGroups.filter(g => g.fuzzyHighConfidence);
+      const typo = fuzzyGroups.filter(g => !g.fuzzyHighConfidence);
+      const renderList = arr => arr.map(g => {
         const origIdx = _dealDedupeState.fuzzyGroups.indexOf(g);
         return _ddRenderGroup(g, origIdx, true);
       }).join('');
-      fuzzyBody = `
-        <div style="margin-bottom:18px;">
-          <div style="padding:9px 12px;background:#fef3c7;border:1px solid #fde68a;border-radius:6px;margin-bottom:10px;font-size:11px;color:#78350f;line-height:1.5;">
-            ⚠ <strong>${fuzzyGroups.length} fuzzy match${fuzzyGroups.length===1?'':'es'}${isFiltered ? ` of ${allFuzzy.length}` : ''}</strong> — near-duplicates the exact scan missed (typo, missing zip, suffix variant). Review each one before merging.
-          </div>
-          ${fb}
-        </div>`;
+      const hcSection = hc.length ? `
+        <div style="padding:9px 12px;background:#dcfce7;border:1px solid #86efac;border-radius:6px;margin-bottom:10px;font-size:11px;color:#14532d;line-height:1.5;">
+          ✓ <strong>${hc.length} high-confidence fuzzy match${hc.length===1?'':'es'}${isFiltered ? ` of ${_fuzzyHCcount}` : ''}</strong> — same alphanum street, one row has the full zip+city and the other doesn't. Same building, just different completeness. Safe to bulk-merge.
+        </div>
+        ${renderList(hc)}` : '';
+      const typoSection = typo.length ? `
+        <div style="padding:9px 12px;background:#fef3c7;border:1px solid #fde68a;border-radius:6px;margin-top:${hc.length?'18px':'0'};margin-bottom:10px;font-size:11px;color:#78350f;line-height:1.5;">
+          ⚠ <strong>${typo.length} fuzzy typo match${typo.length===1?'':'es'}${isFiltered ? ` of ${_fuzzyTypoCount}` : ''}</strong> — single-letter difference in the street name (e.g. "Terril" vs "Terrill"). Same street number + zip; could be a real typo or a different street. <strong>Review each before merging.</strong>
+        </div>
+        ${renderList(typo)}` : '';
+      fuzzyBody = `<div style="margin-bottom:18px;">${hcSection}${typoSection}</div>`;
     }
     let exactBody = '';
     if(groups.length){
@@ -20248,9 +20291,11 @@ function _ddRenderModal(){
     body = fuzzyBody + exactBody;
   }
 
-  // Subtitle line changes when filtered. Mentions fuzzy count when present.
+  // Subtitle line changes when filtered. Mentions fuzzy split when present.
   const totalExactDupes = allGroups.reduce((n,g)=>n+(g.deals.length-1),0);
-  const fuzzyTag = allFuzzy.length ? ` · ${allFuzzy.length} fuzzy` : '';
+  const fuzzyTag = allFuzzy.length
+    ? ` · ${_fuzzyHCcount} high-conf fuzzy · ${_fuzzyTypoCount} fuzzy to review`
+    : '';
   const subtitle = (allGroups.length === 0 && allFuzzy.length === 0)
     ? 'Scan complete'
     : (isFiltered
@@ -20272,6 +20317,14 @@ function _ddRenderModal(){
             onmouseenter="this.style.background='#115e59'"
             onmouseleave="this.style.background='#0f766e'">
             ⚡ Merge all ${allGroups.length} confident
+          </button>` : ''}
+          ${_fuzzyHCcount > 0 ? `
+          <button onclick="_ddMergeAllConfident({kind:'fuzzy-high-confidence'})"
+            title="Merge every high-confidence fuzzy match (same street, one row has zip and the other doesn't — same building). Typo-style fuzzy matches still need per-row review."
+            style="background:#b45309;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:11px;font-weight:700;cursor:pointer;"
+            onmouseenter="this.style.background='#92400e'"
+            onmouseleave="this.style.background='#b45309'">
+            ⚡ Merge ${_fuzzyHCcount} high-confidence fuzzy
           </button>` : ''}
           <button onclick="openDealDedupeModal()" style="background:#f1f5f9;color:#334155;border:1px solid #e2e8f0;border-radius:6px;padding:6px 12px;font-size:11px;font-weight:600;cursor:pointer;">↻ Rescan</button>
           <button onclick="closeDealDedupeModal()" style="background:none;border:none;color:#94a3b8;font-size:20px;line-height:1;cursor:pointer;padding:4px 8px;">×</button>
@@ -20400,18 +20453,33 @@ function _ddSetSurvivor(groupIdx, dealId, fuzzy){
 // Bulk-merge every exact-match group with the auto-picked survivor. Mirrors
 // the server-side /tmp/run_exact_dups.mjs flow: concurrency=5, per-group
 // edge fn call, live progress, soft-archive losers in-memory after each ok.
+//
+// v113.37: also handles the high-confidence fuzzy bucket (missing-zip
+// variants only — same alphanum street, one with zip and one without).
+// Pass {kind:'fuzzy-high-confidence'} to target that subset; default
+// targets exact-match groups.
 let _ddBulkCancel = false;
 let _ddBulkInProgress = false;
-async function _ddMergeAllConfident(){
+async function _ddMergeAllConfident(opts){
   if(_ddBulkInProgress) return;
-  const groups = (_dealDedupeState.groups||[]).slice();
+  opts = opts || {};
+  const isFuzzyHC = opts.kind === 'fuzzy-high-confidence';
+  const groups = isFuzzyHC
+    ? (_dealDedupeState.fuzzyGroups||[]).filter(g => g.fuzzyHighConfidence).slice()
+    : (_dealDedupeState.groups||[]).slice();
   if(!groups.length) return;
   const totalLosers = groups.reduce((n,g) => n + (g.deals.length-1), 0);
+  const headline = isFuzzyHC
+    ? `Merge all ${groups.length} high-confidence fuzzy match${groups.length===1?'':'es'} (missing-zip variants only)?`
+    : `Merge all ${groups.length} confident match${groups.length===1?'':'es'} now?`;
+  const extraNote = isFuzzyHC
+    ? `\n• High-confidence = same alphanum street, one row has the full zip+city and the other doesn't. Same building, just less complete address.\n• Typo-style fuzzy matches (e.g. "Terril" vs "Terrill") are NOT included — those still need per-row review.`
+    : '';
   if(!confirm(
-    `Merge all ${groups.length} confident match${groups.length===1?'':'es'} now?\n\n` +
+    `${headline}\n\n` +
     `• ${totalLosers} duplicate row${totalLosers===1?'':'s'} will be archived.\n` +
     `• Survivor for each group is the row with the most content (Nurture/Lead/etc. preferred over Clean Up).\n` +
-    `• 30-day undo is preserved via losers_snapshot per merge.\n\n` +
+    `• 30-day undo is preserved via losers_snapshot per merge.${extraNote}\n\n` +
     `If you want to review picks individually, cancel and use the per-group "Merge ★" buttons instead.`
   )) return;
 
@@ -20485,17 +20553,16 @@ async function _ddMergeAllConfident(){
 
   await Promise.all(Array.from({ length: 5 }, () => worker()));
 
-  // Drop merged groups from state. We assume groups[i].ok == true on completion;
-  // but some groups may have failed. Filter the merged ones out by checking
-  // whether any deal in the group still appears non-archived.
-  _dealDedupeState.groups = (_dealDedupeState.groups||[]).filter(g => {
-    return g.deals.some(d => !d['Is Archived']) && g.deals.length >= 2 &&
-           g.deals.filter(d => !d['Is Archived']).length >= 2;
-  });
+  // Drop merged groups from state. Both exact and fuzzy lists need cleanup
+  // because a successful merge marks losers Is Archived in-memory, leaving
+  // any group that referenced them under-populated.
+  const stillLive = g => g.deals.filter(d => !d['Is Archived']).length >= 2;
+  _dealDedupeState.groups = (_dealDedupeState.groups||[]).filter(stillLive);
 
   _ddBulkInProgress = false;
   // Re-scan fuzzy after the bulk merge — some fuzzy pairs may have been
-  // collapsed by the exact-match merges that just ran.
+  // collapsed by the merges that just ran (a fuzzy pair where the loser
+  // got archived is no longer a pair).
   _dealDedupeState.fuzzyGroups = _ddScanFuzzyDuplicates();
   if(typeof buildSidebar === 'function') buildSidebar();
   if(typeof renderDealBoard === 'function' && document.getElementById('dealBoardTbody')) renderDealBoard();

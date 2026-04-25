@@ -15683,6 +15683,52 @@ function _comboInstallGlobalHandlers(){
 
 // (Global handlers are installed lazily inside _comboWire on first call.)
 
+// v113.28: filter-panel wrapper around _comboCreate / _comboFieldHTML.
+// Designed so Full Pipeline + Personal Pipeline can share the same
+// "title + combo" markup. The caller passes a context object with the
+// state read/write callbacks; we own the combo wiring + label HTML.
+//
+// Returns the HTML for ONE filter row. The mount step (calling
+// _comboWire after the HTML is in DOM) is the caller's responsibility —
+// each panel context has its own list of mounted IDs to wire.
+//
+// ctx fields:
+//   id           — DOM id prefix (must be unique app-wide)
+//   label        — bold uppercase title shown above the combo
+//   subLabel     — (optional) muted text right after the label, e.g. "(217 total)"
+//   placeholder  — (optional) input placeholder; defaults to "Search <label>..."
+//   options      — () → string[]: full list of choices
+//   getSelected  — () → string[]: current picks (the source of truth)
+//   setSelected  — (string[]) → void: called whenever the picks change
+//   onCustom     — (optional) (string) → void: free-text Enter handler
+function _filterComboHTML(ctx){
+  if(!ctx || !ctx.id) throw new Error('_filterComboHTML: ctx.id required');
+  const id = ctx.id;
+  // Re-create the instance every render so getOptions/getSelected always
+  // reflect the latest closure (filter state can be swapped at runtime).
+  _comboCreate({
+    id,
+    placeholder: ctx.placeholder || ('Search ' + (ctx.label || '').toLowerCase() + '...'),
+    getOptions:  ctx.options,
+    getSelected: ctx.getSelected,
+    onPick: val => {
+      const cur = ctx.getSelected() || [];
+      if(!cur.includes(val)) ctx.setSelected([...cur, val]);
+    },
+    onUnpick: val => {
+      const cur = ctx.getSelected() || [];
+      ctx.setSelected(cur.filter(v => v !== val));
+    },
+    onCustom: ctx.onCustom || null,
+  });
+  const sub = ctx.subLabel ? `<span style="font-weight:500;color:#94a3b8;">${ctx.subLabel}</span>` : '';
+  return `
+    <div style="margin-bottom:14px;">
+      <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">${ctx.label || ''} ${sub}</div>
+      ${_comboFieldHTML(id)}
+    </div>`;
+}
+
 // ═══════════════════════════════════════════════════════════════════════
 // v102.28 — PORTFOLIOS MODULE (Turn B: create + list + detail view)
 // ═══════════════════════════════════════════════════════════════════════
@@ -22461,6 +22507,9 @@ async function _showMyPipelineBoard(){
     +   '</div>'
     + '</div>';
   _myPipelineBoardMounted = true;
+  // v113.28: wire combobox event handlers for the personal-pipeline filter
+  // panel. No-op when the panel is collapsed (DOM nodes won't be present).
+  if(typeof _myPipelineMountFilterCombos === 'function') _myPipelineMountFilterCombos();
 }
 
 // v113.4: Personal Pipeline Table view.
@@ -22738,8 +22787,27 @@ function _myPipelineScopeToggleHTML(){
 // in ace_agent_pipeline_views (opaque filter_config jsonb) and written
 // via agent_pipeline_view_save / _delete RPCs (SECURITY DEFINER).
 
+// v113.28: bring personal pipeline filters to parity with Full Pipeline.
+// Filter shape now matches getPipelineFilters() except `stages` holds personal
+// stage *keys* (not labels) and `needsReviewOnly` is intentionally omitted —
+// data-quality scanning belongs on the company-wide view, not a per-agent one.
 function _myPipelineDefaultFilters(){
-  return { search: '', stages: [], assetTypes: [], counties: [] };
+  return {
+    search: '',
+    stages: [],
+    assetTypes: [],
+    counties: [],
+    cities: [],
+    agents: [],
+    states: [],
+    regionChipIds: [],
+    regions: [],
+    priceMin: null, priceMax: null,
+    sfMin: null,    sfMax: null,
+    unitsMin: null, unitsMax: null,
+    capMin: null,   capMax: null,
+    commMin: null,  commMax: null,
+  };
 }
 
 let _myPipelineFilters      = _myPipelineDefaultFilters();
@@ -22798,7 +22866,22 @@ function setMyPipelineTableGroupBy(key){
 
 function _myPipelineFilterCount(){
   const f = _myPipelineFilters;
-  return (f.search?1:0) + f.stages.length + f.assetTypes.length + f.counties.length;
+  let n = 0;
+  if(f.search) n++;
+  if(f.stages.length) n++;
+  if(f.assetTypes.length) n++;
+  if(f.counties.length) n++;
+  if(f.cities && f.cities.length) n++;
+  if(f.agents && f.agents.length) n++;
+  if(f.states && f.states.length) n++;
+  if(f.regionChipIds && f.regionChipIds.length) n++;
+  if(f.regions && f.regions.length) n++;
+  if(f.priceMin != null || f.priceMax != null) n++;
+  if(f.sfMin != null    || f.sfMax != null)    n++;
+  if(f.unitsMin != null || f.unitsMax != null) n++;
+  if(f.capMin != null   || f.capMax != null)   n++;
+  if(f.commMin != null  || f.commMax != null)  n++;
+  return n;
 }
 function _myPipelineHasFilters(){ return _myPipelineFilterCount() > 0; }
 
@@ -22842,25 +22925,79 @@ function _myPipelineToggleMulti(group, value){
 }
 
 // Apply the current filter set to the provided deal list.
+// v113.28: full parity with applyPipelineFilters() — every filter the company
+// pipeline supports works here too. We read `Simple County` first and fall
+// back to `County` so deals from either source path filter correctly.
 function _myPipelineApplyFilters(deals){
   const f = _myPipelineFilters;
   const q = (f.search||'').toLowerCase();
+  const dealCounty = (d) => String(d['Simple County'] || d['County'] || '');
   return deals.filter(d => {
     if(q){
       const hay = [
         d['Address'], d['Owner'], d['Owner Name'], d['Agent'],
-        d['County'], d['CRM Asset Classification'], d['Asset Type'], d['City']
+        dealCounty(d), d['CRM Asset Classification'], d['Asset Type'], d['City']
       ].map(v => String(v||'').toLowerCase()).join(' | ');
       if(hay.indexOf(q) === -1) return false;
     }
-    if(f.assetTypes.length){
-      const a = String(d['CRM Asset Classification'] || d['Asset Type'] || '');
-      if(!f.assetTypes.includes(a)) return false;
+    // Asset type — smart-match (top-level picks all subtypes), matches full pipeline
+    if(f.assetTypes && f.assetTypes.length){
+      if(typeof _dealAssetTypeMatches === 'function'){
+        if(!_dealAssetTypeMatches(d, f.assetTypes)) return false;
+      } else {
+        const a = String(d['CRM Asset Classification'] || d['Asset Type'] || '');
+        if(!f.assetTypes.includes(a)) return false;
+      }
     }
-    if(f.counties.length){
-      const c = String(d['County'] || '');
-      if(!f.counties.includes(c)) return false;
+    if(f.regions && f.regions.length){
+      if(!f.regions.includes(d['Region for County'])) return false;
     }
+    if(f.counties && f.counties.length){
+      if(!f.counties.includes(dealCounty(d))) return false;
+    }
+    if(f.states && f.states.length){
+      const dealState = (typeof _countyState === 'function')
+        ? _countyState(dealCounty(d), d) : '';
+      if(!f.states.includes(dealState || 'Other')) return false;
+    }
+    if(f.regionChipIds && f.regionChipIds.length && typeof PIPELINE_REGION_CHIPS !== 'undefined'){
+      const cty = dealCounty(d);
+      const dealState = (typeof _countyState === 'function') ? _countyState(cty, d) : '';
+      const dealRegions = (typeof _countyRegions === 'function') ? _countyRegions(cty) : [];
+      let anyMatch = false;
+      for(const chipId of f.regionChipIds){
+        const chip = PIPELINE_REGION_CHIPS.find(c => c.id === chipId);
+        if(!chip) continue;
+        if(chip.kind === 'state'  && dealState === chip.value){ anyMatch = true; break; }
+        if(chip.kind === 'region' && dealRegions.includes(chip.value)){ anyMatch = true; break; }
+        if(chip.kind === 'states' && Array.isArray(chip.value) && chip.value.includes(dealState)){ anyMatch = true; break; }
+      }
+      if(!anyMatch) return false;
+    }
+    if(f.cities && f.cities.length){
+      const city = (typeof _dealCity === 'function') ? _dealCity(d) : String(d['City']||'');
+      if(!f.cities.includes(city)) return false;
+    }
+    if(f.agents && f.agents.length){
+      const dealAgents = (typeof _agentList === 'function')
+        ? _agentList(d['Assigned Agent']) : [String(d['Assigned Agent']||'')];
+      if(!f.agents.some(sel => dealAgents.some(a => a.toLowerCase() === sel.toLowerCase()))) return false;
+    }
+    const price = Number(d['Asking Price'])||0;
+    if(f.priceMin != null && price < f.priceMin) return false;
+    if(f.priceMax != null && price > f.priceMax) return false;
+    const sf = Number(d['Square Footage'] || d['Total Building SF'] || d['Net Rentable SF']) || 0;
+    if(f.sfMin != null && sf < f.sfMin) return false;
+    if(f.sfMax != null && sf > f.sfMax) return false;
+    const units = Number(d['Number of Units'] || d['No. of Units']) || 0;
+    if(f.unitsMin != null && units < f.unitsMin) return false;
+    if(f.unitsMax != null && units > f.unitsMax) return false;
+    const cap = (typeof _dealCapRate === 'function') ? _dealCapRate(d) : null;
+    if(f.capMin != null && (cap == null || cap < f.capMin)) return false;
+    if(f.capMax != null && (cap == null || cap > f.capMax)) return false;
+    const comm = (typeof _dealCommissionAmt === 'function') ? _dealCommissionAmt(d) : null;
+    if(f.commMin != null && (comm == null || comm < f.commMin)) return false;
+    if(f.commMax != null && (comm == null || comm > f.commMax)) return false;
     // stages are applied at the column level in the render — no-op here.
     return true;
   });
@@ -22873,7 +23010,22 @@ function _myPipelineApplyFilters(deals){
 // works; it targets the portfolio's own metadata.
 function _myPipelineApplyFiltersPortfolio(portfolios){
   const f = _myPipelineFilters;
-  if(f.assetTypes.length || f.counties.length) return [];
+  // v113.28: any deal-attribute filter narrows portfolios out — they don't
+  // carry asset-type/city/county/range info directly. Search still works.
+  const dealOnlyActive =
+       (f.assetTypes && f.assetTypes.length)
+    || (f.counties   && f.counties.length)
+    || (f.cities     && f.cities.length)
+    || (f.agents     && f.agents.length)
+    || (f.states     && f.states.length)
+    || (f.regionChipIds && f.regionChipIds.length)
+    || (f.regions    && f.regions.length)
+    || (f.priceMin != null || f.priceMax != null)
+    || (f.sfMin    != null || f.sfMax    != null)
+    || (f.unitsMin != null || f.unitsMax != null)
+    || (f.capMin   != null || f.capMax   != null)
+    || (f.commMin  != null || f.commMax  != null);
+  if(dealOnlyActive) return [];
   const q = (f.search||'').toLowerCase();
   return portfolios.filter(p => {
     if(q){
@@ -22927,11 +23079,27 @@ function _myPipelineApplyView(viewId){
   const v = _myPipelineSavedViews.find(x => x.id === viewId);
   if(!v){ return; }
   const cfg = v.filter_config || {};
+  // v113.28: merge saved view onto defaults so newly-added filter keys (cities,
+  // agents, states, regionChipIds, ranges) read as empty/null on legacy rows.
+  const base = _myPipelineDefaultFilters();
+  const arrOr = (v) => Array.isArray(v) ? v.slice() : [];
+  const numOr = (v) => (v == null || v === '') ? null : Number(v);
   _myPipelineFilters = {
-    search:     String(cfg.search||''),
-    stages:     Array.isArray(cfg.stages)     ? cfg.stages.slice()     : [],
-    assetTypes: Array.isArray(cfg.assetTypes) ? cfg.assetTypes.slice() : [],
-    counties:   Array.isArray(cfg.counties)   ? cfg.counties.slice()   : []
+    ...base,
+    search:        String(cfg.search||''),
+    stages:        arrOr(cfg.stages),
+    assetTypes:    arrOr(cfg.assetTypes),
+    counties:      arrOr(cfg.counties),
+    cities:        arrOr(cfg.cities),
+    agents:        arrOr(cfg.agents),
+    states:        arrOr(cfg.states),
+    regionChipIds: arrOr(cfg.regionChipIds),
+    regions:       arrOr(cfg.regions),
+    priceMin: numOr(cfg.priceMin), priceMax: numOr(cfg.priceMax),
+    sfMin:    numOr(cfg.sfMin),    sfMax:    numOr(cfg.sfMax),
+    unitsMin: numOr(cfg.unitsMin), unitsMax: numOr(cfg.unitsMax),
+    capMin:   numOr(cfg.capMin),   capMax:   numOr(cfg.capMax),
+    commMin:  numOr(cfg.commMin),  commMax:  numOr(cfg.commMax),
   };
   _myPipelineActiveViewId = viewId;
   _myPipelinePanelOpen = false;
@@ -23042,15 +23210,31 @@ function _myPipelineFilterBarHTML(){
           }).join('')
         + '</div>');
 
-  // Active chips row
+  // Active chips row — v113.28: cover every filter key, not just the
+  // original four. Range chips use _myPipelineChipRangeHTML which has its
+  // own removal hook (sets both Min/Max to null in one click).
   const chips = [];
+  const fmt$ = (v) => (typeof fmtMoney === 'function' && v != null) ? fmtMoney(v) : (v == null ? '—' : String(v));
   if(f.search) chips.push(_myPipelineChipHTML('search', '', '🔍 "' + f.search + '"'));
   f.stages.forEach(s => {
     const stageObj = _myPipelineStageByKey(s);
     chips.push(_myPipelineChipHTML('stages', s, (stageObj?stageObj.label:s)));
   });
-  f.assetTypes.forEach(a => chips.push(_myPipelineChipHTML('assetTypes', a, '🏷️ ' + a)));
-  f.counties.forEach(c => chips.push(_myPipelineChipHTML('counties', c, '📍 ' + c)));
+  (f.assetTypes||[]).forEach(a => chips.push(_myPipelineChipHTML('assetTypes', a, '🏷️ ' + a)));
+  (f.regions||[]).forEach(r => chips.push(_myPipelineChipHTML('regions', r, '🗺️ ' + r)));
+  (f.regionChipIds||[]).forEach(id => {
+    const c = (typeof PIPELINE_REGION_CHIPS !== 'undefined') ? PIPELINE_REGION_CHIPS.find(x => x.id === id) : null;
+    chips.push(_myPipelineChipHTML('regionChipIds', id, '🗺️ ' + (c ? c.label : id)));
+  });
+  (f.states||[]).forEach(s => chips.push(_myPipelineChipHTML('states', s, '🏛️ ' + s)));
+  (f.counties||[]).forEach(c => chips.push(_myPipelineChipHTML('counties', c, '📍 ' + c)));
+  (f.cities||[]).forEach(c => chips.push(_myPipelineChipHTML('cities', c, '🏙️ ' + c)));
+  (f.agents||[]).forEach(a => chips.push(_myPipelineChipHTML('agents', a, '👤 ' + a)));
+  if(f.priceMin != null || f.priceMax != null) chips.push(_myPipelineChipRangeHTML('priceRange', 'Price ' + fmt$(f.priceMin) + '–' + fmt$(f.priceMax)));
+  if(f.sfMin    != null || f.sfMax    != null) chips.push(_myPipelineChipRangeHTML('sfRange',    'SF ' + (f.sfMin??'—') + '–' + (f.sfMax??'—')));
+  if(f.unitsMin != null || f.unitsMax != null) chips.push(_myPipelineChipRangeHTML('unitsRange', 'Units ' + (f.unitsMin??'—') + '–' + (f.unitsMax??'—')));
+  if(f.capMin   != null || f.capMax   != null) chips.push(_myPipelineChipRangeHTML('capRange',   'Cap ' + (f.capMin??'—') + '%–' + (f.capMax??'—') + '%'));
+  if(f.commMin  != null || f.commMax  != null) chips.push(_myPipelineChipRangeHTML('commRange',  'Comm ' + fmt$(f.commMin) + '–' + fmt$(f.commMax)));
   const chipsRow = chips.length
     ? '<div style="display:flex;flex-wrap:wrap;gap:6px;padding:10px 14px 0;">' + chips.join('') + '</div>'
     : '';
@@ -23093,45 +23277,260 @@ function _myPipelineChipHTML(group, val, label){
     + '</span>';
 }
 
+// v113.28: Range chip — single ✕ click clears both Min and Max for the
+// associated range in _myPipelineFilters.
+function _myPipelineChipRangeHTML(rangeKey, label){
+  return '<span style="display:inline-flex;align-items:center;gap:4px;background:#1e3a8a;color:#fff;padding:3px 4px 3px 10px;border-radius:99px;font-size:11px;font-weight:600;">'
+    + _esc(label)
+    + '<button onclick="_myPipelineClearRange(\'' + rangeKey + '\')" style="background:rgba(255,255,255,0.25);border:none;color:#fff;width:16px;height:16px;border-radius:50%;cursor:pointer;font-size:10px;line-height:1;padding:0;display:flex;align-items:center;justify-content:center;">✕</button>'
+    + '</span>';
+}
+
+function _myPipelineClearRange(rangeKey){
+  const f = _myPipelineFilters;
+  if(rangeKey === 'priceRange'){ f.priceMin = null; f.priceMax = null; }
+  else if(rangeKey === 'sfRange'){ f.sfMin = null; f.sfMax = null; }
+  else if(rangeKey === 'unitsRange'){ f.unitsMin = null; f.unitsMax = null; }
+  else if(rangeKey === 'capRange'){ f.capMin = null; f.capMax = null; }
+  else if(rangeKey === 'commRange'){ f.commMin = null; f.commMax = null; }
+  _myPipelineActiveViewId = null;
+  _myPipelineRerenderIfVisible();
+}
+
+// v113.28: Personal Pipeline range setter — mirrors setPipelineRange (full),
+// but mutates _myPipelineFilters and re-renders only the personal board.
+function setMyPipelineRange(minKey, maxKey, which, val){
+  const f = _myPipelineFilters;
+  const num = (val === '' || val == null) ? null : Number(val);
+  if(which === 'min') f[minKey] = (isNaN(num) ? null : num);
+  else                f[maxKey] = (isNaN(num) ? null : num);
+  _myPipelineActiveViewId = null; // ad-hoc
+  _myPipelineRerenderIfVisible();
+}
+
+// v113.28: Personal Pipeline filter panel — converted from pill-pickers to
+// the standard combobox refactor. Same 7 combos as Full Pipeline (Stage,
+// Asset Type, Region, State, County, City, Agent) plus the 5 numeric
+// ranges. Stage combo is special: it shows personal stage *labels* but
+// stores stage *keys* in f.stages, so the column-level stage filter keeps
+// working unchanged. After calling this, the caller MUST invoke
+// _myPipelineMountFilterCombos() so each combo gets event wiring.
 function _myPipelineFilterPanelHTML(){
-  const assetVals  = _myPipelineUniqueValues('CRM Asset Classification');
-  const fallbackAsset = _myPipelineUniqueValues('Asset Type');
-  const counties   = _myPipelineUniqueValues('County');
-  const stages     = _myPipelineStages.slice().sort((a,b)=>(a.order||0)-(b.order||0));
-  const chipPicker = (group, values, emptyMsg) => {
-    if(!values.length) return '<div style="font-size:11px;color:#94a3b8;font-style:italic;padding:4px 0;">' + emptyMsg + '</div>';
-    const selected = _myPipelineFilters[group] || [];
-    return '<div style="display:flex;flex-wrap:wrap;gap:6px;">'
-      + values.map(v => {
-          const isOn = selected.includes(v);
-          const vSafe = String(v).replace(/'/g,"\\'");
-          return '<button onclick="_myPipelineToggleMulti(\''+group+'\',\''+vSafe+'\')" style="background:'+(isOn?'#1e3a8a':'#fff')+';color:'+(isOn?'#fff':'#334155')+';border:1px solid '+(isOn?'#1e3a8a':'#cbd5e1')+';padding:4px 10px;border-radius:99px;font-size:11px;font-weight:600;cursor:pointer;">' + _esc(v) + '</button>';
-        }).join('')
-      + '</div>';
+  const f = _myPipelineFilters;
+  // ── Personal stage list (label↔key translation) ──────────────────
+  const stages = _myPipelineStages.slice().sort((a,b) => (a.order||0) - (b.order||0));
+
+  // ── Source data: deals in the agent's personal pipeline ─────────
+  // We narrow the option lists to what's actually in this agent's pipeline
+  // so they don't see counties/cities/agents that wouldn't match anything.
+  const pipelineDeals = (typeof _myPipelinePipelineDeals === 'function')
+    ? _myPipelinePipelineDeals() : [];
+
+  const assetTypeSet = new Set();
+  const countySet    = new Set();
+  const citySet      = new Set();
+  const agentSet     = new Set();
+  const regionSet    = new Set();
+  pipelineDeals.forEach(d => {
+    const at = (typeof _dealAssetType === 'function')
+      ? _dealAssetType(d) : (d['CRM Asset Classification'] || d['Asset Type'] || '');
+    if(at) assetTypeSet.add(at);
+    const county = d['Simple County'] || d['County'] || '';
+    if(county) countySet.add(county);
+    const city = (typeof _dealCity === 'function') ? _dealCity(d) : String(d['City']||'').trim();
+    if(city) citySet.add(city);
+    if(typeof _agentList === 'function'){
+      _agentList(d['Assigned Agent']).forEach(a => agentSet.add(a));
+    } else if(d['Assigned Agent']){
+      agentSet.add(d['Assigned Agent']);
+    }
+    const region = d['Region for County'];
+    if(region) regionSet.add(region);
+  });
+  const assetTypes = [...assetTypeSet].sort();
+  const counties   = [...countySet].sort();
+  const cities     = [...citySet].sort();
+  const agents     = [...agentSet].sort();
+
+  // Common updater for array-valued combos. Mutates f, marks ad-hoc, rerenders.
+  const updateMulti = (key, vals) => {
+    f[key] = Array.isArray(vals) ? vals : [];
+    _myPipelineActiveViewId = null;
+    _myPipelineRerenderIfVisible();
   };
-  const stageChips = stages.length === 0
-    ? '<div style="font-size:11px;color:#94a3b8;font-style:italic;padding:4px 0;">Loading stages…</div>'
-    : '<div style="display:flex;flex-wrap:wrap;gap:6px;">'
-      + stages.map(s => {
-          const isOn = _myPipelineFilters.stages.includes(s.key);
-          return '<button onclick="_myPipelineToggleMulti(\'stages\',\''+s.key+'\')" style="background:'+(isOn?(s.color||'#1e3a8a'):'#fff')+';color:'+(isOn?'#fff':'#334155')+';border:1px solid '+(isOn?(s.color||'#1e3a8a'):'#cbd5e1')+';padding:4px 10px;border-radius:99px;font-size:11px;font-weight:600;cursor:pointer;">' + _esc(s.label) + '</button>';
-        }).join('')
-      + '</div>';
-  return ''
-    + '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(260px,1fr));gap:14px;">'
-    +   '<div>'
-    +     '<div style="font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Stage</div>'
-    +     stageChips
-    +   '</div>'
-    +   '<div>'
-    +     '<div style="font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">Asset Class</div>'
-    +     chipPicker('assetTypes', assetVals.length ? assetVals : fallbackAsset, 'No asset classes in your pipeline yet')
-    +   '</div>'
-    +   '<div>'
-    +     '<div style="font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:6px;">County</div>'
-    +     chipPicker('counties', counties, 'No counties in your pipeline yet')
+
+  // ── Stage combo (label ↔ key translation) ────────────────────────
+  const stageLabels = stages.map(s => s.label);
+  const stageByLabel = (lbl) => stages.find(s => s.label === lbl);
+  const stageByKey   = (k)   => stages.find(s => s.key === k);
+  const stageCombo = (typeof _filterComboHTML === 'function') ? _filterComboHTML({
+    id: 'mypf_stages',
+    label: 'Stage',
+    options: () => stageLabels,
+    getSelected: () => (f.stages || []).map(k => {
+      const s = stageByKey(k);
+      return s ? s.label : k;
+    }),
+    setSelected: (labels) => {
+      f.stages = labels.map(l => {
+        const s = stageByLabel(l);
+        return s ? s.key : l;
+      });
+      _myPipelineActiveViewId = null;
+      _myPipelineRerenderIfVisible();
+    },
+  }) : '';
+
+  // ── Asset Type combo ─────────────────────────────────────────────
+  const assetTypeCombo = (typeof _filterComboHTML === 'function') ? _filterComboHTML({
+    id: 'mypf_assetTypes',
+    label: 'Asset Type',
+    subLabel: assetTypes.length ? '(' + assetTypes.length + ' in your pipeline)' : '',
+    options: () => assetTypes,
+    getSelected: () => f.assetTypes || [],
+    setSelected: (vals) => updateMulti('assetTypes', vals),
+  }) : '';
+
+  // ── Region combo (chip label↔id translation, same as Full) ──────
+  const regionCombo = (typeof _filterComboHTML === 'function' && typeof PIPELINE_REGION_CHIPS !== 'undefined')
+    ? _filterComboHTML({
+        id: 'mypf_regions',
+        label: 'Region',
+        options: () => PIPELINE_REGION_CHIPS.map(c => c.label),
+        getSelected: () => {
+          const ids = f.regionChipIds || [];
+          return ids.map(id => {
+            const c = PIPELINE_REGION_CHIPS.find(x => x.id === id);
+            return c ? c.label : id;
+          });
+        },
+        setSelected: (labels) => {
+          f.regionChipIds = labels.map(l => {
+            const c = PIPELINE_REGION_CHIPS.find(x => x.label === l);
+            return c ? c.id : l;
+          });
+          _myPipelineActiveViewId = null;
+          _myPipelineRerenderIfVisible();
+        },
+      })
+    : '';
+
+  // ── State combo (multi-select with auto-prune) ──────────────────
+  const stateSet = new Set();
+  counties.forEach(c => {
+    const st = (typeof _countyState === 'function') ? _countyState(c) : '';
+    stateSet.add(st || 'Other');
+  });
+  const allStates = [...stateSet].sort((a,b) => {
+    if(a === 'NJ') return -1;
+    if(b === 'NJ') return 1;
+    if(a === 'Other') return 1;
+    if(b === 'Other') return -1;
+    return a.localeCompare(b);
+  });
+  const stateCombo = (typeof _filterComboHTML === 'function') ? _filterComboHTML({
+    id: 'mypf_states',
+    label: 'State',
+    options: () => allStates,
+    getSelected: () => f.states || [],
+    setSelected: (vals) => {
+      f.states = vals;
+      if(vals.length && f.counties && f.counties.length){
+        f.counties = f.counties.filter(c => {
+          const st = (typeof _countyState === 'function') ? _countyState(c) : '';
+          return (vals.includes('Other') && !st) || (st && vals.includes(st));
+        });
+      }
+      _myPipelineActiveViewId = null;
+      _myPipelineRerenderIfVisible();
+    },
+  }) : '';
+
+  // ── County combo — scoped by current state filter ───────────────
+  const stateFilter = f.states || [];
+  const countiesForState = stateFilter.length
+    ? counties.filter(c => {
+        const st = (typeof _countyState === 'function') ? _countyState(c) : '';
+        return (stateFilter.includes('Other') && !st) || (st && stateFilter.includes(st));
+      })
+    : counties;
+  const countyCombo = (typeof _filterComboHTML === 'function') ? _filterComboHTML({
+    id: 'mypf_counties',
+    label: 'County',
+    subLabel: '(' + countiesForState.length + (stateFilter.length ? ' in ' + stateFilter.join(', ') : ' in your pipeline') + ')',
+    options: () => countiesForState,
+    getSelected: () => f.counties || [],
+    setSelected: (vals) => updateMulti('counties', vals),
+  }) : '';
+
+  // ── City combo ──────────────────────────────────────────────────
+  const cityCombo = (typeof _filterComboHTML === 'function') ? _filterComboHTML({
+    id: 'mypf_cities',
+    label: 'City',
+    subLabel: cities.length ? '(' + cities.length + ' in your pipeline)' : '',
+    options: () => cities,
+    getSelected: () => f.cities || [],
+    setSelected: (vals) => updateMulti('cities', vals),
+  }) : '';
+
+  // ── Agent combo ─────────────────────────────────────────────────
+  const agentCombo = (typeof _filterComboHTML === 'function') ? _filterComboHTML({
+    id: 'mypf_agents',
+    label: 'Agent',
+    options: () => agents,
+    getSelected: () => f.agents || [],
+    setSelected: (vals) => updateMulti('agents', vals),
+  }) : '';
+
+  // ── Range inputs ────────────────────────────────────────────────
+  const rangeInput = (title, minKey, maxKey, placeholder, suffix) => ''
+    + '<div style="margin-bottom:14px;">'
+    +   '<div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">' + title + '</div>'
+    +   '<div style="display:flex;gap:6px;align-items:center;">'
+    +     '<input type="number" placeholder="Min ' + (placeholder||'') + '" value="' + (f[minKey]==null?'':f[minKey]) + '"'
+    +       ' oninput="setMyPipelineRange(\'' + minKey + '\',\'' + maxKey + '\',\'min\',this.value)"'
+    +       ' style="flex:1;padding:6px 10px;border:1px solid #cbd5e1;border-radius:5px;font-size:11px;"/>'
+    +     '<span style="color:#94a3b8;font-size:11px;">to</span>'
+    +     '<input type="number" placeholder="Max ' + (placeholder||'') + '" value="' + (f[maxKey]==null?'':f[maxKey]) + '"'
+    +       ' oninput="setMyPipelineRange(\'' + minKey + '\',\'' + maxKey + '\',\'max\',this.value)"'
+    +       ' style="flex:1;padding:6px 10px;border:1px solid #cbd5e1;border-radius:5px;font-size:11px;"/>'
+    +     (suffix ? '<span style="font-size:11px;color:#64748b;">' + suffix + '</span>' : '')
     +   '</div>'
     + '</div>';
+
+  const stageNotice = stages.length === 0
+    ? '<div style="font-size:11px;color:#94a3b8;font-style:italic;padding:4px 0;">Loading stages…</div>'
+    : '';
+
+  return ''
+    + '<div style="display:grid;grid-template-columns:1fr 1fr;gap:20px 24px;">'
+    +   '<div>'
+    +     stageCombo + stageNotice
+    +     assetTypeCombo
+    +     regionCombo
+    +     stateCombo
+    +     countyCombo
+    +   '</div>'
+    +   '<div>'
+    +     cityCombo
+    +     agentCombo
+    +     rangeInput('Price', 'priceMin', 'priceMax', '$', '')
+    +     rangeInput('Square Footage', 'sfMin', 'sfMax', 'SF', 'SF')
+    +     rangeInput('Units', 'unitsMin', 'unitsMax', '#', 'units')
+    +     rangeInput('Cap Rate', 'capMin', 'capMax', '%', '%')
+    +     rangeInput('Commission Amount', 'commMin', 'commMax', '$', '')
+    +   '</div>'
+    + '</div>';
+}
+
+// v113.28: wire personal pipeline filter combos. Idempotent — safe to call
+// after every rerender. Each `_comboWire` call refreshes that combo's event
+// listeners against the freshly mounted DOM nodes.
+function _myPipelineMountFilterCombos(){
+  if(typeof _comboWire !== 'function') return;
+  ['mypf_stages','mypf_assetTypes','mypf_regions','mypf_states','mypf_counties','mypf_cities','mypf_agents'].forEach(id => {
+    if(document.getElementById('combo-si-' + id)) _comboWire(id);
+  });
 }
 
 // Dirty check: does the current filter state differ from the active saved view?
@@ -23148,10 +23547,25 @@ function _myPipelineViewIsDirty(){
     for(let i=0;i<as.length;i++) if(as[i] !== bs[i]) return false;
     return true;
   };
+  const numEq = (a,b) => {
+    const an = (a == null || a === '') ? null : Number(a);
+    const bn = (b == null || b === '') ? null : Number(b);
+    return an === bn;
+  };
   if(String(cfg.search||'') !== String(f.search||'')) return true;
-  if(!sameArr(cfg.stages,     f.stages))     return true;
-  if(!sameArr(cfg.assetTypes, f.assetTypes)) return true;
-  if(!sameArr(cfg.counties,   f.counties))   return true;
+  if(!sameArr(cfg.stages,        f.stages))        return true;
+  if(!sameArr(cfg.assetTypes,    f.assetTypes))    return true;
+  if(!sameArr(cfg.counties,      f.counties))      return true;
+  if(!sameArr(cfg.cities,        f.cities))        return true;
+  if(!sameArr(cfg.agents,        f.agents))        return true;
+  if(!sameArr(cfg.states,        f.states))        return true;
+  if(!sameArr(cfg.regionChipIds, f.regionChipIds)) return true;
+  if(!sameArr(cfg.regions,       f.regions))       return true;
+  if(!numEq(cfg.priceMin, f.priceMin) || !numEq(cfg.priceMax, f.priceMax)) return true;
+  if(!numEq(cfg.sfMin,    f.sfMin)    || !numEq(cfg.sfMax,    f.sfMax))    return true;
+  if(!numEq(cfg.unitsMin, f.unitsMin) || !numEq(cfg.unitsMax, f.unitsMax)) return true;
+  if(!numEq(cfg.capMin,   f.capMin)   || !numEq(cfg.capMax,   f.capMax))   return true;
+  if(!numEq(cfg.commMin,  f.commMin)  || !numEq(cfg.commMax,  f.commMax))  return true;
   return false;
 }
 
@@ -43538,23 +43952,24 @@ function _buildPipelineFilterChipsHTML(){
   return chips.join(' ');
 }
 
+// v113.28: Full Pipeline filter panel — every former pill set / dropdown
+// is now a searchable combobox (`_filterComboHTML`). Ranges + the Needs
+// Review toggle are unchanged. After this returns, the caller MUST call
+// _pipelineMountFilterCombos() so each combo gets its event wiring.
+//
+// Filter state (`getPipelineFilters()`) shape is preserved — we just swap
+// the UI in front of it. Existing chip / save / clear logic keeps working.
 function _buildPipelineFilterPanelHTML(){
   const opts = _collectFilterOptions();
   const f = getPipelineFilters();
 
-  const btnStyle = (selected) =>
-    `display:inline-block;padding:5px 11px;margin:2px;border-radius:99px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${selected?'#1e3a8a':'#cbd5e1'};background:${selected?'#1e3a8a':'#f1f5f9'};color:${selected?'#fff':'#334155'};`;
-
-  const multiSelect = (title, key, values) => {
-    if(!values.length) return '';
-    const selected = f[key];
-    return `
-      <div style="margin-bottom:14px;">
-        <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">${title}</div>
-        <div>
-          ${values.map(v => `<span data-filter-key="${key}" data-filter-val="${v.replace(/"/g,'&quot;')}" onclick="togglePipelineFilterValue('${key}','${v.replace(/'/g,"\\'")}')" style="${btnStyle(selected.includes(v))}">${v}</span>`).join('')}
-        </div>
-      </div>`;
+  // Generic state mutator used by every combo's setSelected.
+  // Mutates f[key], saves to localStorage, and triggers a full re-render
+  // so the chip strip + filter count + filtered deals all update together.
+  const updateMulti = (key, vals) => {
+    f[key] = Array.isArray(vals) ? vals : [];
+    savePipelineFilters();
+    _refreshPipelineFilterChips(); // full re-render via showPipelineView
   };
 
   const rangeInput = (title, minKey, maxKey, placeholder, suffix) => `
@@ -43572,21 +43987,124 @@ function _buildPipelineFilterPanelHTML(){
       </div>
     </div>`;
 
-  // Phase A: Region chips row — NJ subsections + Tri-State
-  const regionChipsHTML = `
-    <div style="margin-bottom:14px;">
-      <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Region <span style="font-weight:500;color:#94a3b8;">(click to toggle)</span></div>
-      <div>
-        ${PIPELINE_REGION_CHIPS.map(chip => {
-          const sel = f.regionChipIds && f.regionChipIds.includes(chip.id);
-          return `<span onclick="togglePipelineRegionChip('${chip.id}')" style="${btnStyle(sel)}">${chip.label}</span>`;
-        }).join('')}
-      </div>
-    </div>`;
+  // ─── Stage combo ────────────────────────────────────────────────
+  const stageCombo = _filterComboHTML({
+    id: 'pf_stages',
+    label: 'Pipeline Stage',
+    options: () => NEW_PIPELINE_STAGES.slice(),
+    getSelected: () => f.stages || [],
+    setSelected: (vals) => updateMulti('stages', vals),
+  });
 
-  // Phase B: Needs Review toggle — count deals flagged for county review and
-  // render a single button that filters pipeline to just the review queue.
-  // Uses the same DB-backed flag that Phase B populated, with Phase A fallback.
+  // ─── Asset Type combo ──────────────────────────────────────────
+  const assetTypeCombo = _filterComboHTML({
+    id: 'pf_assetTypes',
+    label: 'Asset Type',
+    subLabel: opts.assetTypes.length ? '(' + opts.assetTypes.length + ' total)' : '',
+    options: () => opts.assetTypes,
+    getSelected: () => f.assetTypes || [],
+    setSelected: (vals) => updateMulti('assetTypes', vals),
+  });
+
+  // ─── Region combo (label↔chipId translation) ────────────────────
+  // PIPELINE_REGION_CHIPS is the source of truth for available regions.
+  // Combo options/picks use chip.label; we translate to chip.id when
+  // writing to f.regionChipIds (which is what applyPipelineFilters reads).
+  const regionCombo = _filterComboHTML({
+    id: 'pf_regions',
+    label: 'Region',
+    options: () => PIPELINE_REGION_CHIPS.map(c => c.label),
+    getSelected: () => {
+      const ids = f.regionChipIds || [];
+      return ids.map(id => {
+        const c = PIPELINE_REGION_CHIPS.find(x => x.id === id);
+        return c ? c.label : id;
+      });
+    },
+    setSelected: (labels) => {
+      f.regionChipIds = labels.map(l => {
+        const c = PIPELINE_REGION_CHIPS.find(x => x.label === l);
+        return c ? c.id : l;
+      });
+      savePipelineFilters();
+      _refreshPipelineFilterChips();
+    },
+  });
+
+  // ─── State combo — multi-select. Auto-prunes counties not in any
+  // selected state so the user doesn't end up with hidden-but-active
+  // county filters.
+  const stateSet = new Set();
+  opts.counties.forEach(c => {
+    const st = _countyState(c);
+    stateSet.add(st || 'Other');
+  });
+  const allStates = [...stateSet].sort((a,b) => {
+    if(a === 'NJ') return -1;
+    if(b === 'NJ') return 1;
+    if(a === 'Other') return 1;
+    if(b === 'Other') return -1;
+    return a.localeCompare(b);
+  });
+  const stateCombo = _filterComboHTML({
+    id: 'pf_states',
+    label: 'State',
+    options: () => allStates,
+    getSelected: () => f.states || [],
+    setSelected: (vals) => {
+      f.states = vals;
+      // Drop counties not in any of the selected states (keep all if nothing selected)
+      if(vals.length && f.counties && f.counties.length){
+        f.counties = f.counties.filter(c => {
+          const st = _countyState(c);
+          return (vals.includes('Other') && !st) || (st && vals.includes(st));
+        });
+      }
+      savePipelineFilters();
+      _refreshPipelineFilterChips();
+    },
+  });
+
+  // ─── County combo — scoped by current state filter ─────────────
+  // When state(s) are selected, narrow the combo's option list so the
+  // user only sees counties in those states (matches the prior dropdown
+  // semantics).
+  const stateFilter = f.states || [];
+  const countiesForState = stateFilter.length
+    ? opts.counties.filter(c => {
+        const st = _countyState(c);
+        return (stateFilter.includes('Other') && !st) || (st && stateFilter.includes(st));
+      })
+    : opts.counties;
+  const countyCombo = _filterComboHTML({
+    id: 'pf_counties',
+    label: 'County',
+    subLabel: '(' + countiesForState.length + (stateFilter.length ? ' in ' + stateFilter.join(', ') : ' total') + ')',
+    options: () => countiesForState,
+    getSelected: () => f.counties || [],
+    setSelected: (vals) => updateMulti('counties', vals),
+  });
+
+  // ─── City combo ─────────────────────────────────────────────────
+  const cityCombo = _filterComboHTML({
+    id: 'pf_cities',
+    label: 'City',
+    subLabel: opts.cities.length ? '(' + opts.cities.length + ' total)' : '',
+    options: () => opts.cities,
+    getSelected: () => f.cities || [],
+    setSelected: (vals) => updateMulti('cities', vals),
+  });
+
+  // ─── Agent combo ────────────────────────────────────────────────
+  const agentCombo = _filterComboHTML({
+    id: 'pf_agents',
+    label: 'Agent',
+    options: () => opts.agents,
+    getSelected: () => f.agents || [],
+    setSelected: (vals) => updateMulti('agents', vals),
+  });
+
+  // ─── Needs Review toggle — kept as a single button, not a combo ──
   const reviewCount = allDeals.filter(d => _isBadCountyName(d['Simple County'], d)).length;
   const reviewActive = !!f.needsReviewOnly;
   const reviewToggleHTML = `
@@ -43598,71 +44116,19 @@ function _buildPipelineFilterPanelHTML(){
       ${reviewCount > 0 ? `<div style="font-size:10px;color:#94a3b8;margin-top:4px;">${reviewCount} deals have bad, missing, or mismatched county data.</div>` : ''}
     </div>`;
 
-  // Phase A: State dropdown — all states present in data, default "All"
-  // Builds the state list from actual deals so unmapped counties show as "Other"
-  const stateSet = new Set();
-  opts.counties.forEach(c => {
-    const st = _countyState(c);
-    stateSet.add(st || 'Other');
-  });
-  const allStates = [...stateSet].sort((a,b) => {
-    // NJ first (Ricky's primary market), then alphabetical, Other last
-    if(a === 'NJ') return -1;
-    if(b === 'NJ') return 1;
-    if(a === 'Other') return 1;
-    if(b === 'Other') return -1;
-    return a.localeCompare(b);
-  });
-  const currentStateFilter = (f.states && f.states[0]) || ''; // single-select UX for dropdown
-  const stateDropdownHTML = `
-    <div style="margin-bottom:10px;">
-      <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">State</div>
-      <select onchange="setPipelineStateFilter(this.value)" style="width:100%;max-width:200px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:5px;font-size:12px;background:#fff;">
-        <option value="">All states</option>
-        ${allStates.map(s => `<option value="${s}" ${currentStateFilter===s?'selected':''}>${s === 'Other' ? 'Other (unmapped)' : s}</option>`).join('')}
-      </select>
-    </div>`;
-
-  // Phase A: Searchable county multi-select, filtered by current state selection.
-  // If a state is selected, only show counties in that state. Otherwise show all.
-  const countiesForState = currentStateFilter
-    ? opts.counties.filter(c => {
-        const st = _countyState(c);
-        return currentStateFilter === 'Other' ? !st : st === currentStateFilter;
-      })
-    : opts.counties;
-  const selectedCounties = f.counties || [];
-  const countySearchHTML = `
-    <div style="margin-bottom:14px;">
-      <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">
-        County <span style="font-weight:500;color:#94a3b8;">(${countiesForState.length} ${currentStateFilter?`in ${currentStateFilter}`:'total'}${selectedCounties.length?` · ${selectedCounties.length} selected`:''})</span>
-      </div>
-      <input type="text" id="pipelineCountySearchBox" placeholder="Type to search counties..." oninput="_pipelineCountySearch(this.value)" style="width:100%;padding:7px 10px;border:1px solid #cbd5e1;border-radius:5px;font-size:11px;box-sizing:border-box;margin-bottom:6px;"/>
-      <div id="pipelineCountyResults" style="max-height:160px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:5px;padding:6px;background:#fff;">
-        ${_pipelineCountyRenderList('', countiesForState, selectedCounties, btnStyle)}
-      </div>
-    </div>`;
-
   return `
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px 24px;padding:16px 20px;background:#f8fafc;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;">
       <div>
-        ${multiSelect('Pipeline Stage', 'stages', NEW_PIPELINE_STAGES)}
-        ${multiSelect('Asset Type', 'assetTypes', opts.assetTypes)}
-        ${regionChipsHTML}
-        ${stateDropdownHTML}
-        ${countySearchHTML}
+        ${stageCombo}
+        ${assetTypeCombo}
+        ${regionCombo}
+        ${stateCombo}
+        ${countyCombo}
         ${reviewToggleHTML}
       </div>
       <div>
-        ${opts.cities.length <= 60 ? multiSelect('City', 'cities', opts.cities) : `
-          <div style="margin-bottom:14px;">
-            <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">City (${opts.cities.length} total)</div>
-            <input type="text" placeholder="Type city name..." oninput="_cityFilterSearch(this.value)" style="width:100%;padding:6px 10px;border:1px solid #cbd5e1;border-radius:5px;font-size:11px;box-sizing:border-box;margin-bottom:6px;"/>
-            <div id="cityFilterResults" style="max-height:100px;overflow-y:auto;">
-              ${f.cities.map(v => `<span data-filter-key="cities" data-filter-val="${v.replace(/"/g,'&quot;')}" onclick="togglePipelineFilterValue('cities','${v.replace(/'/g,"\\'")}')" style="${btnStyle(true)}">${v} ✕</span>`).join('')}
-            </div>
-          </div>`}
-        ${multiSelect('Agent', 'agents', opts.agents)}
+        ${cityCombo}
+        ${agentCombo}
         ${rangeInput('Price', 'priceMin', 'priceMax', '$', '')}
         ${rangeInput('Square Footage', 'sfMin', 'sfMax', 'SF', 'SF')}
         ${rangeInput('Units', 'unitsMin', 'unitsMax', '#', 'units')}
@@ -43670,6 +44136,19 @@ function _buildPipelineFilterPanelHTML(){
         ${rangeInput('Commission Amount', 'commMin', 'commMax', '$', '')}
       </div>
     </div>`;
+}
+
+// v113.28: Wire all 7 pipeline filter combos after the panel HTML is in DOM.
+// Called from showPipelineView() (full) and _renderMyPipelineBoard (personal).
+// `_comboWire` is idempotent — safe to call repeatedly across re-renders.
+// We guard on element presence so it's a no-op when the panel is collapsed
+// or the page hasn't mounted yet.
+function _pipelineMountFilterCombos(){
+  if(typeof _comboWire !== 'function') return;
+  if(!document.getElementById('pipelineFilterPanel')) return;
+  ['pf_stages','pf_assetTypes','pf_regions','pf_states','pf_counties','pf_cities','pf_agents'].forEach(id => {
+    if(document.getElementById('combo-si-' + id)) _comboWire(id);
+  });
 }
 
 // Render the filtered county list (used both on initial panel build and as
@@ -43987,6 +44466,9 @@ function showPipelineView(){
     const _ptbl = document.querySelector('#pipelineBody table');
     if(_ptbl) _makeColumnsResizable(_ptbl, 'pipelineTable');
   }
+
+  // v113.28: wire combobox event handlers for the filter panel
+  if(typeof _pipelineMountFilterCombos === 'function') _pipelineMountFilterCombos();
 }
 
 // ─── PIPELINE DRAG & DROP ────────────────────────────────────────

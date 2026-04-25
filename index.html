@@ -11614,21 +11614,17 @@ function renderAICommTab(d){
       <details id="emailTplSettings" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-bottom:10px;">
         <summary style="font-size:12px;font-weight:600;color:#1e3a8a;cursor:pointer;user-select:none;">⚙️ Template settings (fields, tone, signature)</summary>
 
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-top:10px;">
-          <div>
-            <label style="font-size:10px;font-weight:600;color:#475569;display:block;margin-bottom:3px;">Sign off as</label>
-            <input id="emailTplSignature" style="width:100%;padding:6px 8px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;">
-          </div>
-          <div>
-            <label style="font-size:10px;font-weight:600;color:#475569;display:block;margin-bottom:3px;">Tone</label>
-            <select id="emailTplTone" style="width:100%;padding:6px 8px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;">
-              <option value="Professional, concise, and compelling">Professional (default)</option>
-              <option value="Warm and conversational, but still polished">Warm / conversational</option>
-              <option value="Urgent — emphasize opportunity and timing">Urgent — limited window</option>
-              <option value="Data-driven and analytical — lead with numbers">Analytical — lead with numbers</option>
-              <option value="Brief and punchy — four sentences max">Brief — punchy</option>
-            </select>
-          </div>
+        <!-- v113.18: Sign-off is per agent from Settings → Marketing. No per-deal override. -->
+        <div style="margin-top:10px;">
+          <label style="font-size:10px;font-weight:600;color:#475569;display:block;margin-bottom:3px;">Tone <span style="font-weight:400;color:#94a3b8;">(overrides the default from Settings → Marketing)</span></label>
+          <select id="emailTplTone" style="width:100%;padding:6px 8px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;">
+            <option value="">— Use Marketing default —</option>
+            <option value="Professional, concise, and compelling">Professional</option>
+            <option value="Warm and conversational, but still polished">Warm / conversational</option>
+            <option value="Urgent — emphasize opportunity and timing">Urgent — limited window</option>
+            <option value="Data-driven and analytical — lead with numbers">Analytical — lead with numbers</option>
+            <option value="Brief and punchy — four sentences max">Brief — punchy</option>
+          </select>
         </div>
 
         <div style="margin-top:10px;">
@@ -11703,7 +11699,7 @@ const EMAIL_TPL_FIELDS = [
   { k:'sqft',          group:'Physical',     label:'Building SF',           get:d=>{ const v=d['Square Footage']||d['Total Building SF']; return v?Number(v).toLocaleString()+' SF':''; } },
   { k:'netRentableSF', group:'Physical',     label:'Net Rentable SF',       get:d=>{ const v=d['Net Rentable SF']; return v?Number(v).toLocaleString()+' SF':''; } },
   { k:'lotSize',       group:'Physical',     label:'Lot Size',              get:d=>{ const v=d['Total Lot Size']; return v?Number(v).toLocaleString()+' acres':''; } },
-  { k:'units',         group:'Physical',     label:'# of Units',            get:d=>d['Number of Units']||d['No. of Units'] },
+  { k:'units',         group:'Physical',     label:'# of Units',            get:d=>d['No. of Units']||d['Number of Units'] },  // v113.18: Unit Mix UI writes to 'No. of Units'; prefer it over the legacy 'Number of Units' column
   { k:'noOfBuildings', group:'Physical',     label:'# of Buildings',        get:d=>d['No. of Buildings'] },
   { k:'unitMix',       group:'Physical',     label:'Unit Mix',              get:d=>d['Unit Mix'] },
   { k:'yearBuilt',     group:'Physical',     label:'Year Built',            get:d=>d['Year Built'] },
@@ -11719,7 +11715,15 @@ const EMAIL_TPL_FIELDS = [
   { k:'griMonthly',    group:'Financials',   label:'GRI (Monthly)',         get:d=>{ const v=d['Gross Rental Income (Monthly)']; return v?'$'+Number(v).toLocaleString()+'/mo':''; } },
   { k:'grossRevYearly',group:'Financials',   label:'Gross Revenue (yr)',    get:d=>{ const gri=d['Gross Revenue Yearly']; const mo=d['Gross Rental Income (Monthly)']; const v=gri||(mo?Number(mo)*12:null); return v?'$'+Number(v).toLocaleString():''; } },
   { k:'expensesYearly',group:'Financials',   label:'Expenses (yr)',         get:d=>{ const v=d['Expenses Yearly']||(d['Expenses Monthly']?Number(d['Expenses Monthly'])*12:null); return v?'$'+Number(v).toLocaleString():''; } },
-  { k:'noi',           group:'Financials',   label:'NOI (yearly)',          get:d=>{ const v=d['NOI']; return v?'$'+Number(v).toLocaleString():''; } },
+  { k:'noi',           group:'Financials',   label:'NOI (yearly)',          get:d=>{
+      // v113.18: compute NOI when the column is empty. NOI = Gross Revenue - Expenses.
+      const stored = Number(d['NOI']);
+      if(stored) return '$'+stored.toLocaleString();
+      const gri = Number(d['Gross Revenue Yearly']) || (Number(d['Gross Rental Income (Monthly)'])*12) || 0;
+      const exp = Number(d['Expenses Yearly'])       || (Number(d['Expenses Monthly'])*12)             || 0;
+      const noi = gri - exp;
+      return (gri && exp && noi>0) ? '$'+Math.round(noi).toLocaleString() : '';
+  } },
   { k:'capRate',       group:'Financials',   label:'Cap Rate',              get:d=>{ const v=d['Cap Rate (CRM)']; return (v!=null&&v!=='')? (Number(v)*100).toFixed(2)+'%':''; } },
   { k:'expenseRatio',  group:'Financials',   label:'Expense Ratio',         get:d=>{ const v=d['Actual Expense Ratio %']; return (v!=null&&v!=='')? Number(v).toFixed(1)+'%':''; } },
   { k:'pricePerSF',    group:'Financials',   label:'Price / SF',            get:d=>{ const ask=Number(d['Asking Price']||d['Pitch Out Price']||0); const sf=Number(d['Square Footage']||d['Total Building SF']||0); return (ask&&sf)?'$'+(ask/sf).toFixed(2)+'/SF':''; } },
@@ -11783,11 +11787,15 @@ function _emailTplSavePrefs(){
     const el = document.getElementById('emailTplF_'+f.k);
     enabled[f.k] = !!el?.checked;
   });
+  // v113.18: signature is now sourced from Settings → Marketing (per-agent),
+  // not from a per-deal input. We keep the field in prefs for backwards compat
+  // but don't read it from a DOM input anymore — runEmailAgent falls through
+  // to the marketing default when prefs.signature is blank.
   const prefs = {
     enabled,
-    signature: (document.getElementById('emailTplSignature')?.value || '').trim() || EMAIL_TPL_DEFAULTS.signature,
-    tone:      (document.getElementById('emailTplTone')?.value      || '').trim() || EMAIL_TPL_DEFAULTS.tone,
-    extra:     (document.getElementById('emailTplExtra')?.value     || '').trim()
+    signature: '',
+    tone:      (document.getElementById('emailTplTone')?.value  || '').trim(),  // blank = use marketing default
+    extra:     (document.getElementById('emailTplExtra')?.value || '').trim()
   };
   try{ localStorage.setItem(EMAIL_TPL_LS_KEY, JSON.stringify(prefs)); }catch(_e){}
   return prefs;
@@ -11835,13 +11843,11 @@ function _emailTplRenderFields(){
   });
   grid.innerHTML = html;
 
-  // Restore signature / tone / extra
-  const sigEl = document.getElementById('emailTplSignature'); if(sigEl) sigEl.value = prefs.signature;
-  const toneEl = document.getElementById('emailTplTone');     if(toneEl) toneEl.value = prefs.tone;
-  const extraEl = document.getElementById('emailTplExtra');   if(extraEl) extraEl.value = prefs.extra;
+  // v113.18: only tone + extra are per-deal. Signature lives in Marketing settings.
+  const toneEl = document.getElementById('emailTplTone');   if(toneEl)  toneEl.value  = prefs.tone;
+  const extraEl = document.getElementById('emailTplExtra'); if(extraEl) extraEl.value = prefs.extra;
 
-  // Persist on change for signature / tone / extra
-  ['emailTplSignature','emailTplTone','emailTplExtra'].forEach(id => {
+  ['emailTplTone','emailTplExtra'].forEach(id => {
     const el = document.getElementById(id);
     if(el && !el._emailTplBound){
       el.addEventListener('change', _emailTplSavePrefs);
@@ -12018,10 +12024,9 @@ async function loadSavedTemplate(id){
   const bodyEl= document.getElementById('emailTemplateText');
   if(subEl)  subEl.value  = t.subject || '';
   if(bodyEl) bodyEl.value = t.body || '';
-  // Restore settings
-  const sigEl = document.getElementById('emailTplSignature'); if(sigEl && t.signature) sigEl.value = t.signature;
-  const toneEl= document.getElementById('emailTplTone');      if(toneEl && t.tone)      toneEl.value = t.tone;
-  const extraEl=document.getElementById('emailTplExtra');     if(extraEl)               extraEl.value = t.extra_instructions || '';
+  // Restore per-deal settings (tone, extra). v113.18: signature comes from Marketing settings.
+  const toneEl= document.getElementById('emailTplTone');  if(toneEl)  toneEl.value  = t.tone || '';
+  const extraEl=document.getElementById('emailTplExtra'); if(extraEl) extraEl.value = t.extra_instructions || '';
   if(t.fields_enabled && typeof t.fields_enabled === 'object'){
     EMAIL_TPL_FIELDS.forEach(f => {
       const el = document.getElementById('emailTplF_'+f.k);
@@ -12542,12 +12547,25 @@ async function runEmailAgent(){
 
   // v113.17: load the user's Marketing defaults (Settings → Marketing tab) so
   // every Run Agent starts from the same base prompt/tone/signature/style guide.
-  // Per-deal prefs (tone select, extra instructions, signature on the AI Comm
-  // tab) override the defaults when set.
+  // Per-deal prefs (tone select, extra instructions) override the defaults when set.
   if(_marketingSettings === null && typeof _marketingLoad === 'function'){
     try { await _marketingLoad(); } catch(_e){}
   }
   const mkg = _marketingSettings || {};
+
+  // v113.18: refetch the deal row before generating so recent Unit Mix /
+  // Financial Analysis edits are reflected. Without this, an agent who
+  // changes "No. of Units" from 2 to 4 and immediately clicks Run Agent
+  // sends the stale in-memory value of 2 to the AI.
+  if(isSupabase() && currentDeal?.id){
+    try {
+      const fresh = await _sbGet(SB_TABLES.properties, `id=eq.${currentDeal.id}`);
+      if(Array.isArray(fresh) && fresh[0]){
+        const refreshed = _sbToAt(fresh[0], SB_PROP_MAP);
+        Object.assign(currentDeal, refreshed);
+      }
+    } catch(_e) { /* non-fatal; use in-memory copy */ }
+  }
 
   // Resolve each enabled field against the current deal. Empty values fall
   // through so the edge function strips them out ("don't mention missing info").
@@ -12607,9 +12625,16 @@ async function runEmailAgent(){
 
   try{
     const cfg = getConfig();
+    // v113.18: pass the anon key because the redeployed crm-email-gen enforces
+    // JWT verification (v4+). The anon key is public-safe to include in the
+    // bundle — same as every other Supabase REST call in this file.
     const res = await fetch(cfg.url + '/functions/v1/crm-email-gen', {
       method:'POST',
-      headers:{'Content-Type':'application/json'},
+      headers:{
+        'Content-Type':'application/json',
+        'apikey': SB_ANON_KEY,
+        'Authorization': 'Bearer ' + SB_ANON_KEY,
+      },
       body: JSON.stringify({
         fields,
         signature: effectiveSignature,

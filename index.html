@@ -11964,20 +11964,25 @@ function _emailInsertPlaceholder(token){
   try { el.setSelectionRange(pos, pos); } catch(_e){}
 }
 
-// ─── v113.14: Saved Email Templates (per-user library) ───────────────────────
-// Templates live in ace_user_email_templates, keyed by user_email + name.
-// One per user may be marked is_official — that's the default picked when
-// composing / sending.
-let _emailTemplates = [];          // cache for current user
+// ─── v113.14: Saved Email Templates (per-user + per-deal library) ────────────
+// Templates live in ace_user_email_templates, scoped by (user_email, property_id,
+// name). One per user-deal may be marked is_official — that's the default picked
+// when composing / sending on that specific deal.
+// v113.17: scoped per-deal — a template saved on 1722 Stout no longer shows up
+// when you open 105 10th Ave.
+let _emailTemplates = [];          // cache for current user + current deal
 let _currentTemplateId = null;     // id of currently-loaded template, or null
 
 async function _loadUserTemplatesList(){
   if(!isSupabase()) return;
   const email = _currentUser?.email;
   if(!email) return;
+  const propId = currentDeal?.id || null;
   try{
+    // v113.17: filter by property_id — only templates for this specific deal
+    const propFilter = propId ? `&property_id=eq.${encodeURIComponent(propId)}` : '&property_id=is.null';
     const rows = await _sbGet('ace_user_email_templates',
-      `user_email=eq.${encodeURIComponent(email)}&order=is_official.desc`);
+      `user_email=eq.${encodeURIComponent(email)}${propFilter}&order=is_official.desc`);
     const list = Array.isArray(rows) ? rows : [];
     // Secondary sort by name, client-side (proxy only supports one order col)
     list.sort((a,b) => (b.is_official?1:0) - (a.is_official?1:0) || String(a.name||'').localeCompare(String(b.name||'')));
@@ -12036,7 +12041,8 @@ function _collectCurrentTemplatePayload(){
   const body    = document.getElementById('emailTemplateText')?.value    || '';
   const prefs   = _emailTplSavePrefs();
   return {
-    user_email: _currentUser?.email || '',
+    user_email:  _currentUser?.email || '',
+    property_id: currentDeal?.id || null,  // v113.17: scope to current deal
     subject, body,
     signature: prefs.signature || null,
     tone: prefs.tone || null,
@@ -12075,7 +12081,8 @@ async function saveAsTemplate(){
 async function saveCurrentTemplate(){
   if(!_currentTemplateId){ return saveAsTemplate(); }
   const payload = _collectCurrentTemplatePayload();
-  delete payload.user_email; // don't reassign owner
+  delete payload.user_email;  // don't reassign owner
+  delete payload.property_id; // don't reparent a template to a different deal
   try{
     await _sbPatch('ace_user_email_templates', _currentTemplateId, payload);
     await _loadUserTemplatesList();
@@ -12087,8 +12094,10 @@ async function makeTemplateOfficial(){
   if(!_currentTemplateId){ alert('Load a saved template first, then click Make Official.'); return; }
   if(!_currentUser?.email) return;
   try{
-    // Clear official flag on all OTHER templates owned by this user
-    // (partial unique index blocks multiple official rows, so clear first).
+    // v113.17: _emailTemplates is now already scoped to this deal, so clearing
+    // "others" only clears other templates for this same deal (the partial
+    // unique index on (user_email, property_id) WHERE is_official blocks
+    // multiple official rows per deal, so we clear first).
     const others = _emailTemplates.filter(t => t.is_official && t.id !== _currentTemplateId);
     for(const t of others){
       await _sbPatch('ace_user_email_templates', t.id, { is_official: false });
@@ -12111,6 +12120,65 @@ async function deleteCurrentTemplate(){
     await _loadUserTemplatesList();
     showSaveConfirm('✓ Template deleted');
   }catch(e){ alert('Delete failed: '+e.message); }
+}
+
+// ─── v113.17: Marketing defaults (user-global, applied on every Run Agent) ───
+// Stored in ace_user_marketing_settings. Loaded once on Settings open, applied
+// by runEmailAgent by appending to the per-deal extra instructions field.
+let _marketingSettings = null;
+
+async function _marketingLoad(){
+  if(!isSupabase() || !_currentUser?.email) return;
+  try{
+    const rows = await _sbGet('ace_user_marketing_settings',
+      `user_email=eq.${encodeURIComponent(_currentUser.email)}&limit=1`);
+    _marketingSettings = (Array.isArray(rows) && rows[0]) || null;
+  }catch(_e){ _marketingSettings = null; }
+  _marketingPopulateForm();
+}
+
+function _marketingPopulateForm(){
+  const s = _marketingSettings || {};
+  const set = (id,v)=>{ const el=document.getElementById(id); if(el) el.value = v||''; };
+  set('mkgDefaultTone',      s.default_tone);
+  set('mkgDefaultSubject',   s.default_subject_template);
+  set('mkgDefaultPrompt',    s.default_prompt);
+  set('mkgStyleGuide',       s.style_guide);
+  set('mkgDefaultSignature', s.default_signature);
+}
+
+async function _marketingSave(){
+  if(!isSupabase()){ alert('Marketing defaults require Supabase mode.'); return; }
+  if(!_currentUser?.email){ alert('Sign in first.'); return; }
+  const get = id => document.getElementById(id)?.value?.trim() || null;
+  const payload = {
+    user_email:               _currentUser.email,
+    default_tone:             get('mkgDefaultTone'),
+    default_subject_template: get('mkgDefaultSubject'),
+    default_prompt:           get('mkgDefaultPrompt'),
+    style_guide:              get('mkgStyleGuide'),
+    default_signature:        get('mkgDefaultSignature'),
+  };
+  const status = document.getElementById('mkgSaveStatus');
+  try{
+    if(_marketingSettings?.id){
+      await _sbPatch('ace_user_marketing_settings', _marketingSettings.id, payload);
+      _marketingSettings = Object.assign({}, _marketingSettings, payload);
+    } else {
+      const saved = await _sbPost('ace_user_marketing_settings', payload);
+      _marketingSettings = Array.isArray(saved) ? saved[0] : saved;
+    }
+    if(status){
+      status.textContent = '✓ Saved ' + new Date().toLocaleTimeString();
+      status.style.color = '#059669';
+    }
+    showSaveConfirm('✓ Marketing defaults saved');
+  }catch(e){
+    if(status){
+      status.textContent = '✗ Save failed: ' + e.message;
+      status.style.color = '#dc2626';
+    }
+  }
 }
 
 // ─── Send via Gmail (modal flow) ─────────────────────────────────────────────
@@ -12472,6 +12540,15 @@ async function runEmailAgent(){
   // Persist the current form state + get a clean prefs snapshot
   const prefs = _emailTplSavePrefs();
 
+  // v113.17: load the user's Marketing defaults (Settings → Marketing tab) so
+  // every Run Agent starts from the same base prompt/tone/signature/style guide.
+  // Per-deal prefs (tone select, extra instructions, signature on the AI Comm
+  // tab) override the defaults when set.
+  if(_marketingSettings === null && typeof _marketingLoad === 'function'){
+    try { await _marketingLoad(); } catch(_e){}
+  }
+  const mkg = _marketingSettings || {};
+
   // Resolve each enabled field against the current deal. Empty values fall
   // through so the edge function strips them out ("don't mention missing info").
   const fields = {};
@@ -12502,7 +12579,31 @@ async function runEmailAgent(){
   // v113.14: instruct the AI to emit a "Subject: ..." line first, then a blank
   // line, then the body. We parse it back out. If not present, fall back.
   const subjectInstr = 'Begin your response with one line in the exact format: "Subject: <subject line>" (no other prefix, no quotes). Leave a blank line after the subject, then write the email body.';
-  const mergedExtra = [subjectInstr, prefs.extra].filter(Boolean).join('\n\n');
+
+  // v113.17: layer Marketing defaults → per-deal extra instructions
+  //   (1) standing default_prompt from Settings → Marketing (user's usual ask)
+  //   (2) style_guide from Settings → Marketing (brand voice, do/don'ts)
+  //   (3) default_subject_template hint (e.g. "use a benefit-led subject")
+  //   (4) per-deal "Additional Instructions" (AI Comm → Template Settings)
+  //   (5) subjectInstr (structural — must come last to survive)
+  const subjectStyleHints = {
+    property_headline: 'Subject should be a short property headline (Type + neighborhood + one killer feature).',
+    benefit_led:       'Subject should lead with the single strongest quantitative benefit (cap rate, cash-on-cash, occupancy, %).',
+    question:          'Subject should be a short conversational question that prompts a reply.',
+    short_direct:      'Subject should be short and direct — 5 words or less, no fluff.',
+  };
+  const subjectStyle = subjectStyleHints[mkg.default_subject_template] || '';
+  const mergedExtra = [
+    mkg.default_prompt || '',
+    mkg.style_guide ? ('STYLE GUIDE:\n' + mkg.style_guide) : '',
+    subjectStyle,
+    prefs.extra || '',
+    subjectInstr,
+  ].filter(Boolean).join('\n\n');
+
+  // v113.17: fall through to marketing defaults when the per-deal field is blank
+  const effectiveTone      = prefs.tone      || mkg.default_tone      || '';
+  const effectiveSignature = prefs.signature || mkg.default_signature || '';
 
   try{
     const cfg = getConfig();
@@ -12511,8 +12612,8 @@ async function runEmailAgent(){
       headers:{'Content-Type':'application/json'},
       body: JSON.stringify({
         fields,
-        signature: prefs.signature,
-        tone: prefs.tone,
+        signature: effectiveSignature,
+        tone: effectiveTone,
         extraInstructions: mergedExtra,
         recipient
       })
@@ -25881,6 +25982,56 @@ function showSettingsPage(){
           </div>
         </section>
 
+        <!-- v113.17: MARKETING — default prompt/style/tone/signature Run Agent applies to every deal -->
+        <section data-settings-tab="marketing" style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;">
+          <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:10px;margin-bottom:12px;">
+            <div>
+              <div style="font-size:15px;font-weight:700;color:#0f172a;">✉ Email defaults for Run Agent</div>
+              <div style="font-size:12px;color:#64748b;margin-top:4px;line-height:1.5;">
+                These defaults are applied <b>every time</b> you press <b>Run Agent</b> on the AI Communication tab.
+                Per-deal "Additional Instructions" are appended on top of what you set here.
+              </div>
+            </div>
+            <button onclick="_marketingSave()" style="background:#059669;color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">✓ Save defaults</button>
+          </div>
+
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+            <div>
+              <label style="display:block;font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Default tone</label>
+              <select id="mkgDefaultTone" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;background:#fff;">
+                <option value="">— Pick a tone —</option>
+                <option value="professional">Professional</option>
+                <option value="direct">Direct / no-fluff</option>
+                <option value="consultative">Consultative</option>
+                <option value="warm">Warm</option>
+                <option value="urgent">Urgent</option>
+                <option value="casual">Casual</option>
+              </select>
+            </div>
+            <div>
+              <label style="display:block;font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:4px;">Default subject style</label>
+              <select id="mkgDefaultSubject" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;background:#fff;">
+                <option value="">— Pick a style —</option>
+                <option value="property_headline">Property headline (e.g. "Fully Occupied Belmar Duplex – Steps from the Beach")</option>
+                <option value="benefit_led">Benefit-led (e.g. "8.2% cap, $0 vacancy, 5 min from the GSP")</option>
+                <option value="question">Question (e.g. "Open to a look at 105 10th Ave?")</option>
+                <option value="short_direct">Short + direct (e.g. "Belmar duplex — quick look?")</option>
+              </select>
+            </div>
+          </div>
+
+          <label style="display:block;font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.5px;margin:14px 0 4px;">Default prompt <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">(standing instructions — sent to the AI on every Run Agent)</span></label>
+          <textarea id="mkgDefaultPrompt" rows="6" style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;font-family:inherit;line-height:1.5;resize:vertical;" placeholder="e.g.&#10;Write as a commercial broker pitching a serious off-market opportunity to a qualified buyer. Lead with the strongest number (cap rate, cash-on-cash, or occupancy). Keep it under 150 words. End with a clear next step — OM request or site visit."></textarea>
+
+          <label style="display:block;font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.5px;margin:14px 0 4px;">Style guide <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">(brand voice, do's and don'ts)</span></label>
+          <textarea id="mkgStyleGuide" rows="5" style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;font-family:inherit;line-height:1.5;resize:vertical;" placeholder="e.g.&#10;- Never use emoji&#10;- Use bullet points for key financials&#10;- Always include at least one specific neighborhood detail&#10;- Never use the word 'turnkey' or 'once-in-a-lifetime'"></textarea>
+
+          <label style="display:block;font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.5px;margin:14px 0 4px;">Default signature</label>
+          <textarea id="mkgDefaultSignature" rows="4" style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;font-family:inherit;line-height:1.5;resize:vertical;" placeholder="e.g.&#10;Richard Reyes&#10;KW Commercial&#10;(843) 926-1393"></textarea>
+
+          <div id="mkgSaveStatus" style="margin-top:10px;font-size:11px;color:#64748b;min-height:14px;"></div>
+        </section>
+
         <section data-settings-tab="config" style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;opacity:0.7;">
           <div style="font-size:15px;font-weight:700;color:#0f172a;margin-bottom:4px;">🎨 Display Preferences <span style="font-size:10px;background:#fef3c7;color:#92400e;padding:2px 8px;border-radius:99px;margin-left:6px;">Coming Soon</span></div>
           <div style="font-size:12px;color:#64748b;">Dark mode, font size, default landing page, pipeline card fields.</div>
@@ -25925,6 +26076,7 @@ const _SETTINGS_TABS = [
   { id:'sync',         label:'🔄 Sync Status' },
   { id:'integrations', label:'🔌 Integrations' },
   { id:'tools',        label:'🧹 Tools' },
+  { id:'marketing',    label:'✉ Marketing' },  // v113.17: default prompt/style/tone/signature for Run Agent
   { id:'team',         label:'👥 Team' },
   { id:'config',       label:'⚙ Configuration' },
 ];
@@ -25954,6 +26106,10 @@ function _settingsSwitchTab(name){
   if(name === 'sync'){
     _syncStatusRender(false);
     if(typeof _reconQueueRender === 'function') _reconQueueRender(false);
+  }
+  // v113.17: load marketing defaults on demand
+  if(name === 'marketing' && typeof _marketingLoad === 'function'){
+    _marketingLoad();
   }
 }
 

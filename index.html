@@ -36789,11 +36789,32 @@ let _notifPollTimer = null;
 const _notifPollMs = 30000;
 let _notifChimeAudio = null;
 let _notifChimeUnlocked = false;
+// v113.25: notification volume is a per-user preference — stored in
+// localStorage (it's a UI setting, not data of record). Range 0..1.
+// 0 = muted, 1 = max. Default 0.6 — louder than v113.24's 0.18 baseline
+// since users were missing it. Each user-controlled chime tops out at
+// gain 1.0 which is comfortably loud through laptop speakers.
+function _notifGetVolume(){
+  try {
+    const v = parseFloat(localStorage.getItem('notif_volume'));
+    if(isFinite(v) && v >= 0 && v <= 1) return v;
+  } catch(_e){}
+  return 0.6;
+}
+function _notifSetVolume(v){
+  const num = Math.max(0, Math.min(1, parseFloat(v) || 0));
+  try { localStorage.setItem('notif_volume', String(num)); } catch(_e){}
+  // Update the slider's live label if the dropdown is open.
+  const lbl = document.getElementById('notifVolValue');
+  if(lbl) lbl.textContent = Math.round(num * 100) + '%';
+}
 function _notifPlayChime(){
   // Browsers block autoplay until the user has interacted with the page,
   // so the first chime might silently fail. After the user clicks anything
   // (the bell, a nav button, etc.), we unlock and subsequent chimes work.
   try {
+    const vol = _notifGetVolume();
+    if(vol <= 0) return; // muted
     if(!_notifChimeAudio){
       // Short, soft 800Hz "ding" — generated via WebAudio so we don't need
       // a static asset. ~180ms blip, fades out.
@@ -36803,16 +36824,23 @@ function _notifPlayChime(){
     }
     const ctx = _notifChimeAudio.ctx;
     if(ctx.state === 'suspended') ctx.resume().catch(()=>{});
-    const o = ctx.createOscillator();
-    const g = ctx.createGain();
-    o.type = 'sine'; o.frequency.value = 880;
-    g.gain.value = 0;
-    o.connect(g); g.connect(ctx.destination);
-    const t0 = ctx.currentTime;
-    g.gain.linearRampToValueAtTime(0.18, t0 + 0.02);
-    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.35);
-    o.start(t0);
-    o.stop(t0 + 0.4);
+    // Two-tone "ding-dong" so it's recognizable as a notification, not just
+    // a beep. Volume scales linearly with the user's slider.
+    const peak = vol; // user-controlled gain peak (already 0..1)
+    const playTone = (freq, startOffset, duration) => {
+      const o = ctx.createOscillator();
+      const g = ctx.createGain();
+      o.type = 'sine'; o.frequency.value = freq;
+      g.gain.value = 0;
+      o.connect(g); g.connect(ctx.destination);
+      const t0 = ctx.currentTime + startOffset;
+      g.gain.linearRampToValueAtTime(peak, t0 + 0.02);
+      g.gain.exponentialRampToValueAtTime(0.0001, t0 + duration);
+      o.start(t0);
+      o.stop(t0 + duration + 0.05);
+    };
+    playTone(988, 0,    0.22);   // B5
+    playTone(740, 0.18, 0.32);   // F#5
   } catch(_e){ /* silent */ }
 }
 // One-time autoplay unlock — first user click anywhere arms the audio
@@ -36900,8 +36928,19 @@ function _notifToggleDropdown(){
 function _notifRenderDropdown(){
   const dd = document.getElementById('navBellDropdown');
   if(!dd) return;
+  // v113.25: volume control sits at the top of the dropdown for every
+  // user, regardless of whether there are unread items.
+  const vol = _notifGetVolume();
+  const volPct = Math.round(vol * 100);
+  const volRow = `
+    <div style="padding:8px 12px;border-bottom:1px solid #e5e7eb;background:#f8fafc;display:flex;align-items:center;gap:8px;">
+      <span style="font-size:11px;color:#64748b;font-weight:600;white-space:nowrap;">🔊 Sound</span>
+      <input type="range" min="0" max="100" value="${volPct}" oninput="_notifSetVolume(this.value/100)" onchange="_notifPlayChime()" style="flex:1;accent-color:#7c3aed;cursor:pointer;" title="Notification volume">
+      <span id="notifVolValue" style="font-size:10px;color:#475569;font-weight:700;min-width:32px;text-align:right;">${volPct}%</span>
+      <button onclick="_notifPlayChime()" title="Test sound" style="background:none;border:1px solid #cbd5e1;color:#475569;border-radius:4px;padding:2px 6px;font-size:10px;cursor:pointer;">Test</button>
+    </div>`;
   if(!_notifUnread.length){
-    dd.innerHTML = `
+    dd.innerHTML = volRow + `
       <div style="padding:14px;font-size:12px;color:#64748b;text-align:center;">No new notifications.</div>`;
     return;
   }
@@ -36920,7 +36959,7 @@ function _notifRenderDropdown(){
       </div>
     </div>`;
   }).join('');
-  dd.innerHTML = `
+  dd.innerHTML = volRow + `
     <div style="padding:8px 12px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:#f8fafc;">
       <span style="font-size:12px;font-weight:700;color:#0f172a;">Notifications (${_notifUnread.length})</span>
       <button onclick="_notifMarkAllRead()" style="background:none;border:none;color:#7c3aed;font-size:11px;cursor:pointer;font-weight:600;">Mark all read</button>
@@ -37533,7 +37572,7 @@ async function _renderGlobalTasks(){
         : '';
       const canDrag = !isAssignedToOthersTab && (section==='overdue' || section==='today' || section==='future');
       const dragHandle = canDrag
-        ? `<div title="Drag to reorder" style="cursor:grab;color:var(--text3);font-size:14px;padding:2px 4px;line-height:1;flex-shrink:0;user-select:none;letter-spacing:-2px;">⋮⋮</div>`
+        ? `<div title="Drag to reorder" onclick="event.stopPropagation()" style="cursor:grab;color:var(--text3);font-size:14px;padding:2px 4px;line-height:1;flex-shrink:0;user-select:none;letter-spacing:-2px;">⋮⋮</div>`
         : '';
       const dragAttrs = canDrag
         ? `draggable="true" data-task-id="${t.id}" data-section="${section}" data-prio="${prioTier}"
@@ -37543,16 +37582,20 @@ async function _renderGlobalTasks(){
            ondragleave="_tasksDragLeave(event)"
            ondrop="_tasksDrop(event)"`
         : `data-task-id="${t.id}"`;
-      return `<div ${dragAttrs} style="background:var(--surface);border:1px solid ${due.overdue&&!isDone?'#fca5a5':'var(--border)'};border-radius:var(--radius-sm);padding:11px 14px;margin-bottom:7px;display:flex;align-items:flex-start;gap:10px;${isDone?'opacity:0.55;':''}">
+      // v113.25: clicking anywhere on the row (outside the checkbox / drag
+      // handle / icon buttons) opens the edit/detail modal — including on
+      // the Assigned-to-Others tab so assigners can edit what they handed off.
+      const rowOpenAttr = `onclick="openEditTaskModal('${t.id}','${(t['Task']||'').replace(/'/g,"\\'")}','${(t['Priority']||'').trim()}','${t['Due Date']||''}','${(t['Notes']||'').replace(/'/g,"\\'").replace(/\n/g,' ')}','global')"`;
+      return `<div ${dragAttrs} ${rowOpenAttr} style="background:var(--surface);border:1px solid ${due.overdue&&!isDone?'#fca5a5':'var(--border)'};border-radius:var(--radius-sm);padding:11px 14px;margin-bottom:7px;display:flex;align-items:flex-start;gap:10px;cursor:pointer;${isDone?'opacity:0.55;':''}">
         ${dragHandle}
-        <input type="checkbox" ${isDone?'checked':''} ${isAssignedToOthersTab?'disabled':''} onchange="toggleTaskDone('${t.id}','${t['Status']}','global')" style="width:16px;height:16px;margin-top:2px;cursor:${isAssignedToOthersTab?'not-allowed':'pointer'};flex-shrink:0;accent-color:#7c3aed;">
+        <input type="checkbox" ${isDone?'checked':''} ${isAssignedToOthersTab?'disabled':''} onclick="event.stopPropagation()" onchange="toggleTaskDone('${t.id}','${t['Status']}','global')" style="width:16px;height:16px;margin-top:2px;cursor:${isAssignedToOthersTab?'not-allowed':'pointer'};flex-shrink:0;accent-color:#7c3aed;">
         <div style="flex:1;min-width:0;">
           <div style="font-size:13px;font-weight:600;${isDone?'text-decoration:line-through;':''}margin-bottom:4px;">${t['Task']||'Untitled'}</div>
           ${t['Notes']?`<div style="font-size:12px;color:var(--text2);margin-bottom:5px;">${t['Notes']}</div>`:''}
           <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">${prio}${dealChip}${contactChip}${buyerChip}${generalChip}<span style="font-size:11px;color:${due.color};font-weight:500;">${due.text}</span>${fromChip}${toChip}${queueChip}${planChip}${writePlanBtn}</div>
         </div>
-        ${isAssignedToOthersTab ? '' : `<button onclick="openEditTaskModal('${t.id}','${(t['Task']||'').replace(/'/g,"\\'")}','${(t['Priority']||'').trim()}','${t['Due Date']||''}','${(t['Notes']||'').replace(/'/g,"\\'").replace(/\n/g,' ')}','global')" title="Edit" style="background:none;border:none;color:var(--text3);font-size:14px;cursor:pointer;padding:0 4px;flex-shrink:0;" onmouseover="this.style.color='#7c3aed'" onmouseout="this.style.color='var(--text3)'">✏️</button>`}
-        ${isAssignedToOthersTab ? '' : `<button onclick="deleteTaskRecord('${t.id}','global')" title="Delete" style="background:none;border:none;color:var(--text3);font-size:16px;cursor:pointer;padding:0 4px;flex-shrink:0;" onmouseover="this.style.color='#dc2626'" onmouseout="this.style.color='var(--text3)'">✕</button>`}
+        <button onclick="event.stopPropagation();openEditTaskModal('${t.id}','${(t['Task']||'').replace(/'/g,"\\'")}','${(t['Priority']||'').trim()}','${t['Due Date']||''}','${(t['Notes']||'').replace(/'/g,"\\'").replace(/\n/g,' ')}','global')" title="Edit" style="background:none;border:none;color:var(--text3);font-size:14px;cursor:pointer;padding:0 4px;flex-shrink:0;" onmouseover="this.style.color='#7c3aed'" onmouseout="this.style.color='var(--text3)'">✏️</button>
+        <button onclick="event.stopPropagation();deleteTaskRecord('${t.id}','global')" title="Delete" style="background:none;border:none;color:var(--text3);font-size:16px;cursor:pointer;padding:0 4px;flex-shrink:0;" onmouseover="this.style.color='#dc2626'" onmouseout="this.style.color='var(--text3)'">✕</button>
       </div>`;
     };
 

@@ -19724,12 +19724,47 @@ async function deleteDeal(dealId, addr){
 }
 
 // ─── PROPERTY DEAL DEDUPE ───────────────────────────────────────
+// v113.33: dedupe modal now calls the merge-property-with-notes v2 edge
+// function directly (FK repointing + audit log + soft-delete + 30-day undo
+// via losers_snapshot). Adds: fuzzy detection (Lev-1 over alphanum street,
+// scoped by zip OR city), "Merge all confident" bulk button (concurrency=5
+// with progress bar), and a non-Clean-Up survivor bonus to keep
+// Nurture/Lead UUIDs alive over Clean-Up ones.
+//
 // Finds duplicate deals by normalized Street 1 + Zip, lets the user pick a
-// survivor, and merges losers: notes → survivor's Property Description
-// (organized by address + lead ID), agents → unioned pipe-delimited, and
-// losers → soft-archived (is_archived=true). Reversible for 30 days via
-// the archive flag.
-let _dealDedupeState = { groups: [], modalOpen: false, search: '' };
+// survivor, and merges via the edge function (server-side notes append +
+// field-level resolution + FK repointing + soft-delete with 30-day-undo).
+let _dealDedupeState = { groups: [], fuzzyGroups: [], modalOpen: false, search: '' };
+
+// Edit-distance ≤ 1 check (early-exit). Returns true only when a !== b and the
+// two strings differ by exactly one insertion, deletion, or substitution.
+function _ddLev1Match(a, b){
+  if(a === b) return false;
+  if(Math.abs(a.length - b.length) > 1) return false;
+  let i = 0;
+  while(i < a.length && i < b.length && a[i] === b[i]) i++;
+  if(i === a.length && i === b.length) return false;
+  if(a.length === b.length) return a.slice(i+1) === b.slice(i+1);
+  if(a.length > b.length) return a.slice(i+1) === b.slice(i);
+  return a.slice(i) === b.slice(i+1);
+}
+
+function _ddSplitKey(key){
+  const i = key.indexOf('|');
+  return i < 0 ? { street: key, zip: '' } : { street: key.slice(0,i), zip: key.slice(i+1) };
+}
+
+// Pull the city name out of a typical address string. Falls back to '' if the
+// address has fewer than 2 comma-separated segments.
+//   "1308 Langford St, Asbury Park, NJ 07712, USA" -> "asbury park"
+//   "11 Cotters Ln, East Brunswick"                -> "east brunswick"
+function _ddCityFromAddr(addr){
+  if(!addr) return '';
+  const parts = String(addr).split(',').map(p => p.trim()).filter(Boolean);
+  if(parts.length < 2) return '';
+  // Strip a trailing state+zip ("NJ 07712") off the chosen segment.
+  return parts[1].toLowerCase().replace(/\s+[a-z]{2}\s*\d*$/i,'').trim();
+}
 
 // Street-suffix canonicalization so "Street"↔"St" and "Boulevard"↔"Blvd" group together
 const _DD_SUFFIX_MAP = {
@@ -19816,10 +19851,14 @@ function _ddPickDefaultSurvivor(deals){
     ['Deal Notes','General Property Notes','Next Steps','Property Description',
      'Location Description','Financial Property Notes']
       .forEach(f => s += (d[f]||'').length);
-    // Bonus for having agent, price, offers, etc.
     if(d['Assigned Agent']) s += 50;
     if(Number(d['Asking Price']) > 0) s += 20;
     if(Number(d['Offer Price']) > 0) s += 20;
+    // Prefer non-Clean-Up stage UUIDs to survive — Clean Up is the throwaway
+    // bucket; the merge engine auto-promotes the stage value either way, but
+    // the surviving id matters for any external links by UUID.
+    const stage = String(d['Pipeline Stage']||'').trim().toLowerCase();
+    if(stage && stage !== 'clean up') s += 200;
     return s;
   };
   return [...deals].sort((a,b) => {
@@ -19859,6 +19898,93 @@ function _ddScanDealDuplicates(){
     .filter(([, arr]) => arr.length >= 2)
     .map(([key, arr]) => ({ key, deals: arr, survivorId: _ddPickDefaultSurvivor(arr) }))
     .sort((a,b) => b.deals.length - a.deals.length); // biggest groups first
+}
+
+// Fuzzy duplicate scan. Catches address variants the exact-match scan misses:
+//   1. Same alphanum street, but one row has a zip and the other doesn't —
+//      e.g. "11 Cotters Ln" vs "11 Cotters Ln, East Brunswick, NJ 08816, USA".
+//   2. Levenshtein-1 on the alphanum street within the same zip OR same city —
+//      catches typos like "Terril" vs "Terrill".
+// Each output entry pairs two distinct exact-match keys; the .deals union is
+// what gets shown in the modal. fuzzy:true tags the entry so the renderer can
+// style it as a review section (no auto-merge button at the section level).
+function _ddScanFuzzyDuplicates(){
+  const byKey = new Map();
+  (allDeals||[]).forEach(d => {
+    if(d['Is Archived']) return;
+    const k = _ddDealKey(d);
+    if(!k) return;
+    if(!byKey.has(k)) byKey.set(k, { deals: [], rep: d['Address']||'' });
+    byKey.get(k).deals.push(d);
+  });
+  const items = [];
+  for(const [k, v] of byKey){
+    const { street, zip } = _ddSplitKey(k);
+    if(!/^\d/.test(street)) continue;   // skip city-only / no-leading-digit keys
+    if(street.length < 4) continue;
+    items.push({ key: k, street, zip, deals: v.deals, addr: v.rep });
+  }
+
+  const seen = new Set();
+  const pairs = [];
+  const tryPair = (a, b) => {
+    if(a.key === b.key) return;
+    const pk = a.key < b.key ? `${a.key}__${b.key}` : `${b.key}__${a.key}`;
+    if(seen.has(pk)) return;
+    seen.add(pk);
+    pairs.push({ a, b });
+  };
+
+  // Bucket by zip and by city — Lev-1 within each bucket only.
+  const buckets = new Map();
+  const addBucket = (b, item) => {
+    if(!b) return;
+    if(!buckets.has(b)) buckets.set(b, []);
+    buckets.get(b).push(item);
+  };
+  items.forEach(it => {
+    if(it.zip) addBucket(`zip:${it.zip}`, it);
+    const city = _ddCityFromAddr(it.addr);
+    if(city) addBucket(`city:${city}`, it);
+  });
+  for(const bucket of buckets.values()){
+    for(let i = 0; i < bucket.length; i++){
+      for(let j = i+1; j < bucket.length; j++){
+        if(_ddLev1Match(bucket[i].street, bucket[j].street)) tryPair(bucket[i], bucket[j]);
+      }
+    }
+  }
+
+  // Same-street, missing-vs-present zip — pair across zip-presence regardless
+  // of city extraction success (covers cases where the no-zip row also has no
+  // commas, so its city is ''). Only pair across mismatched zip if at least
+  // one side is missing — different zips = different buildings.
+  const byStreet = new Map();
+  items.forEach(it => {
+    if(!byStreet.has(it.street)) byStreet.set(it.street, []);
+    byStreet.get(it.street).push(it);
+  });
+  for(const arr of byStreet.values()){
+    if(arr.length < 2) continue;
+    for(let i = 0; i < arr.length; i++){
+      for(let j = i+1; j < arr.length; j++){
+        const a = arr[i], b = arr[j];
+        if(a.zip && b.zip && a.zip !== b.zip) continue;
+        tryPair(a, b);
+      }
+    }
+  }
+
+  return pairs.map(({a,b}) => {
+    const deals = [...a.deals, ...b.deals];
+    return {
+      key: `fuzzy:${a.key}~${b.key}`,
+      deals,
+      survivorId: _ddPickDefaultSurvivor(deals),
+      fuzzy: true,
+      fuzzyPair: [a.key, b.key],
+    };
+  }).sort((x,y) => y.deals.length - x.deals.length);
 }
 
 // Debug helper — paste a substring like "Kennedy" in the console:
@@ -19936,6 +20062,7 @@ window._ddRescueMergedNotes = async function(opts){
 
 function openDealDedupeModal(){
   _dealDedupeState.groups = _ddScanDealDuplicates();
+  _dealDedupeState.fuzzyGroups = _ddScanFuzzyDuplicates();
   _dealDedupeState.modalOpen = true;
   // Seed the modal's filter from the sidebar search so a user who's already
   // narrowed to a known address gets scoped dedupe results on open.
@@ -19991,6 +20118,13 @@ function _ddFilteredGroups(){
   );
 }
 
+function _ddFilteredFuzzyGroups(){
+  const q = (_dealDedupeState.search||'').trim().toLowerCase();
+  const all = _dealDedupeState.fuzzyGroups || [];
+  if(!q) return all;
+  return all.filter(g => g.deals.some(d => (d['Address']||'').toLowerCase().includes(q)));
+}
+
 function closeDealDedupeModal(){
   _dealDedupeState.modalOpen = false;
   const m = document.getElementById('dealDedupeModal');
@@ -20012,46 +20146,67 @@ function _ddRenderModal(){
     document.body.appendChild(modal);
   }
   const allGroups    = _dealDedupeState.groups;
+  const allFuzzy     = _dealDedupeState.fuzzyGroups || [];
   const groups       = _ddFilteredGroups();
+  const fuzzyGroups  = _ddFilteredFuzzyGroups();
   const totalDupes   = groups.reduce((n,g) => n + (g.deals.length - 1), 0);
   const searchQ      = _dealDedupeState.search || '';
   const isFiltered   = searchQ.trim().length > 0;
   const safeSearch   = _ddEsc(searchQ);
 
   let body;
-  if(allGroups.length === 0){
+  if(allGroups.length === 0 && allFuzzy.length === 0){
     body = `
       <div style="padding:60px 40px;text-align:center;">
         <div style="font-size:48px;margin-bottom:12px;">✅</div>
         <div style="font-size:16px;font-weight:600;color:#0f172a;margin-bottom:6px;">No duplicate deals found</div>
         <div style="font-size:12px;color:#64748b;">Scanned ${allDeals.length} deals — all unique addresses.</div>
       </div>`;
-  } else if(groups.length === 0 && isFiltered){
+  } else if(groups.length === 0 && fuzzyGroups.length === 0 && isFiltered){
     body = `
       <div style="padding:50px 40px;text-align:center;">
         <div style="font-size:40px;margin-bottom:10px;">🔎</div>
         <div style="font-size:14px;font-weight:600;color:#0f172a;margin-bottom:4px;">No duplicate groups match "${safeSearch}"</div>
         <div style="font-size:11px;color:#64748b;margin-bottom:14px;">
-          ${allGroups.length} group${allGroups.length>1?'s':''} exist overall, but none contain that address.
+          ${allGroups.length} exact group${allGroups.length===1?'':'s'} · ${allFuzzy.length} fuzzy pair${allFuzzy.length===1?'':'s'} exist overall, but none contain that address.
         </div>
         <button onclick="_ddClearSearch()" style="background:#1a3a6e;color:#fff;border:none;border-radius:6px;padding:7px 14px;font-size:11px;font-weight:600;cursor:pointer;">
-          Clear filter — show all ${allGroups.length}
+          Clear filter — show all
         </button>
       </div>`;
   } else {
-    body = groups.map((g, idx) => {
-      // Preserve original index so _ddMergeGroup / _ddSetSurvivor still target the right group
-      const origIdx = _dealDedupeState.groups.indexOf(g);
-      return _ddRenderGroup(g, origIdx);
-    }).join('');
+    let fuzzyBody = '';
+    if(fuzzyGroups.length){
+      const fb = fuzzyGroups.map(g => {
+        const origIdx = _dealDedupeState.fuzzyGroups.indexOf(g);
+        return _ddRenderGroup(g, origIdx, true);
+      }).join('');
+      fuzzyBody = `
+        <div style="margin-bottom:18px;">
+          <div style="padding:9px 12px;background:#fef3c7;border:1px solid #fde68a;border-radius:6px;margin-bottom:10px;font-size:11px;color:#78350f;line-height:1.5;">
+            ⚠ <strong>${fuzzyGroups.length} fuzzy match${fuzzyGroups.length===1?'':'es'}${isFiltered ? ` of ${allFuzzy.length}` : ''}</strong> — near-duplicates the exact scan missed (typo, missing zip, suffix variant). Review each one before merging.
+          </div>
+          ${fb}
+        </div>`;
+    }
+    let exactBody = '';
+    if(groups.length){
+      exactBody = groups.map(g => {
+        const origIdx = _dealDedupeState.groups.indexOf(g);
+        return _ddRenderGroup(g, origIdx, false);
+      }).join('');
+    }
+    body = fuzzyBody + exactBody;
   }
 
-  // Subtitle line changes when filtered
-  const subtitle = allGroups.length === 0
+  // Subtitle line changes when filtered. Mentions fuzzy count when present.
+  const totalExactDupes = allGroups.reduce((n,g)=>n+(g.deals.length-1),0);
+  const fuzzyTag = allFuzzy.length ? ` · ${allFuzzy.length} fuzzy` : '';
+  const subtitle = (allGroups.length === 0 && allFuzzy.length === 0)
     ? 'Scan complete'
     : (isFiltered
-        ? `Showing ${groups.length} of ${allGroups.length} group${allGroups.length>1?'s':''} · filter: "${safeSearch}"`
-        : `${allGroups.length} group${allGroups.length>1?'s':''} · ${allGroups.reduce((n,g)=>n+(g.deals.length-1),0)} duplicate${allGroups.reduce((n,g)=>n+(g.deals.length-1),0)>1?'s':''} to merge`);
+        ? `Showing ${groups.length} exact + ${fuzzyGroups.length} fuzzy of ${allGroups.length}+${allFuzzy.length} · filter: "${safeSearch}"`
+        : `${allGroups.length} exact group${allGroups.length===1?'':'s'} · ${totalExactDupes} duplicate${totalExactDupes===1?'':'s'} to merge${fuzzyTag}`);
 
   modal.innerHTML = `
     <div style="background:#fff;border-radius:12px;width:100%;max-width:900px;max-height:90vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 25px 60px rgba(0,0,0,0.25);">
@@ -20061,6 +20216,14 @@ function _ddRenderModal(){
           <div style="font-size:11px;color:#64748b;margin-top:2px;">${subtitle}</div>
         </div>
         <div style="display:flex;gap:8px;align-items:center;">
+          ${allGroups.length > 0 ? `
+          <button onclick="_ddMergeAllConfident()"
+            title="Merge every exact-match group with the auto-picked survivor (concurrency=5, 30-day undo via losers_snapshot)"
+            style="background:#0f766e;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:11px;font-weight:700;cursor:pointer;"
+            onmouseenter="this.style.background='#115e59'"
+            onmouseleave="this.style.background='#0f766e'">
+            ⚡ Merge all ${allGroups.length} confident
+          </button>` : ''}
           <button onclick="openDealDedupeModal()" style="background:#f1f5f9;color:#334155;border:1px solid #e2e8f0;border-radius:6px;padding:6px 12px;font-size:11px;font-weight:600;cursor:pointer;">↻ Rescan</button>
           <button onclick="closeDealDedupeModal()" style="background:none;border:none;color:#94a3b8;font-size:20px;line-height:1;cursor:pointer;padding:4px 8px;">×</button>
         </div>
@@ -20091,17 +20254,20 @@ function _ddRenderModal(){
         ${body}
       </div>
       <div style="padding:12px 20px;border-top:1px solid #e2e8f0;background:#fff;font-size:11px;color:#64748b;">
-        <strong>How it works:</strong> Groups deals by normalized Street 1 + ZIP.
-        Survivor (radio-selected) keeps all data; duplicates get archived (reversible).
-        Notes from archived deals are added to the survivor's <em>Property Description</em>.
-        Assigned agents are combined into one pipe-delimited list.
+        <strong>How it works:</strong> Each merge calls the <code>merge-property-with-notes</code> edge function.
+        Deal Notes / General Property Notes / Next Steps from losers are appended to the survivor;
+        numeric and categorical fields auto-resolve (Nurture/Lead preferred over Clean Up);
+        FK references on losers (offers, pitches, tasks, manual comps) repoint to the survivor;
+        losers soft-delete with a <strong>30-day-recoverable</strong> snapshot. Audit log via <code>ace_merge_log</code>.
       </div>
     </div>`;
 }
 
-function _ddRenderGroup(g, idx){
+function _ddRenderGroup(g, idx, fuzzy){
+  fuzzy = !!fuzzy;
   const survivor = g.deals.find(d => d.id === g.survivorId) || g.deals[0];
   const addr = survivor['Address'] || '(no address)';
+  const radioName = `ddSurvivor_${fuzzy?'f':'e'}_${idx}`;
   const rows = g.deals.map(d => {
     const leadId = (d.id||'').substring(0,8).toUpperCase();
     const isSurvivor = d.id === g.survivorId;
@@ -20116,8 +20282,8 @@ function _ddRenderGroup(g, idx){
     return `
       <tr style="border-top:1px solid #e2e8f0;${isSurvivor?'background:#ecfdf5;':''}">
         <td style="padding:8px 10px;text-align:center;">
-          <input type="radio" name="ddSurvivor_${idx}" ${isSurvivor?'checked':''}
-            onchange="_ddSetSurvivor(${idx}, '${d.id}')" style="cursor:pointer;" />
+          <input type="radio" name="${radioName}" ${isSurvivor?'checked':''}
+            onchange="_ddSetSurvivor(${idx}, '${d.id}', ${fuzzy})" style="cursor:pointer;" />
         </td>
         <td style="padding:8px 10px;font-family:ui-monospace,Menlo,monospace;font-size:10px;color:${isSurvivor?'#059669':'#64748b'};font-weight:${isSurvivor?'700':'500'};">
           ${leadId}${isSurvivor?' ★':''}
@@ -20137,17 +20303,23 @@ function _ddRenderGroup(g, idx){
       </tr>`;
   }).join('');
 
+  // Amber accent for fuzzy review groups; navy/green for exact.
+  const cardBorder = fuzzy ? 'border:1px solid #fde68a;' : 'border:1px solid #e2e8f0;';
+  const headerBg   = fuzzy ? 'background:#fffbeb;' : 'background:#f8fafc;';
+  const mergeBtnBg = fuzzy ? '#b45309' : '#1a3a6e';
+  const mergeBtnHv = fuzzy ? '#92400e' : '#2c4f8a';
+  const headerLabel = fuzzy
+    ? `<strong>⚠ ${_ddEsc(addr)}</strong><span style="color:#92400e;font-weight:400;"> · fuzzy match · ${g.deals.length} deals across ${(g.fuzzyPair||[]).length||2} address variants</span>`
+    : `<strong>📍 ${_ddEsc(addr)}</strong><span style="color:#64748b;font-weight:400;"> · ${g.deals.length} matching deals</span>`;
+
   return `
-    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;margin-bottom:12px;overflow:hidden;">
-      <div style="padding:10px 14px;background:#f8fafc;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;gap:12px;">
-        <div style="font-size:12px;color:#0f172a;">
-          <strong>📍 ${_ddEsc(addr)}</strong>
-          <span style="color:#64748b;font-weight:400;"> · ${g.deals.length} matching deals</span>
-        </div>
-        <button onclick="_ddMergeGroup(${idx})"
-          style="background:#1a3a6e;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:11px;font-weight:700;cursor:pointer;"
-          onmouseenter="this.style.background='#2c4f8a'"
-          onmouseleave="this.style.background='#1a3a6e'">
+    <div style="background:#fff;${cardBorder}border-radius:10px;margin-bottom:12px;overflow:hidden;">
+      <div style="padding:10px 14px;${headerBg}border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;gap:12px;">
+        <div style="font-size:12px;color:#0f172a;">${headerLabel}</div>
+        <button onclick="_ddMergeGroup(${idx}, ${fuzzy})"
+          style="background:${mergeBtnBg};color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:11px;font-weight:700;cursor:pointer;"
+          onmouseenter="this.style.background='${mergeBtnHv}'"
+          onmouseleave="this.style.background='${mergeBtnBg}'">
           Merge ${g.deals.length-1} into survivor ★
         </button>
       </div>
@@ -20168,97 +20340,212 @@ function _ddRenderGroup(g, idx){
     </div>`;
 }
 
-function _ddSetSurvivor(groupIdx, dealId){
-  const g = _dealDedupeState.groups[groupIdx];
+function _ddSetSurvivor(groupIdx, dealId, fuzzy){
+  const list = fuzzy ? _dealDedupeState.fuzzyGroups : _dealDedupeState.groups;
+  const g = list[groupIdx];
   if(!g) return;
   g.survivorId = dealId;
   _ddRenderModal();
 }
 
-async function _ddMergeGroup(groupIdx){
-  const g = _dealDedupeState.groups[groupIdx];
+// Bulk-merge every exact-match group with the auto-picked survivor. Mirrors
+// the server-side /tmp/run_exact_dups.mjs flow: concurrency=5, per-group
+// edge fn call, live progress, soft-archive losers in-memory after each ok.
+let _ddBulkCancel = false;
+let _ddBulkInProgress = false;
+async function _ddMergeAllConfident(){
+  if(_ddBulkInProgress) return;
+  const groups = (_dealDedupeState.groups||[]).slice();
+  if(!groups.length) return;
+  const totalLosers = groups.reduce((n,g) => n + (g.deals.length-1), 0);
+  if(!confirm(
+    `Merge all ${groups.length} confident match${groups.length===1?'':'es'} now?\n\n` +
+    `• ${totalLosers} duplicate row${totalLosers===1?'':'s'} will be archived.\n` +
+    `• Survivor for each group is the row with the most content (Nurture/Lead/etc. preferred over Clean Up).\n` +
+    `• 30-day undo is preserved via losers_snapshot per merge.\n\n` +
+    `If you want to review picks individually, cancel and use the per-group "Merge ★" buttons instead.`
+  )) return;
+
+  _ddBulkInProgress = true;
+  _ddBulkCancel = false;
+
+  // Replace modal body with a live progress UI.
+  const modalBody = document.querySelector('#dealDedupeModal > div > div[style*="overflow-y:auto"]');
+  if(modalBody){
+    modalBody.innerHTML = `
+      <div style="padding:40px 24px;text-align:center;">
+        <div style="font-size:32px;margin-bottom:10px;">⚙️</div>
+        <div id="ddBulkTitle" style="font-size:14px;font-weight:600;color:#0f172a;margin-bottom:6px;">Merging…</div>
+        <div id="ddBulkSub" style="font-size:11px;color:#64748b;margin-bottom:16px;">0 / ${groups.length} groups · 0 archived · 0 failed</div>
+        <div style="max-width:420px;margin:0 auto 14px;background:#e2e8f0;height:8px;border-radius:99px;overflow:hidden;">
+          <div id="ddBulkBar" style="background:#1a3a6e;height:100%;width:0%;transition:width 120ms linear;"></div>
+        </div>
+        <div id="ddBulkCurrent" style="font-size:10px;color:#94a3b8;margin-bottom:16px;font-family:ui-monospace,Menlo,monospace;">&nbsp;</div>
+        <button id="ddBulkCancelBtn" onclick="_ddBulkCancel = true; this.disabled=true; this.textContent='Stopping after current batch…'"
+          style="background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;padding:6px 14px;font-size:11px;font-weight:600;cursor:pointer;">
+          Cancel
+        </button>
+      </div>`;
+  }
+
+  const total = groups.length;
+  let completed = 0, ok = 0, fail = 0, archived = 0;
+  const failures = [];
+  let nextIdx = 0;
+
+  function updateProgress(currentLabel){
+    const bar = document.getElementById('ddBulkBar');
+    const sub = document.getElementById('ddBulkSub');
+    const cur = document.getElementById('ddBulkCurrent');
+    if(bar) bar.style.width = `${Math.round((completed/total)*100)}%`;
+    if(sub) sub.textContent = `${completed} / ${total} groups · ${archived} archived · ${fail} failed`;
+    if(cur && currentLabel) cur.textContent = currentLabel;
+  }
+
+  async function processOne(g){
+    const survivor = g.deals.find(d => d.id === g.survivorId) || g.deals[0];
+    const losers = g.deals.filter(d => d.id !== survivor.id);
+    if(!survivor || !losers.length) return { ok:false, error:'no losers' };
+    try {
+      await _ddCallMergeEdgeFn(survivor.id, losers.map(l => l.id));
+      losers.forEach(l => { l['Is Archived'] = true; });
+      // Best-effort survivor refresh — not awaited inside the worker so the
+      // next group can start while the row reload runs in parallel.
+      _ddRefreshDealInMemory(survivor.id);
+      return { ok:true, archived: losers.length };
+    } catch(e){
+      return { ok:false, error: e.message, address: survivor['Address']||'(no address)' };
+    }
+  }
+
+  async function worker(){
+    while(true){
+      if(_ddBulkCancel) return;
+      const i = nextIdx++;
+      if(i >= total) return;
+      const g = groups[i];
+      const label = (g.deals.find(d => d.id===g.survivorId) || g.deals[0])['Address'] || '(no address)';
+      updateProgress(`[${i+1}/${total}] ${label.slice(0,80)}`);
+      const r = await processOne(g);
+      completed++;
+      if(r.ok){ ok++; archived += r.archived; }
+      else { fail++; failures.push({ address: r.address, error: r.error }); }
+      updateProgress();
+    }
+  }
+
+  await Promise.all(Array.from({ length: 5 }, () => worker()));
+
+  // Drop merged groups from state. We assume groups[i].ok == true on completion;
+  // but some groups may have failed. Filter the merged ones out by checking
+  // whether any deal in the group still appears non-archived.
+  _dealDedupeState.groups = (_dealDedupeState.groups||[]).filter(g => {
+    return g.deals.some(d => !d['Is Archived']) && g.deals.length >= 2 &&
+           g.deals.filter(d => !d['Is Archived']).length >= 2;
+  });
+
+  _ddBulkInProgress = false;
+  // Re-scan fuzzy after the bulk merge — some fuzzy pairs may have been
+  // collapsed by the exact-match merges that just ran.
+  _dealDedupeState.fuzzyGroups = _ddScanFuzzyDuplicates();
+  if(typeof buildSidebar === 'function') buildSidebar();
+  if(typeof renderDealBoard === 'function' && document.getElementById('dealBoardTbody')) renderDealBoard();
+
+  if(fail === 0){
+    showSaveConfirm(`✓ Merged ${ok} group${ok===1?'':'s'} (${archived} archived)`);
+  } else {
+    const sample = failures.slice(0,3).map(f => `  • ${f.address}: ${f.error}`).join('\n');
+    alert(
+      `Bulk merge complete:\n\n` +
+      `  ✓ ${ok} groups merged (${archived} archived)\n` +
+      `  ✗ ${fail} groups failed\n\n` +
+      `Failures (showing up to 3):\n${sample}`
+    );
+  }
+  _ddRenderModal();
+}
+
+// POST to the merge-property-with-notes v2 edge function. Returns the parsed
+// JSON on success, throws on HTTP error or missing merge_log_id. The edge
+// function does field-level auto-resolution, FK repointing, soft-delete on
+// losers, and writes a losers_snapshot row enabling 30-day undo.
+async function _ddCallMergeEdgeFn(survivingId, loserIds){
+  const cfg = getConfig();
+  if(!cfg || !cfg.url || !cfg.key) throw new Error('Supabase config missing');
+  const userId = (typeof _currentUser !== 'undefined' && _currentUser && _currentUser.id) || null;
+  if(!userId) throw new Error('Not signed in — _currentUser.id is required for merge audit log');
+  const res = await fetch(`${cfg.url}/functions/v1/merge-property-with-notes`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${cfg.key}`,
+      'apikey': cfg.key,
+    },
+    body: JSON.stringify({
+      surviving_id: survivingId,
+      loser_ids:    loserIds,
+      user_id:      userId,
+      dry_run:      false,
+    })
+  });
+  const text = await res.text();
+  let json; try { json = JSON.parse(text); } catch { json = { _raw: text }; }
+  if(!res.ok || !json.merge_log_id){
+    throw new Error(json.error || `merge edge fn ${res.status}: ${text.slice(0,200)}`);
+  }
+  return json;
+}
+
+// Refresh a single property row from Supabase and merge it into the matching
+// allDeals[] entry. Best-effort — failures are logged but non-fatal.
+async function _ddRefreshDealInMemory(dealId){
+  try {
+    const fresh = await _sbGet(SB_TABLES.properties, `id=eq.${dealId}`);
+    if(Array.isArray(fresh) && fresh[0]){
+      const refreshed = _sbToAt(fresh[0], SB_PROP_MAP);
+      const idx = (allDeals||[]).findIndex(d => d.id === dealId);
+      if(idx >= 0) Object.assign(allDeals[idx], refreshed);
+    }
+  } catch(e){ console.warn('[_ddRefreshDealInMemory] failed for', dealId, e.message); }
+}
+
+async function _ddMergeGroup(groupIdx, fuzzy){
+  fuzzy = !!fuzzy;
+  const list = fuzzy ? _dealDedupeState.fuzzyGroups : _dealDedupeState.groups;
+  const g = list[groupIdx];
   if(!g) return;
   const survivor = g.deals.find(d => d.id === g.survivorId);
   const losers = g.deals.filter(d => d.id !== g.survivorId);
   if(!survivor || losers.length === 0) return;
+  const fuzzyWarning = fuzzy
+    ? `⚠ FUZZY MATCH — these addresses don't match exactly. Confirm they're the same building before merging.\n\n`
+    : '';
   if(!confirm(
+    fuzzyWarning +
     `Merge ${losers.length} duplicate${losers.length>1?'s':''} into:\n\n` +
     `  ${survivor['Address']||'(no address)'}\n` +
     `  Lead ${(survivor.id||'').substring(0,8).toUpperCase()}\n\n` +
-    `• All notes from duplicates will be appended to this deal's Property Description field.\n` +
-    `• Assigned agents from duplicates will be combined onto this deal.\n` +
-    `• Duplicates will be archived (reversible — see archived deals).\n\n` +
+    `• Note fields (Deal Notes, General Property Notes, Next Steps) get appended.\n` +
+    `• Numeric / categorical fields auto-resolve (longer wins; non-Clean-Up stage wins).\n` +
+    `• Assigned agents get unioned onto the survivor.\n` +
+    `• FK references on losers (offers, pitches, tasks, comps, …) repoint to the survivor.\n` +
+    `• Losers soft-delete with a 30-day-recoverable snapshot.\n\n` +
     `Continue?`
   )) return;
 
-  // Build the consolidated notes block, organized by address + Lead ID
-  const NOTE_FIELDS = [
-    ['Deal Notes','Deal Notes'],
-    ['General Property Notes','General Property Notes'],
-    ['Next Steps','Next Steps'],
-    ['Property Description','Property Description'],
-    ['Location Description','Location Description'],
-    ['Financial Property Notes','Financial Property Notes']
-  ];
-  const mergedBlocks = losers.map(l => {
-    const leadId = (l.id||'').substring(0,8).toUpperCase();
-    const addr = l['Address'] || '(no address)';
-    const blocks = [];
-    NOTE_FIELDS.forEach(([field, label]) => {
-      const v = (l[field]||'').trim();
-      if(v) blocks.push(`${label}:\n${v}`);
-    });
-    const header = `━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━\nMerged from LEAD ${leadId}\n📍 ${addr}\n━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━`;
-    return blocks.length ? `${header}\n\n${blocks.join('\n\n')}` : `${header}\n(no notes on this duplicate)`;
-  }).join('\n\n');
-
-  // IMPORTANT: the textarea the user sees labeled "Property Description"
-  // (id=prop_propDesc) is actually bound to the `General Property Notes`
-  // column, not the unused `Property Description` column. Write to the field
-  // the user actually reads.
-  const existingDesc = (survivor['General Property Notes']||'').trim();
-  const newDesc = existingDesc ? `${existingDesc}\n\n${mergedBlocks}` : mergedBlocks;
-
-  // Union agents — survivor's existing list + every loser's list
-  let mergedAgents = survivor['Assigned Agent']||'';
-  losers.forEach(l => {
-    _agentList(l['Assigned Agent']||'').forEach(a => {
-      mergedAgents = _agentAdd(mergedAgents, a);
-    });
-  });
-
-  // Execute: patch survivor, then archive losers
-  const btnRow = document.querySelector(`#dealDedupeModal button[onclick="_ddMergeGroup(${groupIdx})"]`);
+  const btnRow = document.querySelector(`#dealDedupeModal button[onclick="_ddMergeGroup(${groupIdx}, ${fuzzy})"]`);
   if(btnRow){ btnRow.disabled = true; btnRow.textContent = 'Merging…'; }
   try {
-    const ok1 = await airtableUpdate(survivor.id, {
-      'General Property Notes': newDesc,
-      'Assigned Agent': mergedAgents || null
-    });
-    if(!ok1) throw new Error('Failed to update survivor');
-    // Keep the in-memory copy in sync so a follow-up merge on the same group
-    // sees the already-appended notes instead of the pre-merge value.
-    survivor['General Property Notes'] = newDesc;
-    survivor['Assigned Agent'] = mergedAgents || null;
-    // Archive losers one at a time (sequential — order matters less than simplicity here)
-    for(const l of losers){
-      const ok = await airtableUpdate(l.id, { 'Is Archived': true });
-      if(!ok) console.warn('Failed to archive', l.id);
-      // Also tag the loser's notes so its history is visible if anyone
-      // un-archives it later. Same field as above — General Property Notes.
-      try {
-        const tag = `\n\n[MERGED INTO LEAD ${(survivor.id||'').substring(0,8).toUpperCase()} on ${new Date().toLocaleDateString()}]`;
-        await airtableUpdate(l.id, {
-          'General Property Notes': (l['General Property Notes']||'') + tag
-        });
-      } catch(e){ /* non-fatal */ }
-    }
-    showSaveConfirm(`✓ Merged ${losers.length} duplicate${losers.length>1?'s':''}`);
+    await _ddCallMergeEdgeFn(survivor.id, losers.map(l => l.id));
+    losers.forEach(l => { l['Is Archived'] = true; });
+    await _ddRefreshDealInMemory(survivor.id);
 
-    // Remove the merged group from state and re-render
-    _dealDedupeState.groups.splice(groupIdx, 1);
+    showSaveConfirm(`✓ Merged ${losers.length} duplicate${losers.length>1?'s':''}`);
+    list.splice(groupIdx, 1);
+    // After a merge, fuzzy pairs may now point to archived rows — quickest
+    // sync is a re-scan. Cheap relative to the merge that just happened.
+    _dealDedupeState.fuzzyGroups = _ddScanFuzzyDuplicates();
     _ddRenderModal();
-    // Refresh sidebar + any visible list views
     if(typeof buildSidebar === 'function') buildSidebar();
     if(typeof renderDealBoard === 'function' && document.getElementById('dealBoardTbody')) renderDealBoard();
   } catch(e){

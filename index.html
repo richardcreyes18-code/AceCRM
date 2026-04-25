@@ -2846,10 +2846,14 @@ async function syncData(){
       // it, rows that share created_at can leak into multiple pages, leaving
       // allDeals with duplicate ids — the dedupe modal then renders the same
       // row 2-3× per group. Cheap fix; aligns with the server-side scripts.
+      // v113.34: filter out soft-deleted rows (deleted_at IS NOT NULL). The
+      // merge-property-with-notes v2 edge function sets deleted_at on losers,
+      // not is_archived — so without this filter, post-merge losers leaked
+      // into allDeals and the dedupe modal showed them as live duplicates.
       const pages = await Promise.all(
         Array.from({length: MAX_PARALLEL_PAGES}, (_, i) =>
           _sbGet(SB_TABLES.properties,
-            `select=*&order=created_at.desc,id.asc&limit=${batchSize}&offset=${i*batchSize}${agentFilter}`)
+            `select=*&deleted_at=is.null&order=created_at.desc,id.asc&limit=${batchSize}&offset=${i*batchSize}${agentFilter}`)
           .catch(e => { console.warn('deal page '+i+' failed:', e.message); return []; })
         )
       );
@@ -2861,7 +2865,7 @@ async function syncData(){
       if(pages[MAX_PARALLEL_PAGES - 1] && pages[MAX_PARALLEL_PAGES - 1].length === batchSize){
         while(true){
           const rows = await _sbGet(SB_TABLES.properties,
-            `select=*&order=created_at.desc,id.asc&limit=${batchSize}&offset=${from}${agentFilter}`);
+            `select=*&deleted_at=is.null&order=created_at.desc,id.asc&limit=${batchSize}&offset=${from}${agentFilter}`);
           if(!rows || !rows.length) break;
           mapRows(rows);
           if(rows.length < batchSize) break;

@@ -2872,7 +2872,20 @@ async function syncData(){
           from += batchSize;
         }
       }
-      allDeals = records;
+      // v113.35: belt-and-suspenders — dedupe records by id before assigning
+      // to allDeals. Pagination tiebreak + deleted_at filter should make this
+      // unnecessary, but the sidebar was still showing the same deal twice
+      // after the v113.33/.34 fixes were deployed. Anything downstream of the
+      // loader can now trust allDeals to be unique-by-id without re-checking.
+      const _seenIds = new Set();
+      let _dupRowsDropped = 0;
+      allDeals = records.filter(d => {
+        if(!d || !d.id) return false;
+        if(_seenIds.has(d.id)) { _dupRowsDropped++; return false; }
+        _seenIds.add(d.id);
+        return true;
+      });
+      if(_dupRowsDropped) console.warn(`[loadAllDeals] dropped ${_dupRowsDropped} duplicate row${_dupRowsDropped===1?'':'s'} from the property load — investigate the source.`);
       // Cache the full unfiltered set so view-mode toggling is instant.
       if(!agentFilter) _allDealsSnapshot = allDeals.slice();
     } else {

@@ -28237,6 +28237,11 @@ function showSettingsPage(){
       <div style="max-width:900px;margin:0 auto;padding:0 22px 60px;">
         <!-- v111.12: Settings tab navigation -->
         <div id="settingsTabBar" style="display:flex;gap:2px;border-bottom:1px solid #cbd5e1;margin:18px 0 18px;flex-wrap:wrap;"></div>
+
+        <!-- v113.45: Ratings tab — completeness audit dashboard -->
+        <section data-settings-tab="ratings" style="background:transparent;padding:0;margin-bottom:16px;">
+          <div id="ratingsTabRoot"></div>
+        </section>
         <div id="settingsSaveMsg" style="min-height:18px;font-size:12px;color:#16a34a;font-weight:600;margin-bottom:12px;"></div>
 
         <!-- v111.12: FUB Sync Health dashboard -->
@@ -28647,10 +28652,12 @@ function showSettingsPage(){
 }
 
 // v111.12: Settings tab navigation
+// v113.45: added Ratings tab — completeness audit for deals/contacts/buyer criteria.
 const _SETTINGS_TABS = [
   { id:'sync',         label:'🔄 Sync Status' },
   { id:'integrations', label:'🔌 Integrations' },
   { id:'tools',        label:'🧹 Tools' },
+  { id:'ratings',      label:'📊 Ratings' },     // v113.45
   { id:'marketing',    label:'✉ Marketing' },  // v113.17: default prompt/style/tone/signature for Run Agent
   { id:'team',         label:'👥 Team' },
   { id:'config',       label:'⚙ Configuration' },
@@ -28686,6 +28693,266 @@ function _settingsSwitchTab(name){
   if(name === 'marketing' && typeof _marketingLoad === 'function'){
     _marketingLoad();
   }
+  // v113.45: lazy-render ratings dashboard on first open (and re-render
+  // every time — avg/distribution depends on current allDeals state).
+  if(name === 'ratings' && typeof _ratingsRender === 'function'){
+    _ratingsRender();
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════
+// v113.45: COMPLETENESS RATINGS — score deals/contacts/buyer criteria
+// by how many critical + secondary fields are filled. 0–100 per item;
+// per-entity-type avg, distribution histogram, and lowest-20 drill-down.
+// Pure live — no DB writes, no cache. Recomputes from allDeals /
+// allContacts / allBuyerCriteria each time the Ratings tab is opened.
+// ═══════════════════════════════════════════════════════════════════
+
+// Per-entity field weights (sum to 100). Each entry:
+//   { field: 'Display Name', weight: N, label: 'Short Label', test: fn }
+// `test(item)` is optional — returns true if the field counts as filled.
+// If omitted, falls back to "non-empty string / non-zero number / non-empty
+// array".
+const _ratingFilled = v => {
+  if(v === null || v === undefined) return false;
+  if(Array.isArray(v)) return v.length > 0;
+  if(typeof v === 'number') return v !== 0;
+  return String(v).trim().length > 0;
+};
+
+const _RATING_WEIGHTS = {
+  property: [
+    // Heavy fields (72 pts) — user-specified critical signals.
+    { label:'Complete address (zip+state)', weight:12, test:d => /\b\d{5}\b/.test(String(d['Address']||'')) && /[A-Z]{2}/.test(String(d['Address']||'')) },
+    { label:'Owner contact linked',         weight:12, test:d => Array.isArray(d['Owner']) && d['Owner'].length > 0 },
+    { label:'Asset classification',         weight:12, test:d => _ratingFilled(d['CRM Asset Classification']) },
+    { label:'Agent assigned',               weight:12, test:d => _ratingFilled(d['Assigned Agent']) },
+    { label:'Asking price',                 weight:12, test:d => Number(d['Asking Price']) > 0 },
+    { label:'Gross income',                 weight:12, test:d => Number(d['Gross Revenue Yearly']||d['Gross Revenue Monthly']||d['Gross Rental Income (Monthly)']) > 0 },
+    // Secondary fields (28 pts) — nice-to-have completeness.
+    { label:'Pipeline stage set',           weight:3,  test:d => _ratingFilled(d['Pipeline Stage']) && d['Pipeline Stage'] !== 'Clean Up' },
+    { label:'Property type',                weight:2,  test:d => _ratingFilled(d['Simple Text Property Type']) },
+    { label:'Number of units',              weight:2,  test:d => Number(d['Number of Units']||d['No of Units']) > 0 },
+    { label:'Square footage',               weight:2,  test:d => Number(d['Square Footage']||d['Total Building SF']) > 0 },
+    { label:'Year built',                   weight:1,  test:d => Number(d['Year Built']) > 1800 },
+    { label:'Property condition / class',   weight:2,  test:d => _ratingFilled(d['Property Class']) || _ratingFilled(d['Property Condition']) },
+    { label:'NOI',                          weight:2,  test:d => Number(d['NOI']) !== 0 },
+    { label:'Cap rate',                     weight:2,  test:d => Number(d['Cap Rate (CRM)']||d['Cap Rate Proforma (CRM)']) > 0 },
+    { label:'Deal notes',                   weight:2,  test:d => (String(d['Deal Notes']||'').trim().length) >= 20 },
+    { label:'General property notes',       weight:2,  test:d => (String(d['General Property Notes']||'').trim().length) >= 20 },
+    { label:'Photos attached',              weight:3,  test:d => Array.isArray(d['Photo Attachments']) && d['Photo Attachments'].length > 0 || _ratingFilled(d['Main Photo Attachment ID']) },
+    { label:'Coordinates',                  weight:2,  test:d => Number(d['Latitude']) !== 0 && Number(d['Longitude']) !== 0 },
+    { label:'County',                       weight:1,  test:d => _ratingFilled(d['Simple County']) },
+  ],
+  contact: [
+    // Heavy fields (80 pts) — name/phone/email per user spec.
+    { label:'Name',          weight:30, test:c => _ratingFilled(c['Name']) },
+    { label:'Phone',         weight:25, test:c => _ratingFilled(c['Phone Number']) || _ratingFilled(c['Phone Mobile']) || _ratingFilled(c['Phone Office']) || _ratingFilled(c['Secondary Phone Number']) },
+    { label:'Email',         weight:25, test:c => _ratingFilled(c['Email']) || _ratingFilled(c['Secondary Email']) },
+    // Secondary fields (20 pts).
+    { label:'Company',       weight:5,  test:c => _ratingFilled(c['Company']) },
+    { label:'Contact role',  weight:3,  test:c => _ratingFilled(c['Type']) || _ratingFilled(c['Contact Role']) },
+    { label:'Notes',         weight:5,  test:c => (String(c['Contact Notes']||'').trim().length) >= 20 },
+    { label:'Address',       weight:3,  test:c => Array.isArray(c['addresses']) ? c['addresses'].length > 0 : _ratingFilled(c['addresses']) },
+    { label:'Tags',          weight:2,  test:c => Array.isArray(c['fub_tags']) ? c['fub_tags'].length > 0 : _ratingFilled(c['fub_tags']) },
+    { label:'Source',        weight:2,  test:c => _ratingFilled(c['Source']) || _ratingFilled(c['fub_source']) },
+  ],
+  buyer_criteria: [
+    // Heavy fields (70 pts) — asset types and locations per user spec.
+    { label:'Asset types desired', weight:35, test:b => {
+        const v = b['Simple Text Desired Property Type'] || b['desired_property_types'];
+        return Array.isArray(v) ? v.length > 0 : _ratingFilled(v);
+      } },
+    { label:'Locations / regions', weight:35, test:b => {
+        return _ratingFilled(b['Location Preferences']) || _ratingFilled(b['Simple Area Preference'])
+            || _ratingFilled(b['Preferred Cities']) || _ratingFilled(b['Preferred States'])
+            || _ratingFilled(b['Preferred Counties']);
+      } },
+    // Secondary (30 pts).
+    { label:'Price range',       weight:10, test:b => Number(b['Min Purchase Price']) > 0 || Number(b['Max Purchase Price']) > 0 },
+    { label:'Unit / size range', weight:5,  test:b => Number(b['Minimum # of Units MF']) > 0 || Number(b['Max # of Units MF']) > 0 || Number(b['Warehouse Min Square Footage']) > 0 || Number(b['Office Min SF']) > 0 || Number(b['Land Min Acreage']) > 0 },
+    { label:'Cap rate floor',    weight:3,  test:b => Number(b['Minumum Cap Rate']) > 0 },
+    { label:'Other requirements',weight:5,  test:b => (String(b['Other Requirements ']||'').trim().length) >= 20 },
+    { label:'Linked to contact', weight:5,  test:b => _ratingFilled(b['contact_id']) || _ratingFilled(b['Contact ID']) },
+    { label:'Financing type',    weight:2,  test:b => _ratingFilled(b['financing_type']) || _ratingFilled(b['Financing Type']) },
+  ],
+};
+
+// Compute a single item's score + per-field breakdown.
+function _rateEntity(item, type){
+  const weights = _RATING_WEIGHTS[type];
+  if(!weights || !item) return { score: 0, breakdown: [], missingHeavy: [] };
+  const breakdown = [];
+  let total = 0;
+  for(const w of weights){
+    let filled = false;
+    try { filled = !!w.test(item); } catch(_e){ filled = false; }
+    if(filled) total += w.weight;
+    breakdown.push({ label: w.label, weight: w.weight, filled });
+  }
+  // Heavy fields are weight >= 10. Highlight which heavy fields are missing.
+  const missingHeavy = breakdown.filter(b => !b.filled && b.weight >= 10).map(b => b.label);
+  return { score: Math.round(total), breakdown, missingHeavy };
+}
+
+// Title-line builder for each entity type — what shows on the lowest-20 list.
+function _ratingTitle(item, type){
+  if(type === 'property')        return item['Address'] || item['Property Name'] || '(no address)';
+  if(type === 'contact')         return item['Name'] || '(unnamed contact)';
+  if(type === 'buyer_criteria')  return (item['Buyer Name'] || allBuyerContacts?.[item.contact_id]?.name || `Criteria ${(item.id||'').slice(0,8).toUpperCase()}`);
+  return '(unknown)';
+}
+
+// Click-through to open the entity for the user to fill in missing fields.
+function _ratingOpen(item, type){
+  try {
+    if(type === 'property' && typeof openDeal === 'function')      return openDeal(item);
+    if(type === 'contact' && typeof openContactModal === 'function') return openContactModal(item.id);
+    if(type === 'buyer_criteria' && typeof showBuyerCriteriaPage === 'function') return showBuyerCriteriaPage();
+  } catch(e){ console.warn('[_ratingOpen] failed', e.message); }
+}
+
+// Compute summary stats for a list: avg, distribution histogram (5 buckets),
+// and the lowest-N items.
+function _ratingSummarize(items, type, lowestN){
+  lowestN = lowestN || 25;
+  const scored = (items || []).map(it => ({ item: it, ...(_rateEntity(it, type)) }));
+  if(!scored.length) return { count:0, avg:0, buckets:[0,0,0,0,0], lowest:[], scored:[] };
+  const sum = scored.reduce((s, r) => s + r.score, 0);
+  const avg = Math.round(sum / scored.length);
+  const buckets = [0, 0, 0, 0, 0];   // 0–20, 21–40, 41–60, 61–80, 81–100
+  scored.forEach(r => {
+    const idx = r.score >= 81 ? 4 : r.score >= 61 ? 3 : r.score >= 41 ? 2 : r.score >= 21 ? 1 : 0;
+    buckets[idx]++;
+  });
+  const lowest = scored.slice().sort((a,b) => a.score - b.score).slice(0, lowestN);
+  return { count: scored.length, avg, buckets, lowest, scored };
+}
+
+// Color for a 0-100 score — used for the badge backgrounds.
+function _ratingColor(score){
+  if(score >= 81) return '#15803d';   // green
+  if(score >= 61) return '#65a30d';   // light green
+  if(score >= 41) return '#ca8a04';   // amber
+  if(score >= 21) return '#ea580c';   // orange
+  return '#b91c1c';                   // red
+}
+
+// Active type filter (saved between tab opens).
+let _ratingsActiveType = 'property';
+
+function _ratingsRender(){
+  const root = document.getElementById('ratingsTabRoot');
+  if(!root) return;
+
+  const props    = _ratingSummarize(allDeals||[], 'property');
+  const contacts = _ratingSummarize(allContacts||[], 'contact');
+  const buyers   = _ratingSummarize(allBuyerCriteria||[], 'buyer_criteria');
+
+  const summary = (label, type, s) => {
+    const active = _ratingsActiveType === type;
+    return `
+      <div onclick="_ratingsActiveType='${type}'; _ratingsRender();"
+        style="flex:1;cursor:pointer;background:${active?'#eff6ff':'#fff'};border:1px solid ${active?'#2563eb':'#e2e8f0'};border-radius:10px;padding:14px 16px;">
+        <div style="font-size:11px;font-weight:600;color:#64748b;text-transform:uppercase;letter-spacing:.04em;margin-bottom:4px;">${label}</div>
+        <div style="display:flex;align-items:baseline;gap:10px;">
+          <div style="font-size:24px;font-weight:700;color:#0f172a;">${s.avg}</div>
+          <div style="font-size:11px;color:#64748b;">avg · ${s.count.toLocaleString()} item${s.count===1?'':'s'}</div>
+        </div>
+      </div>`;
+  };
+
+  const summaries = `
+    <div style="display:flex;gap:12px;margin-bottom:18px;">
+      ${summary('🏢 Properties / Deals',  'property',       props)}
+      ${summary('👤 Contacts',            'contact',        contacts)}
+      ${summary('🎯 Buyer Criteria',      'buyer_criteria', buyers)}
+    </div>`;
+
+  const focus = _ratingsActiveType === 'property' ? props
+              : _ratingsActiveType === 'contact'  ? contacts
+              : buyers;
+  const labels = ['0-20','21-40','41-60','61-80','81-100'];
+  const colors = ['#b91c1c','#ea580c','#ca8a04','#65a30d','#15803d'];
+  const maxBucket = Math.max(1, ...focus.buckets);
+
+  const histogram = `
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;margin-bottom:14px;">
+      <div style="font-size:12px;font-weight:600;color:#0f172a;margin-bottom:10px;">Distribution</div>
+      <div style="display:flex;gap:8px;align-items:flex-end;height:72px;">
+        ${focus.buckets.map((n, i) => {
+          const pct = (n / maxBucket) * 100;
+          return `<div style="flex:1;display:flex;flex-direction:column;align-items:center;gap:4px;">
+            <div style="font-size:10px;color:#475569;font-weight:600;">${n.toLocaleString()}</div>
+            <div style="width:100%;background:${colors[i]};height:${Math.max(2, pct*0.6)}px;border-radius:4px 4px 0 0;"></div>
+          </div>`;
+        }).join('')}
+      </div>
+      <div style="display:flex;gap:8px;margin-top:6px;">
+        ${labels.map(l => `<div style="flex:1;text-align:center;font-size:10px;color:#94a3b8;">${l}</div>`).join('')}
+      </div>
+    </div>`;
+
+  const typeLabel = _ratingsActiveType === 'property' ? 'properties'
+                  : _ratingsActiveType === 'contact'  ? 'contacts'
+                  : 'buyer criteria';
+
+  const lowestRows = focus.lowest.map(r => {
+    const title = _ratingTitle(r.item, _ratingsActiveType);
+    const idShort = String(r.item.id || '').slice(0,8).toUpperCase();
+    const missing = r.missingHeavy.length
+      ? `<span style="color:#b91c1c;">missing: ${r.missingHeavy.join(', ')}</span>`
+      : '<span style="color:#94a3b8;">all heavy fields ✓</span>';
+    return `
+      <tr style="border-top:1px solid #e2e8f0;cursor:pointer;" onclick='_ratingsClick(${JSON.stringify(r.item.id)}, "${_ratingsActiveType}")' onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background=''">
+        <td style="padding:7px 10px;font-family:ui-monospace,Menlo,monospace;font-size:10px;color:#64748b;">${idShort}</td>
+        <td style="padding:7px 10px;font-size:12px;color:#0f172a;max-width:340px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${(title||'').replace(/"/g,'&quot;')}">${title || '(no title)'}</td>
+        <td style="padding:7px 10px;font-size:11px;color:#475569;">${missing}</td>
+        <td style="padding:7px 10px;text-align:right;">
+          <span style="display:inline-block;background:${_ratingColor(r.score)};color:#fff;font-size:11px;font-weight:700;padding:3px 10px;border-radius:99px;min-width:42px;text-align:center;">${r.score}</span>
+        </td>
+      </tr>`;
+  }).join('');
+
+  const lowestPanel = `
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;">
+      <div style="font-size:12px;font-weight:600;color:#0f172a;margin-bottom:10px;">
+        Lowest-rated ${typeLabel} (top ${focus.lowest.length}) — click to open and fill in
+      </div>
+      ${focus.lowest.length === 0
+        ? `<div style="font-size:12px;color:#64748b;padding:20px;text-align:center;">No items to score yet.</div>`
+        : `<table style="width:100%;border-collapse:collapse;">
+            <thead>
+              <tr style="background:#f8fafc;font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;">
+                <th style="padding:6px 10px;text-align:left;font-weight:600;">ID</th>
+                <th style="padding:6px 10px;text-align:left;font-weight:600;">Title</th>
+                <th style="padding:6px 10px;text-align:left;font-weight:600;">Heavy fields</th>
+                <th style="padding:6px 10px;text-align:right;font-weight:600;width:70px;">Score</th>
+              </tr>
+            </thead>
+            <tbody>${lowestRows}</tbody>
+          </table>`}
+    </div>`;
+
+  root.innerHTML = `
+    <div style="font-size:13px;color:#64748b;margin-bottom:12px;">
+      Each item is scored 0-100 by how many critical and secondary fields are filled.
+      <strong>Heavy fields</strong> (the ones in red) drive most of the score; secondary fields fill in the rest.
+      Click any row below to open and complete it.
+    </div>
+    ${summaries}
+    ${histogram}
+    ${lowestPanel}`;
+}
+
+function _ratingsClick(itemId, type){
+  const list = type === 'property'       ? (allDeals || [])
+             : type === 'contact'        ? (allContacts || [])
+             : type === 'buyer_criteria' ? (allBuyerCriteria || [])
+             : [];
+  const item = list.find(x => x.id === itemId);
+  if(!item) return;
+  _ratingOpen(item, type);
 }
 
 // v111.12: FUB sync health dashboard

@@ -2850,6 +2850,11 @@ async function syncData(){
       // merge-property-with-notes v2 edge function sets deleted_at on losers,
       // not is_archived — so without this filter, post-merge losers leaked
       // into allDeals and the dedupe modal showed them as live duplicates.
+      // v113.39 (REQUIRES crm-proxy v13+): the multi-column order
+      // `created_at.desc,id.asc` is parsed correctly by the proxy. Older proxy
+      // versions split on '.' once and silently turned this into
+      // `created_at ASC` (because dir='desc,id' !== 'desc'), causing offset
+      // pagination to leak/drop rows and allDeals to come up ~25% short.
       const pages = await Promise.all(
         Array.from({length: MAX_PARALLEL_PAGES}, (_, i) =>
           _sbGet(SB_TABLES.properties,

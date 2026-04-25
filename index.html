@@ -12975,7 +12975,23 @@ function showMapPage(){
 // _loadAppLists() which is called once per sync from syncData(). The Deal
 // Board's type/city filters and the Settings > App Lists editor both read
 // from this cache so changes show up without a full resync.
-const _appLists = { asset_types: [], preferred_cities: [] };
+//
+// v113.26: extended with `states`, `regions`, `counties`. Each list is the
+// flat array of values used everywhere; the per-row metadata (region tags
+// for counties, special flags for All-NJ / Tri-State) lives in _appListsMeta
+// keyed by `${list_key}::${value}`. The two parallel maps mean existing
+// consumers that just iterate the values (Deal Board filters, intake form
+// pickers) keep working unchanged, while the buyer intake form's
+// region→county auto-add logic can read the metadata when it needs to.
+const _appLists = {
+  asset_types: [], preferred_cities: [],
+  states: [], regions: [], counties: [],
+};
+const _appListsMeta = {}; // key: "<list_key>::<value>"  →  metadata object
+
+function _appListMeta(listKey, value){
+  return _appListsMeta[listKey + '::' + value] || {};
+}
 
 async function _loadAppLists(){
   if(!isSupabase()) return;
@@ -12983,20 +12999,159 @@ async function _loadAppLists(){
     const rows = await _sbGet(SB_TABLES.appLists,
       'select=list_key,value,sort_order,metadata&is_active=eq.true&order=sort_order.asc,value.asc');
     if(!Array.isArray(rows)) return;
-    const next = { asset_types: [], preferred_cities: [] };
+    const next = {
+      asset_types: [], preferred_cities: [],
+      states: [], regions: [], counties: [],
+    };
+    // Wipe and rebuild metadata map in one pass.
+    for(const k in _appListsMeta) delete _appListsMeta[k];
     for(const r of rows){
       const bucket = next[r.list_key];
       if(bucket) bucket.push(r.value);
+      if(r.metadata && typeof r.metadata === 'object'){
+        _appListsMeta[r.list_key + '::' + r.value] = r.metadata;
+      }
     }
-    _appLists.asset_types     = next.asset_types;
+    _appLists.asset_types      = next.asset_types;
     _appLists.preferred_cities = next.preferred_cities;
+    _appLists.states           = next.states;
+    _appLists.regions          = next.regions;
+    _appLists.counties         = next.counties;
     // v102.35: rebuild ASSET_SUBTYPES from the curated list. This is what
     // wires Settings edits through to the lead form / deal-card editor /
     // Buyer Criteria editor — they all read the same global name.
     _rebuildAssetSubtypes();
+    // v113.26: first-run seed. If states/regions/counties came back empty,
+    // populate from the hardcoded NJ constants + standard US state list and
+    // re-fetch so the rest of the app starts with real data.
+    await _appListsMaybeSeed();
   }catch(e){
     console.warn('[v102.34] _loadAppLists failed:', e.message);
   }
+}
+
+// v113.26: idempotent seed for the three new app lists (states / regions /
+// counties). Runs once when those lists are empty in the DB. The values
+// come from the existing in-app constants so the seed is just a one-time
+// migration of in-code data into the editable settings table.
+//
+// Source of truth after seeding:
+//   - _appLists.states    ← rows for every US state (+DC), default NJ flagged
+//   - _appLists.regions   ← All NJ / North NJ / Central NJ / South NJ / Tri-State
+//   - _appLists.counties  ← every NJ county, metadata.regions = ['North NJ'] etc.
+//
+// Schema (per ace_app_lists):
+//   list_key: 'states' | 'regions' | 'counties'
+//   value:    the canonical name (state code, region label, bare county name)
+//   metadata: free-form JSON; see _appListsBuildSeed for shapes
+//
+// If a future deploy adds a new region/state/county, this function does
+// NOT re-run — admins add them via Settings > App Lists.
+async function _appListsMaybeSeed(){
+  const needs = [];
+  if(!_appLists.states.length)   needs.push('states');
+  if(!_appLists.regions.length)  needs.push('regions');
+  if(!_appLists.counties.length) needs.push('counties');
+  if(!needs.length) return;
+  const seed = _appListsBuildSeed();
+  let inserted = 0;
+  for(const listKey of needs){
+    const rows = seed[listKey] || [];
+    for(let i = 0; i < rows.length; i++){
+      const r = rows[i];
+      try{
+        // Use the upsert primitive so re-running this against a partially
+        // populated DB (or one with tombstoned rows) reactivates instead
+        // of erroring out on a unique violation.
+        await _appListUpsert(listKey, r.value, { sortOrder: i, metadata: r.metadata, silent: true });
+        inserted++;
+      }catch(e){
+        // Most likely cause: row already active (race with another tab's
+        // seed). Safe to skip.
+        if(!/already exists/i.test(e.message||'')) {
+          console.warn('[v113.26] seed failed for', listKey, r.value, e.message);
+        }
+      }
+    }
+  }
+  if(inserted){
+    console.log('[v113.26] seeded ace_app_lists with', inserted, 'rows across', needs.join(', '));
+    // Re-fetch so the cache reflects what we just wrote.
+    try{
+      const rows = await _sbGet(SB_TABLES.appLists,
+        'select=list_key,value,sort_order,metadata&is_active=eq.true&order=sort_order.asc,value.asc');
+      if(Array.isArray(rows)){
+        const next = { states: [], regions: [], counties: [] };
+        for(const r of rows){
+          const bucket = next[r.list_key];
+          if(bucket) bucket.push(r.value);
+          if(r.metadata && typeof r.metadata === 'object'){
+            _appListsMeta[r.list_key + '::' + r.value] = r.metadata;
+          }
+        }
+        _appLists.states   = next.states;
+        _appLists.regions  = next.regions;
+        _appLists.counties = next.counties;
+      }
+    }catch(e){ console.warn('[v113.26] post-seed reload failed:', e.message); }
+  }
+}
+
+// v113.26: build the seed payload. Pulled out so it's easy to read and
+// audit what gets written on the first deploy. Order in each list defines
+// the default sort_order.
+function _appListsBuildSeed(){
+  // 50 US states + DC. NJ flagged as the broker's default home state.
+  const STATES = [
+    ['NJ','New Jersey',true],['NY','New York'],['PA','Pennsylvania'],['CT','Connecticut'],
+    ['DE','Delaware'],['MD','Maryland'],['VA','Virginia'],['MA','Massachusetts'],
+    ['RI','Rhode Island'],['NH','New Hampshire'],['ME','Maine'],['VT','Vermont'],
+    ['FL','Florida'],['GA','Georgia'],['NC','North Carolina'],['SC','South Carolina'],
+    ['TN','Tennessee'],['KY','Kentucky'],['WV','West Virginia'],['AL','Alabama'],
+    ['MS','Mississippi'],['LA','Louisiana'],['AR','Arkansas'],['OK','Oklahoma'],
+    ['TX','Texas'],['OH','Ohio'],['MI','Michigan'],['IN','Indiana'],['IL','Illinois'],
+    ['WI','Wisconsin'],['MN','Minnesota'],['IA','Iowa'],['MO','Missouri'],
+    ['ND','North Dakota'],['SD','South Dakota'],['NE','Nebraska'],['KS','Kansas'],
+    ['CO','Colorado'],['NM','New Mexico'],['AZ','Arizona'],['UT','Utah'],
+    ['NV','Nevada'],['CA','California'],['OR','Oregon'],['WA','Washington'],
+    ['ID','Idaho'],['MT','Montana'],['WY','Wyoming'],['AK','Alaska'],['HI','Hawaii'],
+    ['DC','District of Columbia'],
+  ];
+  const states = STATES.map(([code, name, isDefault]) => ({
+    value: code,
+    metadata: isDefault ? { name, default: true } : { name },
+  }));
+
+  // NJ regions + Tri-State. "All NJ" is a special selector that adds every
+  // county in NJ; "Tri-State" adds every county in NJ + flags NY/PA states.
+  const regions = [
+    { value: 'All NJ',     metadata: { state: 'NJ', special: 'all_state' } },
+    { value: 'North NJ',   metadata: { state: 'NJ' } },
+    { value: 'Central NJ', metadata: { state: 'NJ' } },
+    { value: 'South NJ',   metadata: { state: 'NJ' } },
+    { value: 'Tri-State',  metadata: { special: 'multi_state', states: ['NJ','NY','PA'] } },
+  ];
+
+  // NJ counties with their region tags. Mirrors NJ_NORTH_COUNTIES /
+  // NJ_CENTRAL_COUNTIES / NJ_SOUTH_COUNTIES + Ricky's house rule that
+  // Ocean belongs to BOTH Central and South, and Hunterdon to BOTH North
+  // and Central (per _countyRegions at line ~17664).
+  const tagFor = bare => {
+    const r = [];
+    if(typeof NJ_NORTH_COUNTIES !== 'undefined' && NJ_NORTH_COUNTIES.includes(bare))     r.push('North NJ');
+    if(typeof NJ_CENTRAL_COUNTIES !== 'undefined' && NJ_CENTRAL_COUNTIES.includes(bare)) r.push('Central NJ');
+    if(typeof NJ_SOUTH_COUNTIES !== 'undefined' && NJ_SOUTH_COUNTIES.includes(bare))     r.push('South NJ');
+    if(bare === 'Ocean'     && !r.includes('South NJ'))   r.push('South NJ');
+    if(bare === 'Hunterdon' && !r.includes('Central NJ')) r.push('Central NJ');
+    return r;
+  };
+  const njCounties = (typeof NJ_COUNTIES !== 'undefined' ? NJ_COUNTIES : []);
+  const counties = njCounties.map(bare => ({
+    value: bare,
+    metadata: { state: 'NJ', regions: tagFor(bare) },
+  }));
+
+  return { states, regions, counties };
 }
 
 // v102.35: derive ASSET_SUBTYPES from _appLists.asset_types. Each row is
@@ -13115,6 +13270,51 @@ function _appListRender(listKey){
   const countEl = document.getElementById('alCount' + domKey);
   if(!listEl) return;
 
+  // v113.26: states / regions / counties — flat lists with optional metadata
+  // chips. Counties show their region tags + state; regions show their state
+  // and special flag; states show their long name.
+  if(listKey === 'states' || listKey === 'regions' || listKey === 'counties'){
+    const values = _appLists[listKey] || [];
+    if(countEl) countEl.textContent = values.length + ' item' + (values.length === 1 ? '' : 's');
+    if(!values.length){
+      listEl.innerHTML = '<div style="padding:14px;text-align:center;color:#94a3b8;font-size:11px;">No items yet — add one above.</div>';
+      return;
+    }
+    listEl.innerHTML = values.map(v => {
+      const safe = _appListEsc(v);
+      const attr = _appListJsEsc(v);
+      const meta = _appListMeta(listKey, v);
+      let chips = '';
+      if(listKey === 'states' && meta.name){
+        chips += `<span style="background:#f1f5f9;color:#475569;border-radius:4px;padding:2px 7px;font-size:10px;font-weight:500;">${_appListEsc(meta.name)}</span>`;
+        if(meta.default) chips += `<span style="background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe;border-radius:4px;padding:2px 7px;font-size:10px;font-weight:600;">Default</span>`;
+      }
+      if(listKey === 'regions'){
+        if(meta.state) chips += `<span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:4px;padding:2px 7px;font-size:10px;font-weight:600;">${_appListEsc(meta.state)}</span>`;
+        if(meta.special === 'all_state') chips += `<span style="background:#ecfccb;color:#3f6212;border:1px solid #d9f99d;border-radius:4px;padding:2px 7px;font-size:10px;font-weight:600;">All-state</span>`;
+        if(meta.special === 'multi_state' && Array.isArray(meta.states)){
+          chips += `<span style="background:#e0e7ff;color:#3730a3;border:1px solid #c7d2fe;border-radius:4px;padding:2px 7px;font-size:10px;font-weight:600;">Multi: ${_appListEsc(meta.states.join(', '))}</span>`;
+        }
+      }
+      if(listKey === 'counties'){
+        if(meta.state) chips += `<span style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:4px;padding:2px 7px;font-size:10px;font-weight:600;">${_appListEsc(meta.state)}</span>`;
+        if(Array.isArray(meta.regions) && meta.regions.length){
+          chips += meta.regions.map(rg =>
+            `<span style="background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe;border-radius:4px;padding:2px 7px;font-size:10px;font-weight:500;">${_appListEsc(rg)}</span>`).join('');
+        }
+        // Inline edit-tags button so admins can correct a county's region
+        // assignment without re-creating the row.
+        chips += `<button onclick="_appListEditCountyMeta('${attr}')" title="Edit state / region tags" style="background:#f1f5f9;border:1px solid #cbd5e1;color:#334155;padding:2px 7px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;">Edit tags</button>`;
+      }
+      return '<div class="al-row" style="display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px solid #e2e8f0;background:#fff;">'
+           +   '<div style="flex:1;color:#0f172a;display:flex;align-items:center;gap:6px;flex-wrap:wrap;"><span style="font-weight:600;">' + safe + '</span>' + chips + '</div>'
+           +   '<button onclick="_appListRename(\'' + listKey + '\',\'' + attr + '\')" style="background:#f1f5f9;border:1px solid #cbd5e1;color:#334155;padding:3px 8px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;">Rename</button>'
+           +   '<button onclick="_appListDelete(\'' + listKey + '\',\'' + attr + '\')" style="background:#fef2f2;border:1px solid #fecaca;color:#dc2626;padding:3px 8px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;">Delete</button>'
+           + '</div>';
+    }).join('');
+    return;
+  }
+
   if(listKey === 'preferred_cities'){
     // Flat list (unchanged from v102.34).
     const values = _appLists.preferred_cities || [];
@@ -13205,6 +13405,10 @@ async function _appListAfterEdit(){
   await _loadAppLists();
   _appListRender('asset_types');
   _appListRender('preferred_cities');
+  // v113.26: also refresh the three new lists if their containers are mounted.
+  ['states','regions','counties'].forEach(k => {
+    if(document.getElementById('alList' + _appListDomKey(k))) _appListRender(k);
+  });
   // Re-render Deal Board if open so filter dropdowns pick up changes.
   const bar = document.getElementById('loc-compact-bar');
   if(bar && typeof renderDealBoard === 'function'){
@@ -13218,6 +13422,133 @@ async function _appListAfterEdit(){
       });
       renderDealBoard();
     }catch(e){ console.warn('deal board refresh after app list edit failed:', e.message); }
+  }
+}
+
+// v113.26: edit a county row's metadata (state + regions). Simple prompt
+// chain — keeps this small until we ship a proper modal. Region values are
+// validated against _appLists.regions so admins can't tag a county with a
+// region that doesn't exist.
+async function _appListEditCountyMeta(value){
+  const meta = _appListMeta('counties', value);
+  const curState = (meta.state || 'NJ').toUpperCase();
+  const stateRaw = prompt('State code for "' + value + '" (e.g. NJ, NY, PA):', curState);
+  if(stateRaw === null) return;
+  const state = (stateRaw || '').trim().toUpperCase();
+  if(!state){ _appListStatus('State is required.', true); return; }
+  if((_appLists.states || []).length && !_appLists.states.includes(state)){
+    if(!confirm('"' + state + '" is not in the States list. Save anyway?')) return;
+  }
+  const curRegions = Array.isArray(meta.regions) ? meta.regions.join(', ') : '';
+  const regionsRaw = prompt('Region tags for "' + value + '" — comma-separated, must match values in the Regions list (or blank for none):', curRegions);
+  if(regionsRaw === null) return;
+  const regions = (regionsRaw || '').split(',').map(s => s.trim()).filter(Boolean);
+  const known = new Set(_appLists.regions || []);
+  const unknown = regions.filter(r => known.size && !known.has(r));
+  if(unknown.length){
+    if(!confirm('These region(s) are not in the Regions list: ' + unknown.join(', ') + '\n\nSave anyway?')) return;
+  }
+  _appListStatus('Saving…', false);
+  try{
+    const rows = await _sbGet(SB_TABLES.appLists,
+      'select=id&list_key=eq.counties&value=eq.' + encodeURIComponent(value)
+      + '&is_active=eq.true&limit=1');
+    if(!Array.isArray(rows) || !rows.length){
+      _appListStatus('Row not found.', true); return;
+    }
+    await _sbPatch(SB_TABLES.appLists, rows[0].id, {
+      metadata: { state, regions }
+    });
+    await _appListAfterEdit();
+    _appListStatus('Updated tags for "' + value + '".', false);
+  }catch(e){
+    console.error('_appListEditCountyMeta failed:', e);
+    _appListStatus('Save failed: ' + (e.message || 'unknown error'), true);
+  }
+}
+
+// v113.26: county add. The plain "+ Add" path doesn't know which state /
+// region a new county belongs to, so we ask via prompts. Same validation
+// as _appListEditCountyMeta. Falls through to _appListUpsert which handles
+// reactivate-over-insert semantics.
+async function _appListAddCounty(){
+  const inp = document.getElementById('alInputCounties');
+  if(!inp) return;
+  const raw = (inp.value || '').trim();
+  if(!raw){ _appListStatus('Enter a county name first.', true); return; }
+  if((_appLists.counties || []).some(v => v.toLowerCase() === raw.toLowerCase())){
+    _appListStatus('"' + raw + '" is already in the list.', true); return;
+  }
+  const stateRaw = prompt('State code for "' + raw + '" (e.g. NJ, NY, PA):', 'NJ');
+  if(stateRaw === null) return;
+  const state = (stateRaw || '').trim().toUpperCase();
+  if(!state){ _appListStatus('State is required.', true); return; }
+  if((_appLists.states || []).length && !_appLists.states.includes(state)){
+    if(!confirm('"' + state + '" is not in the States list. Save anyway?')) return;
+  }
+  const regionsRaw = prompt('Region tags for "' + raw + '" — comma-separated (e.g. "North NJ"), or blank:', '');
+  if(regionsRaw === null) return;
+  const regions = (regionsRaw || '').split(',').map(s => s.trim()).filter(Boolean);
+  _appListStatus('Saving…', false);
+  try{
+    await _appListUpsert('counties', raw, { metadata: { state, regions } });
+    inp.value = '';
+    await _appListAfterEdit();
+    _appListStatus('Added "' + raw + '".', false);
+  }catch(e){
+    console.error('_appListAddCounty failed:', e);
+    _appListStatus('Add failed: ' + (e.message || 'unknown error'), true);
+  }
+}
+
+// v113.26: state add. Uses optional long-name prompt → metadata.name.
+async function _appListAddState(){
+  const inp = document.getElementById('alInputStates');
+  if(!inp) return;
+  const raw = (inp.value || '').trim().toUpperCase();
+  if(!raw){ _appListStatus('Enter a state code first.', true); return; }
+  if(!/^[A-Z]{2}$/.test(raw)){
+    if(!confirm('"' + raw + '" doesn\'t look like a 2-letter state code. Save anyway?')) return;
+  }
+  if((_appLists.states || []).some(v => v.toUpperCase() === raw)){
+    _appListStatus('"' + raw + '" is already in the list.', true); return;
+  }
+  const name = (prompt('Full state name for "' + raw + '" (optional):', '') || '').trim();
+  _appListStatus('Saving…', false);
+  try{
+    await _appListUpsert('states', raw, { metadata: name ? { name } : {} });
+    inp.value = '';
+    await _appListAfterEdit();
+    _appListStatus('Added "' + raw + '".', false);
+  }catch(e){
+    console.error('_appListAddState failed:', e);
+    _appListStatus('Add failed: ' + (e.message || 'unknown error'), true);
+  }
+}
+
+// v113.26: region add. Asks for parent state (so the buyer-intake combobox
+// can scope the auto-add).
+async function _appListAddRegion(){
+  const inp = document.getElementById('alInputRegions');
+  if(!inp) return;
+  const raw = (inp.value || '').trim();
+  if(!raw){ _appListStatus('Enter a region name first.', true); return; }
+  if((_appLists.regions || []).some(v => v.toLowerCase() === raw.toLowerCase())){
+    _appListStatus('"' + raw + '" is already in the list.', true); return;
+  }
+  const stateRaw = prompt('Parent state for "' + raw + '" (e.g. NJ). Leave blank if it spans multiple states:', '');
+  if(stateRaw === null) return;
+  const state = (stateRaw || '').trim().toUpperCase();
+  const meta = state ? { state } : {};
+  _appListStatus('Saving…', false);
+  try{
+    await _appListUpsert('regions', raw, { metadata: meta });
+    inp.value = '';
+    await _appListAfterEdit();
+    _appListStatus('Added "' + raw + '".', false);
+  }catch(e){
+    console.error('_appListAddRegion failed:', e);
+    _appListStatus('Add failed: ' + (e.message || 'unknown error'), true);
   }
 }
 
@@ -13280,22 +13611,37 @@ async function _appListAddSubtype(category, inputId){
 }
 
 // Reactivate-over-insert primitive used by both add paths.
-async function _appListUpsert(listKey, value){
+//
+// v113.26: opts object adds {sortOrder, metadata, silent}.
+//   - sortOrder: numeric, defaults to 0 (callers can pass an index for seeds)
+//   - metadata:  object, overrides the legacy preferred_cities default
+//   - silent:    if true, throw is suppressed when row already active
+//                (used by the seeder so a partial seed doesn't error out)
+async function _appListUpsert(listKey, value, opts){
+  opts = opts || {};
   const q = 'select=id,is_active&list_key=eq.' + encodeURIComponent(listKey)
           + '&value=eq.' + encodeURIComponent(value) + '&limit=1';
   const existing = await _sbGet(SB_TABLES.appLists, q);
   if(Array.isArray(existing) && existing.length){
     const row = existing[0];
     if(row.is_active){
+      if(opts.silent) return;
       throw new Error('"' + value + '" already exists and is active.');
     }
-    await _sbPatch(SB_TABLES.appLists, row.id, { is_active: true });
+    const patch = { is_active: true };
+    if(opts.metadata) patch.metadata = opts.metadata;
+    await _sbPatch(SB_TABLES.appLists, row.id, patch);
   }else{
-    const meta = (listKey === 'preferred_cities') ? { state: 'NJ' } : {};
+    let meta = opts.metadata;
+    if(!meta){
+      // Legacy default: preferred_cities rows are tagged with state=NJ so
+      // the city autocomplete can scope results.
+      meta = (listKey === 'preferred_cities') ? { state: 'NJ' } : {};
+    }
     await _sbPost(SB_TABLES.appLists, {
       list_key:   listKey,
       value:      value,
-      sort_order: 0,
+      sort_order: (typeof opts.sortOrder === 'number' ? opts.sortOrder : 0),
       is_active:  true,
       metadata:   meta
     });
@@ -14928,6 +15274,234 @@ function _locPostRender(){
 // ═══════════════════════════════════════════════════════════════════════
 // End LOC-001
 // ═══════════════════════════════════════════════════════════════════════
+
+// ═══════════════════════════════════════════════════════════════════════
+// v113.26: GENERIC COMBOBOX (_combo*)
+// ═══════════════════════════════════════════════════════════════════════
+// Reusable type-to-search + Enter-to-pick combobox built on the LOC-001
+// CSS classes. Parameterized so each instance owns its own state — no
+// global filter object, no Deal Board re-render coupling.
+//
+// Usage:
+//   const id = _comboCreate({
+//     id: 'liStates',                     // unique DOM id prefix
+//     placeholder: 'Search states...',
+//     getOptions: () => _appLists.states, // () → string[]
+//     getSelected: () => _li.states,      // () → string[] (current picks)
+//     onPick:    val => { ... },          // user selected an option
+//     onUnpick:  val => { ... },          // user clicked X on a tag
+//     onCustom:  val => { ... },          // (optional) Enter on free-text
+//                                         //   that doesn't match any option
+//   });
+//   container.innerHTML = _comboFieldHTML(id, 'States');
+//   _comboWire(id);                       // call after HTML is in the DOM
+//
+// State change semantics: getSelected() is read every render so the
+// caller's source of truth always wins. _comboRefresh(id) re-paints.
+//
+// All instances share one outside-click handler so dropdowns close cleanly.
+const _comboInstances = {}; // id → { getOptions, getSelected, onPick, ... }
+
+function _comboCreate(opts){
+  if(!opts || !opts.id) throw new Error('_comboCreate: opts.id is required');
+  _comboInstances[opts.id] = {
+    placeholder: opts.placeholder || 'Search...',
+    getOptions:  opts.getOptions  || (() => []),
+    getSelected: opts.getSelected || (() => []),
+    onPick:      opts.onPick      || (() => {}),
+    onUnpick:    opts.onUnpick    || (() => {}),
+    onCustom:    opts.onCustom    || null,
+    kbCursor: -1,
+  };
+  return opts.id;
+}
+
+function _comboFieldHTML(id, label){
+  // Reuse LOC-001 CSS so the tag-input and dropdown inherit the same look
+  // the rest of the app already trusts.
+  if(typeof _locInjectCSS === 'function') _locInjectCSS();
+  const inst = _comboInstances[id];
+  const ph = (inst && inst.placeholder) || 'Search...';
+  return `
+    <div class="loc-field" id="combo-field-${id}" style="position:relative;">
+      ${label ? `<span class="loc-label" style="margin-right:6px;">${label}</span>` : ''}
+      <div class="loc-ti" id="combo-ti-${id}" style="max-width:100%;flex-wrap:wrap;">
+        <input class="loc-si" id="combo-si-${id}" placeholder="${ph}" autocomplete="off"/>
+      </div>
+      <span class="loc-chevron">&#x25BE;</span>
+      <div class="loc-dd" id="combo-dd-${id}" style="display:none;"></div>
+    </div>`;
+}
+
+function _comboPaintTags(id){
+  const inst = _comboInstances[id];
+  if(!inst) return;
+  const ti  = document.getElementById('combo-ti-' + id);
+  const inp = document.getElementById('combo-si-' + id);
+  if(!ti || !inp) return;
+  ti.querySelectorAll('.loc-tag').forEach(t => t.remove());
+  const sel = inst.getSelected() || [];
+  sel.forEach(v => {
+    const tag = document.createElement('span');
+    tag.className = 'loc-tag';
+    const safe = String(v).replace(/"/g,'&quot;').replace(/</g,'&lt;');
+    tag.innerHTML = '<span class="loc-tag-text">'+safe+'</span>'
+      + '<span class="loc-tag-x" data-combo="'+id+'" data-val="'+safe+'">&times;</span>';
+    ti.insertBefore(tag, inp);
+  });
+  inp.placeholder = sel.length ? '' : inst.placeholder;
+}
+
+function _comboBuildDD(id, query){
+  const inst = _comboInstances[id];
+  if(!inst) return;
+  const dd = document.getElementById('combo-dd-' + id);
+  if(!dd) return;
+  const all = inst.getOptions() || [];
+  const sel = new Set(inst.getSelected() || []);
+  const q = (query || '').toLowerCase();
+  const matches = all.filter(v => String(v).toLowerCase().includes(q));
+  inst.kbCursor = -1;
+  if(!matches.length){
+    const customHint = inst.onCustom && q
+      ? `<div class="loc-no-res">No matches — press Enter to add "<b>${String(query).replace(/</g,'&lt;')}</b>"</div>`
+      : '<div class="loc-no-res">No results</div>';
+    dd.innerHTML = customHint;
+    return;
+  }
+  dd.innerHTML = matches.map(v => {
+    const isSel = sel.has(v);
+    const safe = String(v).replace(/"/g,'&quot;').replace(/</g,'&lt;');
+    return '<div class="loc-opt '+(isSel?'sel':'')+'" data-combo="'+id+'" data-val="'+safe+'">'
+      + '<span>'+safe+'</span>'
+      + '<span class="loc-ck">&#x2713;</span>'
+      + '</div>';
+  }).join('');
+}
+
+// Public refresh: re-read selected + options and re-paint both pieces.
+// Used when the underlying state changes (e.g. picking a region auto-adds
+// counties — caller mutates the state then calls _comboRefresh('liCounties')).
+function _comboRefresh(id){
+  _comboPaintTags(id);
+  const inp = document.getElementById('combo-si-' + id);
+  if(inp) _comboBuildDD(id, inp.value);
+}
+
+function _comboPick(id, val){
+  const inst = _comboInstances[id];
+  if(!inst) return;
+  const sel = inst.getSelected() || [];
+  if(sel.includes(val)){
+    inst.onUnpick(val);
+  }else{
+    inst.onPick(val);
+  }
+  _comboRefresh(id);
+}
+
+function _comboCloseAll(exceptId){
+  Object.keys(_comboInstances).forEach(id => {
+    if(id === exceptId) return;
+    const dd = document.getElementById('combo-dd-' + id);
+    if(dd) dd.style.display = 'none';
+  });
+}
+
+function _comboWire(id){
+  _comboInstallGlobalHandlers();
+  const inst = _comboInstances[id];
+  if(!inst) return;
+  const inp = document.getElementById('combo-si-' + id);
+  const dd  = document.getElementById('combo-dd-' + id);
+  const ti  = document.getElementById('combo-ti-' + id);
+  if(!inp || !dd || !ti) return;
+
+  ti.addEventListener('click', e => {
+    if(!e.target.closest('.loc-tag-x')) inp.focus();
+  });
+
+  inp.addEventListener('focus', () => {
+    _comboCloseAll(id);
+    _comboBuildDD(id, inp.value);
+    dd.style.display = 'block';
+  });
+
+  inp.addEventListener('input', () => {
+    _comboBuildDD(id, inp.value);
+    dd.style.display = 'block';
+  });
+
+  inp.addEventListener('keydown', e => {
+    const opts = [...dd.querySelectorAll('.loc-opt')];
+    if(e.key === 'ArrowDown'){
+      inst.kbCursor = Math.min(inst.kbCursor + 1, opts.length - 1);
+      opts.forEach(o => o.classList.remove('kb'));
+      if(opts[inst.kbCursor]) opts[inst.kbCursor].classList.add('kb');
+      e.preventDefault();
+    } else if(e.key === 'ArrowUp'){
+      inst.kbCursor = Math.max(inst.kbCursor - 1, 0);
+      opts.forEach(o => o.classList.remove('kb'));
+      if(opts[inst.kbCursor]) opts[inst.kbCursor].classList.add('kb');
+      e.preventDefault();
+    } else if(e.key === 'Enter'){
+      const target = inst.kbCursor >= 0 ? opts[inst.kbCursor] : opts[0];
+      if(target){
+        _comboPick(id, target.dataset.val);
+        inp.value = '';
+        _comboBuildDD(id, '');
+      } else if(inst.onCustom && inp.value.trim()){
+        // No matching option but caller allows free-text adds.
+        inst.onCustom(inp.value.trim());
+        inp.value = '';
+        _comboRefresh(id);
+      }
+      e.preventDefault();
+    } else if(e.key === 'Escape'){
+      dd.style.display = 'none';
+    } else if(e.key === 'Backspace' && inp.value === ''){
+      const sel = inst.getSelected() || [];
+      if(sel.length){
+        const last = sel[sel.length - 1];
+        inst.onUnpick(last);
+        _comboRefresh(id);
+      }
+    }
+  });
+
+  dd.addEventListener('mousedown', e => {
+    const opt = e.target.closest('.loc-opt');
+    if(opt && opt.dataset.combo === id){
+      _comboPick(id, opt.dataset.val);
+      inp.value = '';
+      _comboBuildDD(id, '');
+      inp.focus();
+      e.preventDefault();
+    }
+  });
+
+  // Initial paint.
+  _comboPaintTags(id);
+}
+
+// One global outside-click + tag-X delegation. Installed lazily on first
+// _comboWire so we don't add listeners on pages that don't use combos.
+function _comboInstallGlobalHandlers(){
+  if(window._comboGlobalInstalled) return;
+  document.addEventListener('mousedown', e => {
+    if(e.target.closest && (e.target.closest('.loc-field') || e.target.closest('.loc-dd'))) return;
+    _comboCloseAll(null);
+  });
+  document.addEventListener('click', e => {
+    const x = e.target.closest('.loc-tag-x');
+    if(x && x.dataset.combo){
+      _comboPick(x.dataset.combo, x.dataset.val);
+    }
+  });
+  window._comboGlobalInstalled = true;
+}
+
+// (Global handlers are installed lazily inside _comboWire on first call.)
 
 // ═══════════════════════════════════════════════════════════════════════
 // v102.28 — PORTFOLIOS MODULE (Turn B: create + list + detail view)
@@ -26026,7 +26600,7 @@ function showSettingsPage(){
           </div>
 
           <!-- Preferred Cities subsection -->
-          <div style="border:1px solid #e2e8f0;border-radius:8px;padding:14px;background:#f8fafc;">
+          <div style="border:1px solid #e2e8f0;border-radius:8px;padding:14px;background:#f8fafc;margin-bottom:18px;">
             <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
               <div style="font-size:13px;font-weight:700;color:#0f172a;">📍 Preferred Cities</div>
               <div id="alCountPreferredCities" style="font-size:11px;color:#64748b;">—</div>
@@ -26036,6 +26610,48 @@ function showSettingsPage(){
               <button onclick="_appListAdd('preferred_cities')" style="background:#0f172a;color:#fff;border:none;padding:7px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">+ Add</button>
             </div>
             <div id="alListPreferredCities" style="max-height:320px;overflow-y:auto;font-size:12px;">Loading…</div>
+          </div>
+
+          <!-- v113.26: States subsection -->
+          <div style="border:1px solid #e2e8f0;border-radius:8px;padding:14px;background:#f8fafc;margin-bottom:18px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+              <div style="font-size:13px;font-weight:700;color:#0f172a;">🇺🇸 States</div>
+              <div id="alCountStates" style="font-size:11px;color:#64748b;">—</div>
+            </div>
+            <div style="font-size:11px;color:#64748b;margin-bottom:8px;">2-letter state codes used by the buyer intake form's "Preferred States" picker. NJ is the default for new buyers.</div>
+            <div style="display:flex;gap:6px;margin-bottom:10px;">
+              <input id="alInputStates" placeholder="2-letter code (e.g. NJ)" maxlength="3" onkeydown="if(event.key==='Enter'){event.preventDefault();_appListAddState();}" style="flex:1;padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;font-family:inherit;background:#fff;text-transform:uppercase;"/>
+              <button onclick="_appListAddState()" style="background:#0f172a;color:#fff;border:none;padding:7px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">+ Add State</button>
+            </div>
+            <div id="alListStates" style="max-height:320px;overflow-y:auto;font-size:12px;">Loading…</div>
+          </div>
+
+          <!-- v113.26: Regions subsection -->
+          <div style="border:1px solid #e2e8f0;border-radius:8px;padding:14px;background:#f8fafc;margin-bottom:18px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+              <div style="font-size:13px;font-weight:700;color:#0f172a;">🗺 Regions</div>
+              <div id="alCountRegions" style="font-size:11px;color:#64748b;">—</div>
+            </div>
+            <div style="font-size:11px;color:#64748b;margin-bottom:8px;">Region labels (e.g. "North NJ", "Tri-State"). Selecting a region in the buyer intake form auto-adds every county tagged with that region.</div>
+            <div style="display:flex;gap:6px;margin-bottom:10px;">
+              <input id="alInputRegions" placeholder="New region…" onkeydown="if(event.key==='Enter'){event.preventDefault();_appListAddRegion();}" style="flex:1;padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;font-family:inherit;background:#fff;"/>
+              <button onclick="_appListAddRegion()" style="background:#0f172a;color:#fff;border:none;padding:7px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">+ Add Region</button>
+            </div>
+            <div id="alListRegions" style="max-height:320px;overflow-y:auto;font-size:12px;">Loading…</div>
+          </div>
+
+          <!-- v113.26: Counties subsection -->
+          <div style="border:1px solid #e2e8f0;border-radius:8px;padding:14px;background:#f8fafc;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;">
+              <div style="font-size:13px;font-weight:700;color:#0f172a;">🏛 Counties</div>
+              <div id="alCountCounties" style="font-size:11px;color:#64748b;">—</div>
+            </div>
+            <div style="font-size:11px;color:#64748b;margin-bottom:8px;">County names (without the " County" suffix) tagged with their state and region(s). Click <b>Edit tags</b> on a row to change which region(s) it belongs to.</div>
+            <div style="display:flex;gap:6px;margin-bottom:10px;">
+              <input id="alInputCounties" placeholder="New county name (e.g. Bergen)" onkeydown="if(event.key==='Enter'){event.preventDefault();_appListAddCounty();}" style="flex:1;padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;font-family:inherit;background:#fff;"/>
+              <button onclick="_appListAddCounty()" style="background:#0f172a;color:#fff;border:none;padding:7px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">+ Add County</button>
+            </div>
+            <div id="alListCounties" style="max-height:520px;overflow-y:auto;font-size:12px;">Loading…</div>
           </div>
 
           <div id="alStatus" style="margin-top:12px;font-size:11px;color:#64748b;min-height:14px;"></div>
@@ -26115,6 +26731,7 @@ function showSettingsPage(){
   setTimeout(() => { if(typeof _tmLoadUsers === 'function') _tmLoadUsers(); }, 50);
   // v102.34: populate App Lists editor. If the cache is empty (e.g. user
   // landed on Settings before syncData finished), load it first.
+  // v113.26: also render the three new lists (states / regions / counties).
   setTimeout(async () => {
     try{
       if(!_appLists.asset_types.length && !_appLists.preferred_cities.length){
@@ -26122,6 +26739,9 @@ function showSettingsPage(){
       }
       _appListRender('asset_types');
       _appListRender('preferred_cities');
+      _appListRender('states');
+      _appListRender('regions');
+      _appListRender('counties');
     }catch(e){ console.warn('app list render failed:', e.message); }
   }, 60);
 
@@ -30096,10 +30716,13 @@ const LI_ASSET_TYPES = [
   {id:'shopping',     label:'Shopping Center',  icon:'🛍️', color:'#b45309', desc:'Anchored, neighborhood, community'},
 ];
 
-let _li = { mode:null, assets:[], counties:[] };
+// v113.26: states + regions added so the buyer intake form can use the
+// Settings-managed app lists (states/regions/counties) instead of pills
+// hardcoded to NJ. Default state is 'NJ' to match Ricky's primary market.
+let _li = { mode:null, assets:[], counties:[], states:['NJ'], regions:[] };
 
 function showLeadIntakePage(){
-  _li = { mode:null, assets:[], assetTypes:[], assetKeys:[], counties:[] };
+  _li = { mode:null, assets:[], assetTypes:[], assetKeys:[], counties:[], states:['NJ'], regions:[] };
   const main = document.getElementById('mainArea');
   main.innerHTML = `
     <div style="max-width:680px;margin:0 auto;padding:32px 20px;">
@@ -34861,28 +35484,32 @@ function _liRenderBuyerForm(){
       `)}
 
       ${_liSection('📍 Target Areas', `
-        <div style="font-size:12px;color:#64748b;margin-bottom:10px;">Select all NJ counties this buyer is actively looking in</div>
+        <div style="font-size:12px;color:#64748b;margin-bottom:14px;">Type to search or pick from the list. Adding a region auto-adds every county in that region.</div>
 
-        <!-- v112.4: Preferred Regions quick-select. Same North/Central/South
-             mapping used everywhere else in the CRM (Deal Board filters,
-             Buyer Criteria card). Clicking a region toggles on every county
-             in that region; Ocean belongs to both Central and South per the
-             house rule. "Clear" wipes whatever is currently selected. -->
-        <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:12px;align-items:center;">
-          <span style="font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:0.05em;margin-right:4px;">Preferred Regions:</span>
-          <button type="button" onclick="_liSelectRegion('All NJ')"     style="background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;padding:4px 12px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;">🗽 All NJ</button>
-          <button type="button" onclick="_liSelectRegion('North NJ')"   style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;padding:4px 12px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;">⬆ North NJ</button>
-          <button type="button" onclick="_liSelectRegion('Central NJ')" style="background:#ecfccb;color:#3f6212;border:1px solid #d9f99d;padding:4px 12px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;">▬ Central NJ</button>
-          <button type="button" onclick="_liSelectRegion('South NJ')"   style="background:#fce7f3;color:#9d174d;border:1px solid #fbcfe8;padding:4px 12px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;">⬇ South NJ</button>
-          <button type="button" onclick="_liClearRegions()"             style="background:#fef2f2;color:#991b1b;border:1px solid #fecaca;padding:4px 12px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;margin-left:4px;">✕ Clear</button>
+        <!-- v113.26: Searchable comboboxes for States, Regions, Counties.
+             All three pull from ace_app_lists (managed in Settings > App
+             Lists), so admins can add/rename/delete values without code
+             changes. Selecting a region auto-fills the matching counties
+             via _liExpandRegion below. -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
+          <div>
+            <label style="${_liLabelStyle()}">🇺🇸 Preferred States <span style="color:#94a3b8;font-weight:400;">(default: NJ)</span></label>
+            <div id="li_b_states_combo_mount"></div>
+          </div>
+          <div>
+            <label style="${_liLabelStyle()}">🗺 Regions <span style="color:#94a3b8;font-weight:400;">(auto-adds counties)</span></label>
+            <div id="li_b_regions_combo_mount"></div>
+          </div>
+        </div>
+        <div style="margin-bottom:14px;">
+          <label style="${_liLabelStyle()}">🏛 Counties</label>
+          <div id="li_b_counties_combo_mount"></div>
+          <div style="font-size:10px;color:#94a3b8;margin-top:4px;">Counties are scoped to the states above. Pick a region to auto-fill its counties; edit individual counties any time.</div>
         </div>
 
-        <div id="li_b_counties" style="display:flex;flex-wrap:wrap;gap:8px;margin-bottom:16px;">
-          ${NJ_COUNTIES.map(c=>`<div id="li_b_co_${c.replace(' ','_')}" onclick="_liToggleCounty('${c}')"
-            style="background:#f1f5f9;border:2px solid #e2e8f0;border-radius:99px;padding:6px 14px;font-size:12px;font-weight:600;cursor:pointer;transition:all 0.15s;color:#475569;">${c}</div>`).join('')}
-        </div>
-
-        <!-- Preferred Cities subsection — mirrors the pattern from the Buyer Criteria profile page -->
+        <!-- Preferred Cities subsection — unchanged for v113.26. Will be
+             converted to the same combobox pattern in a follow-up once the
+             app-lists infrastructure has been validated end-to-end. -->
         <div style="border-top:1px solid #e2e8f0;padding-top:14px;margin-top:6px;">
           <label style="${_liLabelStyle()}">📍 Preferred Cities / Towns <span style="color:#94a3b8;font-weight:400;">(optional — click ✕ to remove)</span></label>
           <div id="li_b_city_pills" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px;min-height:28px;padding:6px;background:#f8faff;border:1px solid #e2e8f0;border-radius:8px;"></div>
@@ -34926,6 +35553,198 @@ function _liRenderBuyerForm(){
     </div>`;
   // v102.27: Apply prefill values if we arrived here from a contact detail page
   _liApplyPrefill('b');
+  // v113.26: mount the three Target-Area comboboxes (states / regions / counties).
+  // Done after innerHTML lands so the mount points exist.
+  _liMountTargetAreaCombos();
+}
+
+// v113.26: Build & wire the three Target Areas comboboxes on the buyer
+// intake form. Each combobox reads its options from _appLists.* (the
+// Settings-managed app lists) and writes selections into _li.{states|
+// regions|counties}.
+//
+// Region picks expand into county picks via _liExpandRegion(). The
+// counties list is filtered to the currently-selected states so users
+// don't see, say, NY counties while only NJ is selected.
+async function _liMountTargetAreaCombos(){
+  // Lazy-load app lists if syncData hasn't run yet (e.g. user opened the
+  // intake form straight after login).
+  try{
+    if(!(_appLists.states && _appLists.states.length)){
+      await _loadAppLists();
+    }
+  }catch(_e){}
+
+  // Mount points may not exist on the seller form, so guard each one.
+  const stateMount   = document.getElementById('li_b_states_combo_mount');
+  const regionMount  = document.getElementById('li_b_regions_combo_mount');
+  const countyMount  = document.getElementById('li_b_counties_combo_mount');
+  if(!stateMount && !regionMount && !countyMount) return;
+
+  if(stateMount){
+    _comboCreate({
+      id: 'liStates',
+      placeholder: 'Type a state code (NJ, NY, FL...) or pick from list',
+      getOptions:  () => _appLists.states && _appLists.states.length ? _appLists.states.slice() : ['NJ'],
+      getSelected: () => _li.states,
+      onPick:    v => { if(!_li.states.includes(v)) _li.states.push(v); _liRefreshTargetCombos(); },
+      onUnpick:  v => {
+        const i = _li.states.indexOf(v); if(i >= 0) _li.states.splice(i, 1);
+        // Drop counties / regions that belonged to the removed state so the
+        // form doesn't show stale picks the user can't see in the dropdown.
+        _li.counties = (_li.counties || []).filter(c => {
+          const st = (_appListMeta('counties', c) || {}).state;
+          return !st || _li.states.includes(st);
+        });
+        _li.regions = (_li.regions || []).filter(r => {
+          const meta = _appListMeta('regions', r) || {};
+          if(meta.state) return _li.states.includes(meta.state);
+          if(meta.special === 'multi_state' && Array.isArray(meta.states)){
+            return meta.states.some(s => _li.states.includes(s));
+          }
+          return true; // unscoped regions — keep
+        });
+        _liRefreshTargetCombos();
+      },
+      onCustom:  v => {  // free-text: uppercase 2-letter codes
+        const code = String(v).trim().toUpperCase();
+        if(!code) return;
+        if(!_li.states.includes(code)){ _li.states.push(code); _liRefreshTargetCombos(); }
+      },
+    });
+    stateMount.innerHTML = _comboFieldHTML('liStates', '');
+    _comboWire('liStates');
+  }
+
+  if(regionMount){
+    _comboCreate({
+      id: 'liRegions',
+      placeholder: 'Type or pick a region — auto-adds counties',
+      getOptions: () => {
+        const all = (_appLists.regions || []).slice();
+        // Only show regions whose parent state is selected (or unscoped /
+        // multi-state regions — those always show).
+        return all.filter(r => {
+          const m = _appListMeta('regions', r) || {};
+          if(m.state) return _li.states.includes(m.state);
+          if(m.special === 'multi_state' && Array.isArray(m.states)){
+            return m.states.some(s => _li.states.includes(s));
+          }
+          return true;
+        });
+      },
+      getSelected: () => _li.regions,
+      onPick:   v => { if(!_li.regions.includes(v)) _li.regions.push(v); _liExpandRegion(v); _liRefreshTargetCombos(); },
+      onUnpick: v => { const i = _li.regions.indexOf(v); if(i >= 0) _li.regions.splice(i, 1); _liRefreshTargetCombos(); },
+    });
+    regionMount.innerHTML = _comboFieldHTML('liRegions', '');
+    _comboWire('liRegions');
+  }
+
+  if(countyMount){
+    _comboCreate({
+      id: 'liCounties',
+      placeholder: 'Type or pick a county',
+      getOptions: () => {
+        // Prefer the curated app-list. Fall back to the legacy NJ_COUNTIES
+        // constant if the app list is empty (first-load before seed runs).
+        const all = (_appLists.counties && _appLists.counties.length)
+          ? _appLists.counties.slice()
+          : (typeof NJ_COUNTIES !== 'undefined' ? NJ_COUNTIES.slice() : []);
+        // Scope to selected states.
+        return all.filter(c => {
+          const meta = _appListMeta('counties', c) || {};
+          // Counties without a state tag (e.g. legacy NJ_COUNTIES fallback) are
+          // assumed to be NJ.
+          const st = meta.state || 'NJ';
+          return !_li.states.length || _li.states.includes(st);
+        });
+      },
+      getSelected: () => _li.counties,
+      onPick:   v => { if(!_li.counties.includes(v)) _li.counties.push(v); _liRefreshTargetCombos(); },
+      onUnpick: v => { const i = _li.counties.indexOf(v); if(i >= 0) _li.counties.splice(i, 1); _liRefreshTargetCombos(); },
+      onCustom: v => { // free-text county for states without curated lists
+        const name = String(v).trim();
+        if(!name) return;
+        if(!_li.counties.includes(name)){ _li.counties.push(name); _liRefreshTargetCombos(); }
+      },
+    });
+    countyMount.innerHTML = _comboFieldHTML('liCounties', '');
+    _comboWire('liCounties');
+  }
+
+  _liRefreshTargetCombos();
+}
+
+// Re-paint all three Target-Area combos. Called whenever any of them
+// changes — region picks update counties, state picks change which
+// regions / counties are visible.
+function _liRefreshTargetCombos(){
+  if(typeof _comboRefresh !== 'function') return;
+  if(_comboInstances && _comboInstances.liStates)   _comboRefresh('liStates');
+  if(_comboInstances && _comboInstances.liRegions)  _comboRefresh('liRegions');
+  if(_comboInstances && _comboInstances.liCounties) _comboRefresh('liCounties');
+}
+
+// v113.26: expand a picked region into its counties. Mirrors the old
+// _liSelectRegion logic but reads the region → county mapping from the
+// app-lists metadata (counties.metadata.regions array, regions.metadata
+// special flags) instead of hardcoded NJ_NORTH_COUNTIES etc. Falls back
+// to the hardcoded constants if the app lists haven't been seeded.
+function _liExpandRegion(regionName){
+  const regionMeta = _appListMeta('regions', regionName) || {};
+  const usingAppLists = !!(_appLists.counties && _appLists.counties.length);
+
+  // "All NJ" / any all-state region: add every county for that state.
+  if(regionMeta.special === 'all_state' && regionMeta.state){
+    if(usingAppLists){
+      _appLists.counties.forEach(c => {
+        const m = _appListMeta('counties', c) || {};
+        const st = m.state || 'NJ';
+        if(st === regionMeta.state && !_li.counties.includes(c)) _li.counties.push(c);
+      });
+    } else if(typeof NJ_COUNTIES !== 'undefined' && regionMeta.state === 'NJ'){
+      NJ_COUNTIES.forEach(c => { if(!_li.counties.includes(c)) _li.counties.push(c); });
+    }
+    return;
+  }
+
+  // Tri-State / multi-state: add every county whose state is in the list,
+  // plus auto-select those states.
+  if(regionMeta.special === 'multi_state' && Array.isArray(regionMeta.states)){
+    regionMeta.states.forEach(s => { if(!_li.states.includes(s)) _li.states.push(s); });
+    if(usingAppLists){
+      _appLists.counties.forEach(c => {
+        const m = _appListMeta('counties', c) || {};
+        const st = m.state || 'NJ';
+        if(regionMeta.states.includes(st) && !_li.counties.includes(c)) _li.counties.push(c);
+      });
+    } else if(typeof NJ_COUNTIES !== 'undefined' && regionMeta.states.includes('NJ')){
+      NJ_COUNTIES.forEach(c => { if(!_li.counties.includes(c)) _li.counties.push(c); });
+    }
+    return;
+  }
+
+  // Standard region: add every county whose metadata.regions contains it.
+  if(usingAppLists){
+    _appLists.counties.forEach(c => {
+      const m = _appListMeta('counties', c) || {};
+      const tags = Array.isArray(m.regions) ? m.regions : [];
+      if(tags.includes(regionName) && !_li.counties.includes(c)) _li.counties.push(c);
+    });
+    return;
+  }
+  // Hardcoded fallback path — same mapping the v112.4 region quick-buttons
+  // used. Kept so the form still works if the seed never fires.
+  if(typeof NJ_NORTH_COUNTIES === 'undefined') return;
+  let counties = [];
+  if(regionName === 'North NJ')        counties = [...NJ_NORTH_COUNTIES];
+  else if(regionName === 'Central NJ') counties = [...NJ_CENTRAL_COUNTIES];
+  else if(regionName === 'South NJ'){
+    counties = [...NJ_SOUTH_COUNTIES];
+    if(!counties.includes('Ocean')) counties.push('Ocean');
+  }
+  counties.forEach(c => { if(!_li.counties.includes(c)) _li.counties.push(c); });
 }
 
 // v102.14: Deal Dependent toggle — hides/shows the price range inputs when
@@ -35005,58 +35824,28 @@ function _liSyncCities(){
   hidden.value = names.join(', ');
 }
 
+// v113.26: legacy compat shims. The pill grid + region quick-buttons
+// were replaced by the three Target-Area comboboxes (_liMountTargetAreaCombos).
+// These remain as no-DOM-touching array helpers so any external HTML or
+// onclick that still calls them keeps working — they just delegate to the
+// combobox state and let _liRefreshTargetCombos re-paint.
 function _liToggleCounty(county){
-  const key = county.replace(' ','_');
-  const el = document.getElementById(`li_b_co_${key}`);
   const idx = _li.counties.indexOf(county);
-  if(idx>=0){
-    _li.counties.splice(idx,1);
-    if(el){ el.style.background='#f1f5f9'; el.style.borderColor='#e2e8f0'; el.style.color='#475569'; }
-  } else {
-    _li.counties.push(county);
-    if(el){ el.style.background='#1a3a6e'; el.style.borderColor='#1a3a6e'; el.style.color='#fff'; }
-  }
+  if(idx >= 0) _li.counties.splice(idx, 1);
+  else _li.counties.push(county);
+  if(typeof _liRefreshTargetCombos === 'function') _liRefreshTargetCombos();
 }
 
-// v112.4: Preferred Regions quick-select for the Buyer Lead Intake form.
-// Mirrors _bcAddRegionCounties (used on the Buyer Criteria profile page)
-// so both entry points use the exact same North/Central/South mapping.
-// Clicking a region chip adds every county in that region as a selected
-// pill without disturbing counties the user already picked. Ocean is
-// claimed by both Central and South per Ricky's rule.
 function _liSelectRegion(regionName){
-  let counties = [];
-  if(regionName === 'All NJ'){
-    // All 21 NJ counties. Use NJ_COUNTIES directly to guarantee coverage even
-    // if the region constants ever drift.
-    counties = [...NJ_COUNTIES];
-  } else if(regionName === 'North NJ'){
-    counties = [...NJ_NORTH_COUNTIES];
-  } else if(regionName === 'Central NJ'){
-    // NJ_CENTRAL_COUNTIES already includes Ocean — don't double-add.
-    counties = [...NJ_CENTRAL_COUNTIES];
-  } else if(regionName === 'South NJ'){
-    counties = [...NJ_SOUTH_COUNTIES];
-    // Per house rule, Ocean belongs to Central AND South.
-    if(!counties.includes('Ocean')) counties.push('Ocean');
-  } else {
-    console.warn('_liSelectRegion: unknown region', regionName);
-    return;
-  }
-  counties.forEach(c => {
-    // Skip counties that are already selected — _liToggleCounty would
-    // otherwise turn them OFF. Only add the ones currently unchecked.
-    if(!_li.counties.includes(c)) _liToggleCounty(c);
-  });
+  if(!_li.regions.includes(regionName)) _li.regions.push(regionName);
+  if(typeof _liExpandRegion === 'function') _liExpandRegion(regionName);
+  if(typeof _liRefreshTargetCombos === 'function') _liRefreshTargetCombos();
 }
 
-// v112.4: Clear every currently-selected county from the intake form.
-// Keeps the chips in the DOM — just deselects them visually + in state.
 function _liClearRegions(){
-  if(!_li.counties || !_li.counties.length) return;
-  // Snapshot first — _liToggleCounty mutates _li.counties while we iterate.
-  const snapshot = [..._li.counties];
-  snapshot.forEach(c => _liToggleCounty(c));
+  _li.counties = [];
+  _li.regions = [];
+  if(typeof _liRefreshTargetCombos === 'function') _liRefreshTargetCombos();
 }
 
 
@@ -35266,7 +36055,7 @@ async function _liSubmitBuyer(){
         // v102.17: agent attribution for dashboard scoping
         fub_assigned_to: agentFub,
         desired_property_types: assetLabels || null,
-        preferred_states: (_li.counties && _li.counties.length) ? 'NJ' : null,
+        preferred_states: (_li.states && _li.states.length) ? _li.states.join(', ') : null,
         preferred_counties: _li.counties && _li.counties.length ? _li.counties.join(', ') : null,
         // v102.15: ALSO write to simple_area_preference for backwards compat
         // with legacy code paths and queries that still read from that column.

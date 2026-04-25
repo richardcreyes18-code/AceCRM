@@ -20675,6 +20675,23 @@ async function _ddCallMergeEdgeFn(survivingId, loserIds){
   return json;
 }
 
+// v113.44: strip deal-name prefix junk before sending to Google. Patterns
+// like "MF - 28U - 1001 E. Owassa Rd. Edinburg, TX 78542 - DK" confuse
+// Google's parser — it returned the wrong city/zip for one such case.
+// Iteratively peels off "PREFIX - " patterns and a trailing "- AGENT_INITIALS".
+function _ddCleanAddrForGeocode(addr){
+  if(!addr) return '';
+  let s = String(addr).trim();
+  let prev;
+  do {
+    prev = s;
+    s = s.replace(/^[a-z0-9][a-z0-9 ]{0,15}[-–—]\s+/i, '').trim();
+  } while(s !== prev && s.length > 0);
+  // Strip trailing agent tag like " - DK" / " -JD" / " - AA"
+  s = s.replace(/\s*[-–—]\s*[A-Z]{1,4}\s*$/, '').trim();
+  return s;
+}
+
 // v113.43: pick the best raw address from the group, run it through Google
 // Geocoding to get the canonical formatted_address, and PATCH the survivor
 // with the result before the merge fires. The engine's text-curated policy
@@ -20682,25 +20699,50 @@ async function _ddCallMergeEdgeFn(survivingId, loserIds){
 // the conflict in deal_notes; pre-promoting + geocoding makes the cleanest
 // official address actually win.
 //
-// Geocoder fallback: if Google flags partial_match (it's guessing) or the
-// API errors / returns no result, we fall back to the raw best address from
-// _ddBestAddressFromGroup. Better to ship a clean human-entered address
-// than a wrong Google guess.
+// v113.44: feed Google the candidate with the most zip/city/state context
+// (cleaned of prefix junk first), then verify the geocoded zip against any
+// candidate input zip — if it disagrees, reject Google's guess and fall
+// back to the raw best.
 async function _ddPrePromoteBestAddress(survivor, groupDeals){
   if(!survivor) return;
   const bestRaw = _ddBestAddressFromGroup(groupDeals);
   const cur     = String(survivor['Address']||'').trim();
   if(!bestRaw) return;
 
-  // Try to canonicalize via Google. Falls back to bestRaw on any failure.
+  // Candidate addresses for geocoding: cleaned version of every group
+  // member. Pick the one with the most context (zip + commas).
+  const cleanedCandidates = (groupDeals || [])
+    .map(d => _ddCleanAddrForGeocode(d['Address']||''))
+    .filter(Boolean);
+  const geocodeInput = cleanedCandidates.slice().sort((a, b) => {
+    const score = s => (/\b\d{5}\b/.test(s) ? 1000 : 0)
+                     + Math.min((s.match(/,/g)||[]).length, 4) * 25
+                     + s.length * 0.05;
+    return score(b) - score(a);
+  })[0] || _ddCleanAddrForGeocode(bestRaw);
+
+  // Collect any zip codes that appeared in the inputs — if Google returns a
+  // different zip, it probably matched the wrong place and we should reject.
+  const inputZips = new Set();
+  for(const d of (groupDeals || [])){
+    const m = String(d['Address']||'').match(/\b(\d{5})\b/);
+    if(m) inputZips.add(m[1]);
+  }
+
+  // Try to canonicalize via Google. Falls back to bestRaw on any failure
+  // (no result, partial_match, or zip-mismatch).
   let final = bestRaw;
   let geo = null;
   try {
-    if(typeof googleGeocodeAddress === 'function'){
-      const r = await googleGeocodeAddress(bestRaw);
-      if(r && r.ok && r.formatted && !r.partial_match) {
+    if(typeof googleGeocodeAddress === 'function' && geocodeInput){
+      const r = await googleGeocodeAddress(geocodeInput);
+      const zipOk = inputZips.size === 0 || (r?.zip && inputZips.has(r.zip));
+      if(r && r.ok && r.formatted && !r.partial_match && zipOk) {
         final = r.formatted;
         geo = r;
+      } else if(r && r.zip && inputZips.size && !inputZips.has(r.zip)){
+        console.warn('[_ddPrePromoteBestAddress] zip mismatch, rejecting Google result',
+          { input: geocodeInput, expected_zips: [...inputZips], got: r.zip, formatted: r.formatted });
       }
     }
   } catch(e){ /* fall through to bestRaw */ }
@@ -20853,12 +20895,26 @@ window._ddRetroFixMerges = async function(opts){
     if(!cur){ stats.deleted++; return; }
     if(cur.deleted_at){ stats.deleted++; return; }
 
-    // Geocode.
+    // v113.44: feed Google the cleaned-and-most-context candidate, verify
+    // the returned zip matches an input zip (else reject as wrong-place).
+    const cleanedCandidates = candidates.map(c => _ddCleanAddrForGeocode(c.Address||'')).filter(Boolean);
+    const geoInput = cleanedCandidates.slice().sort((a,b) => {
+      const score = s => (/\b\d{5}\b/.test(s) ? 1000 : 0)
+                       + Math.min((s.match(/,/g)||[]).length, 4) * 25
+                       + s.length * 0.05;
+      return score(b) - score(a);
+    })[0] || _ddCleanAddrForGeocode(bestRaw);
+    const inputZips = new Set();
+    for(const c of candidates){
+      const m = String(c.Address||'').match(/\b(\d{5})\b/);
+      if(m) inputZips.add(m[1]);
+    }
     let final = bestRaw, geo = null;
-    if(bestRaw){
+    if(geoInput){
       try {
-        const r = await googleGeocodeAddress(bestRaw);
-        if(r && r.ok && r.formatted && !r.partial_match){ final = r.formatted; geo = r; stats.geocoded++; }
+        const r = await googleGeocodeAddress(geoInput);
+        const zipOk = inputZips.size === 0 || (r?.zip && inputZips.has(r.zip));
+        if(r && r.ok && r.formatted && !r.partial_match && zipOk){ final = r.formatted; geo = r; stats.geocoded++; }
       } catch(_){}
     }
 

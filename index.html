@@ -36627,9 +36627,11 @@ async function loadPitchOutTab(dealId){
   const el = document.getElementById('pitchOutContent');
   if(!el) return;
 
-  // ── Pull financial data from localStorage ─────────────────────
-  let fi = {};
-  try{ fi = JSON.parse(localStorage.getItem('fin_'+dealId)||'{}'); } catch(e){}
+  // v113.20: Pitch Out reads everything from the deal row (DB is source of
+  // truth). Live window globals are still preferred when the Financial tab
+  // is open on this laptop, because they reflect unsaved in-progress edits.
+  // Pull monthly values straight from the DB columns — no more legacy
+  // `fin_${dealId}` localStorage blob.
 
   // Core deal fields
   const ask     = Number(d['Asking Price'])||0;
@@ -36641,21 +36643,22 @@ async function loadPitchOutTab(dealId){
   const county  = d['Simple County']||'';
   const stage   = (Array.isArray(d['Pipeline Stage'])?d['Pipeline Stage'][0]:d['Pipeline Stage'])||'';
 
-  // Financial calcs — prefer live window globals, fall back to localStorage
-  const aEGI_mo  = window._aEGI_mo  || Number(fi['aGrossRent_mo'])||0;
+  // Financial calcs — prefer live window globals, fall back to DB columns
+  const dbGRI_mo = Number(d['Gross Rental Income (Monthly)']) || (Number(d['Gross Revenue Yearly'])/12) || 0;
+  const aEGI_mo  = window._aEGI_mo  || dbGRI_mo || 0;
   const aEGI_yr  = aEGI_mo * 12;
-  const aOpEx_mo = window._aTotalOpEx_mo || 0;
+  const aOpEx_mo = window._aTotalOpEx_mo || (Number(d['Expenses Yearly'])/12) || Number(d['Expenses Monthly']) || 0;
   const aOpEx_yr = aOpEx_mo * 12;
   const aNOI_mo  = window._aNOI_mo  || (aEGI_mo - aOpEx_mo) || Number(d['NOI'])/12 || 0;
   const aNOI_yr  = aNOI_mo * 12 || Number(d['NOI']) || 0;
 
-  // Mortgage
+  // Mortgage — pull balance/rate/amort from the ace_properties Mortgage N columns
   const mort_mo = window._aMortgage_mo || (() => {
     let t=0;
     [1,2,3].forEach(n=>{
-      const bal=Number(fi['mort'+n+'_bal'])||0;
-      const amort=Number(fi['mort'+n+'_amort'])||0;
-      const rate=Number(fi['mort'+n+'_rate'])||0;
+      const bal   = Number(d['Mortgage '+n+' Principal Balance'])||0;
+      const amort = Number(d['Mortgage '+n+' Amortization (Years)'])||0;
+      const rate  = Number(d['Mortgage '+n+' Interest Rate (%)'])||0;
       const mr=rate/100/12; const np=amort*12;
       if(mr>0&&np>0&&bal>0) t+=bal*mr*Math.pow(1+mr,np)/(Math.pow(1+mr,np)-1);
     });
@@ -36667,11 +36670,10 @@ async function loadPitchOutTab(dealId){
   const cf_mo = aNOI_mo - mort_mo;
   const cf_yr = cf_mo * 12;
 
-  // Down payment
-  const dpType = fi['aDpType']||'percent';
-  const dpPct  = Number(fi['aDownPct'])||25;
+  // Down payment — DB doesn't store a "percent vs amount" toggle, always treat as %
+  const dpPct  = Number(d['Down Payment (%)'])||25;
   const price  = offer||ask;
-  const dpAmt  = dpType==='amount' ? dpPct : price*(dpPct/100);
+  const dpAmt  = price*(dpPct/100);
   const loanAmt= price - dpAmt;
 
   // CAP rate
@@ -36682,7 +36684,7 @@ async function loadPitchOutTab(dealId){
   if(capRate>1) capRate=capRate/100; // normalize if stored as percent
 
   // Cash on Cash
-  const totalCash = dpAmt + (Number(fi['aRenovation'])||0);
+  const totalCash = dpAmt + (Number(d['Renovation Expense'])||0);
   const coc = totalCash>0 ? (cf_yr/totalCash)*100 : 0;
 
   // Price metrics — always compute both, show what's available
@@ -36692,9 +36694,9 @@ async function loadPitchOutTab(dealId){
   const sfSource     = Number(d['Total Building SF'])>0 ? 'Total Bldg SF' : 'Net Rentable SF';
 
   // Loan details
-  const mort1Rate  = Number(fi['mort1_rate'])||0;
-  const mort1Amort = Number(fi['mort1_amort'])||0;
-  const mort1Type  = fi['mort1_type']||'—';
+  const mort1Rate  = Number(d['Mortgage 1 Interest Rate (%)'])||0;
+  const mort1Amort = Number(d['Mortgage 1 Amortization (Years)'])||0;
+  const mort1Type  = d['Mortgage 1 Loan Type']||'—';
 
   // Fetch tenant mix for this deal
   const cfg = getConfig();
@@ -42847,23 +42849,19 @@ function getDefaultLoanTerms(){
 }
 
 function mortApplyDefaults(d){
-  // Auto-populate 1st mortgage if it has no balance set
-  const fi = (() => {
-    try{ return JSON.parse(localStorage.getItem('fin_'+(d?.id||''))||'{}'); }catch(e){ return {}; }
-  })();
+  // v113.20: Auto-populate 1st mortgage if it has no balance set.
+  // Reads from the DB columns on `d` — no more legacy fin_${dealId}
+  // localStorage blob.
 
   // Only apply if loan 1 has no saved balance (never been touched)
-  if(fi['mort1_bal']) return;
+  if(Number(d?.['Mortgage 1 Principal Balance'])) return;
 
   const defaults = getDefaultLoanTerms();
 
   // Calculate loan amount = (Offer Price or Asking Price) × (1 - down payment %)
   const offerPrice = Number(d?.['Offer Price']) || Number(d?.['Asking Price']) || 0;
-  const dpPct      = Number(fi['aDownPct']) || 25;
-  const dpType     = fi['aDpType'] || 'percent';
-  const dpAmt      = dpType === 'amount'
-    ? (Number(fi['aDownPct']) || 0)
-    : offerPrice * dpPct / 100;
+  const dpPct      = Number(d?.['Down Payment (%)']) || 25;
+  const dpAmt      = offerPrice * dpPct / 100;
   const loanAmt    = Math.round(offerPrice - dpAmt);
 
   if(!loanAmt) return;  // no price data yet, skip
@@ -46716,20 +46714,30 @@ function showFieldMap(){
 
 // ─── AIRTABLE WRITE-BACK ──────────────────────────────────────
 // ─── LOCAL FIELD FALLBACK ─────────────────────────────────────
-// For new fields not yet in Airtable, we store them in localStorage
-// keyed as _lf_<dealId>_<fieldName>
+// v113.20: Deal-dependent data (Deal Tag, Is Archived, etc.) now lives in
+// the database — the local-field fallback is only used as an emergency
+// catch for fields that fail a remote write. `loadOnto` is a NO-OP so
+// stale per-laptop values can never override fresh DB values. A one-time
+// sweep below deletes any legacy _lf_* keys left over from older builds.
 const _lf = {
   key: (id,f) => '_lf_'+id+'_'+f.replace(/\s+/g,'_'),
   set: (id,f,v) => { try{ if(v===null||v===undefined||v==='') localStorage.removeItem(_lf.key(id,f)); else localStorage.setItem(_lf.key(id,f),JSON.stringify(v)); }catch(e){} },
   get: (id,f) => { try{ const r=localStorage.getItem(_lf.key(id,f)); return r!==null?JSON.parse(r):undefined; }catch(e){ return undefined; } },
-  loadOnto: (deal) => {
-    if(!deal?.id) return;
-    ['Deal Tag','Is Archived'].forEach(f => {
-      const v = _lf.get(deal.id, f);
-      if(v !== undefined) deal[f] = v;
-    });
-  }
+  loadOnto: (_deal) => { /* v113.20: no-op — DB is source of truth */ }
 };
+
+// v113.20: one-time sweep to evict legacy _lf_<dealId>_<field> keys that
+// used to shadow DB values. Runs at module load; safe to re-run.
+(function _purgeLegacyLfKeys(){
+  try{
+    const toDel = [];
+    for(let i=0; i<localStorage.length; i++){
+      const k = localStorage.key(i);
+      if(k && k.startsWith('_lf_')) toDel.push(k);
+    }
+    toDel.forEach(k => { try{ localStorage.removeItem(k); }catch(_){} });
+  }catch(_){}
+})();
 
 // Fields that may not exist in Airtable yet — empty now that Deal Tag and Is Archived
 // have been created directly in Airtable. All saves go straight to Airtable.

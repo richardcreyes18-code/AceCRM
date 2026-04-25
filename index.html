@@ -19830,10 +19830,16 @@ function _ddNormalizeDealAddr(addr){
   // at the END. Using the last match skips the "3500 sqft" kind of noise.
   let street = '';
   const routeRe = /(\d+[-\d]*\s+(?:(?:state|us|county|nj|ny|pa)\s+)?(?:highway|hwy|route|rt|road)\s+\d+)/gi;
+  // v113.36: allow alphanumeric street-name words ([a-z0-9]) so ordinal
+  // numbers like "28th", "121st", "1st" work as part of the street name.
+  // Without this, "234 E 28th St, Paterson" and "234 E 121st St, New York"
+  // both fell through to the generic regex and normalized to the same
+  // useless key "234e", lumping completely different properties into one
+  // dedupe group.
   const suffixRe = new RegExp(
-    '(\\d+[-\\d]*\\s+(?:[a-z][a-z\\-\'\\.]*\\s+){0,4}?(?:' + _DD_SUFFIX_ALT + ')\\b)', 'gi'
+    '(\\d+[-\\d]*\\s+(?:[a-z0-9][a-z0-9\\-\'\\.]*\\s+){0,4}?(?:' + _DD_SUFFIX_ALT + ')\\b)', 'gi'
   );
-  const genericRe = /(\d+[-\d]*(?:\s+[a-z][a-z\-'\.]*){1,2})/gi;
+  const genericRe = /(\d+[-\d]*(?:\s+[a-z0-9][a-z0-9\-'\.]*){1,2})/gi;
 
   const lastMatch = (str, re) => {
     const matches = [...str.matchAll(re)];

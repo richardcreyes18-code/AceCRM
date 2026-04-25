@@ -1700,7 +1700,9 @@ const SB_TABLES = {
   // v113.9: user-entered comparable sales. Separate records, FK to the
   // subject deal in ace_properties. Unlike the "From Your Pipeline" comps
   // (filtered allDeals), these are market comps the user types in manually.
-  manualComps:         'ace_manual_comps'
+  manualComps:         'ace_manual_comps',
+  // v113.21: Task notifications — bell dropdown, triggered on assign / overdue-plan / completed.
+  taskNotifications:   'ace_task_notifications'
 };
 
 // ─── SUPABASE ↔ AIRTABLE FIELD MAPS ───────────────────────────
@@ -1936,10 +1938,26 @@ const SB_BC_MAP = {
   field_status:'Field Status'
 };
 
-// Tasks map (ace_tasks)
+// Tasks map (ace_tasks) — v113.21 adds multi-agent assignment, buyer link,
+// DB sort_order, and overdue-plan columns.
 const SB_TASK_MAP = {
   id:'id', task:'Task', due_date:'Due Date', priority:'Priority',
-  notes:'Notes', status:'Status'
+  notes:'Notes', status:'Status',
+  property_id:'Property ID', contact_id:'Contact ID',
+  buyer_criteria_id:'Buyer Criteria ID',
+  task_type:'Task Type',
+  assigned_to_user_id:'Assigned To', assigned_by_user_id:'Assigned By',
+  assigned_at:'Assigned At',
+  sort_order:'Sort Order',
+  overdue_plan:'Overdue Plan', overdue_plan_at:'Overdue Plan At',
+  created_by_user_id:'Created By', created_at:'Created At', updated_at:'Updated At'
+};
+
+// v113.21: Notifications table map
+const SB_NOTIF_MAP = {
+  id:'id', recipient_user_id:'Recipient', actor_user_id:'Actor',
+  task_id:'Task ID', type:'Type', message:'Message',
+  read_at:'Read At', created_at:'Created At'
 };
 
 // v113.9: Manual comps map (ace_manual_comps). Same convention —
@@ -35901,6 +35919,10 @@ let _taskModalDealId=null, _taskModalDealAddr='', _taskModalSrc='deal';
 // tab uses _currentContactTasksId to know what to refresh after mutations.
 let _taskModalContactId=null, _taskModalContactName='';
 let _currentContactTasksId=null, _currentContactTasksName='';
+// v113.21: buyer-criteria link — set when the modal is opened from a
+// buyer criteria card. Defaults task_type to 'buyer' and writes the FK
+// to ace_tasks.buyer_criteria_id.
+let _taskModalBuyerCritId=null, _taskModalBuyerCritLabel='';
 
 function openCreateTaskModal(dealId=null,address='',source='deal',contactId=null,contactName=''){
   _taskModalDealId=dealId; _taskModalDealAddr=address; _taskModalSrc=source;
@@ -36033,6 +36055,32 @@ async function submitEditTask(taskId, source){
   }
 }
 
+// v113.21: compute the next sort_order for a given assignee — one index per
+// user so each person's queue is contiguous. Missing values are treated as
+// the end of the list (NULL sorts last in our UI anyway, but we want new
+// rows to have a real integer so drag-reorder math stays monotonic).
+async function _tasksNextSortOrder(userId){
+  if(!userId) return 1;
+  try {
+    const rows = await _sbGet(SB_TABLES.tasks, `assigned_to_user_id=eq.${userId}&select=sort_order&order=sort_order.desc.nullslast&limit=1`);
+    const cur = Array.isArray(rows) && rows[0] && Number(rows[0].sort_order);
+    return (cur && cur > 0 ? cur : 0) + 1;
+  } catch(_e) { return Date.now() % 1000000; } // fallback: monotonic-ish
+}
+
+// v113.21: determine task_type from the modal source. Caller can override
+// via the (upcoming v113.23) type picker. The contact-page → 'contact' rule
+// and buyer-criteria-page → 'buyer' rule are both per user spec.
+function _taskTypeFromSource(source, dealId, contactId, buyerCritId){
+  if(buyerCritId) return 'buyer';
+  if(dealId)      return 'deal';
+  if(contactId)   return 'contact';
+  if(source === 'buyer')   return 'buyer';
+  if(source === 'deal')    return 'deal';
+  if(source === 'contact') return 'contact';
+  return 'admin';
+}
+
 async function submitCreateTask(){
   const name  = document.getElementById('ctask_name')?.value?.trim();
   const prio  = document.getElementById('ctask_priority')?.value;
@@ -36052,15 +36100,56 @@ async function submitCreateTask(){
   if(_taskModalDealId&&!_taskModalDealId.startsWith('demo')) fields['Related Property']=[_taskModalDealId];
   try{
     if(isSupabase()){
-      const sbTask={task:name, status:'Pending', priority:prio||null, due_date:due||null, notes:notes||null};
+      // v113.21: determine assignee. The v113.23 modal will expose an
+      // "Assign to" picker (default _currentUser.id); until then, every
+      // task self-assigns to the creator so `assigned_to_user_id` is never
+      // null for new rows.
+      const assigneeId = (document.getElementById('ctask_assignee')?.value) || (_currentUser && _currentUser.id) || null;
+      const buyerCritId = document.getElementById('ctask_buyerCrit')?.value || _taskModalBuyerCritId || null;
+      const typeOverride = document.getElementById('ctask_type')?.value;
+      const taskType = typeOverride || _taskTypeFromSource(_taskModalSrc, _taskModalDealId, _taskModalContactId, buyerCritId);
+
+      const sortOrder = await _tasksNextSortOrder(assigneeId);
+
+      const sbTask={
+        task:name, status:'Pending',
+        priority: prio||null, due_date: due||null, notes: notes||null,
+        task_type: taskType,
+        sort_order: sortOrder
+      };
       if(_taskModalDealId&&!_taskModalDealId.startsWith('demo')) sbTask.property_id=_taskModalDealId;
-      // v113.5: stamp contact_id when the task was created from a contact card.
-      // A task can optionally have both (deal + contact), though today the UI
-      // only sets one or the other.
       if(_taskModalContactId) sbTask.contact_id=_taskModalContactId;
-      // Stamp ownership so Dashboard + Tasks page can filter to the current user
+      if(buyerCritId) sbTask.buyer_criteria_id = buyerCritId;
       if(_currentUser && _currentUser.id) sbTask.created_by_user_id = _currentUser.id;
-      await _sbPost(SB_TABLES.tasks, sbTask);
+      if(assigneeId) sbTask.assigned_to_user_id = assigneeId;
+
+      // Only stamp `assigned_by` / `assigned_at` when someone OTHER than the
+      // creator is the assignee (i.e. a real assignment across agents).
+      // Self-assigned tasks leave those columns NULL, which the UI reads as
+      // "no banner, don't notify anyone".
+      const creatorId = _currentUser && _currentUser.id;
+      if(assigneeId && creatorId && assigneeId !== creatorId){
+        sbTask.assigned_by_user_id = creatorId;
+        sbTask.assigned_at = new Date().toISOString();
+      }
+
+      const newRow = await _sbPost(SB_TABLES.tasks, sbTask);
+      // _sbPost may return either the row object or an array of rows
+      // depending on the proxy — normalize so we can read the id.
+      const newId = newRow && (newRow.id || (Array.isArray(newRow) && newRow[0] && newRow[0].id));
+
+      // Fire a notification when the task is handed off to another agent.
+      if(sbTask.assigned_by_user_id && newId){
+        try {
+          await _sbPost(SB_TABLES.taskNotifications, {
+            recipient_user_id: assigneeId,
+            actor_user_id: creatorId,
+            task_id: newId,
+            type: 'assigned',
+            message: (_currentUser?.name || 'Someone') + ' assigned you: ' + name
+          });
+        } catch(_e){ console.warn('Notification insert failed:', _e.message); }
+      }
     } else {
       const res=await fetch(`https://api.airtable.com/v0/${cfg.base}/${TASKS_TABLE_ID}`,{
         method:'POST', headers:{Authorization:`Bearer ${cfg.key}`,'Content-Type':'application/json'},

@@ -11656,30 +11656,78 @@ function renderAICommTab(d){
 // in the checkbox, (b) a getter that pulls the value off `currentDeal`,
 // and (c) a stable key used for the localStorage pref. Toggling a box
 // changes the pref and optionally the generated prompt on the next Run.
+// v113.13: Expanded field list with groups. Every field from Property Details +
+// Financial Analysis is available; defaults mirror what agents typically include
+// in outbound emails. Each entry has:
+//   k     — stable localStorage key
+//   group — section header in the picker
+//   label — displayed label and sent to AI
+//   get   — getter against currentDeal (AT-style field names)
 const EMAIL_TPL_FIELDS = [
-  { k:'address',     label:'Address',              get:d=>d['Address'] },
-  { k:'propType',    label:'Property Type',        get:d=>d['Simple Text Property Type'] || d['CRM Asset Classification'] },
-  { k:'askingPrice', label:'Asking Price',         get:d=>d['Pitch Out Price'] ? '$'+Number(d['Pitch Out Price']).toLocaleString() : (d['Asking Price'] ? '$'+Number(d['Asking Price']).toLocaleString() : '') },
-  { k:'sqft',        label:'Square Footage',       get:d=>{const v=d['Square Footage']||d['Total Building SF'];return v?Number(v).toLocaleString()+' SF':'';} },
-  { k:'lotSize',     label:'Lot Size',             get:d=>d['Total Lot Size'] ? Number(d['Total Lot Size']).toLocaleString() + ' acres' : '' },
-  { k:'units',       label:'# of Units',           get:d=>d['Number of Units']||d['No. of Units'] },
-  { k:'unitMix',     label:'Unit Mix',             get:d=>d['Unit Mix'] },
-  { k:'yearBuilt',   label:'Year Built',           get:d=>d['Year Built'] },
-  { k:'ownerOcc',    label:'Owner Occupied?',      get:d=>{const v=d['Owner Occupied'];if(v===true)return'Yes';if(v===false)return'No';return v||'';} },
-  { k:'capRate',     label:'Cap Rate',             get:d=>d['Cap Rate (Asking Price)'] || d['X Cap Rate Pct'] },
-  { k:'noi',         label:'NOI (yearly)',         get:d=>d['NOI'] ? '$'+Number(d['NOI']).toLocaleString() : '' },
-  { k:'revenue',     label:'Gross Revenue (yr)',   get:d=>d['Calculated Revenue Yearly'] ? '$'+Number(d['Calculated Revenue Yearly']).toLocaleString() : (d['Gross Revenue (Yearly)'] ? '$'+Number(d['Gross Revenue (Yearly)']).toLocaleString() : '') },
-  { k:'expenses',    label:'Expenses (yr)',        get:d=>d['Calculated Expenses Yearly'] ? '$'+Number(d['Calculated Expenses Yearly']).toLocaleString() : (d['Expenses (Yearly)'] ? '$'+Number(d['Expenses (Yearly)']).toLocaleString() : '') },
-  { k:'pricePerSF',  label:'Price / SF',           get:d=>d['X Price Per Foot'] ? '$'+Number(d['X Price Per Foot']).toLocaleString()+'/SF' : '' },
-  { k:'genNotes',    label:'General Property Notes', get:d=>d['General Property Notes'] },
-  { k:'finNotes',    label:'Financial Property Notes', get:d=>d['Financial Property Notes'] },
-  { k:'whySelling',  label:'Why Selling',          get:d=>d['Why Selling'] },
-  { k:'pipeline',    label:'Pipeline Stage',       get:d=>d['Pipeline Stage'] },
+  // ── Basic Info ────────────────────────────────────────────────────────────
+  { k:'address',       group:'Basic Info',   label:'Address',               get:d=>d['Address'] },
+  { k:'propType',      group:'Basic Info',   label:'Property Type',         get:d=>d['Simple Text Property Type']||d['CRM Asset Classification'] },
+  { k:'askingPrice',   group:'Basic Info',   label:'Asking Price',          get:d=>{ const v=d['Pitch Out Price']||d['Asking Price']; return v?'$'+Number(v).toLocaleString():''; } },
+  { k:'pipeline',      group:'Basic Info',   label:'Pipeline Stage',        get:d=>d['Pipeline Stage'] },
+  { k:'propDesc',      group:'Basic Info',   label:'Property Description',  get:d=>d['Property Description'] },
+
+  // ── Physical Details ──────────────────────────────────────────────────────
+  { k:'sqft',          group:'Physical',     label:'Building SF',           get:d=>{ const v=d['Square Footage']||d['Total Building SF']; return v?Number(v).toLocaleString()+' SF':''; } },
+  { k:'netRentableSF', group:'Physical',     label:'Net Rentable SF',       get:d=>{ const v=d['Net Rentable SF']; return v?Number(v).toLocaleString()+' SF':''; } },
+  { k:'lotSize',       group:'Physical',     label:'Lot Size',              get:d=>{ const v=d['Total Lot Size']; return v?Number(v).toLocaleString()+' acres':''; } },
+  { k:'units',         group:'Physical',     label:'# of Units',            get:d=>d['Number of Units']||d['No. of Units'] },
+  { k:'noOfBuildings', group:'Physical',     label:'# of Buildings',        get:d=>d['No. of Buildings'] },
+  { k:'unitMix',       group:'Physical',     label:'Unit Mix',              get:d=>d['Unit Mix'] },
+  { k:'yearBuilt',     group:'Physical',     label:'Year Built',            get:d=>d['Year Built'] },
+  { k:'yearRenovated', group:'Physical',     label:'Year Renovated',        get:d=>d['Year Renovated'] },
+  { k:'occupancy',     group:'Physical',     label:'Occupancy %',           get:d=>{ const v=d['Occupancy (%)']; return (v!=null&&v!=='')? v+'%':''; } },
+  { k:'ownerOcc',      group:'Physical',     label:'Owner Occupied?',       get:d=>{ const v=d['Owner Occupied']; if(v===true)return'Yes'; if(v===false)return'No'; return v||''; } },
+  { k:'propClass',     group:'Physical',     label:'Property Class',        get:d=>d['Property Class'] },
+  { k:'propCondition', group:'Physical',     label:'Property Condition',    get:d=>d['Property Condition'] },
+  { k:'noOfStories',   group:'Physical',     label:'# of Stories',          get:d=>d['No. of Stories'] },
+  { k:'parking',       group:'Physical',     label:'Parking Spaces',        get:d=>d['No. of Parking Spaces'] },
+
+  // ── Financials (Actual) ───────────────────────────────────────────────────
+  { k:'griMonthly',    group:'Financials',   label:'GRI (Monthly)',         get:d=>{ const v=d['Gross Rental Income (Monthly)']; return v?'$'+Number(v).toLocaleString()+'/mo':''; } },
+  { k:'grossRevYearly',group:'Financials',   label:'Gross Revenue (yr)',    get:d=>{ const gri=d['Gross Revenue Yearly']; const mo=d['Gross Rental Income (Monthly)']; const v=gri||(mo?Number(mo)*12:null); return v?'$'+Number(v).toLocaleString():''; } },
+  { k:'expensesYearly',group:'Financials',   label:'Expenses (yr)',         get:d=>{ const v=d['Expenses Yearly']||(d['Expenses Monthly']?Number(d['Expenses Monthly'])*12:null); return v?'$'+Number(v).toLocaleString():''; } },
+  { k:'noi',           group:'Financials',   label:'NOI (yearly)',          get:d=>{ const v=d['NOI']; return v?'$'+Number(v).toLocaleString():''; } },
+  { k:'capRate',       group:'Financials',   label:'Cap Rate',              get:d=>{ const v=d['Cap Rate (CRM)']; return (v!=null&&v!=='')? (Number(v)*100).toFixed(2)+'%':''; } },
+  { k:'expenseRatio',  group:'Financials',   label:'Expense Ratio',         get:d=>{ const v=d['Actual Expense Ratio %']; return (v!=null&&v!=='')? Number(v).toFixed(1)+'%':''; } },
+  { k:'pricePerSF',    group:'Financials',   label:'Price / SF',            get:d=>{ const ask=Number(d['Asking Price']||d['Pitch Out Price']||0); const sf=Number(d['Square Footage']||d['Total Building SF']||0); return (ask&&sf)?'$'+(ask/sf).toFixed(2)+'/SF':''; } },
+  { k:'pricePerUnit',  group:'Financials',   label:'Price / Unit',          get:d=>{ const ask=Number(d['Asking Price']||d['Pitch Out Price']||0); const u=Number(d['Number of Units']||d['No. of Units']||0); return (ask&&u)?'$'+Math.round(ask/u).toLocaleString()+'/unit':''; } },
+  { k:'vacancyRate',   group:'Financials',   label:'Vacancy Rate',          get:d=>{ const v=d['Vacancy Rate (%)']; return (v!=null&&v!=='')? v+'%':''; } },
+  { k:'annualDebtSvc', group:'Financials',   label:'Annual Debt Service',   get:d=>{ const v=d['Annual Debt Service']; return v?'$'+Number(v).toLocaleString():''; } },
+  { k:'dscr',          group:'Financials',   label:'DSCR',                  get:d=>d['DSCR (Manual)'] },
+
+  // ── Pro Forma ─────────────────────────────────────────────────────────────
+  { k:'pfGRIYearly',   group:'Pro Forma',    label:'Pro Forma GRI (yr)',    get:d=>{ const v=d['Pro Forma Gross Revenue Yearly']||(d['Pro Forma Gross Revenue Monthly']?Number(d['Pro Forma Gross Revenue Monthly'])*12:null); return v?'$'+Number(v).toLocaleString():''; } },
+  { k:'pfExpYearly',   group:'Pro Forma',    label:'Pro Forma Expenses (yr)',get:d=>{ const v=d['Pro Forma Expenses Yearly']||(d['Pro Forma Expenses Monthly']?Number(d['Pro Forma Expenses Monthly'])*12:null); return v?'$'+Number(v).toLocaleString():''; } },
+  { k:'pfNOI',         group:'Pro Forma',    label:'Pro Forma NOI',         get:d=>{ const gri=Number(d['Pro Forma Gross Revenue Yearly']||(d['Pro Forma Gross Revenue Monthly']?Number(d['Pro Forma Gross Revenue Monthly'])*12:0)||0); const exp=Number(d['Pro Forma Expenses Yearly']||(d['Pro Forma Expenses Monthly']?Number(d['Pro Forma Expenses Monthly'])*12:0)||0); return (gri&&exp)?'$'+(gri-exp).toLocaleString():''; } },
+  { k:'pfCapRate',     group:'Pro Forma',    label:'Pro Forma Cap Rate',    get:d=>{ const v=d['Cap Rate Proforma (CRM)']; return (v!=null&&v!=='')? (Number(v)*100).toFixed(2)+'%':''; } },
+  { k:'pfExpRatio',    group:'Pro Forma',    label:'Pro Forma Expense Ratio',get:d=>{ const v=d['Pro Forma Expense Ratio %']; return (v!=null&&v!=='')? Number(v).toFixed(1)+'%':''; } },
+
+  // ── Notes & Deal Details ──────────────────────────────────────────────────
+  { k:'genNotes',      group:'Notes',        label:'General Property Notes',get:d=>d['General Property Notes'] },
+  { k:'finNotes',      group:'Notes',        label:'Financial Notes',       get:d=>d['Financial Property Notes'] },
+  { k:'whySelling',    group:'Notes',        label:'Why Selling',           get:d=>d['Why Selling'] },
+  { k:'sellerMotiv',   group:'Notes',        label:'Seller Motivation',     get:d=>d['Seller Motivation Level'] },
 ];
 
-// Defaults — match what the user's Airtable screenshot shows as "useful for email"
+// Defaults — pre-checked fields for a typical outbound marketing email.
+// Keys must match the `k` values above.
 const EMAIL_TPL_DEFAULTS = {
-  enabled: { address:true, propType:true, askingPrice:true, sqft:true, units:true, unitMix:true, ownerOcc:true, capRate:true, noi:true, revenue:true, expenses:true, genNotes:true, finNotes:true, whySelling:false, pipeline:false, lotSize:true, yearBuilt:true, pricePerSF:true },
+  enabled: {
+    address:true, propType:true, askingPrice:true, pipeline:false, propDesc:false,
+    sqft:true, netRentableSF:false, lotSize:true, units:true, noOfBuildings:false,
+    unitMix:true, yearBuilt:true, yearRenovated:false, occupancy:false,
+    ownerOcc:true, propClass:false, propCondition:false, noOfStories:false, parking:false,
+    griMonthly:true, grossRevYearly:true, expensesYearly:true, noi:true,
+    capRate:true, expenseRatio:false, pricePerSF:true, pricePerUnit:false,
+    vacancyRate:false, annualDebtSvc:false, dscr:false,
+    pfGRIYearly:false, pfExpYearly:false, pfNOI:false, pfCapRate:false, pfExpRatio:false,
+    genNotes:true, finNotes:true, whySelling:false, sellerMotiv:false
+  },
   signature: 'Richard Reyes, KW Commercial',
   tone: 'Professional, concise, and compelling',
   extra: ''
@@ -11722,17 +11770,39 @@ function _emailTplRenderFields(){
   if(!grid) return;
   const prefs = _emailTplLoadPrefs();
   const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
-  grid.innerHTML = EMAIL_TPL_FIELDS.map(f => {
-    const on = prefs.enabled[f.k] !== false;  // default on unless explicitly off
-    const val = currentDeal ? (f.get(currentDeal) || '') : '';
-    const hasVal = String(val).trim() !== '';
-    const dim = hasVal ? '' : 'color:#94a3b8;';
-    const valHint = hasVal ? ' — <span style="color:#64748b;">'+esc(String(val).slice(0,30))+(String(val).length>30?'…':'')+'</span>' : ' <span style="font-size:10px;color:#cbd5e1;">(empty)</span>';
-    return `<label style="display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;${dim}" title="${esc(String(val))}">
-      <input type="checkbox" id="emailTplF_${f.k}" ${on?'checked':''} onchange="_emailTplSavePrefs()" style="cursor:pointer;">
-      <span>${esc(f.label)}${valHint}</span>
-    </label>`;
-  }).join('');
+
+  // Build grouped structure preserving insertion order
+  const groupNames = [];
+  const groupMap   = {};
+  EMAIL_TPL_FIELDS.forEach(f => {
+    const g = f.group || 'Other';
+    if(!groupMap[g]){ groupMap[g] = []; groupNames.push(g); }
+    groupMap[g].push(f);
+  });
+
+  let html = '';
+  groupNames.forEach((g, gi) => {
+    html += `<div style="font-size:10px;font-weight:700;color:#94a3b8;text-transform:uppercase;
+      letter-spacing:0.05em;margin:${gi===0?'2px':'10px'} 0 4px;
+      ${gi>0?'padding-top:8px;border-top:1px solid #e2e8f0;':''}">${esc(g)}</div>`;
+    groupMap[g].forEach(f => {
+      // default: use saved pref; if no saved pref, use EMAIL_TPL_DEFAULTS.enabled[k]
+      const savedOn = prefs.enabled[f.k];
+      const on = savedOn !== undefined ? savedOn : (EMAIL_TPL_DEFAULTS.enabled[f.k] !== false);
+      let val = '';
+      try { val = currentDeal ? (f.get(currentDeal) || '') : ''; } catch(_e){}
+      const hasVal = String(val).trim() !== '';
+      const dim = hasVal ? '' : 'color:#94a3b8;';
+      const valHint = hasVal
+        ? ' — <span style="color:#64748b;">'+esc(String(val).slice(0,35))+(String(val).length>35?'…':'')+'</span>'
+        : ' <span style="font-size:10px;color:#cbd5e1;">(empty)</span>';
+      html += `<label style="display:flex;align-items:center;gap:6px;padding:2px 0;cursor:pointer;${dim}" title="${esc(String(val))}">
+        <input type="checkbox" id="emailTplF_${f.k}" ${on?'checked':''} onchange="_emailTplSavePrefs()" style="cursor:pointer;">
+        <span>${esc(f.label)}${valHint}</span>
+      </label>`;
+    });
+  });
+  grid.innerHTML = html;
 
   // Restore signature / tone / extra
   const sigEl = document.getElementById('emailTplSignature'); if(sigEl) sigEl.value = prefs.signature;

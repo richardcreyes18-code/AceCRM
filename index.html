@@ -19894,11 +19894,40 @@ function _ddPickDefaultSurvivor(deals){
     if(d['Assigned Agent']) s += 50;
     if(Number(d['Asking Price']) > 0) s += 20;
     if(Number(d['Offer Price']) > 0) s += 20;
-    // Prefer non-Clean-Up stage UUIDs to survive — Clean Up is the throwaway
-    // bucket; the merge engine auto-promotes the stage value either way, but
-    // the surviving id matters for any external links by UUID.
+    // v113.38: TIERED scoring. Stage is the primary tier; canonical-address
+    // form is a secondary tier that decides ties between same-stage rows.
+    // Both tiers use weight 100000 — unreachable by any realistic content
+    // length (a few thousand chars max), so tier order is dominant.
+    //
+    //   Tier 2 (200000+): non-Clean-Up stage  (Nurture, Lead, Closed, …)
+    //   Tier 1 (100000+): Clean-Up + canonical address (zip + USA suffix)
+    //   Tier 0 (0+):       Clean-Up + junky address  (e.g., "5U - …")
+    //
+    // Within a tier, content length + agent/price + comma count decide.
+    // Note: the merge engine appends loser notes to survivor anyway, so a
+    // sparse-but-canonical survivor still ends up with all the notes.
     const stage = String(d['Pipeline Stage']||'').trim().toLowerCase();
-    if(stage && stage !== 'clean up') s += 200;
+    const _addr = String(d['Address']||'');
+    const _isCanonical = /\b\d{5}\b/.test(_addr) && /,\s*USA\s*$/i.test(_addr);
+    if(stage && stage !== 'clean up') s += 200000;
+    else if(_isCanonical)             s += 100000;
+
+    // v113.38: address-quality scoring. When two rows share a pipeline stage
+    // (e.g. both Clean Up), notes-length alone picks the row with a junky
+    // deal-name address ("5U - 111 Maple Ave, Hackensack") over the canonical
+    // "111 Maple Ave, Hackensack, NJ 07601, USA" if the junky row inherited
+    // a long FUB-import notes blob. Bias scoring toward canonical full-form
+    // addresses (street, city, state+zip, USA) so the cleaner UUID survives.
+    const addr = String(d['Address']||'');
+    if(/\b\d{5}\b/.test(addr))             s += 150;  // has a 5-digit zip
+    if(/,\s*USA\s*$/i.test(addr))          s += 50;   // canonical ", USA" suffix
+    if(/,\s*[A-Z]{2}\s+\d{5}/.test(addr))  s += 30;   // "NJ 07601" state-zip pattern
+    // Comma count is a strong proxy for canonical form: "Street, City, State Zip, USA"
+    // has 3 commas; a deal-name junky address like "5U - 111 Maple Ave, Hackensack"
+    // has only 1.
+    const commaCount = (addr.match(/,/g) || []).length;
+    s += Math.min(commaCount, 4) * 25;
+
     return s;
   };
   return [...deals].sort((a,b) => {

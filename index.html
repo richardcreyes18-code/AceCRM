@@ -1692,6 +1692,11 @@ const SB_TABLES = {
   // to which buyer contacts. Deals can be in-system (deal_id FK) or
   // off-system (offsystem_address + offsystem_agent_name text fields).
   buyerPitches:      'ace_buyer_pitches',
+  // v113.31: full Gmail conversation storage (sent + received).
+  // Rows are inserted by gmail-send (outbound) and gmail-sync (inbound +
+  // any outbound that wasn't logged at send time). Uniqueness is enforced
+  // per mailbox via (gmail_message_id, user_email).
+  emails:            'ace_emails',
   // v102.34: editable app-wide lists (asset_types, preferred_cities).
   // Rows are keyed by list_key + value; is_active=false acts as a tombstone
   // so _appListAdd can "reactivate over insert" when a value is re-added
@@ -21564,6 +21569,8 @@ async function showContactDetailPage(recordId, returnTo){
           <!-- Tabs — flat, underline-style active state (FUB look) -->
           <div style="display:flex;background:#fff;border-bottom:1px solid #e2e8f0;padding:0 28px;gap:4px;flex-shrink:0;">
             <button id="ctab_comm" onclick="_contactTabSwitch('comm')" style="background:transparent;border:none;border-bottom:3px solid #2563eb;padding:16px 20px;font-size:14px;font-weight:700;color:#1e40af;cursor:pointer;margin-bottom:-1px;">📞 Communication <span id="ctabCommCount" style="background:#dbeafe;color:#1e40af;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:700;">…</span></button>
+            <!-- v113.31: Email — full Gmail conversation (sent + received) with this contact, plus inline reply -->
+            <button id="ctab_email" onclick="_contactTabSwitch('email')" style="background:transparent;border:none;border-bottom:3px solid transparent;padding:16px 20px;font-size:14px;font-weight:600;color:#64748b;cursor:pointer;margin-bottom:-1px;">📧 Email <span id="ctabEmailCount" style="background:#f1f5f9;color:#64748b;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:700;">…</span></button>
             <button id="ctab_props" onclick="_contactTabSwitch('props')" style="background:transparent;border:none;border-bottom:3px solid transparent;padding:16px 20px;font-size:14px;font-weight:600;color:#64748b;cursor:pointer;margin-bottom:-1px;">🏢 Properties <span id="ctabPropsCount" style="background:#f1f5f9;color:#64748b;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:700;">…</span></button>
             <button id="ctab_buyer" onclick="_contactTabSwitch('buyer')" style="background:transparent;border:none;border-bottom:3px solid transparent;padding:16px 20px;font-size:14px;font-weight:600;color:#64748b;cursor:pointer;margin-bottom:-1px;">🎯 Buyer Criteria <span id="ctabBuyerCount" style="background:#f1f5f9;color:#64748b;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:700;">…</span></button>
             <button id="ctab_pitches" onclick="_contactTabSwitch('pitches')" style="background:transparent;border:none;border-bottom:3px solid transparent;padding:16px 20px;font-size:14px;font-weight:600;color:#64748b;cursor:pointer;margin-bottom:-1px;">📨 Pitches <span id="ctabPitchesCount" style="background:#f1f5f9;color:#64748b;font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:700;">…</span></button>
@@ -21574,6 +21581,15 @@ async function showContactDetailPage(recordId, returnTo){
           <div style="flex:1;overflow-y:auto;padding:24px 28px;min-width:0;min-height:0;">
             <div id="cpane_comm">
               <div id="contactCommList" style="color:#64748b;font-size:13px;"><div style="text-align:center;padding:40px;">⏳ Loading communication history...</div></div>
+            </div>
+
+            <!-- v113.31: Email tab — Gmail threads (sent + received) with this contact -->
+            <div id="cpane_email" style="display:none;">
+              <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:16px;gap:12px;flex-wrap:wrap;">
+                <div style="font-size:13px;color:#64748b;">Full Gmail conversation with this contact — sent from CRM or directly. Reply inline below to keep the thread.</div>
+                <button id="contactEmailSyncBtn" onclick="_contactSyncMyMailbox()" title="Pull the latest emails from your Gmail now" style="background:#0f172a;color:#fff;border:none;padding:10px 16px;font-size:12px;font-weight:600;border-radius:8px;cursor:pointer;font-family:'Inter',system-ui,sans-serif;white-space:nowrap;">↻ Sync now</button>
+              </div>
+              <div id="contactEmailList" style="color:#64748b;font-size:13px;"><div style="text-align:center;padding:40px;">⏳ Loading email threads...</div></div>
             </div>
 
             <div id="cpane_props" style="display:none;">
@@ -21630,6 +21646,8 @@ async function showContactDetailPage(recordId, returnTo){
   _contactLoadCommunication(recordId);
   // v102.31: load pitches for the new Pitches tab
   _contactLoadPitches(recordId);
+  // v113.31: load Gmail conversation for the Email tab
+  _contactLoadEmails(recordId);
   // v111.14: load rich FUB profile (all phones, emails, tags, stage, etc.)
   _contactLoadRichProfile(recordId);
   // v113.5: load tasks linked to this contact. Also stash the id on a module
@@ -21662,8 +21680,9 @@ async function showContactDetailPage(recordId, returnTo){
 // inactive tabs have a transparent bottom border. Count pills switch between
 // blue-filled (active) and grey (inactive).
 function _contactTabSwitch(tab){
-  const tabs = ['props','buyer','comm','info','pitches','tasks'];
-  const pillIdMap = { props:'ctabPropsCount', buyer:'ctabBuyerCount', comm:'ctabCommCount', pitches:'ctabPitchesCount', tasks:'ctabTasksCount' };
+  // v113.31: 'email' tab added — Gmail conversation thread + inline reply.
+  const tabs = ['props','buyer','comm','info','pitches','tasks','email'];
+  const pillIdMap = { props:'ctabPropsCount', buyer:'ctabBuyerCount', comm:'ctabCommCount', pitches:'ctabPitchesCount', tasks:'ctabTasksCount', email:'ctabEmailCount' };
   tabs.forEach(t=>{
     const btn = document.getElementById('ctab_'+t);
     const pane = document.getElementById('cpane_'+t);
@@ -23742,6 +23761,265 @@ async function _contactLoadPitches(contactId){
     _renderPitchesList(contactId);
   } catch(e) {
     listEl.innerHTML = '<div style="padding:20px;color:#dc2626;font-size:12px;">Error loading pitches: '+e.message+'</div>';
+  }
+}
+
+// ── v113.31: EMAIL CONVERSATION TAB ──────────────────────────────────
+// Load every ace_emails row linked to this contact and render them
+// grouped by gmail_thread_id, oldest-thread-on-bottom, newest-message-
+// at-bottom-within-thread. Each thread has an inline reply form.
+let _currentContactEmails = [];
+let _currentContactEmailsId = null;
+
+async function _contactLoadEmails(contactId){
+  const listEl  = document.getElementById('contactEmailList');
+  const badgeEl = document.getElementById('ctabEmailCount');
+  if(!listEl) return;
+  _currentContactEmailsId = contactId;
+
+  if(!isSupabase()){
+    listEl.innerHTML = '<div style="padding:20px;color:#94a3b8;font-size:12px;text-align:center;">Email conversation requires Supabase mode.</div>';
+    if(badgeEl) badgeEl.textContent = '0';
+    return;
+  }
+
+  try {
+    const rows = await _sbGet(SB_TABLES.emails,
+      `contact_id=eq.${contactId}&deleted_at=is.null&select=*&order=sent_at.asc&limit=500`);
+    _currentContactEmails = rows || [];
+    // Badge = number of distinct threads (more meaningful than total messages)
+    const threadIds = new Set(_currentContactEmails.map(r => r.gmail_thread_id));
+    if(badgeEl) badgeEl.textContent = String(threadIds.size);
+    _renderContactEmails(contactId);
+  } catch(e) {
+    listEl.innerHTML = '<div style="padding:20px;color:#dc2626;font-size:12px;">Error loading emails: ' + (e.message || e) + '</div>';
+  }
+}
+
+function _renderContactEmails(contactId){
+  const listEl = document.getElementById('contactEmailList');
+  if(!listEl) return;
+  const rows = _currentContactEmails || [];
+
+  if(rows.length === 0){
+    listEl.innerHTML = `
+      <div style="background:#fff;border:1px dashed #cbd5e1;border-radius:10px;padding:40px 20px;text-align:center;">
+        <div style="font-size:36px;opacity:0.4;margin-bottom:8px;">📧</div>
+        <div style="font-size:13px;font-weight:600;color:#475569;margin-bottom:4px;">No emails yet for this contact</div>
+        <div style="font-size:11px;color:#94a3b8;line-height:1.6;max-width:460px;margin:0 auto;">
+          Send an email to this contact from any deal card and it'll show up here.
+          Inbound emails sync automatically every few minutes once Gmail is connected
+          (Profile → Gmail). Click <strong>↻ Sync now</strong> above to pull immediately.
+        </div>
+      </div>`;
+    return;
+  }
+
+  // Group by gmail_thread_id, preserve message order within thread,
+  // sort threads by latest message timestamp descending.
+  const byThread = new Map();
+  for(const r of rows){
+    if(!byThread.has(r.gmail_thread_id)) byThread.set(r.gmail_thread_id, []);
+    byThread.get(r.gmail_thread_id).push(r);
+  }
+  const threads = Array.from(byThread.entries())
+    .map(([tid, msgs]) => ({
+      tid,
+      msgs: msgs.slice().sort((a,b) => new Date(a.sent_at) - new Date(b.sent_at)),
+      latest: msgs.reduce((acc, m) => new Date(m.sent_at) > new Date(acc) ? m.sent_at : acc, '1970-01-01'),
+    }))
+    .sort((a,b) => new Date(b.latest) - new Date(a.latest));
+
+  const esc = s => String(s == null ? '' : s).replace(/[&<>]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;'}[m]));
+  const fmtDate = iso => {
+    if(!iso) return '—';
+    const d = new Date(iso);
+    if(isNaN(d.getTime())) return iso;
+    const now = new Date();
+    const sameDay = d.toDateString() === now.toDateString();
+    if(sameDay) return d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+    return d.toLocaleDateString() + ' ' + d.toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
+  };
+
+  const html = threads.map((t, ti) => {
+    // Subject = first message's subject (Gmail strips Re: in some clients but
+    // we keep whatever the first message had for simplicity).
+    const subj = t.msgs[0].subject || '(no subject)';
+    const msgsHtml = t.msgs.map(m => {
+      const isOut = m.direction === 'outbound';
+      const who = isOut
+        ? `You · ${esc(m.from_email)}`
+        : `${esc(m.from_name || m.from_email)} <${esc(m.from_email)}>`;
+      const bodyText = (m.body_text && m.body_text.trim())
+        || (m.body_html ? m.body_html.replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim() : '')
+        || (m.snippet || '');
+      const bodyEsc = esc(bodyText).replace(/\n/g,'<br>');
+      return `
+        <div style="border-left:3px solid ${isOut ? '#2563eb' : '#16a34a'};background:${isOut ? '#eff6ff' : '#f0fdf4'};padding:12px 14px;margin:8px 0;border-radius:6px;">
+          <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;font-size:11px;color:#475569;font-weight:600;margin-bottom:6px;">
+            <span>${isOut ? '↗ ' : '↘ '}${who}</span>
+            <span style="color:#94a3b8;font-weight:500;white-space:nowrap;">${fmtDate(m.sent_at)}</span>
+          </div>
+          <div style="font-size:13px;color:#0f172a;line-height:1.55;white-space:pre-wrap;word-wrap:break-word;">${bodyEsc || '<span style="color:#94a3b8;font-style:italic;">(empty body)</span>'}</div>
+        </div>`;
+    }).join('');
+
+    // Reply form keyed by thread index — collapsed by default.
+    // We stash all the per-thread data on data-* attributes so we don't
+    // have to inline strings (subject can contain quotes / apostrophes).
+    const replyId = `emailReply_${ti}`;
+    const lastMsg = t.msgs[t.msgs.length - 1];
+    const replyToAddr = lastMsg.direction === 'outbound'
+      ? (lastMsg.to_emails && lastMsg.to_emails[0]) || ''
+      : lastMsg.from_email || '';
+    const replySubj = subj.toLowerCase().startsWith('re:') ? subj : ('Re: ' + subj);
+    const escAttr = s => esc(s).replace(/"/g, '&quot;');
+
+    return `
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;margin-bottom:14px;"
+           data-reply-id="${replyId}">
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
+          <div style="font-size:14px;font-weight:700;color:#0f172a;">${esc(subj)}</div>
+          <div style="font-size:11px;color:#64748b;">${t.msgs.length} message${t.msgs.length===1?'':'s'} · ${fmtDate(t.latest)}</div>
+        </div>
+        ${msgsHtml}
+        <div style="margin-top:10px;border-top:1px dashed #e2e8f0;padding-top:10px;">
+          <button class="emailReplyOpenBtn"
+                  data-reply-id="${replyId}"
+                  onclick="_contactReplyOpen(this)"
+                  style="background:#2563eb;color:#fff;border:none;padding:6px 14px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;">↩ Reply</button>
+          <div id="${replyId}" style="display:none;margin-top:10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px;">
+            <div style="font-size:11px;color:#64748b;margin-bottom:6px;">To: <strong>${esc(replyToAddr)}</strong> · Subject: <strong>${esc(replySubj)}</strong></div>
+            <textarea id="${replyId}_body" placeholder="Type your reply..." style="width:100%;min-height:100px;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-family:'Inter',system-ui,sans-serif;font-size:13px;resize:vertical;box-sizing:border-box;"></textarea>
+            <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px;">
+              <button data-reply-id="${replyId}"
+                      onclick="_contactReplyCancel(this)"
+                      style="background:transparent;color:#64748b;border:1px solid #cbd5e1;padding:6px 12px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;">Cancel</button>
+              <button data-contact-id="${escAttr(contactId)}"
+                      data-msg-id="${escAttr(lastMsg.gmail_message_id)}"
+                      data-to="${escAttr(replyToAddr)}"
+                      data-subject="${escAttr(replySubj)}"
+                      data-body-id="${replyId}_body"
+                      onclick="_contactReplySend(this)"
+                      style="background:#16a34a;color:#fff;border:none;padding:6px 14px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;">✉ Send reply</button>
+            </div>
+          </div>
+        </div>
+      </div>`;
+  }).join('');
+
+  listEl.innerHTML = html;
+}
+
+// v113.31: Reply form open/close + send handlers — keep all state on
+// data-* attributes so strings with quotes don't break the markup.
+function _contactReplyOpen(btn){
+  const id = btn.getAttribute('data-reply-id');
+  const form = document.getElementById(id);
+  if(form) form.style.display = 'block';
+  btn.style.display = 'none';
+  const ta = document.getElementById(id + '_body');
+  if(ta) ta.focus();
+}
+
+function _contactReplyCancel(btn){
+  const id = btn.getAttribute('data-reply-id');
+  const form = document.getElementById(id);
+  if(form) form.style.display = 'none';
+  // Re-show the matching "Reply" open button
+  const openBtn = document.querySelector(`.emailReplyOpenBtn[data-reply-id="${id}"]`);
+  if(openBtn) openBtn.style.display = 'inline-block';
+}
+
+function _contactReplySend(btn){
+  const contactId          = btn.getAttribute('data-contact-id');
+  const inReplyToMessageId = btn.getAttribute('data-msg-id');
+  const toAddr             = btn.getAttribute('data-to');
+  const subject            = btn.getAttribute('data-subject');
+  const bodyElId           = btn.getAttribute('data-body-id');
+  _contactSendReply(contactId, inReplyToMessageId, toAddr, subject, bodyElId, btn);
+}
+
+// Reply to a thread by sending a new email with In-Reply-To set to the
+// last message's Gmail msg id. gmail-send v4 fetches the original to copy
+// the Message-ID/References headers and passes threadId to Gmail so the
+// reply lands in the same thread on both sides.
+async function _contactSendReply(contactId, inReplyToMessageId, toAddr, subject, bodyElId, btn){
+  const ta = document.getElementById(bodyElId);
+  if(!ta){ alert('Reply box missing.'); return; }
+  const body = (ta.value || '').trim();
+  if(!body){ alert('Reply body is empty.'); return; }
+  if(!toAddr){ alert('No recipient on this thread.'); return; }
+  if(!_gmailConnected || !_gmailConnected.email){
+    alert('Connect your Gmail first (sidebar → Connect Gmail).');
+    return;
+  }
+  const orig = btn ? btn.textContent : '';
+  if(btn){ btn.disabled = true; btn.textContent = '⏳ Sending…'; }
+  try {
+    const r = await _gmailSend({
+      to:      toAddr,
+      subject: subject,
+      body:    body,
+      contactId,
+      inReplyToMessageId,
+    });
+    if(r.sent){
+      showSaveConfirm('✓ Reply sent');
+      ta.value = '';
+      // Reload threads — the new outbound row was just inserted by gmail-send
+      _contactLoadEmails(contactId);
+    } else if(r.error){
+      alert('Send failed: ' + r.error);
+      if(btn){ btn.disabled = false; btn.textContent = orig || '✉ Send reply'; }
+    }
+  } catch(e) {
+    alert('Send failed: ' + (e.message || e));
+    if(btn){ btn.disabled = false; btn.textContent = orig || '✉ Send reply'; }
+  }
+}
+
+// Manual sync trigger — invokes gmail-sync for the current user only
+// (faster than waiting for the 5-min cron). Reloads the email list on
+// completion.
+async function _contactSyncMyMailbox(){
+  const btn = document.getElementById('contactEmailSyncBtn');
+  if(!_currentUser || !_currentUser.email){
+    alert('You must be signed in.');
+    return;
+  }
+  if(!_gmailConnected || !_gmailConnected.email){
+    alert('Connect your Gmail first (sidebar → Connect Gmail).');
+    return;
+  }
+  if(btn){ btn.disabled = true; btn.textContent = '⏳ Syncing…'; }
+  try {
+    const cfg = getConfig();
+    const res = await fetch(cfg.url + '/functions/v1/gmail-sync', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ user_email: _currentUser.email }),
+    });
+    const data = await res.json();
+    if(data.error) throw new Error(data.error);
+    const mine = (data.synced || []).find(x => x.user_email === _currentUser.email);
+    if(mine && mine.error){
+      // Most common: the Gmail OAuth grant predates v113.31's readonly scope.
+      // Walk the user through the fix instead of just dumping the raw error.
+      if(/insufficient.*scope|insufficientPermissions|ACCESS_TOKEN_SCOPE_INSUFFICIENT/i.test(mine.error)){
+        alert('Your Gmail connection only allows sending. To pull inbound emails, click "Connect Gmail" in the sidebar to re-authorize with read access.');
+      } else {
+        alert('Sync error: ' + mine.error);
+      }
+      return;
+    }
+    const count = mine ? (mine.inserted || 0) : 0;
+    showSaveConfirm(count ? ('✓ Synced ' + count + ' new email' + (count===1?'':'s')) : '✓ Up to date — no new emails');
+    if(_currentContactEmailsId) _contactLoadEmails(_currentContactEmailsId);
+  } catch(e) {
+    alert('Sync failed: ' + (e.message || e));
+  } finally {
+    if(btn){ btn.disabled = false; btn.textContent = '↻ Sync now'; }
   }
 }
 
@@ -50502,7 +50780,11 @@ let _gmailConnected = null;   // null=unknown, false=not connected, {email}=conn
 
 const GMAIL_CLIENT_ID   = '419384865839-s1dc2k1r2pe3e76ga4dp2g0vnq2mblam.apps.googleusercontent.com';
 const GMAIL_REDIRECT    = 'https://kxtuegjptvzqycgyzehj.supabase.co/functions/v1/gmail-oauth-callback';
-const GMAIL_SCOPES      = 'https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/userinfo.email';
+// v113.31: gmail.readonly added so the inbound sync (gmail-sync edge fn)
+// can list + fetch messages on the user's behalf. Existing connections
+// granted before this version need to click "Connect Gmail" once more to
+// authorize the new scope — sending still works without it.
+const GMAIL_SCOPES      = 'https://www.googleapis.com/auth/gmail.send https://www.googleapis.com/auth/gmail.readonly https://www.googleapis.com/auth/userinfo.email';
 
 // Build the Google OAuth URL and redirect the agent to Google's consent page.
 function _gmailConnect(){
@@ -50566,7 +50848,9 @@ async function _gmailDisconnect(){
 // Send an email via the gmail-send edge function.
 // Falls back to Gmail compose URL if not connected.
 // Returns { sent: true } or { sent: false, fallback: true }
-async function _gmailSend({ to, subject, body, dealId, onSuccess, onError }){
+// v113.31: added inReplyToMessageId + contactId so replies thread properly
+// in Gmail and the resulting ace_emails row is linked to the right contact.
+async function _gmailSend({ to, subject, body, dealId, contactId, inReplyToMessageId, onSuccess, onError }){
   if(!_gmailConnected || !_gmailConnected.email){
     // Not connected — open compose URL as before
     const url = 'https://mail.google.com/mail/?view=cm&fs=1'
@@ -50584,13 +50868,15 @@ async function _gmailSend({ to, subject, body, dealId, onSuccess, onError }){
       body: JSON.stringify({
         user_email: _currentUser.email,
         to, subject, body,
-        deal_id: dealId || null
+        deal_id: dealId || null,
+        contact_id: contactId || null,
+        in_reply_to_message_id: inReplyToMessageId || null
       })
     });
     const data = await res.json();
     if(data.error) throw new Error(data.error);
     if(onSuccess) onSuccess(data);
-    return { sent: true, message_id: data.message_id };
+    return { sent: true, message_id: data.message_id, thread_id: data.thread_id };
   }catch(e){
     if(onError) onError(e);
     else alert('Send failed: ' + e.message);

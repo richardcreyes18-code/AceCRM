@@ -12451,6 +12451,41 @@ function _sendModalRefreshPreview(){
   }
 }
 
+// v113.29: Auto-log a pitch row when an email is sent from the deal/property
+// card. The row lands in ace_buyer_pitches and surfaces in two places:
+//   1) Contact card → Pitches tab (filter contact_id=eq.<recipient>)
+//   2) Deal page → Contacts/Buyers → Buyer Activity (filter deal_id=eq.<deal>)
+// Best-effort: failures are logged but never block the UI — the email already
+// sent successfully by the time we get here. We also refresh both panels
+// after creation so an open Pitches/Buyer Activity view updates without a
+// manual reload. Each panel-refresh is a no-op if its DOM isn't mounted.
+async function _autoLogEmailPitch({ dealId, contact, subject }){
+  if(!dealId || !contact || !contact.id) return; // guard — need both sides
+  if(typeof _pitchCreate !== 'function') return;
+  try {
+    const today = new Date();
+    const yyyy = today.getFullYear();
+    const mm   = String(today.getMonth() + 1).padStart(2, '0');
+    const dd   = String(today.getDate()).padStart(2, '0');
+    const subj = String(subject || '').trim();
+    const note = subj ? ('Email sent: ' + subj) : 'Email sent via Gmail';
+    await _pitchCreate({
+      contact_id:    contact.id,
+      deal_id:       dealId,
+      pitch_date:    yyyy + '-' + mm + '-' + dd,
+      pitch_channel: 'email',
+      reaction:      null,   // user can update once buyer responds
+      notes:         note,
+    });
+    // Refresh whichever panel the user might be looking at. Both functions
+    // bail early if their target list element isn't in the DOM.
+    if(typeof loadDealPitches === 'function')      loadDealPitches(dealId);
+    if(typeof _contactLoadPitches === 'function')  _contactLoadPitches(contact.id);
+  } catch(e){
+    console.warn('[v113.29] auto-pitch on email-send failed (non-blocking):', e && e.message);
+  }
+}
+
 async function _sendModalConfirm(){
   if(!_sendModalRecipient?.email){ alert('Pick a recipient first.'); return; }
   const subject = (document.getElementById('sendModalSubject')?.value || '').trim();
@@ -12486,7 +12521,16 @@ async function _sendModalConfirm(){
     });
     if(result.sent){
       showSaveConfirm('✓ Email sent to ' + _sendModalRecipient.name);
+      // v113.29: log this email as a pitch on the deal + contact. Snapshot
+      // the deal id and recipient before _closeSendModal clears state, then
+      // fire-and-forget so the modal close stays snappy.
+      const _autoDealId    = currentDeal && currentDeal.id;
+      const _autoRecipient = _sendModalRecipient;
+      const _autoSubject   = resolvedSubject;
       _closeSendModal();
+      if(typeof _autoLogEmailPitch === 'function'){
+        _autoLogEmailPitch({ dealId: _autoDealId, contact: _autoRecipient, subject: _autoSubject });
+      }
     } else if(result.fallback){
       showSaveConfirm('✎ Opened Gmail compose (connect Gmail in sidebar for 1-click send)');
       _closeSendModal();

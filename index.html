@@ -19895,6 +19895,13 @@ function _ddNormalizeDealAddr(addr){
 }
 
 // Pick the deal with most content as default survivor; tiebreak on UUID (stable).
+//
+// v113.41: scoring is back to "most notes + agent/price wins". Stage and
+// address-quality are NOT survivor-pick criteria anymore — the merge engine
+// auto-promotes pipeline_stage from Clean-Up to a real stage if a loser
+// has one, and _ddBestAddressFromGroup() pre-promotes the canonical
+// address onto the survivor before the merge fires. So the survivor pick
+// is purely "who has the most history we want to keep alive".
 function _ddPickDefaultSurvivor(deals){
   const score = d => {
     let s = 0;
@@ -19904,46 +19911,44 @@ function _ddPickDefaultSurvivor(deals){
     if(d['Assigned Agent']) s += 50;
     if(Number(d['Asking Price']) > 0) s += 20;
     if(Number(d['Offer Price']) > 0) s += 20;
-    // v113.38: TIERED scoring. Stage is the primary tier; canonical-address
-    // form is a secondary tier that decides ties between same-stage rows.
-    // Both tiers use weight 100000 — unreachable by any realistic content
-    // length (a few thousand chars max), so tier order is dominant.
-    //
-    //   Tier 2 (200000+): non-Clean-Up stage  (Nurture, Lead, Closed, …)
-    //   Tier 1 (100000+): Clean-Up + canonical address (zip + USA suffix)
-    //   Tier 0 (0+):       Clean-Up + junky address  (e.g., "5U - …")
-    //
-    // Within a tier, content length + agent/price + comma count decide.
-    // Note: the merge engine appends loser notes to survivor anyway, so a
-    // sparse-but-canonical survivor still ends up with all the notes.
-    const stage = String(d['Pipeline Stage']||'').trim().toLowerCase();
-    const _addr = String(d['Address']||'');
-    const _isCanonical = /\b\d{5}\b/.test(_addr) && /,\s*USA\s*$/i.test(_addr);
-    if(stage && stage !== 'clean up') s += 200000;
-    else if(_isCanonical)             s += 100000;
-
-    // v113.38: address-quality scoring. When two rows share a pipeline stage
-    // (e.g. both Clean Up), notes-length alone picks the row with a junky
-    // deal-name address ("5U - 111 Maple Ave, Hackensack") over the canonical
-    // "111 Maple Ave, Hackensack, NJ 07601, USA" if the junky row inherited
-    // a long FUB-import notes blob. Bias scoring toward canonical full-form
-    // addresses (street, city, state+zip, USA) so the cleaner UUID survives.
-    const addr = String(d['Address']||'');
-    if(/\b\d{5}\b/.test(addr))             s += 150;  // has a 5-digit zip
-    if(/,\s*USA\s*$/i.test(addr))          s += 50;   // canonical ", USA" suffix
-    if(/,\s*[A-Z]{2}\s+\d{5}/.test(addr))  s += 30;   // "NJ 07601" state-zip pattern
-    // Comma count is a strong proxy for canonical form: "Street, City, State Zip, USA"
-    // has 3 commas; a deal-name junky address like "5U - 111 Maple Ave, Hackensack"
-    // has only 1.
-    const commaCount = (addr.match(/,/g) || []).length;
-    s += Math.min(commaCount, 4) * 25;
-
     return s;
   };
   return [...deals].sort((a,b) => {
     const diff = score(b) - score(a);
     return diff !== 0 ? diff : (a.id||'').localeCompare(b.id||'');
   })[0].id;
+}
+
+// Pick the best (most canonical) address from a duplicate group, regardless
+// of which row is the survivor. Used to pre-promote the address onto the
+// survivor before calling the merge engine — the engine's "address =
+// keep-survivor + log-conflict" policy isn't what we want for the dedupe
+// flow; we want the cleanest address to actually survive.
+//
+// Heuristic: the canonical "Street, City, ST 12345, USA" form scores high
+// (zip + ", USA" + 3-4 commas), junky deal-name prefixes ("5U - …", "L- …")
+// score low because they lack zip and have only 1 comma.
+function _ddBestAddressFromGroup(deals){
+  const score = a => {
+    if(!a) return -1;
+    let s = 0;
+    if(/\b\d{5}\b/.test(a))             s += 150;  // has a 5-digit zip
+    if(/,\s*USA\s*$/i.test(a))          s += 50;   // ends with ", USA"
+    if(/,\s*[A-Z]{2}\s+\d{5}/.test(a))  s += 30;   // "NJ 07601" state-zip pattern
+    s += Math.min((a.match(/,/g) || []).length, 4) * 25;
+    // Length as a final tiebreak — among equally-canonical addresses, the
+    // longer one usually has more detail (apt #, suite, etc.).
+    s += a.length * 0.1;
+    return s;
+  };
+  let best = '', bestScore = -1;
+  for(const d of (deals || [])){
+    const a = String(d['Address'] || '').trim();
+    if(!a) continue;
+    const sc = score(a);
+    if(sc > bestScore){ bestScore = sc; best = a; }
+  }
+  return best;
 }
 
 // Pick the best available address-like field for dedupe keying.
@@ -20563,6 +20568,10 @@ async function _ddMergeAllConfident(opts){
     const losers = g.deals.filter(d => d.id !== survivor.id);
     if(!survivor || !losers.length) return { ok:false, error:'no losers' };
     try {
+      // v113.41: pre-promote the canonical address before the merge fires
+      // (same reason as _ddMergeGroup — the engine keeps the survivor's
+      // address by default and we want the best one to win).
+      await _ddPrePromoteBestAddress(survivor, g.deals);
       await _ddCallMergeEdgeFn(survivor.id, losers.map(l => l.id));
       losers.forEach(l => { l['Is Archived'] = true; });
       // Best-effort survivor refresh — not awaited inside the worker so the
@@ -20651,6 +20660,26 @@ async function _ddCallMergeEdgeFn(survivingId, loserIds){
   return json;
 }
 
+// If the group contains an address that's more canonical than the survivor's
+// own, PATCH the survivor with that address before the merge engine fires.
+// The engine's text-curated policy on `address` is "keep survivor + log
+// conflict in deal_notes"; we want the cleaner address to actually survive.
+// In-memory survivor object is also updated so downstream UI shows the new
+// address without a refetch.
+async function _ddPrePromoteBestAddress(survivor, groupDeals){
+  if(!survivor) return;
+  const best = _ddBestAddressFromGroup(groupDeals);
+  const cur  = String(survivor['Address']||'').trim();
+  if(!best || best === cur) return;
+  try {
+    await _sbPatch(SB_TABLES.properties, survivor.id, { address: best });
+    survivor['Address'] = best;
+  } catch(e){
+    // Non-fatal — the merge can still proceed with the original address.
+    console.warn('[_ddPrePromoteBestAddress] failed for', survivor.id, e.message);
+  }
+}
+
 // Refresh a single property row from Supabase and merge it into the matching
 // allDeals[] entry. Best-effort — failures are logged but non-fatal.
 async function _ddRefreshDealInMemory(dealId){
@@ -20691,6 +20720,11 @@ async function _ddMergeGroup(groupIdx, fuzzy){
   const btnRow = document.querySelector(`#dealDedupeModal button[onclick="_ddMergeGroup(${groupIdx}, ${fuzzy})"]`);
   if(btnRow){ btnRow.disabled = true; btnRow.textContent = 'Merging…'; }
   try {
+    // v113.41: pre-promote the canonical address from the group onto the
+    // survivor before the merge engine fires. The engine's text-curated
+    // policy is "keep survivor + log conflict in deal_notes" — we want the
+    // cleaner address to actually survive instead.
+    await _ddPrePromoteBestAddress(survivor, g.deals);
     await _ddCallMergeEdgeFn(survivor.id, losers.map(l => l.id));
     losers.forEach(l => { l['Is Archived'] = true; });
     await _ddRefreshDealInMemory(survivor.id);

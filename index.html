@@ -20181,9 +20181,24 @@ function _contactsRenderLoadMore(){
   </div>`;
 }
 
-function navigateToDeal(dealId){
-  const deal = (allDeals||[]).find(d=>d.id===dealId);
-  if(!deal){ alert('Property not found in current pipeline. Try syncing data first.'); return; }
+async function navigateToDeal(dealId){
+  let deal = (allDeals||[]).find(d=>d.id===dealId);
+  // v113.19: if the deal isn't in the local cache (e.g. opening it from the
+  // Contacts page where the list was fetched fresh from the DB), go fetch
+  // the row from Supabase and add it to allDeals before opening. Previously
+  // this silently alerted "not in current pipeline" even when the user was
+  // in All Deals mode, because `allDeals` is filtered/paginated.
+  if(!deal && isSupabase() && dealId){
+    try {
+      const rows = await _sbGet(SB_TABLES.properties, `id=eq.${dealId}`);
+      if(Array.isArray(rows) && rows[0]){
+        deal = _sbToAt(rows[0], SB_PROP_MAP);
+        deal.id = rows[0].id;
+        if(Array.isArray(allDeals)) allDeals.push(deal);
+      }
+    } catch(_e) { /* fall through to the alert below */ }
+  }
+  if(!deal){ alert('Property not found. Try clicking Sync in the top-right.'); return; }
   // Switch Home nav active
   document.querySelectorAll('.nav-btn').forEach(b=>b.classList.remove('active'));
   const homeBtn = document.querySelector('.nav-btn');
@@ -20851,8 +20866,11 @@ async function _contactLoadLinkedProperties(contactId){
           const price = d['Asking Price']?'$'+Number(d['Asking Price']).toLocaleString():'';
           const pid = d['Portfolio ID'];
           const portfolio = pid ? (allPortfolios||[]).find(p => p.id === pid) : null;
-          const clickable = !d._fromDb || (allDeals||[]).some(x=>x.id===d.id);
-          return `<div onclick="${clickable?`_contactNavToProp('${d.id}')`:`alert('This property is outside your current view. Switch to All Deals to open it.')`}"
+          // v113.19: always clickable — navigateToDeal falls through to a DB
+          // fetch when the deal isn't in the local allDeals cache. Previously
+          // the "outside your current view" alert blocked Contacts-page cards
+          // even when the user was already in All Deals mode.
+          return `<div onclick="_contactNavToProp('${d.id}')"
             style="display:flex;align-items:center;gap:12px;padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;cursor:pointer;transition:all 0.15s;"
             onmouseenter="this.style.background='#eff6ff';this.style.borderColor='#2563eb';"
             onmouseleave="this.style.background='#f8fafc';this.style.borderColor='#e2e8f0';">

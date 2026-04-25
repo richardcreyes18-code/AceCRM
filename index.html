@@ -1541,6 +1541,16 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
     <span id="netStatusDot" style="display:inline-block;width:8px;height:8px;border-radius:50%;background:#22c55e;"></span>
     <span id="netStatusText">Online</span>
   </span>
+  <!-- v113.24: Notification bell. Polls every 30s for unread task notifications.
+       Pulses + chimes on new arrivals; click to open the dropdown. -->
+  <div id="navBellWrap" style="position:relative;display:inline-block;margin-right:8px;">
+    <button id="navBellBtn" onclick="_notifToggleDropdown()" title="Notifications"
+      style="background:transparent;border:none;cursor:pointer;font-size:18px;padding:4px 8px;color:#1a3a6e;position:relative;">
+      🔔
+      <span id="navBellBadge" style="display:none;position:absolute;top:0;right:2px;background:#dc2626;color:#fff;border-radius:99px;font-size:9px;font-weight:700;padding:1px 5px;line-height:1;">0</span>
+    </button>
+    <div id="navBellDropdown" style="display:none;position:absolute;right:0;top:100%;width:340px;max-height:420px;overflow-y:auto;background:#fff;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,0.15);z-index:1000;margin-top:4px;"></div>
+  </div>
   <button class="nav-btn" onclick="syncData()" id="syncNavBtn">↻ Sync</button>
 </div>
 
@@ -35923,10 +35933,188 @@ let _currentContactTasksId=null, _currentContactTasksName='';
 // buyer criteria card. Defaults task_type to 'buyer' and writes the FK
 // to ace_tasks.buyer_criteria_id.
 let _taskModalBuyerCritId=null, _taskModalBuyerCritLabel='';
+// v113.23: explicit task-type override. The modal's pill row writes here;
+// submit() falls back to _taskTypeFromSource() when null.
+let _taskModalTypeOverride = null;
+// v113.23: assignee picker state. Defaults to the current user; the modal's
+// "Assign to" select writes here. Submit reads this to stamp
+// assigned_to_user_id (and assigned_by/at when it's a cross-agent handoff).
+let _taskModalAssigneeId = null;
+// v113.23: task being edited (full ace_tasks row), or null for create. Set
+// by openEditTaskModal so submitEditTask can persist link/type/assignee
+// changes without bouncing through positional onclick args.
+let _taskModalEditing = null;
+
+// v113.23: link-picker state setters / search. Each picker (deal, contact,
+// buyer criteria) has a hidden id input + a visible chip when filled or a
+// search input when empty. Selecting a result stamps the modal's *_id
+// state and auto-flips the task-type pill if no override is set.
+function _taskLinkSetDeal(id, label){
+  _taskModalDealId = id || null;
+  _taskModalDealAddr = label || '';
+  if(!_taskModalTypeOverride && id) _taskModalTypeOverride = 'deal';
+  _taskRefreshLinkRows();
+}
+function _taskLinkSetContact(id, label){
+  _taskModalContactId = id || null;
+  _taskModalContactName = label || '';
+  if(!_taskModalTypeOverride && id) _taskModalTypeOverride = 'contact';
+  _taskRefreshLinkRows();
+}
+function _taskLinkSetBuyerCrit(id, label){
+  _taskModalBuyerCritId = id || null;
+  _taskModalBuyerCritLabel = label || '';
+  if(!_taskModalTypeOverride && id) _taskModalTypeOverride = 'buyer';
+  _taskRefreshLinkRows();
+}
+function _taskLinkClearDeal()      { _taskLinkSetDeal(null, ''); }
+function _taskLinkClearContact()   { _taskLinkSetContact(null, ''); }
+function _taskLinkClearBuyerCrit() { _taskLinkSetBuyerCrit(null, ''); }
+
+// Render the chip-or-input row for one picker.
+function _taskLinkRowHtml(kind){
+  if(kind === 'deal'){
+    if(_taskModalDealId){
+      return `<div style="display:flex;align-items:center;gap:6px;background:var(--primary-light);color:var(--primary);border:1px solid var(--primary);border-radius:5px;padding:5px 8px;font-size:12px;">
+        <span>📍</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${(_taskModalDealAddr||'Deal').replace(/</g,'&lt;')}</span>
+        <button onclick="_taskLinkClearDeal()" style="background:none;border:none;color:inherit;cursor:pointer;font-size:14px;padding:0 2px;line-height:1;">✕</button>
+      </div>`;
+    }
+    return `<div style="position:relative;">
+      <input id="ctask_dealSearch" oninput="_taskLinkSearch('deal', this.value)" onfocus="_taskLinkSearch('deal', this.value)" class="form-input" placeholder="Search deals by address..." style="width:100%;font-size:12px;"/>
+      <div id="ctask_dealResults" style="display:none;position:absolute;left:0;right:0;top:100%;background:var(--surface);border:1px solid var(--border);border-radius:5px;box-shadow:0 8px 24px rgba(0,0,0,0.12);max-height:200px;overflow-y:auto;z-index:10;margin-top:2px;"></div>
+    </div>`;
+  }
+  if(kind === 'contact'){
+    if(_taskModalContactId){
+      return `<div style="display:flex;align-items:center;gap:6px;background:#fef3c7;color:#b45309;border:1px solid #fde68a;border-radius:5px;padding:5px 8px;font-size:12px;">
+        <span>👤</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${(_taskModalContactName||'Contact').replace(/</g,'&lt;')}</span>
+        <button onclick="_taskLinkClearContact()" style="background:none;border:none;color:inherit;cursor:pointer;font-size:14px;padding:0 2px;line-height:1;">✕</button>
+      </div>`;
+    }
+    return `<div style="position:relative;">
+      <input id="ctask_contactSearch" oninput="_taskLinkSearch('contact', this.value)" class="form-input" placeholder="Search contacts by name..." style="width:100%;font-size:12px;"/>
+      <div id="ctask_contactResults" style="display:none;position:absolute;left:0;right:0;top:100%;background:var(--surface);border:1px solid var(--border);border-radius:5px;box-shadow:0 8px 24px rgba(0,0,0,0.12);max-height:200px;overflow-y:auto;z-index:10;margin-top:2px;"></div>
+    </div>`;
+  }
+  // buyer
+  if(_taskModalBuyerCritId){
+    return `<div style="display:flex;align-items:center;gap:6px;background:#dbeafe;color:#1e40af;border:1px solid #93c5fd;border-radius:5px;padding:5px 8px;font-size:12px;">
+      <span>💼</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${(_taskModalBuyerCritLabel||'Buyer Criteria').replace(/</g,'&lt;')}</span>
+      <button onclick="_taskLinkClearBuyerCrit()" style="background:none;border:none;color:inherit;cursor:pointer;font-size:14px;padding:0 2px;line-height:1;">✕</button>
+    </div>`;
+  }
+  return `<div style="position:relative;">
+    <input id="ctask_buyerSearch" oninput="_taskLinkSearch('buyer', this.value)" class="form-input" placeholder="Search buyer criteria by contact or property type..." style="width:100%;font-size:12px;"/>
+    <div id="ctask_buyerResults" style="display:none;position:absolute;left:0;right:0;top:100%;background:var(--surface);border:1px solid var(--border);border-radius:5px;box-shadow:0 8px 24px rgba(0,0,0,0.12);max-height:200px;overflow-y:auto;z-index:10;margin-top:2px;"></div>
+  </div>`;
+}
+// Repaint the three link rows + the type pills (so the picker chip and the
+// auto-flipped type stay in sync after a selection / clear).
+function _taskRefreshLinkRows(){
+  const dealEl    = document.getElementById('ctask_dealRow');
+  const contactEl = document.getElementById('ctask_contactRow');
+  const buyerEl   = document.getElementById('ctask_buyerRow');
+  if(dealEl)    dealEl.innerHTML    = _taskLinkRowHtml('deal');
+  if(contactEl) contactEl.innerHTML = _taskLinkRowHtml('contact');
+  if(buyerEl)   buyerEl.innerHTML   = _taskLinkRowHtml('buyer');
+  const pillsEl = document.getElementById('ctask_typePills');
+  if(pillsEl) pillsEl.innerHTML = _taskTypePillsHtml();
+}
+// Pill row HTML for the task-type override.
+function _taskTypePillsHtml(){
+  const TYPES = [
+    { k:'deal',    label:'📍 Deal' },
+    { k:'buyer',   label:'💼 Buyer' },
+    { k:'contact', label:'👤 Contact' },
+    { k:'admin',   label:'⚙ Admin' },
+  ];
+  const auto = _taskTypeFromSource(_taskModalSrc, _taskModalDealId, _taskModalContactId, _taskModalBuyerCritId);
+  const active = _taskModalTypeOverride || auto;
+  return TYPES.map(t => {
+    const on = (t.k === active);
+    return `<button type="button" onclick="_taskSetTypeOverride('${t.k}')" style="background:${on?'#7c3aed':'var(--surface)'};color:${on?'#fff':'var(--text2)'};border:1px solid ${on?'#7c3aed':'var(--border)'};border-radius:99px;padding:5px 11px;font-size:11px;font-weight:600;cursor:pointer;">${t.label}</button>`;
+  }).join('') + `<input type="hidden" id="ctask_type" value="${active}"/>`;
+}
+function _taskSetTypeOverride(v){
+  _taskModalTypeOverride = v;
+  const pillsEl = document.getElementById('ctask_typePills');
+  if(pillsEl) pillsEl.innerHTML = _taskTypePillsHtml();
+}
+
+// v113.23: async search for the link pickers. Each kind has its own
+// scoping + label format. Results render as clickable rows in the dropdown.
+let _taskLinkSearchTimers = {};
+function _taskLinkSearch(kind, q){
+  clearTimeout(_taskLinkSearchTimers[kind]);
+  _taskLinkSearchTimers[kind] = setTimeout(() => _taskLinkSearchNow(kind, q), 220);
+}
+async function _taskLinkSearchNow(kind, q){
+  const term = (q||'').trim();
+  const resEl = document.getElementById(`ctask_${kind}Results`);
+  if(!resEl) return;
+  if(!term){
+    resEl.style.display = 'none';
+    resEl.innerHTML = '';
+    return;
+  }
+  let rows = [];
+  try {
+    if(kind === 'deal'){
+      // Search loaded deals first, then fall back to a Supabase ilike.
+      const local = (allDeals||[])
+        .filter(d => (d['Address']||'').toLowerCase().includes(term.toLowerCase()))
+        .slice(0, 8)
+        .map(d => ({ id: d.id, label: d['Address']||'Deal' }));
+      if(local.length){ rows = local; }
+      else {
+        const sb = await _sbGet(SB_TABLES.properties,
+          `select=id,address&address=ilike.*${encodeURIComponent(term)}*&limit=8`);
+        rows = (sb||[]).map(r => ({ id:r.id, label:r.address || 'Deal' }));
+      }
+    } else if(kind === 'contact'){
+      const sb = await _sbGet(SB_TABLES.contacts,
+        `select=id,name&name=ilike.*${encodeURIComponent(term)}*&limit=8`);
+      rows = (sb||[]).map(r => ({ id:r.id, label:r.name || 'Contact' }));
+    } else if(kind === 'buyer'){
+      const sb = await _sbGet(SB_TABLES.buyerCriteria,
+        `select=id,desired_property_types,contact_id,ace_contacts(name)&or=(desired_property_types.ilike.*${encodeURIComponent(term)}*,ace_contacts.name.ilike.*${encodeURIComponent(term)}*)&deleted_at=is.null&limit=8`);
+      rows = (sb||[]).map(r => {
+        const cn = r.ace_contacts && r.ace_contacts.name;
+        const pt = r.desired_property_types;
+        const lbl = cn ? `${cn}${pt?' · '+pt:''}` : (pt || 'Buyer Criteria');
+        return { id: r.id, label: lbl };
+      });
+    }
+  } catch(e){
+    resEl.innerHTML = `<div style="padding:8px;font-size:11px;color:#dc2626;">Search failed: ${e.message}</div>`;
+    resEl.style.display = 'block';
+    return;
+  }
+  if(!rows.length){
+    resEl.innerHTML = `<div style="padding:8px;font-size:11px;color:var(--text3);">No matches</div>`;
+    resEl.style.display = 'block';
+    return;
+  }
+  const setterFn = kind === 'deal' ? '_taskLinkSetDeal' : kind === 'contact' ? '_taskLinkSetContact' : '_taskLinkSetBuyerCrit';
+  resEl.innerHTML = rows.map(r => {
+    const safe = String(r.label).replace(/'/g,"\\'").replace(/"/g,'&quot;');
+    const lbl  = String(r.label).replace(/</g,'&lt;');
+    return `<div onclick="${setterFn}('${r.id}','${safe}')" style="padding:8px 10px;font-size:12px;cursor:pointer;border-bottom:1px solid var(--border);" onmouseover="this.style.background='var(--bg)'" onmouseout="this.style.background=''">${lbl}</div>`;
+  }).join('');
+  resEl.style.display = 'block';
+}
 
 function openCreateTaskModal(dealId=null,address='',source='deal',contactId=null,contactName=''){
   _taskModalDealId=dealId; _taskModalDealAddr=address; _taskModalSrc=source;
   _taskModalContactId=contactId; _taskModalContactName=contactName;
+  // v113.23: reset the buyer / type / assignee state on every open. The
+  // caller may have prefilled buyer crit before the call (set via the
+  // buyer-criteria card's task button) — keep that, but always reset the
+  // override + assignee so a stale prior selection doesn't leak.
+  _taskModalTypeOverride = null;
+  _taskModalAssigneeId   = (_currentUser && _currentUser.id) || null;
+  _taskModalEditing      = null;
   let modal=document.getElementById('createTaskModal');
   if(!modal){ modal=document.createElement('div'); modal.id='createTaskModal'; document.body.appendChild(modal); }
   modal.style.cssText='position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;';
@@ -35936,16 +36124,18 @@ function openCreateTaskModal(dealId=null,address='',source='deal',contactId=null
   let subtitle = 'General Task (no link)';
   if(dealId) subtitle = '📍 ' + address;
   else if(contactId) subtitle = '👤 ' + (contactName || 'Linked contact');
+  // v113.23: ensure the user list is loaded before painting the assignee picker
+  _ensureUsersCache().catch(()=>{});
   modal.innerHTML=`
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:480px;max-width:94vw;box-shadow:0 20px 60px rgba(0,0,0,0.25);overflow:hidden;">
-      <div style="background:linear-gradient(135deg,#0f172a,#4c1d95);padding:14px 18px;display:flex;align-items:center;justify-content:space-between;">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:520px;max-width:94vw;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.25);overflow:hidden;">
+      <div style="background:linear-gradient(135deg,#0f172a,#4c1d95);padding:14px 18px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
         <div>
           <div style="font-size:15px;font-weight:600;color:#fff;">☑ Create Task</div>
           <div style="font-size:11px;color:#c4b5fd;margin-top:2px;">${subtitle.replace(/</g,'&lt;')}</div>
         </div>
         <button onclick="closeTaskModal()" style="background:none;border:none;color:#94a3b8;font-size:20px;cursor:pointer;line-height:1;">✕</button>
       </div>
-      <div style="padding:20px 18px;">
+      <div style="padding:20px 18px;overflow-y:auto;">
         <div style="margin-bottom:13px;">
           <label style="font-size:12px;font-weight:600;color:var(--text2);display:block;margin-bottom:5px;">Task Name <span style="color:#dc2626;">*</span></label>
           <input id="ctask_name" class="form-input" placeholder="e.g. Follow up with seller, Send LOI, Schedule walkthrough..." />
@@ -35962,6 +36152,25 @@ function openCreateTaskModal(dealId=null,address='',source='deal',contactId=null
             <input id="ctask_due" type="date" class="form-input" value="${tomorrow}" style="width:100%;"/>
           </div>
         </div>
+        <div style="margin-bottom:13px;">
+          <label style="font-size:12px;font-weight:600;color:var(--text2);display:block;margin-bottom:5px;">Assign to</label>
+          <select id="ctask_assignee" class="form-select" style="width:100%;" onchange="_taskModalAssigneeId=this.value||null;">
+            ${(_usersCache.length?_usersCache:[{id:_taskModalAssigneeId,name:'Me'}]).filter(u=>u.is_active!==false).map(u =>
+              `<option value="${u.id}" ${u.id===_taskModalAssigneeId?'selected':''}>${(u.name||u.email||'Agent').replace(/</g,'&lt;')}${u.id===(_currentUser&&_currentUser.id)?' (me)':''}</option>`
+            ).join('')}
+          </select>
+        </div>
+        <div style="margin-bottom:13px;">
+          <label style="font-size:12px;font-weight:600;color:var(--text2);display:block;margin-bottom:5px;">Task Type</label>
+          <div id="ctask_typePills" style="display:flex;gap:6px;flex-wrap:wrap;">${_taskTypePillsHtml()}</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:4px;">Auto-detects from links — pick a type to override.</div>
+        </div>
+        <div style="border-top:1px solid var(--border);padding-top:13px;margin-bottom:13px;">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:8px;">Linked Items (optional)</div>
+          <div style="margin-bottom:8px;"><div style="font-size:11px;color:var(--text2);margin-bottom:3px;">Property / Deal</div><div id="ctask_dealRow">${_taskLinkRowHtml('deal')}</div></div>
+          <div style="margin-bottom:8px;"><div style="font-size:11px;color:var(--text2);margin-bottom:3px;">Contact</div><div id="ctask_contactRow">${_taskLinkRowHtml('contact')}</div></div>
+          <div style="margin-bottom:0;"><div style="font-size:11px;color:var(--text2);margin-bottom:3px;">Buyer Criteria</div><div id="ctask_buyerRow">${_taskLinkRowHtml('buyer')}</div></div>
+        </div>
         <div style="margin-bottom:18px;">
           <label style="font-size:12px;font-weight:600;color:var(--text2);display:block;margin-bottom:5px;">Notes</label>
           <textarea id="ctask_notes" class="form-textarea" rows="3" placeholder="Any details, context, or reminders..."></textarea>
@@ -35975,42 +36184,129 @@ function openCreateTaskModal(dealId=null,address='',source='deal',contactId=null
     </div>`;
   modal.addEventListener('click', e=>{ if(e.target===modal) closeTaskModal(); }, {once:true});
   setTimeout(()=>document.getElementById('ctask_name')?.focus(), 80);
+  // v113.23: re-paint the assignee dropdown once _ensureUsersCache resolves —
+  // the modal opens optimistically with whatever cache existed at click time.
+  _ensureUsersCache().then(() => {
+    const sel = document.getElementById('ctask_assignee');
+    if(!sel) return;
+    sel.innerHTML = (_usersCache||[]).filter(u=>u.is_active!==false).map(u =>
+      `<option value="${u.id}" ${u.id===_taskModalAssigneeId?'selected':''}>${(u.name||u.email||'Agent').replace(/</g,'&lt;')}${u.id===(_currentUser&&_currentUser.id)?' (me)':''}</option>`
+    ).join('');
+    sel.onchange = () => { _taskModalAssigneeId = sel.value || null; };
+  });
 }
 
 function closeTaskModal(){
   const m=document.getElementById('createTaskModal'); if(m) m.style.display='none';
+  // v113.23: clear modal state so the next open starts fresh.
+  _taskModalDealId=null; _taskModalDealAddr='';
+  _taskModalContactId=null; _taskModalContactName='';
+  _taskModalBuyerCritId=null; _taskModalBuyerCritLabel='';
+  _taskModalTypeOverride=null;
+  _taskModalAssigneeId=(_currentUser && _currentUser.id) || null;
+  _taskModalEditing=null;
 }
 
-function openEditTaskModal(taskId, taskName, priority, dueDate, notes, source){
+async function openEditTaskModal(taskId, taskName, priority, dueDate, notes, source){
+  // v113.23: rebuild the modal with the same picker UX as Create. We
+  // still accept the legacy positional args (for existing call sites)
+  // but also fetch the full row from DB so we can pre-populate
+  // assignee + type + links accurately.
+  let row = null;
+  try {
+    const rows = await _sbGet(SB_TABLES.tasks, `id=eq.${taskId}&select=*&limit=1`);
+    row = Array.isArray(rows) && rows[0];
+  } catch(_e){ /* fall through — render with positional args only */ }
+
+  // Seed modal state from the row (or args, when fetch failed).
+  _taskModalEditing      = row || { id: taskId };
+  _taskModalSrc          = source || 'global';
+  _taskModalDealId       = (row && row.property_id) || null;
+  _taskModalDealAddr     = (row && row.property_id && (allDeals.find(d=>d.id===row.property_id)?.['Address']||'')) || '';
+  _taskModalContactId    = (row && row.contact_id) || null;
+  _taskModalContactName  = '';
+  _taskModalBuyerCritId  = (row && row.buyer_criteria_id) || null;
+  _taskModalBuyerCritLabel = '';
+  _taskModalTypeOverride = (row && row.task_type) || null;
+  _taskModalAssigneeId   = (row && row.assigned_to_user_id) || (_currentUser && _currentUser.id) || null;
+
+  // Resolve display labels for the chips (best-effort).
+  if(_taskModalContactId){
+    try {
+      const c = await _sbGet(SB_TABLES.contacts, `id=eq.${_taskModalContactId}&select=name&limit=1`);
+      _taskModalContactName = (Array.isArray(c) && c[0] && c[0].name) || 'Contact';
+    } catch(_e){ _taskModalContactName = 'Contact'; }
+  }
+  if(_taskModalBuyerCritId){
+    try {
+      const b = await _sbGet(SB_TABLES.buyerCriteria, `id=eq.${_taskModalBuyerCritId}&select=desired_property_types,ace_contacts(name)&limit=1`);
+      const r = Array.isArray(b) && b[0];
+      const cn = r && r.ace_contacts && r.ace_contacts.name;
+      const pt = r && r.desired_property_types;
+      _taskModalBuyerCritLabel = cn ? `${cn}${pt?' · '+pt:''}` : (pt || 'Buyer Criteria');
+    } catch(_e){ _taskModalBuyerCritLabel = 'Buyer Criteria'; }
+  }
+  if(!_taskModalDealAddr && _taskModalDealId){
+    try {
+      const p = await _sbGet(SB_TABLES.properties, `id=eq.${_taskModalDealId}&select=address&limit=1`);
+      _taskModalDealAddr = (Array.isArray(p) && p[0] && p[0].address) || '';
+    } catch(_e){}
+  }
+
+  await _ensureUsersCache();
+
+  const curName  = (row && row.task)      || taskName || '';
+  const curPrio  = (row && row.priority)  || priority || '';
+  const curDue   = (row && row.due_date)  || dueDate  || '';
+  const curNotes = (row && row.notes)     || notes    || '';
+
   let modal=document.getElementById('createTaskModal');
   if(!modal){ modal=document.createElement('div'); modal.id='createTaskModal'; document.body.appendChild(modal); }
   modal.style.cssText='position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;';
   modal.innerHTML=`
-    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:480px;max-width:94vw;box-shadow:0 20px 60px rgba(0,0,0,0.25);overflow:hidden;">
-      <div style="background:linear-gradient(135deg,#0f172a,#4c1d95);padding:14px 18px;display:flex;align-items:center;justify-content:space-between;">
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:520px;max-width:94vw;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 20px 60px rgba(0,0,0,0.25);overflow:hidden;">
+      <div style="background:linear-gradient(135deg,#0f172a,#4c1d95);padding:14px 18px;display:flex;align-items:center;justify-content:space-between;flex-shrink:0;">
         <div style="font-size:15px;font-weight:600;color:#fff;">✏️ Edit Task</div>
         <button onclick="closeTaskModal()" style="background:none;border:none;color:#94a3b8;font-size:20px;cursor:pointer;line-height:1;">✕</button>
       </div>
-      <div style="padding:20px 18px;">
+      <div style="padding:20px 18px;overflow-y:auto;">
         <div style="margin-bottom:13px;">
           <label style="font-size:12px;font-weight:600;color:var(--text2);display:block;margin-bottom:5px;">Task Name <span style="color:#dc2626;">*</span></label>
-          <input id="ctask_name" class="form-input" value="${(taskName||'').replace(/"/g,'&quot;')}" placeholder="Task name..."/>
+          <input id="ctask_name" class="form-input" value="${(curName||'').replace(/"/g,'&quot;')}" placeholder="Task name..."/>
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:13px;">
           <div>
             <label style="font-size:12px;font-weight:600;color:var(--text2);display:block;margin-bottom:5px;">Priority</label>
             <select id="ctask_priority" class="form-select" style="width:100%;">
-              ${TASK_PRIORITIES.map(p=>`<option value="${p.val}"${(priority||'').trim()===p.val.trim()?' selected':''}>${p.label}</option>`).join('')}
+              ${TASK_PRIORITIES.map(p=>`<option value="${p.val}"${(curPrio||'').trim()===p.val.trim()?' selected':''}>${p.label}</option>`).join('')}
             </select>
           </div>
           <div>
             <label style="font-size:12px;font-weight:600;color:var(--text2);display:block;margin-bottom:5px;">Due Date</label>
-            <input id="ctask_due" type="date" class="form-input" value="${dueDate||''}" style="width:100%;"/>
+            <input id="ctask_due" type="date" class="form-input" value="${curDue||''}" style="width:100%;"/>
           </div>
+        </div>
+        <div style="margin-bottom:13px;">
+          <label style="font-size:12px;font-weight:600;color:var(--text2);display:block;margin-bottom:5px;">Assign to</label>
+          <select id="ctask_assignee" class="form-select" style="width:100%;" onchange="_taskModalAssigneeId=this.value||null;">
+            ${(_usersCache||[]).filter(u=>u.is_active!==false).map(u =>
+              `<option value="${u.id}" ${u.id===_taskModalAssigneeId?'selected':''}>${(u.name||u.email||'Agent').replace(/</g,'&lt;')}${u.id===(_currentUser&&_currentUser.id)?' (me)':''}</option>`
+            ).join('')}
+          </select>
+        </div>
+        <div style="margin-bottom:13px;">
+          <label style="font-size:12px;font-weight:600;color:var(--text2);display:block;margin-bottom:5px;">Task Type</label>
+          <div id="ctask_typePills" style="display:flex;gap:6px;flex-wrap:wrap;">${_taskTypePillsHtml()}</div>
+        </div>
+        <div style="border-top:1px solid var(--border);padding-top:13px;margin-bottom:13px;">
+          <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:8px;">Linked Items</div>
+          <div style="margin-bottom:8px;"><div style="font-size:11px;color:var(--text2);margin-bottom:3px;">Property / Deal</div><div id="ctask_dealRow">${_taskLinkRowHtml('deal')}</div></div>
+          <div style="margin-bottom:8px;"><div style="font-size:11px;color:var(--text2);margin-bottom:3px;">Contact</div><div id="ctask_contactRow">${_taskLinkRowHtml('contact')}</div></div>
+          <div style="margin-bottom:0;"><div style="font-size:11px;color:var(--text2);margin-bottom:3px;">Buyer Criteria</div><div id="ctask_buyerRow">${_taskLinkRowHtml('buyer')}</div></div>
         </div>
         <div style="margin-bottom:18px;">
           <label style="font-size:12px;font-weight:600;color:var(--text2);display:block;margin-bottom:5px;">Notes</label>
-          <textarea id="ctask_notes" class="form-textarea" rows="3">${(notes||'').replace(/</g,'&lt;')}</textarea>
+          <textarea id="ctask_notes" class="form-textarea" rows="3">${(curNotes||'').replace(/</g,'&lt;')}</textarea>
         </div>
         <div id="ctask_error" style="color:#dc2626;font-size:12px;margin-bottom:8px;display:none;"></div>
         <div style="display:flex;gap:10px;justify-content:flex-end;">
@@ -36034,11 +36330,54 @@ async function submitEditTask(taskId, source){
   const cfg=getConfig(); if(!cfg.key){ if(errEl){errEl.textContent='Connect Supabase first.';errEl.style.display='block';} return; }
   if(btn){btn.disabled=true;btn.textContent='Saving...';}
   if(errEl) errEl.style.display='none';
-  const fields={'Task':name,'Priority':prio||null,'Due Date':due||null,'Notes':notes||null};
   try{
     if(isSupabase()){
-      await _sbPatch(SB_TABLES.tasks, taskId, {task:name, priority:prio||null, due_date:due||null, notes:notes||null});
+      // v113.23: also persist link, type, and assignee changes. When the
+      // edit changes the assignee to someone other than the existing
+      // assignee we treat that as a re-assignment: stamp assigned_by_*
+      // and fire a notification.
+      const assigneeId  = document.getElementById('ctask_assignee')?.value || _taskModalAssigneeId || (_currentUser && _currentUser.id) || null;
+      const typeChosen  = document.getElementById('ctask_type')?.value || _taskModalTypeOverride
+                        || _taskTypeFromSource(_taskModalSrc, _taskModalDealId, _taskModalContactId, _taskModalBuyerCritId);
+
+      const patch = {
+        task: name,
+        priority: prio || null,
+        due_date: due || null,
+        notes: notes || null,
+        property_id:        _taskModalDealId      || null,
+        contact_id:         _taskModalContactId   || null,
+        buyer_criteria_id:  _taskModalBuyerCritId || null,
+        task_type:          typeChosen,
+        assigned_to_user_id: assigneeId,
+      };
+
+      const prev = _taskModalEditing && _taskModalEditing.assigned_to_user_id;
+      const meId = _currentUser && _currentUser.id;
+      const isHandOff = assigneeId && meId && assigneeId !== meId && prev !== assigneeId;
+      if(isHandOff){
+        patch.assigned_by_user_id = meId;
+        patch.assigned_at = new Date().toISOString();
+        // Reassignment moves to the end of the new assignee's queue so we
+        // don't collide with their existing sort_order.
+        try { patch.sort_order = await _tasksNextSortOrder(assigneeId); } catch(_e){}
+      }
+
+      await _sbPatch(SB_TABLES.tasks, taskId, patch);
+
+      if(isHandOff){
+        try {
+          await _sbPost(SB_TABLES.taskNotifications, {
+            recipient_user_id: assigneeId,
+            actor_user_id: meId,
+            task_id: taskId,
+            type: 'assigned',
+            message: (_currentUser?.name || 'Someone') + ' assigned you: ' + name
+          });
+        } catch(_e){ console.warn('Notification insert failed:', _e.message); }
+      }
     } else {
+      const fields={'Task':name,'Priority':prio||null,'Due Date':due||null,'Notes':notes||null};
       const res=await fetch(`https://api.airtable.com/v0/${cfg.base}/${TASKS_TABLE_ID}/${taskId}`,{
         method:'PATCH', headers:{Authorization:`Bearer ${cfg.key}`,'Content-Type':'application/json'},
         body:JSON.stringify({fields})
@@ -36100,13 +36439,14 @@ async function submitCreateTask(){
   if(_taskModalDealId&&!_taskModalDealId.startsWith('demo')) fields['Related Property']=[_taskModalDealId];
   try{
     if(isSupabase()){
-      // v113.21: determine assignee. The v113.23 modal will expose an
-      // "Assign to" picker (default _currentUser.id); until then, every
-      // task self-assigns to the creator so `assigned_to_user_id` is never
-      // null for new rows.
-      const assigneeId = (document.getElementById('ctask_assignee')?.value) || (_currentUser && _currentUser.id) || null;
-      const buyerCritId = document.getElementById('ctask_buyerCrit')?.value || _taskModalBuyerCritId || null;
-      const typeOverride = document.getElementById('ctask_type')?.value;
+      // v113.23: assignee comes from the modal's <select> (state mirror is
+      // _taskModalAssigneeId). Default = current user when nothing else.
+      const assigneeId = (document.getElementById('ctask_assignee')?.value) || _taskModalAssigneeId || (_currentUser && _currentUser.id) || null;
+      const buyerCritId = _taskModalBuyerCritId || null;
+      // The pill row writes to a hidden #ctask_type input; if for some
+      // reason that's missing, fall back to the override state then to the
+      // source-derived default.
+      const typeOverride = document.getElementById('ctask_type')?.value || _taskModalTypeOverride;
       const taskType = typeOverride || _taskTypeFromSource(_taskModalSrc, _taskModalDealId, _taskModalContactId, buyerCritId);
 
       const sortOrder = await _tasksNextSortOrder(assigneeId);
@@ -36432,6 +36772,254 @@ function _relTime(iso){
   if(s < 86400*30)  return Math.floor(s/86400) + 'd ago';
   if(s < 86400*365) return Math.floor(s/(86400*30)) + 'mo ago';
   return Math.floor(s/(86400*365)) + 'y ago';
+}
+
+// v113.24: notification bell + sound + 30s polling.
+//   _notifLastSeenIds: a Set of notification ids we've already chimed for —
+//     prevents the chime firing again after every poll. Persisted to memory
+//     only; on page reload, the bell will re-chime any still-unread items
+//     (acceptable behavior — user re-confirms they saw them).
+//   _notifPollMs: poll cadence. 30s per the user spec.
+//   _notifChimeAudio: lazily-initialized HTMLAudioElement. We use the
+//     browser's WebAudio + a small data-URL beep so the bundle stays
+//     single-file (no /sounds/ folder).
+let _notifUnread = [];
+let _notifLastSeenIds = new Set();
+let _notifPollTimer = null;
+const _notifPollMs = 30000;
+let _notifChimeAudio = null;
+let _notifChimeUnlocked = false;
+function _notifPlayChime(){
+  // Browsers block autoplay until the user has interacted with the page,
+  // so the first chime might silently fail. After the user clicks anything
+  // (the bell, a nav button, etc.), we unlock and subsequent chimes work.
+  try {
+    if(!_notifChimeAudio){
+      // Short, soft 800Hz "ding" — generated via WebAudio so we don't need
+      // a static asset. ~180ms blip, fades out.
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if(!Ctx) return;
+      _notifChimeAudio = { ctx: new Ctx() };
+    }
+    const ctx = _notifChimeAudio.ctx;
+    if(ctx.state === 'suspended') ctx.resume().catch(()=>{});
+    const o = ctx.createOscillator();
+    const g = ctx.createGain();
+    o.type = 'sine'; o.frequency.value = 880;
+    g.gain.value = 0;
+    o.connect(g); g.connect(ctx.destination);
+    const t0 = ctx.currentTime;
+    g.gain.linearRampToValueAtTime(0.18, t0 + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.0001, t0 + 0.35);
+    o.start(t0);
+    o.stop(t0 + 0.4);
+  } catch(_e){ /* silent */ }
+}
+// One-time autoplay unlock — first user click anywhere arms the audio
+// context so subsequent _notifPlayChime() calls succeed without prompting.
+document.addEventListener('click', () => {
+  if(_notifChimeUnlocked) return;
+  _notifChimeUnlocked = true;
+  try { _notifPlayChime(); } catch(_e){}
+}, { once: true });
+
+async function _notifPoll(){
+  try {
+    const meId = _currentUser && _currentUser.id;
+    if(!meId || !isSupabase()) return;
+    const rows = await _sbGet(SB_TABLES.taskNotifications,
+      `select=*&recipient_user_id=eq.${meId}&read_at=is.null&order=created_at.desc&limit=20`);
+    const list = Array.isArray(rows) ? rows : [];
+    // Detect newly-arrived ids — anything we haven't seen in this session.
+    const fresh = list.filter(n => !_notifLastSeenIds.has(n.id));
+    fresh.forEach(n => _notifLastSeenIds.add(n.id));
+    _notifUnread = list;
+    _notifPaintBadge();
+    // Repaint the dropdown if it's open
+    const dd = document.getElementById('navBellDropdown');
+    if(dd && dd.style.display !== 'none') _notifRenderDropdown();
+    // Chime only when:
+    //   - There's at least one new (fresh) notification this poll
+    //   - We've had the audio context unlocked by a prior click
+    //   - This isn't the first ever poll (we don't want to chime old items
+    //     that were already unread when the page loaded — the user has
+    //     seen them through the badge already in earlier sessions)
+    if(fresh.length && _notifChimeUnlocked && _notifPollTimer){
+      _notifPlayChime();
+      // Pulse the bell
+      const btn = document.getElementById('navBellBtn');
+      if(btn){
+        btn.style.transition = 'transform 0.15s';
+        btn.style.transform = 'scale(1.25)';
+        setTimeout(() => { btn.style.transform = ''; }, 250);
+      }
+    }
+  } catch(_e){ /* swallow — poll silently retries */ }
+}
+function _notifPaintBadge(){
+  const badge = document.getElementById('navBellBadge');
+  if(!badge) return;
+  const n = _notifUnread.length;
+  if(n > 0){
+    badge.textContent = n > 9 ? '9+' : String(n);
+    badge.style.display = '';
+  } else {
+    badge.style.display = 'none';
+  }
+}
+function _notifStartPolling(){
+  if(_notifPollTimer) return;
+  // Initial fetch happens immediately so the badge populates without
+  // waiting 30s. The first call's `fresh` items are added to
+  // _notifLastSeenIds without chiming (because _notifPollTimer is still
+  // null when this first call runs).
+  _notifPoll().then(() => {
+    _notifPollTimer = setInterval(_notifPoll, _notifPollMs);
+  });
+}
+function _notifToggleDropdown(){
+  const dd = document.getElementById('navBellDropdown');
+  if(!dd) return;
+  if(dd.style.display === 'none' || !dd.style.display){
+    _notifRenderDropdown();
+    dd.style.display = 'block';
+    // Outside-click closes
+    setTimeout(() => {
+      const off = (ev) => {
+        if(!dd.contains(ev.target) && ev.target.id !== 'navBellBtn'){
+          dd.style.display = 'none';
+          document.removeEventListener('click', off, true);
+        }
+      };
+      document.addEventListener('click', off, true);
+    }, 50);
+  } else {
+    dd.style.display = 'none';
+  }
+}
+function _notifRenderDropdown(){
+  const dd = document.getElementById('navBellDropdown');
+  if(!dd) return;
+  if(!_notifUnread.length){
+    dd.innerHTML = `
+      <div style="padding:14px;font-size:12px;color:#64748b;text-align:center;">No new notifications.</div>`;
+    return;
+  }
+  const itemsHtml = _notifUnread.map(n => {
+    const actorName = _userName(n.actor_user_id, 'Someone');
+    const when = _relTime(n.created_at);
+    const msg = (n.message || '').replace(/</g,'&lt;');
+    const typeIcon = n.type==='assigned' ? '➜'
+                   : n.type==='overdue_plan' ? '📝'
+                   : n.type==='completed' ? '✓' : '🔔';
+    return `<div onclick="_notifOpenTask('${n.task_id}','${n.id}')" style="padding:10px 12px;border-bottom:1px solid #f1f5f9;cursor:pointer;display:flex;gap:10px;align-items:flex-start;" onmouseover="this.style.background='#f8fafc'" onmouseout="this.style.background=''">
+      ${_userAvatarHtml(n.actor_user_id, actorName)}
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:12px;color:#0f172a;line-height:1.4;">${typeIcon} ${msg || (actorName + ' notified you')}</div>
+        <div style="font-size:10px;color:#94a3b8;margin-top:2px;">${when}</div>
+      </div>
+    </div>`;
+  }).join('');
+  dd.innerHTML = `
+    <div style="padding:8px 12px;border-bottom:1px solid #e5e7eb;display:flex;justify-content:space-between;align-items:center;background:#f8fafc;">
+      <span style="font-size:12px;font-weight:700;color:#0f172a;">Notifications (${_notifUnread.length})</span>
+      <button onclick="_notifMarkAllRead()" style="background:none;border:none;color:#7c3aed;font-size:11px;cursor:pointer;font-weight:600;">Mark all read</button>
+    </div>
+    ${itemsHtml}`;
+}
+async function _notifMarkAllRead(){
+  const ids = _notifUnread.map(n => n.id);
+  _notifUnread = [];
+  _notifPaintBadge();
+  _notifRenderDropdown();
+  // Best-effort patch — failure leaves the rows unread, next poll will repaint.
+  try {
+    const now = new Date().toISOString();
+    await Promise.all(ids.map(id => _sbPatch(SB_TABLES.taskNotifications, id, { read_at: now })));
+  } catch(_e){ console.warn('Mark notifications read failed:', _e.message); }
+}
+async function _notifMarkOneRead(id){
+  _notifUnread = _notifUnread.filter(n => n.id !== id);
+  _notifPaintBadge();
+  try { await _sbPatch(SB_TABLES.taskNotifications, id, { read_at: new Date().toISOString() }); }
+  catch(_e){}
+}
+async function _notifOpenTask(taskId, notifId){
+  await _notifMarkOneRead(notifId);
+  const dd = document.getElementById('navBellDropdown');
+  if(dd) dd.style.display = 'none';
+  // Jump to the Tasks page; the user can find their row from there. (We
+  // don't deep-link to a specific task because that requires more route
+  // plumbing than is worth shipping with v113.24.)
+  if(typeof setNav === 'function'){
+    const navBtn = document.querySelector('[data-page="tasks-nav"]');
+    if(navBtn) setNav(navBtn, 'tasks-nav');
+  }
+}
+
+// v113.24: overdue-plan workflow. When a cross-assigned task is past due
+// and has no plan yet, the assignee sees a "Write plan" button on the row.
+// Clicking opens this modal. Saving stamps overdue_plan + overdue_plan_at
+// on ace_tasks and inserts an 'overdue_plan' notification for the assigner.
+function openOverduePlanModal(taskId, taskName, assignerId){
+  let modal=document.getElementById('overduePlanModal');
+  if(!modal){ modal=document.createElement('div'); modal.id='overduePlanModal'; document.body.appendChild(modal); }
+  modal.style.cssText='position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;';
+  modal.innerHTML=`
+    <div style="background:var(--surface);border:1px solid var(--border);border-radius:var(--radius);width:480px;max-width:94vw;box-shadow:0 20px 60px rgba(0,0,0,0.25);overflow:hidden;">
+      <div style="background:linear-gradient(135deg,#7c2d12,#b45309);padding:14px 18px;display:flex;align-items:center;justify-content:space-between;">
+        <div>
+          <div style="font-size:15px;font-weight:600;color:#fff;">📝 Plan for Overdue Task</div>
+          <div style="font-size:11px;color:#fde68a;margin-top:2px;">${(taskName||'').replace(/</g,'&lt;')}</div>
+        </div>
+        <button onclick="closeOverduePlanModal()" style="background:none;border:none;color:#fff;font-size:20px;cursor:pointer;line-height:1;">✕</button>
+      </div>
+      <div style="padding:20px 18px;">
+        <div style="font-size:12px;color:var(--text2);margin-bottom:12px;">
+          This task was assigned to you by <strong>${_userName(assignerId,'a teammate')}</strong> and is past due. Write a quick plan — what's the next step, and when will you finish? They'll be notified.
+        </div>
+        <textarea id="op_plan" class="form-textarea" rows="5" placeholder="e.g. Calling the seller back tomorrow at 10am, will follow up with LOI by EOD Friday."></textarea>
+        <div id="op_error" style="color:#dc2626;font-size:12px;margin-top:8px;display:none;"></div>
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px;">
+          <button onclick="closeOverduePlanModal()" class="action-btn" style="padding:8px 18px;">Cancel</button>
+          <button id="op_submit" onclick="submitOverduePlan('${taskId}','${assignerId}','${(taskName||'').replace(/'/g,"\\'")}')" style="background:#b45309;color:#fff;border:none;padding:8px 22px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">Send Plan</button>
+        </div>
+      </div>
+    </div>`;
+  setTimeout(()=>document.getElementById('op_plan')?.focus(), 80);
+}
+function closeOverduePlanModal(){
+  const m = document.getElementById('overduePlanModal'); if(m) m.style.display='none';
+}
+async function submitOverduePlan(taskId, assignerId, taskName){
+  const plan = document.getElementById('op_plan')?.value?.trim();
+  const errEl = document.getElementById('op_error');
+  const btn   = document.getElementById('op_submit');
+  if(!plan){ if(errEl){errEl.textContent='Plan note is required.';errEl.style.display='block';} return; }
+  if(btn){ btn.disabled = true; btn.textContent = 'Sending...'; }
+  try {
+    await _sbPatch(SB_TABLES.tasks, taskId, {
+      overdue_plan: plan,
+      overdue_plan_at: new Date().toISOString()
+    });
+    if(assignerId){
+      try {
+        await _sbPost(SB_TABLES.taskNotifications, {
+          recipient_user_id: assignerId,
+          actor_user_id: (_currentUser && _currentUser.id) || null,
+          task_id: taskId,
+          type: 'overdue_plan',
+          message: (_currentUser?.name || 'Teammate') + ' shared a plan for: ' + taskName
+        });
+      } catch(_e){}
+    }
+    closeOverduePlanModal();
+    showSaveConfirm('📝 Plan sent');
+    if(typeof showTasksPage === 'function') showTasksPage();
+  } catch(e){
+    if(btn){ btn.disabled = false; btn.textContent = 'Send Plan'; }
+    if(errEl){ errEl.textContent = 'Failed: '+e.message; errEl.style.display='block'; }
+  }
 }
 
 function _tasksPrioTier(priority){
@@ -36934,6 +37522,15 @@ async function _renderGlobalTasks(){
       const planChip = (t._overdue_plan)
         ? `<span title="Plan: ${(t._overdue_plan||'').replace(/"/g,'&quot;')}" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:4px;padding:2px 7px;font-size:10px;font-weight:500;">📝 plan</span>`
         : '';
+      // v113.24: "Write plan" CTA — shows on cross-assigned tasks that are
+      // past due and don't yet have a plan note. Clicking opens the plan
+      // modal which writes overdue_plan + notifies the assigner.
+      const needsPlan = !isAssignedToOthersTab && due.overdue && !isDone
+        && t._assigned_by && t._assigned_by !== userId
+        && !t._overdue_plan;
+      const writePlanBtn = needsPlan
+        ? `<button onclick="event.stopPropagation();openOverduePlanModal('${t.id}','${(t['Task']||'').replace(/'/g,"\\'")}','${t._assigned_by||''}')" style="background:#b45309;color:#fff;border:none;border-radius:4px;padding:3px 9px;font-size:10px;font-weight:600;cursor:pointer;white-space:nowrap;">📝 Write plan</button>`
+        : '';
       const canDrag = !isAssignedToOthersTab && (section==='overdue' || section==='today' || section==='future');
       const dragHandle = canDrag
         ? `<div title="Drag to reorder" style="cursor:grab;color:var(--text3);font-size:14px;padding:2px 4px;line-height:1;flex-shrink:0;user-select:none;letter-spacing:-2px;">⋮⋮</div>`
@@ -36952,7 +37549,7 @@ async function _renderGlobalTasks(){
         <div style="flex:1;min-width:0;">
           <div style="font-size:13px;font-weight:600;${isDone?'text-decoration:line-through;':''}margin-bottom:4px;">${t['Task']||'Untitled'}</div>
           ${t['Notes']?`<div style="font-size:12px;color:var(--text2);margin-bottom:5px;">${t['Notes']}</div>`:''}
-          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">${prio}${dealChip}${contactChip}${buyerChip}${generalChip}<span style="font-size:11px;color:${due.color};font-weight:500;">${due.text}</span>${fromChip}${toChip}${queueChip}${planChip}</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">${prio}${dealChip}${contactChip}${buyerChip}${generalChip}<span style="font-size:11px;color:${due.color};font-weight:500;">${due.text}</span>${fromChip}${toChip}${queueChip}${planChip}${writePlanBtn}</div>
         </div>
         ${isAssignedToOthersTab ? '' : `<button onclick="openEditTaskModal('${t.id}','${(t['Task']||'').replace(/'/g,"\\'")}','${(t['Priority']||'').trim()}','${t['Due Date']||''}','${(t['Notes']||'').replace(/'/g,"\\'").replace(/\n/g,' ')}','global')" title="Edit" style="background:none;border:none;color:var(--text3);font-size:14px;cursor:pointer;padding:0 4px;flex-shrink:0;" onmouseover="this.style.color='#7c3aed'" onmouseout="this.style.color='var(--text3)'">✏️</button>`}
         ${isAssignedToOthersTab ? '' : `<button onclick="deleteTaskRecord('${t.id}','global')" title="Delete" style="background:none;border:none;color:var(--text3);font-size:16px;cursor:pointer;padding:0 4px;flex-shrink:0;" onmouseover="this.style.color='#dc2626'" onmouseout="this.style.color='var(--text3)'">✕</button>`}
@@ -48097,6 +48694,8 @@ async function doLogin(){
     _applyUserToUI(user);
     hideLogin();
     await syncData();
+    // v113.24: kick off the notification bell once we know who we are.
+    if(typeof _notifStartPolling === 'function') _notifStartPolling();
   } catch(e) {
     showLoginErr(e.message || 'Login failed. Check your email and password.');
   } finally {
@@ -48373,6 +48972,10 @@ document.addEventListener('DOMContentLoaded', ()=>{
     syncData();
     _loadMyRelationships(true); // fire-and-forget; contacts page also awaits it
     if(typeof _myPipelineLoad === 'function') _myPipelineLoad(true); // v113.1: fire-and-forget
+    // v113.24: start the notification bell poller. _notifPoll runs once
+    // immediately, then every 30s, populating the badge + dropdown and
+    // chiming on new arrivals.
+    if(typeof _notifStartPolling === 'function') _notifStartPolling();
   } else {
     showLogin();
   }

@@ -20572,6 +20572,9 @@ async function _ddMergeAllConfident(opts){
       // (same reason as _ddMergeGroup — the engine keeps the survivor's
       // address by default and we want the best one to win).
       await _ddPrePromoteBestAddress(survivor, g.deals);
+      // v113.42: bundle every loser's note fields into a single block on
+      // the survivor's GPN — matches per-card merge behavior.
+      await _ddPrePromoteNotesToGPN(survivor, losers);
       await _ddCallMergeEdgeFn(survivor.id, losers.map(l => l.id));
       losers.forEach(l => { l['Is Archived'] = true; });
       // Best-effort survivor refresh — not awaited inside the worker so the
@@ -20680,6 +20683,56 @@ async function _ddPrePromoteBestAddress(survivor, groupDeals){
   }
 }
 
+// v113.42: bundle every note-field-with-content from each loser into a
+// single "Merged from LEAD …" block and append it to the survivor's
+// General Property Notes. Mirrors the legacy _ddMergeGroup behavior — the
+// user reads GPN as the canonical "merge history" tab and wants all loser
+// notes visible there, not scattered across deal_notes / next_steps / etc.
+//
+// The merge engine will also do its own per-field note concatenation
+// (loser.deal_notes → survivor.deal_notes, etc.) — that's a small cosmetic
+// duplicate, but the engine's `survivorNote.includes(...)` skip prevents
+// the GPN content from being doubled.
+async function _ddPrePromoteNotesToGPN(survivor, losers){
+  if(!survivor || !losers || !losers.length) return;
+  const NOTE_FIELDS = [
+    ['Deal Notes',                'Deal Notes'],
+    ['General Property Notes',    'General Property Notes'],
+    ['Next Steps',                'Next Steps'],
+    ['Property Description',      'Property Description'],
+    ['Location Description',      'Location Description'],
+    ['Financial Property Notes',  'Financial Property Notes'],
+    ['AI Clarifying Notes',       'AI Clarifying Notes'],
+  ];
+  const blocks = [];
+  for(const l of losers){
+    const fieldBlocks = [];
+    for(const [f, label] of NOTE_FIELDS){
+      const v = String(l[f]||'').trim();
+      if(v) fieldBlocks.push(`${label}:\n${v}`);
+    }
+    if(!fieldBlocks.length) continue;
+    const leadId = String(l.id||'').slice(0,8).toUpperCase();
+    const lAddr  = l['Address'] || '(no address)';
+    const header = `─── Merged from LEAD ${leadId} (${lAddr}) ───`;
+    blocks.push(`${header}\n\n${fieldBlocks.join('\n\n')}`);
+  }
+  if(!blocks.length) return;
+  const existing = String(survivor['General Property Notes']||'').trim();
+  // Idempotency: don't append if the first block's header is already present
+  // (catches the "user clicked merge twice" case).
+  const firstHeader = blocks[0].split('\n')[0];
+  if(existing.includes(firstHeader)) return;
+  const consolidated = blocks.join('\n\n');
+  const newGpn = existing ? `${existing}\n\n${consolidated}` : consolidated;
+  try {
+    await _sbPatch(SB_TABLES.properties, survivor.id, { general_property_notes: newGpn });
+    survivor['General Property Notes'] = newGpn;
+  } catch(e){
+    console.warn('[_ddPrePromoteNotesToGPN] failed for', survivor.id, e.message);
+  }
+}
+
 // Refresh a single property row from Supabase and merge it into the matching
 // allDeals[] entry. Best-effort — failures are logged but non-fatal.
 async function _ddRefreshDealInMemory(dealId){
@@ -20725,6 +20778,10 @@ async function _ddMergeGroup(groupIdx, fuzzy){
     // policy is "keep survivor + log conflict in deal_notes" — we want the
     // cleaner address to actually survive instead.
     await _ddPrePromoteBestAddress(survivor, g.deals);
+    // v113.42: bundle every loser's note fields into a single "Merged from
+    // LEAD …" block and append to the survivor's GPN. Matches legacy
+    // behavior — user reads GPN as the canonical merge-history tab.
+    await _ddPrePromoteNotesToGPN(survivor, losers);
     await _ddCallMergeEdgeFn(survivor.id, losers.map(l => l.id));
     losers.forEach(l => { l['Is Archived'] = true; });
     await _ddRefreshDealInMemory(survivor.id);

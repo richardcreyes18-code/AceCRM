@@ -5219,9 +5219,8 @@ function renderDealPage(){
   const leadId=d.id?d.id.substring(0,8).toUpperCase():'—';
 
   _rendering = true;
-  const ownerName = d['_sellerName'] || d['_ownerName'] || '';
-  const ownerPhone = d['_sellerPhone'] || '';
-  const ownerContactId = d['_sellerContactId'] || (Array.isArray(d['Owner']) ? d['Owner'][0] : '');
+  // v113.32: owner row HTML is now built by _ownerHeaderInnerHTML(d) — handles
+  // the linked-owner case AND the "⚠ No owner assigned" placeholder.
 
   document.getElementById('mainArea').innerHTML=`
     <!-- DEAL HEADER -->
@@ -5254,7 +5253,7 @@ function renderDealPage(){
             <button id="headerEditAddrBtn" onclick="openEditAddressModal()" title="Edit property name &amp; address" style="flex-shrink:0;background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:5px 10px;border-radius:6px;font-size:13px;cursor:pointer;white-space:nowrap;">✏️</button>
             <button id="headerMapsBtn" onclick="openGoogleMaps('${addr.replace(/'/g,"\\'")}');" title="Open in Google Maps (Street View)" style="flex-shrink:0;background:#1a73e8;color:#fff;border:none;padding:5px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;">🗺 Maps</button>
           </div>
-          ${ownerName ? `<div id="headerOwnerName" style="font-size:13px;color:var(--text2);margin-bottom:6px;">👤 <strong style="color:var(--text);${ownerContactId?'cursor:pointer;text-decoration:underline;text-decoration-color:#c0d0e8;text-underline-offset:3px;':''}" ${ownerContactId?`onclick="openContactModal('${ownerContactId}')" title="Open contact view"`:''}>${ownerName}</strong>${ownerPhone?`<span style="margin-left:10px;color:var(--text3);font-weight:normal;font-size:12px;">📞 <a href="tel:${ownerPhone.replace(/[^0-9+]/g,'')}" style="color:var(--text2);text-decoration:none;">${ownerPhone}</a></span>`:''}</div>` : `<div id="headerOwnerName" style="font-size:13px;color:var(--text2);margin-bottom:6px;"></div>`}
+          <div id="headerOwnerName" style="font-size:13px;color:var(--text2);margin-bottom:6px;">${_ownerHeaderInnerHTML(d)}</div>
           <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
             ${stageBadge(stage)}
             ${_pfIconHtml(d)}
@@ -11039,16 +11038,10 @@ async function loadSellerContact(propertyId){
     set('sel_company', contactFields['Company']);
     set('sel_notes',   contactFields['Contact Notes']);
 
-    // Update owner name live in the deal header if it's visible
-    const name = contactFields['Name']||'';
-    const phone = contactFields['Phone Number']||'';
-    if(name){
-      const ownerEl = document.getElementById('headerOwnerName');
-      if(ownerEl){
-        const phoneDigits = phone.replace(/[^0-9+]/g,'');
-        ownerEl.innerHTML = `👤 <strong style="color:var(--text);cursor:pointer;text-decoration:underline;text-decoration-color:#c0d0e8;text-underline-offset:3px;" onclick="openContactModal('${contactId}')" title="Open contact view">${name}</strong>${phone?`<span style="margin-left:10px;color:var(--text3);font-weight:normal;font-size:12px;">📞 <a href="tel:${phoneDigits}" style="color:var(--text2);text-decoration:none;">${phone}</a></span>`:''}`;
-      }
-    }
+    // Update owner name live in the deal header if it's visible.
+    // v113.32: delegate to _refreshOwnerHeader() so the linked vs. "no owner
+    // assigned" placeholder stays in sync from a single source of truth.
+    if(typeof _refreshOwnerHeader === 'function') _refreshOwnerHeader();
 
     // v113.6: If we just hydrated from the DB (cache was stale), the
     // Contacts/Buyers tab may still be showing the empty "Seller Contact
@@ -34777,6 +34770,7 @@ async function linkExistingSellerContact(propertyId, contactId, contactRow){
     }
     showSaveConfirm('✓ Owner linked to ' + (contactRow.name || 'contact'));
     _dcRefreshContactsTab();
+    if(typeof _refreshOwnerHeader === 'function') _refreshOwnerHeader();
   }catch(e){
     console.error('linkExistingSellerContact failed:', e);
     alert('Failed to link contact: ' + (e.message || 'unknown'));
@@ -34804,9 +34798,185 @@ async function unlinkSellerContact(propertyId){
     }
     showSaveConfirm('✓ Owner unlinked');
     _dcRefreshContactsTab();
+    _refreshOwnerHeader();
   }catch(e){
     console.error('unlinkSellerContact failed:', e);
     alert('Failed to unlink: ' + (e.message || 'unknown'));
+  }
+}
+
+// ─── v113.32: OWNER HEADER ROW + ASSIGN-OWNER MODAL ──────────────
+// Builds the inner HTML for the #headerOwnerName row in the deal header.
+// Two states: owner linked (clickable name + phone) OR no owner ("⚠ No owner
+// assigned" pill that opens the contact picker).
+function _ownerHeaderInnerHTML(d){
+  if(!d) return '';
+  const ownerName = d['_sellerName'] || d['_ownerName'] || '';
+  const ownerPhone = d['_sellerPhone'] || '';
+  const ownerContactId = d['_sellerContactId'] || (Array.isArray(d['Owner']) ? d['Owner'][0] : '');
+  if(ownerName){
+    const phoneDigits = ownerPhone.replace(/[^0-9+]/g,'');
+    const nameStyle = ownerContactId
+      ? 'cursor:pointer;text-decoration:underline;text-decoration-color:#c0d0e8;text-underline-offset:3px;'
+      : '';
+    const nameClick = ownerContactId
+      ? `onclick="openContactModal('${ownerContactId}')" title="Open contact view"`
+      : '';
+    const phoneHtml = ownerPhone
+      ? `<span style="margin-left:10px;color:var(--text3);font-weight:normal;font-size:12px;">📞 <a href="tel:${phoneDigits}" style="color:var(--text2);text-decoration:none;">${ownerPhone}</a></span>`
+      : '';
+    return `👤 <strong style="color:var(--text);${nameStyle}" ${nameClick}>${ownerName}</strong>${phoneHtml}`;
+  }
+  // No owner — render as a clickable assign affordance with a warning icon.
+  return `<button type="button" onclick="openAssignOwnerModal()" title="Click to search & assign an owner contact" style="background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;padding:3px 10px 3px 8px;border-radius:99px;font-size:12px;font-weight:600;cursor:pointer;display:inline-flex;align-items:center;gap:6px;font-family:inherit;" onmouseenter="this.style.background='#fee2e2'" onmouseleave="this.style.background='#fef2f2'">⚠ No owner assigned <span style="font-size:10px;font-weight:500;color:#dc2626;text-decoration:underline;">click to assign</span></button>`;
+}
+
+// Refresh just the owner row in the deal header without rebuilding the
+// whole page. Use after link/unlink/assign actions.
+function _refreshOwnerHeader(){
+  if(!currentDeal) return;
+  const el = document.getElementById('headerOwnerName');
+  if(el) el.innerHTML = _ownerHeaderInnerHTML(currentDeal);
+}
+
+// Open a modal to search ace_contacts and assign one as the property's
+// owner. Reuses the same Supabase search shape as the send-email recipient
+// picker (name OR email ilike, exclude current owner if any). On select,
+// calls linkExistingSellerContact() which patches owner_contact_id and
+// refreshes the in-memory deal + header.
+let _assignOwnerSearchTimer = null;
+let _assignOwnerLastQuery = '';
+function openAssignOwnerModal(){
+  if(!currentDeal || !currentDeal.id){
+    alert('No active deal — open a property first.');
+    return;
+  }
+  // Clean up any stale overlay
+  document.getElementById('assignOwnerModalOverlay')?.remove();
+  _assignOwnerLastQuery = '';
+  const overlay = document.createElement('div');
+  overlay.id = 'assignOwnerModalOverlay';
+  overlay.style.cssText = 'position:fixed;top:0;left:0;width:100%;height:100%;background:rgba(0,0,0,0.55);z-index:9000;display:flex;align-items:flex-start;justify-content:center;padding:60px 20px 20px;overflow-y:auto;';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:10px;width:560px;max-width:95vw;display:flex;flex-direction:column;font-family:'Inter',system-ui,sans-serif;box-shadow:0 20px 60px rgba(0,0,0,0.3);overflow:hidden;">
+      <div style="background:linear-gradient(135deg,#1e3a8a 0%,#0f172a 100%);color:#fff;padding:16px 20px;display:flex;align-items:center;gap:12px;">
+        <div style="width:42px;height:42px;border-radius:50%;background:rgba(255,255,255,0.15);display:flex;align-items:center;justify-content:center;font-size:20px;">👤</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:16px;font-weight:700;line-height:1.2;">Assign property owner</div>
+          <div style="font-size:11px;color:#bfdbfe;margin-top:2px;">${(currentDeal['Address']||'(no address)').replace(/</g,'&lt;').slice(0,90)}</div>
+        </div>
+        <button onclick="_closeAssignOwnerModal()" style="background:rgba(255,255,255,0.1);border:none;color:#fff;cursor:pointer;font-size:18px;width:30px;height:30px;border-radius:6px;">✕</button>
+      </div>
+      <div style="padding:18px 20px;background:#fff;">
+        <label style="font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:6px;">Search contacts</label>
+        <input id="assignOwnerSearch" type="text" placeholder="Type name, email, or phone…" autocomplete="off"
+          oninput="_assignOwnerSearch(this.value)" onfocus="_assignOwnerSearch(this.value)"
+          style="width:100%;box-sizing:border-box;padding:10px 12px;font-size:13px;border:1px solid #cbd5e1;border-radius:6px;"/>
+        <div id="assignOwnerHint" style="font-size:11px;color:#64748b;margin-top:8px;">Type at least 2 characters to search. Pick a contact to set them as the owner of this property.</div>
+        <div id="assignOwnerResults" style="margin-top:10px;max-height:340px;overflow-y:auto;border:1px solid #e2e8f0;border-radius:6px;display:none;"></div>
+      </div>
+      <div style="padding:12px 20px;background:#f8fafc;border-top:1px solid #e2e8f0;display:flex;justify-content:flex-end;gap:8px;">
+        <button onclick="_closeAssignOwnerModal()" style="background:#fff;border:1px solid #cbd5e1;color:#475569;padding:8px 16px;font-size:13px;border-radius:6px;cursor:pointer;font-weight:600;">Cancel</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  setTimeout(() => document.getElementById('assignOwnerSearch')?.focus(), 80);
+}
+
+function _closeAssignOwnerModal(){
+  document.getElementById('assignOwnerModalOverlay')?.remove();
+  _assignOwnerLastQuery = '';
+  if(_assignOwnerSearchTimer){ clearTimeout(_assignOwnerSearchTimer); _assignOwnerSearchTimer = null; }
+}
+
+async function _assignOwnerSearch(q){
+  if(_assignOwnerSearchTimer) clearTimeout(_assignOwnerSearchTimer);
+  const box = document.getElementById('assignOwnerResults');
+  const hint = document.getElementById('assignOwnerHint');
+  if(!box) return;
+  const query = (q || '').trim();
+  if(query.length < 2){
+    box.style.display = 'none';
+    box.innerHTML = '';
+    if(hint) hint.style.display = 'block';
+    return;
+  }
+  _assignOwnerSearchTimer = setTimeout(async () => {
+    if(query === _assignOwnerLastQuery) return;
+    _assignOwnerLastQuery = query;
+    try{
+      const enc = encodeURIComponent(query);
+      const orFilter = `or=(name.ilike.*${enc}*,email.ilike.*${enc}*,phone_number.ilike.*${enc}*,company.ilike.*${enc}*)`;
+      const filter = `${orFilter}&select=id,name,phone_number,email,company,type&limit=30&order=name.asc`;
+      const rows = await _sbGet('ace_contacts', filter);
+      _assignOwnerRenderResults(rows || []);
+    }catch(e){
+      console.warn('owner search failed:', e.message);
+      box.innerHTML = `<div style="padding:12px;font-size:12px;color:#dc2626;">Search failed: ${e.message}</div>`;
+      box.style.display = 'block';
+      if(hint) hint.style.display = 'none';
+    }
+  }, 220);
+}
+
+// Cache the last result set on the module so the click handler can look up
+// the full row by id without us having to embed the whole object in HTML.
+let _assignOwnerResultsCache = [];
+
+function _assignOwnerRenderResults(rows){
+  _assignOwnerResultsCache = Array.isArray(rows) ? rows : [];
+  const box = document.getElementById('assignOwnerResults');
+  const hint = document.getElementById('assignOwnerHint');
+  if(!box) return;
+  if(hint) hint.style.display = 'none';
+  const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/'/g,'&#39;').replace(/"/g,'&quot;');
+  const currentOwner = currentDeal?._sellerContactId || '';
+  if(!_assignOwnerResultsCache.length){
+    box.innerHTML = '<div style="padding:14px;font-size:12px;color:#94a3b8;">No matching contacts.</div>';
+    box.style.display = 'block';
+    return;
+  }
+  box.innerHTML = _assignOwnerResultsCache.map(r => {
+    const name = r.name || '(no name)';
+    const meta = [r.company, r.email, r.phone_number].filter(Boolean).join(' • ');
+    const types = Array.isArray(r.type) ? r.type.join(', ') : (r.type || '');
+    const isCurrent = r.id === currentOwner;
+    if(isCurrent){
+      return `<div style="padding:10px 12px;border-bottom:1px solid #f1f5f9;font-size:12px;background:#f8fafc;opacity:0.7;cursor:not-allowed;">
+        <div style="font-weight:600;color:#0f172a;">${esc(name)} <span style="font-size:10px;color:#16a34a;font-weight:500;">· already the owner</span></div>
+        ${meta ? `<div style="font-size:10px;color:#64748b;margin-top:2px;">${esc(meta)}</div>` : ''}
+      </div>`;
+    }
+    return `<div data-contact-id="${esc(r.id)}" onclick="_assignOwnerPickById(this.getAttribute('data-contact-id'))" style="padding:10px 12px;border-bottom:1px solid #f1f5f9;font-size:12px;cursor:pointer;" onmouseenter="this.style.background='#eff6ff'" onmouseleave="this.style.background='#fff'">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;">
+        <div style="min-width:0;flex:1;">
+          <div style="font-weight:600;color:#0f172a;">${esc(name)}</div>
+          ${meta ? `<div style="font-size:10px;color:#64748b;margin-top:2px;">${esc(meta)}</div>` : ''}
+        </div>
+        ${types ? `<span style="font-size:10px;color:#475569;background:#e2e8f0;padding:2px 8px;border-radius:99px;flex-shrink:0;">${esc(types)}</span>` : ''}
+      </div>
+    </div>`;
+  }).join('');
+  box.style.display = 'block';
+}
+
+async function _assignOwnerPickById(contactId){
+  const row = _assignOwnerResultsCache.find(r => r.id === contactId);
+  if(!row){ alert('Contact not found in current results — please re-search.'); return; }
+  if(!currentDeal || !currentDeal.id) return;
+  const propertyId = currentDeal.id;
+  const proceed = confirm(
+    'Assign ' + (row.name || 'this contact') + ' as the owner of this property?\n\n' +
+    'No new contact will be created. The contact\'s phone, email, and notes will be linked here as the property owner.'
+  );
+  if(!proceed) return;
+  try{
+    await linkExistingSellerContact(propertyId, row.id, row);
+    _refreshOwnerHeader();
+    _closeAssignOwnerModal();
+  }catch(e){
+    console.error('assign owner failed:', e);
+    alert('Failed to assign owner: ' + (e.message || 'unknown'));
   }
 }
 

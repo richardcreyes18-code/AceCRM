@@ -2855,6 +2855,11 @@ async function syncData(){
       // versions split on '.' once and silently turned this into
       // `created_at ASC` (because dir='desc,id' !== 'desc'), causing offset
       // pagination to leak/drop rows and allDeals to come up ~25% short.
+      // v113.40 (REQUIRES partial index ace_properties_load_idx): without
+      // an index covering (created_at DESC, id ASC) WHERE deleted_at IS NULL,
+      // each OFFSET >= 2000 page did a full table sort and timed out under
+      // the JS supabase client. Result: allDeals capped at ~2000 rows.
+      // Migration v113_40_ace_properties_load_idx adds the index.
       const pages = await Promise.all(
         Array.from({length: MAX_PARALLEL_PAGES}, (_, i) =>
           _sbGet(SB_TABLES.properties,

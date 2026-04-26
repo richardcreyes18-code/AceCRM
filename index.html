@@ -21416,10 +21416,9 @@ window._aiAutoFillDeal = async function(propertyId, opts){
   opts = opts || {};
   const onlyFillEmpty = opts.onlyFillEmpty !== false;   // default true
   const cfg = getConfig();
-  // v113.56: client-side key is OPTIONAL. Edge function falls back to the
-  // ANTHROPIC_API_KEY Supabase secret if no client key is set, so the team
-  // can share one centralized key.
-  const anthropicKey = (typeof _store !== 'undefined' && _store && _store.get) ? (_store.get('anthropic_key') || '') : '';
+  // v113.56: API key lives in the Supabase Edge Function secret
+  // ANTHROPIC_API_KEY only — never browser-side. The edge function reads
+  // it server-side; we don't pass anything from here.
   if(!propertyId){
     alert('No deal selected. Open a deal and try again, or call with a deal id.');
     return;
@@ -21442,7 +21441,7 @@ window._aiAutoFillDeal = async function(propertyId, opts){
     const r = await fetch(`${cfg.url}/functions/v1/ai-parse-deal-v2`, {
       method: 'POST',
       headers: { 'Content-Type':'application/json', apikey: cfg.key, Authorization: 'Bearer '+cfg.key },
-      body: JSON.stringify({ property_id: propertyId, anthropic_key: anthropicKey, dry_run: true, only_fill_empty: onlyFillEmpty }),
+      body: JSON.stringify({ property_id: propertyId, dry_run: true, only_fill_empty: onlyFillEmpty }),
     });
     resp = await r.json();
     if(!r.ok || !resp.ok) throw new Error(resp.error || `HTTP ${r.status}`);

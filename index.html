@@ -742,6 +742,37 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   padding-bottom: 3px;
   border-bottom: 1px solid #e2e8f0;
 }
+
+/* v113.62: inline N/A affordance (Phase 2). Empty fields get a tiny
+   "✕ N/A" link that appears on hover. N/A fields render as a purple
+   badge with a revert icon. The host span stays inline so cell
+   layouts (esp. financial-analysis tables) don't reflow. */
+.na-host { position: relative; display: inline-flex; align-items: center; gap: 4px; }
+.na-host > .na-mark-btn {
+  display: none;
+  font-size: 9px; font-weight: 600;
+  color: #94a3b8; cursor: pointer;
+  text-decoration: none; user-select: none;
+  white-space: nowrap;
+  transition: color 0.12s;
+}
+.na-host:hover > .na-mark-btn,
+.na-host > [data-na-col]:focus ~ .na-mark-btn { display: inline; }
+.na-host > [data-na-col]:not(:placeholder-shown) ~ .na-mark-btn { display: none !important; }
+.na-host > select[data-na-col]:not([data-empty="true"]) ~ .na-mark-btn { display: none !important; }
+.na-host > .na-mark-btn:hover { color: #b45309; }
+.na-badge {
+  display: inline-flex; align-items: center; gap: 4px;
+  font-style: italic; font-weight: 600; font-size: 11px;
+  color: #7c3aed; background: #f5f3ff;
+  border: 1px solid #ddd6fe; border-radius: 4px;
+  padding: 2px 8px; user-select: none;
+}
+.na-badge .na-revert-btn {
+  font-style: normal; cursor: pointer; opacity: 0.55;
+  font-size: 10px; padding: 0 2px;
+}
+.na-badge .na-revert-btn:hover { opacity: 1; color: #5b21b6; }
 </style>
 </head>
 <body>
@@ -5451,6 +5482,233 @@ function _openDealDirect(d){
   if(d.id) setTimeout(()=>{ loadSellerContact(d.id); _renderHeaderPhoto(); }, 100);
 }
 
+// v113.62: inline N/A affordance (Phase 2)
+// ─────────────────────────────────────────────
+// USAGE: any <input>/<select>/<textarea> in Property Details or
+// Financial Analysis with a known id/name (see _NA_INPUT_MAP) gets
+// auto-decorated after render. Or add data-na-col="<column>" directly
+// to opt in for a custom input. After renderDealPage(), _naDecorate()
+// walks the DOM and wires up:
+//   • empty + hover  → small "✕ N/A" link to mark the field N/A
+//   • column in NA   → input replaced with a purple "N/A · ↺" badge
+//   • filled         → no chrome added
+//
+// State lives in ace_properties.na_fields jsonb, surfaced on the deal
+// object as currentDeal['NA Fields'].
+
+// Static map: input id (or 'name:<name>' for radio groups) → FIELD_SPEC
+// column. Built by audit of renderPropertyTab + renderFinancialTab.
+const _NA_INPUT_MAP = {
+  // Property Details
+  'prop_yearBuilt':'year_built', 'prop_yearRenov':'year_renovated',
+  'noStories':'no_of_stories', 'prop_hvac':'hvac',
+  'prop_totalBuildingSF':'total_building_sf', 'prop_netRentableSF':'net_rentable_sf',
+  'prop_lotSize':'total_lot_size', 'name:lotUnit':'lot_size_unit',
+  'prop_numBuildings':'no_of_buildings',
+  'prop_parkingType':'parking_type', 'prop_parkingSpaces':'no_of_parking_spaces',
+  'prop_parkingRatio':'parking_ratio',
+  'name:propUse':'property_use', 'name:constStatus':'construction_status',
+  'name:distressed':'is_distressed', 'name:groundLease':'is_on_ground_lease',
+  'name:saleLeaseback':'sale_leaseback',
+  'sellerMotivation':'seller_motivation_level', 'whySelling':'why_selling',
+  'propClass':'property_class', 'propCondition':'property_condition',
+  'locationClass':'location_class', 'locationTrending':'location_trending',
+  'locationType':'location_type',
+  'name:propListed':'is_property_listed',
+  'commSplit':'commission_split_pct', 'dateOnMarket':'date_went_on_market',
+  'sellerOrigDate':'seller_original_purchase_date',
+  'sellerOrigPrice':'seller_original_purchase_price',
+  'financialStrength':'seller_financial_strength',
+  'name:mortgagePayments':'mortgage_payments_status',
+  'um_totalUnits':'no_of_units', 'um_occupancy':'occupancy_pct',
+  'um_eff':'units_efficiency', 'um_eff_v':'units_efficiency_vacant',
+  'um_1br':'units_1br', 'um_1br_v':'units_1br_vacant',
+  'um_2br':'units_2br', 'um_2br_v':'units_2br_vacant',
+  'um_3br':'units_3br', 'um_3br_v':'units_3br_vacant',
+  'um_4br':'units_4br', 'um_4br_v':'units_4br_vacant',
+  'um_other':'units_other', 'um_other_v':'units_other_vacant',
+  // Financial Analysis
+  'fin_askPrice':'asking_price', 'fin_offerPrice':'offer_price',
+  'fin_a_renovation':'renovation_expense', 'fin_renovation':'renovation_expense',
+  'fin_a_downPct':'down_payment_pct', 'fin_p_downPct':'down_payment_pct',
+  'name:aDP':'down_payment_type', 'name:pDP':'down_payment_type',
+  'fin_aGrossRent_mo':'gross_rental_income_monthly',
+  'fin_aGrossRent_yr':'gross_revenue_yearly',
+  'fin_pGrossRent_mo':'proforma_gross_rent_monthly',
+  'fin_pGrossRent_yr':'pro_forma_gross_revenue_yearly',
+  'fin_aVacancy':'vacancy_rate_pct', 'fin_pVacancy':'proforma_vacancy_rate_pct',
+  'fin_aOI_mo':'other_income_monthly', 'fin_aOI_yr':'other_income_monthly',
+  'fin_pOI_mo':'proforma_other_income_monthly', 'fin_pOI_yr':'proforma_other_income_monthly',
+  'fin_aRUBS_mo':'rubs_cam_income_monthly', 'fin_aRUBS_yr':'rubs_cam_income_monthly',
+  'fin_pRUBS_mo':'proforma_rubs_cam_monthly', 'fin_pRUBS_yr':'proforma_rubs_cam_monthly',
+  'fin_aCapRes_mo':'capital_reserve_monthly', 'fin_aCapRes_yr':'capital_reserve_monthly',
+  'fin_simple_gri_mo':'gross_rental_income_monthly', 'fin_simple_gri_yr':'gross_revenue_yearly',
+  'fin_simple_exp_mo':'expenses_yearly', 'fin_simple_exp_yr':'expenses_yearly',
+  'fin_mort1_bal':'mortgage1_principal', 'fin_mort1_amort':'mortgage1_amortization_yrs',
+  'fin_mort1_rate':'mortgage1_interest_rate_pct',
+  'fin_mort1_assumable':'mortgage1_assumable', 'fin_mort1_yrsrem':'mortgage1_years_remaining',
+  'fin_mort2_bal':'mortgage2_principal', 'fin_mort2_amort':'mortgage2_amortization_yrs',
+  'fin_mort2_rate':'mortgage2_interest_rate_pct',
+  'fin_mort2_assumable':'mortgage2_assumable', 'fin_mort2_yrsrem':'mortgage2_years_remaining',
+};
+
+// Itemized expense lines use dynamic IDs like fin_a_<key>_mo. Map the
+// short code to the FIELD_SPEC column.
+const _NA_EXPENSE_KEY_TO_COL = {
+  taxes:'property_tax_monthly', insurance:'insurance_monthly',
+  electric:'electric_monthly', gas:'gas_monthly',
+  water:'water_sewer_monthly', sewer:'water_sewer_monthly', trash:'trash_monthly',
+  janitorial:'janitorial_monthly', landscaping:'landscaping_monthly',
+  repairs:'maintenance_repair_monthly', maintenance:'maintenance_repair_monthly',
+  maintsalary:'maintenance_salary_monthly', pool:'pool_monthly',
+  supplies:'supplies_monthly', misc:'misc_expenses_monthly',
+  pmFee:'property_mgmt_fee_monthly', mgmt:'property_mgmt_fee_monthly',
+  capRes:'capital_reserve_monthly', admin:'admin_expenses_monthly',
+  accounting:'accounting_monthly', legal:'legal_monthly',
+  liability:'liability_insurance_monthly',
+};
+
+function _naColForElement(el){
+  if(el.dataset && el.dataset.naCol) return el.dataset.naCol;
+  if(el.id && _NA_INPUT_MAP[el.id]) return _NA_INPUT_MAP[el.id];
+  if(el.name && _NA_INPUT_MAP['name:'+el.name]) return _NA_INPUT_MAP['name:'+el.name];
+  // Dynamic expense-line pattern: fin_(a|p)_<key>_(mo|yr)
+  const m = el.id && el.id.match(/^fin_[ap]_([a-zA-Z]+)_(?:mo|yr)$/);
+  if(m && _NA_EXPENSE_KEY_TO_COL[m[1]]) return _NA_EXPENSE_KEY_TO_COL[m[1]];
+  return null;
+}
+
+function _naList(d){
+  const v = (d || currentDeal || {})['NA Fields'];
+  if(Array.isArray(v)) return v;
+  if(typeof v === 'string'){ try { const a = JSON.parse(v); return Array.isArray(a) ? a : []; } catch(_) { return []; } }
+  return [];
+}
+
+function _naIs(col, d){ return _naList(d).includes(col); }
+
+async function _naWrite(propertyId, nextArray){
+  try {
+    await _sbPatch(SB_TABLES.properties, propertyId, { na_fields: nextArray });
+    if(currentDeal && currentDeal.id === propertyId) currentDeal['NA Fields'] = nextArray.slice();
+    if(typeof allDeals !== 'undefined' && Array.isArray(allDeals)){
+      const idx = allDeals.findIndex(x => x.id === propertyId);
+      if(idx >= 0) allDeals[idx]['NA Fields'] = nextArray.slice();
+    }
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('✓ Saved');
+    return true;
+  } catch(e){
+    alert('Save failed: ' + e.message);
+    return false;
+  }
+}
+
+window._naMark = async function(col){
+  if(!currentDeal || !col) return;
+  const list = _naList(currentDeal);
+  if(list.includes(col)) return;
+  const next = list.concat([col]);
+  const ok = await _naWrite(currentDeal.id, next);
+  if(ok) renderDealPage();
+};
+
+window._naClear = async function(col){
+  if(!currentDeal || !col) return;
+  const list = _naList(currentDeal);
+  if(!list.includes(col)) return;
+  const next = list.filter(c => c !== col);
+  const ok = await _naWrite(currentDeal.id, next);
+  if(ok) renderDealPage();
+};
+
+// Decorate every recognized input inside `root` (defaults to mainArea):
+//   • already-NA   → swap input out for badge with ↺ revert
+//   • empty/filled → wrap in .na-host so the hover "✕ N/A" link lives
+//                     beside the input
+// Recognition: `data-na-col` attribute OR known id/name in _NA_INPUT_MAP
+// OR matches the fin_(a|p)_<key>_(mo|yr) pattern.
+function _naDecorate(root){
+  root = root || document.getElementById('mainArea');
+  if(!root) return;
+  const naSet = new Set(_naList(currentDeal));
+  // Walk every input/select/textarea once; figure out the column from the map.
+  const candidates = root.querySelectorAll('input, select, textarea');
+  candidates.forEach(el => {
+    if(el.hasAttribute('data-na-decorated')) return;
+    // Skip radio-group members other than the first occurrence so we wrap
+    // each group only once (decorate the whole label/group block).
+    if(el.type === 'radio' || el.type === 'checkbox') return; // handled separately below
+    const col = _naColForElement(el);
+    if(!col) return;
+    el.setAttribute('data-na-decorated','1');
+
+    if(naSet.has(col)){
+      const badge = document.createElement('span');
+      badge.className = 'na-badge';
+      badge.setAttribute('data-na-host-for', col);
+      badge.innerHTML = `N/A <span class="na-revert-btn" title="Restore field" onclick="_naClear('${col.replace(/'/g,"\\'")}')">↺</span>`;
+      el.replaceWith(badge);
+      return;
+    }
+
+    if(!(el.parentElement && el.parentElement.classList.contains('na-host'))){
+      const host = document.createElement('span');
+      host.className = 'na-host';
+      host.style.width = '100%';
+      el.parentNode.insertBefore(host, el);
+      host.appendChild(el);
+    }
+    if(el.tagName === 'INPUT' && !el.placeholder){ el.placeholder = '—'; }
+    if(el.tagName === 'SELECT'){
+      const sync = () => el.setAttribute('data-empty', (el.value === '' || el.value == null) ? 'true' : 'false');
+      sync();
+      el.addEventListener('change', sync);
+    }
+    if(!el.parentElement.querySelector(':scope > .na-mark-btn')){
+      const btn = document.createElement('a');
+      btn.className = 'na-mark-btn';
+      btn.textContent = '✕ N/A';
+      btn.title = 'Mark this field as Not Applicable';
+      btn.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); _naMark(col); };
+      el.parentElement.appendChild(btn);
+    }
+  });
+
+  // Radio groups: decorate the wrapper of each named group once.
+  const seenRadioNames = new Set();
+  root.querySelectorAll('input[type=radio][name]').forEach(r => {
+    if(seenRadioNames.has(r.name)) return;
+    seenRadioNames.add(r.name);
+    const col = _NA_INPUT_MAP['name:'+r.name];
+    if(!col) return;
+    // Find the closest enclosing layout cell (.pd-radio-row or its parent).
+    const wrap = r.closest('.pd-radio-row') || r.closest('.pd-field') || r.parentElement;
+    if(!wrap || wrap.hasAttribute('data-na-decorated')) return;
+    wrap.setAttribute('data-na-decorated','1');
+    if(naSet.has(col)){
+      const badge = document.createElement('span');
+      badge.className = 'na-badge';
+      badge.innerHTML = `N/A <span class="na-revert-btn" title="Restore field" onclick="_naClear('${col.replace(/'/g,"\\'")}')">↺</span>`;
+      // Hide the radios visually but keep them in DOM (so save handlers don't break).
+      [...wrap.querySelectorAll('label, input')].forEach(n => { n.style.display = 'none'; });
+      wrap.appendChild(badge);
+      return;
+    }
+    const btn = document.createElement('a');
+    btn.className = 'na-mark-btn';
+    btn.style.display = 'inline'; // always-visible on radios since CSS placeholder rules don't apply
+    btn.style.marginLeft = '8px';
+    btn.style.fontSize = '9px';
+    btn.style.color = '#cbd5e1';
+    btn.textContent = '✕ N/A';
+    btn.title = 'Mark this field as Not Applicable';
+    btn.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); _naMark(col); };
+    btn.addEventListener('mouseover', () => btn.style.color = '#b45309');
+    btn.addEventListener('mouseout', () => btn.style.color = '#cbd5e1');
+    wrap.appendChild(btn);
+  });
+}
+
 function renderDealPage(){
   const d=currentDeal;
   const stage=getStage(d);
@@ -5657,6 +5915,9 @@ function renderDealPage(){
   _mfRentUnits = _mfRd.units||[];
   // Trigger initial GRI total calculation if on MF deal
   setTimeout(()=>{ if(document.getElementById('umr_grandTotal')) mfRentCalcTotal(); }, 50);
+  // v113.62: decorate any [data-na-col] inputs with the inline N/A affordance.
+  // Runs after innerHTML so it can wrap the input nodes.
+  if(typeof _naDecorate === 'function') _naDecorate();
 }
 
 function estCommission(d){
@@ -21401,14 +21662,13 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
-// v113.61: AI auto-fill ALL property details + financial analysis fields
-// using the ai-parse-deal-v2 edge function (v9). Modal now lists every
-// FIELD_SPEC entry grouped by category. Each row is one of four states:
-//   1. AI proposes a value → checkbox "Apply value"
-//   2. AI proposes N/A     → orange row, checkbox "Mark N/A"
-//   3. Already N/A         → purple row, locked
-//   4. No info             → dim, uncheckable
-// Apply walks all checked rows and merges accepted N/A into na_fields. Reads property_description,
+// v113.62: AI auto-fill ALL property details + financial analysis fields
+// using the ai-parse-deal-v2 edge function (v9). Modal lists every
+// FIELD_SPEC entry grouped by category, with four row states (value /
+// AI proposes N/A / already N/A / no info). Apply merges accepted N/A
+// into ace_properties.na_fields. Inline N/A affordance (Phase 2) lives
+// in the deal card itself — empty fields show "✕ N/A" on hover, N/A
+// fields render as a purple badge with a ↺ revert. Reads property_description,
 // deal_notes, general_property_notes, ai_clarifying_notes, plus all
 // related text fields. Always runs dry-run first so the user can review
 // before committing.

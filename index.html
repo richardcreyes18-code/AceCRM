@@ -10430,40 +10430,8 @@ function renderFinancialTab(d){
          has been entered. The stamp still renders over the Results Summary table,
          where the missing data is actually relevant. -->
 
-    <!-- v113.76: Custom NOI Override — for deals where the seller only
-         gave a top-line NOI without an itemized expense breakdown. When
-         the toggle is on, the displayed NOI uses the entered numbers
-         instead of computing EGI − expenses. The "Derive Expenses" button
-         is a one-shot helper that puts (Gross − NOI) into the Maintenance
-         & Repair Costs line so the math reconciles even without a real
-         breakdown. -->
-    <div class="info-box" style="background:#fef3c7;border:1px solid #fde68a;margin-bottom:12px;">
-      <div class="info-box-title" style="display:flex;justify-content:space-between;align-items:center;color:#92400e;">
-        <span>📐 Custom NOI Override</span>
-        <label style="font-size:11px;font-weight:500;display:flex;align-items:center;gap:5px;cursor:pointer;color:#78350f;">
-          <input type="checkbox" id="fin_noiOverride" ${d['NOI Override Active']?'checked':''} onchange="markDirty()"/>
-          Use Custom NOI (skip expense breakdown)
-        </label>
-      </div>
-      <div style="font-size:11px;color:#78350f;margin-bottom:8px;line-height:1.5;">
-        When the seller only gave a top-line NOI without an itemized expense breakdown, enter it here and check "Use Custom NOI" — the displayed NOI uses your number instead of EGI − Expenses. If the seller also gave you Gross Rent, click <strong>Derive Expenses → M&amp;R</strong> to put (Gross − NOI) into the Maintenance &amp; Repair Costs line so the totals balance.
-      </div>
-      <div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;">
-        <label style="font-size:12px;display:flex;align-items:center;gap:6px;color:#78350f;">
-          <strong>Actual NOI:</strong>
-          <span style="color:#666;">$</span>
-          <input id="fin_aNOICustom" type="text" inputmode="numeric" class="form-input num-input" value="${_fmtNum(d['NOI Actual Yr']||'')}" placeholder="—" oninput="markDirty()" style="width:130px;text-align:right;"/>
-          <span style="font-size:11px;color:#666;">/yr</span>
-        </label>
-        <label style="font-size:12px;display:flex;align-items:center;gap:6px;color:#78350f;">
-          <strong>Proforma NOI:</strong>
-          <span style="color:#666;">$</span>
-          <input id="fin_pNOICustom" type="text" inputmode="numeric" class="form-input num-input" value="${_fmtNum(d['NOI Proforma Yr']||'')}" placeholder="—" oninput="markDirty()" style="width:130px;text-align:right;"/>
-          <span style="font-size:11px;color:#666;">/yr</span>
-        </label>
-        <button onclick="_finDeriveExpensesFromNOI()" style="background:#1a3a6e;color:#fff;border:none;padding:5px 12px;font-size:11px;font-weight:700;border-radius:5px;cursor:pointer;">📐 Derive Expenses → M&amp;R</button>
-      </div>
-    </div>
+    <!-- v113.77: Custom NOI Override panel moved DOWN to just above Cash
+         Flow (per user) — see further down. -->
 
     <!-- PURCHASE PRICE & DOWN PAYMENT ───────────────────────── -->
     <div class="info-box">
@@ -11312,6 +11280,41 @@ function renderFinancialTab(d){
           </div>
         </div>`;
       })()}
+
+      <!-- v113.77: Custom NOI Override (moved here per user — sits just
+           above Cash Flow). For deals where the seller only gave a
+           top-line NOI without an itemized expense breakdown. When the
+           toggle is on, the displayed NOI uses the entered numbers
+           instead of computing EGI − expenses. The "Derive Expenses"
+           button is a one-shot helper that puts (Gross − NOI) into the
+           Maintenance & Repair Costs line so the math reconciles. -->
+      <div class="info-box" style="background:#fef3c7;border:1px solid #fde68a;margin-top:12px;">
+        <div class="info-box-title" style="display:flex;justify-content:space-between;align-items:center;color:#92400e;">
+          <span>📐 Custom NOI Override</span>
+          <label style="font-size:11px;font-weight:500;display:flex;align-items:center;gap:5px;cursor:pointer;color:#78350f;">
+            <input type="checkbox" id="fin_noiOverride" ${d['NOI Override Active']?'checked':''} onchange="markDirty()"/>
+            Use Custom NOI (skip expense breakdown)
+          </label>
+        </div>
+        <div style="font-size:11px;color:#78350f;margin-bottom:8px;line-height:1.5;">
+          When the seller only gave a top-line NOI without an itemized expense breakdown, enter it here and check "Use Custom NOI" — the displayed NOI uses your number instead of EGI − Expenses. If the seller also gave you Gross Rent, click <strong>Derive Expenses → M&amp;R</strong> to put (Gross − NOI) into the Maintenance &amp; Repair Costs line so the totals balance.
+        </div>
+        <div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;">
+          <label style="font-size:12px;display:flex;align-items:center;gap:6px;color:#78350f;">
+            <strong>Actual NOI:</strong>
+            <span style="color:#666;">$</span>
+            <input id="fin_aNOICustom" type="text" inputmode="numeric" class="form-input num-input" value="${_fmtNum(d['NOI Actual Yr']||'')}" placeholder="—" oninput="markDirty()" style="width:130px;text-align:right;"/>
+            <span style="font-size:11px;color:#666;">/yr</span>
+          </label>
+          <label style="font-size:12px;display:flex;align-items:center;gap:6px;color:#78350f;">
+            <strong>Proforma NOI:</strong>
+            <span style="color:#666;">$</span>
+            <input id="fin_pNOICustom" type="text" inputmode="numeric" class="form-input num-input" value="${_fmtNum(d['NOI Proforma Yr']||'')}" placeholder="—" oninput="markDirty()" style="width:130px;text-align:right;"/>
+            <span style="font-size:11px;color:#666;">/yr</span>
+          </label>
+          <button onclick="_finDeriveExpensesFromNOI()" style="background:#1a3a6e;color:#fff;border:none;padding:5px 12px;font-size:11px;font-weight:700;border-radius:5px;cursor:pointer;">📐 Derive Expenses → M&amp;R</button>
+        </div>
+      </div>
 
       <!-- CASH FLOW ─────────────────────────────────────────── -->
       ${(()=>{
@@ -21958,7 +21961,7 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
-// v113.76: AI auto-fill ALL property details + financial analysis fields
+// v113.77: AI auto-fill ALL property details + financial analysis fields
 // using the ai-parse-deal-v2 edge function (v9). Modal lists every
 // FIELD_SPEC entry grouped by category, with four row states (value /
 // AI proposes N/A / already N/A / no info). Apply merges accepted N/A

@@ -20895,6 +20895,26 @@ function _ddDealKey(d){
   return '';
 }
 
+// v115: portfolio rows ("Hot MF 20U Portfolio - 338 Harvard Ave… | 414 Clements
+// Bridge Rd…") cover two addresses joined by "|". The single-key scan only
+// indexes off the *last* suffix match, so a portfolio row's Harvard segment
+// never groups with a standalone "338 Harvard Ave" row. _ddDealKeys returns
+// EVERY plausible normalized key for a deal — Address + each pipe-separated
+// segment of Name/Property Name — so the scanners can fan the row into each
+// matching group. Empty keys filtered, dedup'd.
+function _ddDealKeys(d){
+  const out = new Set();
+  const tryAdd = s => { const k = _ddNormalizeDealAddr(s); if(k) out.add(k); };
+  tryAdd(d['Address'] || '');
+  for(const fld of ['Name','Property Name']){
+    const v = d[fld] || '';
+    if(!v) continue;
+    tryAdd(v);
+    if(v.includes('|')) v.split('|').forEach(seg => tryAdd(seg.trim()));
+  }
+  return [...out];
+}
+
 // Snapshot of allDeals deduped by id. The in-memory cache can hold the same
 // id multiple times after server-side merges or tab-sync events (the bulk
 // Path A run, for example, soft-deleted rows that the local cache still
@@ -20919,12 +20939,17 @@ function _ddUniqueDeals(){
 
 function _ddScanDealDuplicates(){
   const groups = {};
+  const seenInGroup = {}; // key -> Set<dealId>, prevents the same deal landing twice in one group
   _ddUniqueDeals().forEach(d => {
     if(d['Is Archived']) return;
-    const key = _ddDealKey(d);
-    if(!key) return;
-    if(!groups[key]) groups[key] = [];
-    groups[key].push(d);
+    const keys = _ddDealKeys(d);
+    if(!keys.length) return;
+    for(const key of keys){
+      if(!groups[key]){ groups[key] = []; seenInGroup[key] = new Set(); }
+      if(seenInGroup[key].has(d.id)) continue;
+      seenInGroup[key].add(d.id);
+      groups[key].push(d);
+    }
   });
   return Object.entries(groups)
     .filter(([, arr]) => arr.length >= 2)
@@ -20942,12 +20967,17 @@ function _ddScanDealDuplicates(){
 // style it as a review section (no auto-merge button at the section level).
 function _ddScanFuzzyDuplicates(){
   const byKey = new Map();
+  const seenInKey = new Map(); // k -> Set<dealId>
   _ddUniqueDeals().forEach(d => {
     if(d['Is Archived']) return;
-    const k = _ddDealKey(d);
-    if(!k) return;
-    if(!byKey.has(k)) byKey.set(k, { deals: [], rep: d['Address']||'' });
-    byKey.get(k).deals.push(d);
+    const keys = _ddDealKeys(d);
+    if(!keys.length) return;
+    for(const k of keys){
+      if(!byKey.has(k)){ byKey.set(k, { deals: [], rep: d['Address']||'' }); seenInKey.set(k, new Set()); }
+      if(seenInKey.get(k).has(d.id)) continue;
+      seenInKey.get(k).add(d.id);
+      byKey.get(k).deals.push(d);
+    }
   });
   const items = [];
   for(const [k, v] of byKey){
@@ -21968,6 +21998,8 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v115: dedupe scanner now keys off every pipe-separated address segment
+// of a deal name (portfolio listings cover 2+ properties on one row).
 // v114: AI auto-fill ALL property details + financial analysis fields
 // using the ai-parse-deal-v2 edge function (v9). Modal lists every
 // FIELD_SPEC entry grouped by category, with four row states (value /

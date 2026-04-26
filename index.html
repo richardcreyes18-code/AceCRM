@@ -6204,12 +6204,16 @@ function collectAllDealFields(){
     if(v === undefined) return;
     fields[f] = (v === '' || v === null) ? null : v;
   };
+  // pick(): for multi-source fields, return the first arg that isn't
+  // undefined. UNLIKE `??`, this DOES return null (it's a meaningful
+  // "user cleared" signal that should propagate to s()).
+  const pick = (...vals) => { for(const v of vals) if(v !== undefined) return v; };
 
   const fields = {};
 
   // ── DEAL HEADER ──────────────────────────────────────────────
-  const ask = getNum('fin_askPrice') ?? getNum('bi_asking');
-  const off = getNum('fin_offerPrice') ?? getNum('bi_offer');
+  const ask = pick(getNum('fin_askPrice'), getNum('bi_asking'));
+  const off = pick(getNum('fin_offerPrice'), getNum('bi_offer'));
   s(fields,'Asking Price', ask);
   s(fields,'Offer Price',  off);
   // v102.23: REMOVED dead writes for 'Top Priority' and 'Discuss in Meeting'.
@@ -6217,7 +6221,7 @@ function collectAllDealFields(){
   // longer exist in the DOM, so getChk() was returning false on every save
   // and silently overwriting the real values set by toggleStar() and the
   // meeting toggle. Priority is now saved exclusively via toggleStar().
-  const stage = getVal('bi_stage') ?? getVal('dealStageSelect');
+  const stage = pick(getVal('bi_stage'), getVal('dealStageSelect'));
   s(fields,'Pipeline Stage', stage);
   s(fields,'NOI', getNum('bi_noi'));
 
@@ -6255,13 +6259,13 @@ function collectAllDealFields(){
   if(sellerTypes.length) fields['Seller Type'] = sellerTypes;
 
   // Construction - updated to use prop_ prefixed IDs from Property Information section
-  s(fields,'Year Built',            getNum('prop_yearBuilt')   ?? getNum('yearBuilt'));
-  s(fields,'Year Renovated',        getNum('prop_yearRenov')   ?? getNum('yearRenovated'));
-  s(fields,'Total Building SF',     getNum('prop_totalBuildingSF') ?? getNum('fin_aTotalSF'));
-  s(fields,'Net Rentable SF',       getNum('prop_netRentableSF')   ?? getNum('fin_aNetRentSF'));
+  s(fields,'Year Built',            pick(getNum('prop_yearBuilt'),   getNum('yearBuilt')));
+  s(fields,'Year Renovated',        pick(getNum('prop_yearRenov'),   getNum('yearRenovated')));
+  s(fields,'Total Building SF',     pick(getNum('prop_totalBuildingSF'), getNum('fin_aTotalSF')));
+  s(fields,'Net Rentable SF',       pick(getNum('prop_netRentableSF'),   getNum('fin_aNetRentSF')));
   s(fields,'No. of Buildings',      getNum('prop_numBuildings'));
   s(fields,'No. of Stories',        getNum('noStories'));
-  s(fields,'No. of Parking Spaces', getNum('prop_parkingSpaces') ?? getNum('parkingSpaces'));
+  s(fields,'No. of Parking Spaces', pick(getNum('prop_parkingSpaces'), getNum('parkingSpaces')));
   const parkRatio = getVal('prop_parkingRatio'); if(parkRatio) fields['Parking Ratio'] = parkRatio;
   // v102.8: Total Lot Size was previously wired with oninput="markDirty()"
   // but never collected here — values typed silently vanished. Now collected.
@@ -6274,8 +6278,8 @@ function collectAllDealFields(){
   s(fields,'Exterior',    getVal('exteriorType'));
   s(fields,'Piping',      getVal('pipingType'));
   s(fields,'Wiring',      getVal('wiringType'));
-  s(fields,'HVAC',        getVal('prop_hvac') ?? getVal('hvacType'));
-  s(fields,'Paving',      getVal('prop_parkingType') ?? getVal('pavingType'));
+  s(fields,'HVAC',        pick(getVal('prop_hvac'),        getVal('hvacType')));
+  s(fields,'Paving',      pick(getVal('prop_parkingType'), getVal('pavingType')));
   s(fields,'Parking Type',getVal('prop_parkingType'));
 
   // Property info text
@@ -21740,7 +21744,7 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
-// v113.65: AI auto-fill ALL property details + financial analysis fields
+// v113.66: AI auto-fill ALL property details + financial analysis fields
 // using the ai-parse-deal-v2 edge function (v9). Modal lists every
 // FIELD_SPEC entry grouped by category, with four row states (value /
 // AI proposes N/A / already N/A / no info). Apply merges accepted N/A

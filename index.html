@@ -6529,6 +6529,14 @@ function switchTab(name, btn){
   restorePendingEdits();
   _rendering = false;
 
+  // v113.63: decorate inputs in the freshly-rendered tab with the inline
+  // N/A affordance. switchTab does its own innerHTML so the renderDealPage
+  // hook doesn't fire here.
+  if(typeof _naDecorate === 'function'){
+    const tcEl = document.getElementById('tabContent');
+    if(tcEl) _naDecorate(tcEl);
+  }
+
   // v70: auto-size any textareas in the freshly-rendered tab content so
   // their full content shows without manual drag-resize. Double-rAF to wait
   // for layout to settle (textareas need to be visible to return a real scrollHeight).
@@ -6612,6 +6620,7 @@ async function _summaryToggleMode(section){
     else if(currentTab === 'financial') tabContentEl.innerHTML = renderFinancialTab(currentDeal);
     else                                tabContentEl.innerHTML = renderSummaryTab(currentDeal);
     _rendering = false;
+    if(typeof _naDecorate === 'function') _naDecorate(tabContentEl);
   }
 
   // Persist to Supabase (fire-and-forget — revert on failure)
@@ -6627,6 +6636,7 @@ async function _summaryToggleMode(section){
         else if(currentTab === 'financial') tabContentEl.innerHTML = renderFinancialTab(currentDeal);
         else                                tabContentEl.innerHTML = renderSummaryTab(currentDeal);
         _rendering = false;
+        if(typeof _naDecorate === 'function') _naDecorate(tabContentEl);
       }
       alert('Failed to save view mode: ' + e.message);
     }

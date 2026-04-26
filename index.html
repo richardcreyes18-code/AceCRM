@@ -13074,6 +13074,112 @@ const DB_MULTI_LABELS = {
 // buttons match the LOC-001 aesthetic. Outer button is now a light-bg pill
 // matching the LOC-001 field inputs, and the dropdown menu has softer
 // borders and Inter typography.
+// v113.55: render a min/max range input pair for the advanced filter panel.
+// label is shown as the field title; prefix is "$" for currency, suffix is
+// "%" / " SF" / " ac" / "" for unit hints. Inputs trigger renderDealBoard
+// on change so filters apply live.
+function _dbAdvRange(key, label, prefix, suffix){
+  const hint = (prefix ? prefix : '') + (suffix ? suffix : '');
+  return `
+    <div>
+      <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">
+        ${label}${hint ? ` <span style="color:#94a3b8;font-weight:400;">(${hint.trim()})</span>` : ''}
+      </label>
+      <div style="display:flex;gap:4px;align-items:center;">
+        <input id="db_${key}_min" type="number" placeholder="min" min="0" step="any"
+          oninput="_dbAdvOnChange()"
+          style="flex:1;width:0;padding:6px 8px;font-size:12px;border:1px solid #cbd5e1;border-radius:5px;outline:none;" />
+        <span style="color:#94a3b8;font-size:11px;">–</span>
+        <input id="db_${key}_max" type="number" placeholder="max" min="0" step="any"
+          oninput="_dbAdvOnChange()"
+          style="flex:1;width:0;padding:6px 8px;font-size:12px;border:1px solid #cbd5e1;border-radius:5px;outline:none;" />
+      </div>
+    </div>`;
+}
+
+// Toggle the advanced filter panel open/closed.
+function _dbToggleAdvFilters(){
+  const panel = document.getElementById('db_advPanel');
+  const btn   = document.getElementById('db_advToggle');
+  if(!panel || !btn) return;
+  const open = panel.style.display === 'none' || !panel.style.display;
+  panel.style.display = open ? 'block' : 'none';
+  btn.innerHTML = (open ? '▴' : '▾') + ' More Filters <span id="db_advCount" style="margin-left:4px;font-size:10px;color:#94a3b8;">' + (_dbAdvActiveCount() || '') + '</span>';
+}
+
+// Read all numeric advanced filters into a dictionary.
+//   { price: {min, max}, noi: {min,max}, caprate: ..., ... }
+// Empty inputs become null. Cap rate is entered as a percent (6.5) and
+// converted to decimal (0.065) for comparison since the column stores
+// fractions.
+function _dbReadAdvFilters(){
+  const num = id => {
+    const v = document.getElementById(id)?.value;
+    return v === '' || v == null ? null : Number(v);
+  };
+  return {
+    price:    { min: num('db_price_min'),    max: num('db_price_max') },
+    noi:      { min: num('db_noi_min'),      max: num('db_noi_max') },
+    caprate:  { min: num('db_caprate_min'),  max: num('db_caprate_max') },
+    sqft:     { min: num('db_sqft_min'),     max: num('db_sqft_max') },
+    units:    { min: num('db_units_min'),    max: num('db_units_max') },
+    lotsize:  { min: num('db_lotsize_min'),  max: num('db_lotsize_max') },
+    yearbuilt:{ min: num('db_yearbuilt_min'),max: num('db_yearbuilt_max') },
+    occupancy:{ min: num('db_occupancy_min'),max: num('db_occupancy_max') },
+  };
+}
+
+// Returns true if the deal passes every active range. Missing fields fail
+// when a min is set (we want "show me deals with cap rate ≥ 6%" to exclude
+// deals that have no cap rate, since they aren't qualified). Missing fields
+// pass when only a max is set (no value isn't necessarily "above max").
+function _dbDealMatchesAdv(d, adv){
+  const inRange = (val, range, missingPolicy) => {
+    if(range.min == null && range.max == null) return true;
+    if(val == null || val === '' || (typeof val === 'number' && isNaN(val))){
+      // Missing value: pass only if no min is set
+      return missingPolicy === 'pass' ? true : (range.min == null);
+    }
+    const v = Number(val);
+    if(range.min != null && v < range.min) return false;
+    if(range.max != null && v > range.max) return false;
+    return true;
+  };
+  if(!inRange(d['Asking Price'], adv.price, 'fail')) return false;
+  if(!inRange(d['NOI'],          adv.noi,   'fail')) return false;
+  // Cap rate column is decimal (0.065 = 6.5%); user enters percent.
+  if(adv.caprate.min != null || adv.caprate.max != null){
+    const stored = Number(d['Cap Rate (CRM)'] || d['Cap Rate Proforma (CRM)']);
+    const pct = stored ? stored * 100 : null;
+    if(!inRange(pct, adv.caprate, 'fail')) return false;
+  }
+  const sqft = Number(d['Square Footage'] || d['Total Building SF']);
+  if(!inRange(sqft, adv.sqft, 'fail')) return false;
+  const units = Number(d['Number of Units'] || d['No. of Units'] || d['No of Units']);
+  if(!inRange(units, adv.units, 'fail')) return false;
+  if(!inRange(Number(d['Total Lot Size']), adv.lotsize, 'fail')) return false;
+  if(!inRange(Number(d['Year Built']), adv.yearbuilt, 'fail')) return false;
+  if(!inRange(Number(d['Occupancy (%)']), adv.occupancy, 'fail')) return false;
+  return true;
+}
+
+function _dbAdvActiveCount(){
+  const adv = _dbReadAdvFilters();
+  let n = 0;
+  for(const k of Object.keys(adv)){
+    if(adv[k].min != null) n++;
+    if(adv[k].max != null) n++;
+  }
+  return n ? `(${n} active)` : '';
+}
+
+function _dbAdvOnChange(){
+  const lbl = document.getElementById('db_advCount');
+  if(lbl) lbl.textContent = _dbAdvActiveCount();
+  if(typeof renderDealBoard === 'function') renderDealBoard();
+  if(typeof dbRefreshMapPins === 'function') dbRefreshMapPins();
+}
+
 function _dbMultiBtn(kind, allLabel, values, withSearch){
   const cbClass   = `db_${kind}_cb`;
   const rowClass  = `db_${kind}_row`;
@@ -13215,6 +13321,13 @@ function dbClearAllFilters(){
     const s = document.getElementById(`db_${kind}_search`);
     if(s){ s.value = ''; _dbMultiFilterSearch(kind, ''); }
   });
+  // v113.55: also clear advanced numeric filters
+  ['price','noi','caprate','sqft','units','lotsize','yearbuilt','occupancy'].forEach(k => {
+    const lo = document.getElementById('db_'+k+'_min'); if(lo) lo.value = '';
+    const hi = document.getElementById('db_'+k+'_max'); if(hi) hi.value = '';
+  });
+  const advCount = document.getElementById('db_advCount');
+  if(advCount) advCount.textContent = '';
   renderDealBoard();
   dbRefreshMapPins();
 }
@@ -18480,11 +18593,30 @@ function showDealBoard(){
             <input type="checkbox" id="db_priority" onchange="renderDealBoard();dbRefreshMapPins()"/>
             &#9733; Priority Only
           </label>
+          <button onclick="_dbToggleAdvFilters()" id="db_advToggle"
+            style="background:#fff;color:#334155;border:1px solid #cbd5e1;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;"
+            title="Open advanced numeric filters (price, sqft, units, cap rate, year built, …)">
+            ▾ More Filters <span id="db_advCount" style="margin-left:4px;font-size:10px;color:#94a3b8;"></span>
+          </button>
           <div style="flex:1;"></div>
           ${_dbColsMenuHTML()}
           <button onclick="dbClearAllFilters()" class="db-fbar-clear">
             &#10005; Clear Filters
           </button>
+        </div>
+
+        <!-- v113.55: ADVANCED FILTERS PANEL — numeric ranges. Collapsed by default. -->
+        <div id="db_advPanel" style="display:none;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-top:6px;">
+          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px 16px;font-size:11px;color:#334155;">
+            ${_dbAdvRange('price',     'Asking Price', '$', '')}
+            ${_dbAdvRange('noi',       'NOI (yearly)', '$', '')}
+            ${_dbAdvRange('caprate',   'Cap Rate %',   '',  '%')}
+            ${_dbAdvRange('sqft',      'Square Footage','', ' SF')}
+            ${_dbAdvRange('units',     '# Units (MF)', '',  '')}
+            ${_dbAdvRange('lotsize',   'Lot Size',     '',  ' ac')}
+            ${_dbAdvRange('yearbuilt', 'Year Built',   '',  '')}
+            ${_dbAdvRange('occupancy', 'Occupancy %',  '',  '%')}
+          </div>
         </div>
 
         <!-- v111.3: Shape-filter banner (shown when user has drawn a shape on the map) -->
@@ -19818,6 +19950,7 @@ function renderDealBoard(){
 
   const search   = (document.getElementById('db_search')?.value||'').toLowerCase();
   const priority = document.getElementById('db_priority')?.checked||false;
+  const _adv     = _dbReadAdvFilters();   // v113.55
 
   // Multi-select reads: null means "no filter" (all checked or no boxes rendered)
   const selStages   = _dbMultiGetSelected('stage');
@@ -19858,7 +19991,9 @@ function renderDealBoard(){
     const matchPrio    = !priority || d['Top Priority'];
     // v111.3: drawn-shape filter shared with map view — keeps list in sync
     const matchShape   = !_dbDrawnShape || _dealInsideShape(d);
-    return matchSearch && matchStage && matchState && matchCounty && matchCity && matchType && matchSource && matchRegion && matchPrio && matchShape;
+    // v113.55: advanced numeric range filters (price, sqft, units, cap rate, …)
+    const matchAdv     = _dbDealMatchesAdv(d, _adv);
+    return matchSearch && matchStage && matchState && matchCounty && matchCity && matchType && matchSource && matchRegion && matchPrio && matchShape && matchAdv;
   });
 
   // Sort — sortKey functions live on DB_COLUMNS so adding a new column

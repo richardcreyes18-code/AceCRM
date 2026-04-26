@@ -1928,6 +1928,7 @@ const SB_PROP_MAP = {
   fub_assigned_to:'Assigned Agent',
   ai_clarifying_notes:'AI Clarifying Notes',
   ai_parsed_at:'AI Parsed At',
+  ai_autofill_log:'AI Autofill Log',
   na_fields:'NA Fields',
   // v113.70: Industrial-specific columns
   num_tenants:'Num Tenants', office_sf:'Office SF', warehouse_sf:'Warehouse SF',
@@ -22088,6 +22089,23 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v128: AI Auto-Fill — email templates as context + editable suggestions
+//   + Notes log of every run.
+//   * Edge fn v19 fetches up to 20 saved email templates linked to the
+//     property and appends each as its own context block. Source breakdown
+//     returns each under a synthetic email_template_<id> key so the right
+//     pane in the modal shows them under "✉ Email Template — <name>".
+//     Templates often carry SF / tenant counts / lease type / asset class
+//     descriptors that don't appear in deal_notes.
+//   * AI Proposed cells are now editable inline. Booleans render as a Yes/No
+//     select; everything else is a text input pre-filled with the AI's
+//     proposal. The apply path reads document.getElementById('aiVal_<col>')
+//     and tracks user_override per cell.
+//   * Every apply now appends a snapshot to ace_properties.ai_autofill_log
+//     (new JSONB column). The Notes tab gains a new "✦ AI Auto-Fill Notes"
+//     section that renders each run as a collapsible card with the columns
+//     Field / Before / AI Suggestion / Applied / Explanation / Status.
+//     Newest run opens by default; older runs collapse.
 // v127: Email Templates — lazy-fetch missing properties + manual link UI.
 //   * The Linked-vs-Unlinked badge was driven by a lookup against allDeals,
 //     which is filtered in personal-pipeline mode. Templates whose
@@ -22599,12 +22617,25 @@ window._aiAutoFillDeal = async function(propertyId, opts){
         proposedCellHtml = `<span style="color:#7c3aed;font-style:italic;font-weight:600;">N/A (saved)</span>`;
       } else if(hasProp){
         cbHtml = `<input type="checkbox" id="aiAccept_${f.col}" data-kind="value" checked />`;
-        // tenant_mix_data: show tenant count in the proposed cell, then expand into subfield rows below.
+        // v128: tenant_mix_data + mf_unit_rent_data are too complex to edit
+        // inline — keep as a read-only summary. Everything else gets an
+        // editable input so the user can override the AI's proposal before
+        // applying. Booleans render as a select; everything else is a text
+        // input. Apply path reads document.getElementById('aiVal_<col>').
         if(f.col === 'tenant_mix_data'){
           const tenants = _aiParseTenantArr(f.proposed);
-          proposedCellHtml = `<span style="color:#0f172a;font-weight:600;">${tenants.length} tenant${tenants.length===1?'':'s'}</span> <span style="color:#94a3b8;font-size:10px;">— see breakdown below</span>`;
+          proposedCellHtml = `<span style="color:#0f172a;font-weight:600;">${tenants.length} tenant${tenants.length===1?'':'s'}</span> <span style="color:#94a3b8;font-size:10px;">— see breakdown below (not editable)</span>`;
+        } else if(f.col === 'mf_unit_rent_data'){
+          proposedCellHtml = `<span style="color:#0f172a;font-weight:600;">unit-mix JSON</span> <span style="color:#94a3b8;font-size:10px;">— not editable inline</span>`;
+        } else if(typeof f.proposed === 'boolean'){
+          proposedCellHtml = `<select id="aiVal_${f.col}" data-edit-type="boolean" style="width:100%;font-size:11px;padding:3px 5px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;color:#0f172a;font-weight:600;">
+            <option value="true" ${f.proposed===true?'selected':''}>✓ Yes</option>
+            <option value="false" ${f.proposed===false?'selected':''}>✗ No</option>
+          </select>`;
         } else {
-          proposedCellHtml = `<span style="color:#0f172a;font-weight:600;">${fmtVal(f.proposed)}</span>`;
+          const editVal = (f.proposed === null || f.proposed === undefined) ? '' :
+            (typeof f.proposed === 'number' ? String(f.proposed) : String(f.proposed));
+          proposedCellHtml = `<input id="aiVal_${f.col}" data-edit-type="${f.proposed === null ? 'text' : (typeof f.proposed)}" type="text" value="${_ddEsc(editVal)}" style="width:100%;font-size:11px;padding:3px 5px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;color:#0f172a;font-weight:600;font-family:inherit;box-sizing:border-box;" placeholder="—"/>`;
         }
       } else if(naProp){
         rowStyle = 'background:#fffbeb;';
@@ -22673,7 +22704,19 @@ window._aiAutoFillDeal = async function(propertyId, opts){
     pitch_out_note: 'Pitch Out Note',
     ace_chat_summary: 'Ace Chat Summary',
   };
-  const sourceKeysWithText = Object.keys(SOURCE_LABELS).filter(k => sourceBreakdown[k] && String(sourceBreakdown[k]).trim());
+  // v128: email_template_<id> keys come back from edge fn v19+. Show them
+  // under a generic "Email Template — <name>" label (the body itself is
+  // prefixed with "[<name>]\n" by the server).
+  const _sourceLabel = (k) => {
+    if(SOURCE_LABELS[k]) return SOURCE_LABELS[k];
+    if(k.startsWith('email_template_')){
+      const body = String(sourceBreakdown[k] || '');
+      const m = body.match(/^\[([^\]]+)\]/);
+      return '✉ Email Template' + (m ? ' — ' + m[1] : '');
+    }
+    return k;
+  };
+  const sourceKeysWithText = Object.keys(sourceBreakdown).filter(k => sourceBreakdown[k] && String(sourceBreakdown[k]).trim());
   const sourceTotalChars = sourceKeysWithText.reduce((n, k) => n + String(sourceBreakdown[k] || '').length, 0);
   const sourcesHtml = sourceKeysWithText.length
     ? sourceKeysWithText.map((k, i) => {
@@ -22681,7 +22724,7 @@ window._aiAutoFillDeal = async function(propertyId, opts){
         const open = i < 2 ? 'open' : '';
         return `<details ${open} style="border-bottom:1px solid #e2e8f0;">
           <summary style="padding:8px 12px;cursor:pointer;font-size:11px;font-weight:600;color:#0f172a;background:#f8fafc;display:flex;align-items:center;justify-content:space-between;gap:8px;">
-            <span>${_ddEsc(SOURCE_LABELS[k])}</span>
+            <span>${_ddEsc(_sourceLabel(k))}</span>
             <span style="color:#94a3b8;font-size:10px;font-weight:500;">${txt.length.toLocaleString()} chars</span>
           </summary>
           <pre style="margin:0;padding:10px 14px;font-size:11px;line-height:1.55;color:#334155;background:#fff;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Menlo,Monaco,monospace;max-height:none;">${_ddEsc(txt)}</pre>
@@ -22743,6 +22786,9 @@ window._aiAutoFillDeal = async function(propertyId, opts){
   modal._naProposals = naProposals;
   modal._currentNa = currentNa;
   modal._uncertain = uncertain;
+  // v128: snapshot the full all_fields response so the apply step can dump
+  // the entire diff to ai_autofill_log even for fields the user untoggled.
+  modal._allFields = all;
 };
 
 window._aiAutoFillApply = async function(propertyId, btn){
@@ -22753,15 +22799,42 @@ window._aiAutoFillApply = async function(propertyId, btn){
   const currentNa = modal._currentNa || [];
   const uncertain = modal._uncertain || [];
 
-  // Walk every checkbox in the modal — apply by data-kind.
+  // Walk every checkbox in the modal — apply by data-kind. v128: when a
+  // value-row has an editable input (aiVal_<col>), prefer the user-typed
+  // value over the original AI proposal so users can override before apply.
   const valuePatch = {};
+  const userOverrides = {}; // col -> true when user changed the AI value
   const acceptedNa = [];
   for(const cb of modal.querySelectorAll('input[type=checkbox][data-kind]')){
     if(!cb.checked) continue;
     const col = (cb.id || '').replace(/^aiAccept_/, '');
     if(!col) continue;
     if(cb.dataset.kind === 'value' && proposed[col]){
-      valuePatch[col] = proposed[col].proposed;
+      let v = proposed[col].proposed;
+      const editEl = document.getElementById('aiVal_' + col);
+      if(editEl){
+        const editType = editEl.dataset.editType || 'text';
+        const raw = String(editEl.value ?? '').trim();
+        let parsed;
+        if(editType === 'boolean'){
+          parsed = raw === 'true';
+        } else if(editType === 'number'){
+          if(raw === '') parsed = null;
+          else {
+            const n = Number(raw.replace(/[^\d.\-]/g, ''));
+            parsed = isFinite(n) ? n : null;
+          }
+        } else {
+          parsed = raw === '' ? null : raw;
+        }
+        if(parsed !== v && !(parsed == null && v == null)){
+          userOverrides[col] = true;
+          v = parsed;
+        }
+      }
+      // Skip rows where user cleared the input AND the original was also empty.
+      if(v === null || v === undefined || v === '') continue;
+      valuePatch[col] = v;
     } else if(cb.dataset.kind === 'na'){
       acceptedNa.push(col);
     }
@@ -22801,6 +22874,49 @@ window._aiAutoFillApply = async function(propertyId, btn){
     valuePatch.noi_override_active = true;
     patch.noi_override_active = true;
   }
+
+  // v128: snapshot the entire diff into ai_autofill_log BEFORE the patch so
+  // the user has an audit trail of every AI run — including fields they
+  // unchecked and any user overrides. We append to the existing log array
+  // (or seed a new one if the column was null).
+  try {
+    const allFields = modal._allFields || [];
+    const appliedSet = new Set(Object.keys(valuePatch));
+    const naSet = new Set(acceptedNa);
+    const changes = [];
+    for(const f of allFields){
+      const isProp  = f.proposed !== null && f.proposed !== undefined;
+      const isNaProp = !!f.na_proposed;
+      if(!isProp && !isNaProp) continue;
+      const applied = appliedSet.has(f.col);
+      const appliedNa = naSet.has(f.col);
+      if(!applied && !appliedNa) {
+        // Skipped — still log so the audit shows what AI saw.
+      }
+      changes.push({
+        col: f.col,
+        label: f.col.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+        before: f.current ?? null,
+        proposed: f.proposed ?? null,
+        applied: applied ? (valuePatch[f.col] ?? null) : null,
+        applied_na: appliedNa,
+        skipped: !applied && !appliedNa,
+        explanation: f.explanation || null,
+        user_override: !!userOverrides[f.col],
+      });
+    }
+    const logEntry = {
+      at: new Date().toISOString(),
+      applied_count: Object.keys(valuePatch).length,
+      na_count: acceptedNa.length,
+      changes,
+    };
+    const cur = await _sbGet(SB_TABLES.properties, `id=eq.${propertyId}&select=ai_autofill_log&limit=1`);
+    const existing = (Array.isArray(cur) && cur[0]?.ai_autofill_log) || [];
+    const arr = Array.isArray(existing) ? existing : [];
+    arr.push(logEntry);
+    patch.ai_autofill_log = arr;
+  } catch(e){ console.warn('[ai-autofill] log build failed:', e.message); }
 
   try {
     await _sbPatch(SB_TABLES.properties, propertyId, patch);
@@ -47529,6 +47645,77 @@ function renderNotesTab(d){
   const dealNotesSection = _renderBlobCards('Deal Notes',             d['Deal Notes'],             '#1a3a6e');
   const genNotesSection  = _renderBlobCards('General Property Notes', d['General Property Notes'], '#1a3a6e');
 
+  // v128: AI Auto Fill Notes — JSONB array on ace_properties.ai_autofill_log
+  // populated by every AI Auto-Fill apply. Each entry is one full snapshot
+  // of the diff. Render newest-first as a card with a column-aligned table.
+  const _renderAiAutofillLog = (raw) => {
+    let entries = [];
+    if(Array.isArray(raw)) entries = raw;
+    else if(typeof raw === 'string'){
+      try { const a = JSON.parse(raw); if(Array.isArray(a)) entries = a; } catch(_){}
+    }
+    if(!entries.length) return '';
+    const fmtCell = (v) => {
+      if(v === null || v === undefined || v === '') return '<span style="color:#cbd5e1;">—</span>';
+      if(typeof v === 'boolean') return v ? '✓ Yes' : '✗ No';
+      if(typeof v === 'number') return Number.isInteger(v) ? v.toLocaleString() : String(v);
+      const s = String(v);
+      return s.length > 70 ? s.slice(0, 70).replace(/[<&]/g, c => c==='<'?'&lt;':'&amp;') + '…' : s.replace(/[<&]/g, c => c==='<'?'&lt;':'&amp;');
+    };
+    const rendered = entries.slice().reverse().map(e => {
+      const at = e.at ? new Date(e.at) : null;
+      const dateStr = at ? at.toLocaleString(undefined,{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'}) : '—';
+      const changes = Array.isArray(e.changes) ? e.changes : [];
+      const rows = changes.map(c => {
+        const stateBadge = c.skipped
+          ? '<span style="font-size:9px;color:#94a3b8;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:99px;padding:1px 6px;">skipped</span>'
+          : (c.applied_na
+            ? '<span style="font-size:9px;color:#7c3aed;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:99px;padding:1px 6px;">N/A</span>'
+            : (c.user_override
+              ? '<span style="font-size:9px;color:#1d4ed8;background:#dbeafe;border:1px solid #93c5fd;border-radius:99px;padding:1px 6px;">user-edited</span>'
+              : '<span style="font-size:9px;color:#15803d;background:#dcfce7;border:1px solid #86efac;border-radius:99px;padding:1px 6px;">applied</span>'));
+        return `<tr style="border-top:1px solid #f1f5f9;">
+          <td style="padding:6px 8px;font-size:11px;color:#0f172a;font-weight:500;vertical-align:top;">${(c.label||c.col||'').replace(/[<&]/g,x=>x==='<'?'&lt;':'&amp;')}<br><span style="font-size:9px;color:#94a3b8;font-family:ui-monospace,Menlo,monospace;">${(c.col||'').replace(/[<&]/g,x=>x==='<'?'&lt;':'&amp;')}</span></td>
+          <td style="padding:6px 8px;font-size:11px;color:#475569;vertical-align:top;max-width:140px;word-break:break-word;">${fmtCell(c.before)}</td>
+          <td style="padding:6px 8px;font-size:11px;color:#0f172a;font-weight:600;vertical-align:top;max-width:160px;word-break:break-word;">${fmtCell(c.proposed)}</td>
+          <td style="padding:6px 8px;font-size:11px;color:#1d4ed8;font-weight:600;vertical-align:top;max-width:160px;word-break:break-word;">${c.applied!=null?fmtCell(c.applied):'<span style="color:#cbd5e1;">—</span>'}</td>
+          <td style="padding:6px 8px;font-size:10px;color:#475569;font-style:italic;vertical-align:top;line-height:1.5;max-width:240px;word-break:break-word;">${c.explanation?String(c.explanation).replace(/[<&]/g,x=>x==='<'?'&lt;':'&amp;'):'<span style="color:#cbd5e1;font-style:normal;">—</span>'}</td>
+          <td style="padding:6px 8px;text-align:center;vertical-align:top;">${stateBadge}</td>
+        </tr>`;
+      }).join('');
+      return `<details ${entries.indexOf(e) === entries.length - 1 ? 'open' : ''} style="background:#fff;border:1px solid #c4b5fd;border-left:3px solid #7c3aed;border-radius:6px;padding:0;margin-bottom:8px;overflow:hidden;">
+        <summary style="padding:10px 14px;cursor:pointer;font-size:12px;color:#5b21b6;font-weight:700;display:flex;align-items:center;justify-content:space-between;background:#f5f3ff;">
+          <span>✦ ${dateStr}</span>
+          <span style="font-size:10px;color:#7c3aed;font-weight:500;">${e.applied_count||0} applied${e.na_count?` · ${e.na_count} N/A`:''} · ${changes.length} field${changes.length===1?'':'s'}</span>
+        </summary>
+        <div style="overflow-x:auto;">
+          <table style="width:100%;border-collapse:collapse;font-size:11px;min-width:900px;">
+            <thead>
+              <tr style="background:#fafbfc;font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;">
+                <th style="padding:7px 8px;text-align:left;border-bottom:1px solid #e2e8f0;">Field</th>
+                <th style="padding:7px 8px;text-align:left;border-bottom:1px solid #e2e8f0;">Before</th>
+                <th style="padding:7px 8px;text-align:left;border-bottom:1px solid #e2e8f0;">AI Suggestion</th>
+                <th style="padding:7px 8px;text-align:left;border-bottom:1px solid #e2e8f0;">Applied</th>
+                <th style="padding:7px 8px;text-align:left;border-bottom:1px solid #e2e8f0;">Explanation</th>
+                <th style="padding:7px 8px;text-align:center;border-bottom:1px solid #e2e8f0;width:90px;">Status</th>
+              </tr>
+            </thead>
+            <tbody>${rows || `<tr><td colspan="6" style="padding:12px;text-align:center;color:#94a3b8;font-size:11px;">No changes recorded for this run.</td></tr>`}</tbody>
+          </table>
+        </div>
+      </details>`;
+    }).join('');
+    return `
+      <div style="margin-bottom:12px;">
+        <div style="font-size:11px;font-weight:700;color:#7c3aed;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">
+          ✦ AI Auto-Fill Notes
+          <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">· ${entries.length} run${entries.length===1?'':'s'}</span>
+        </div>
+        ${rendered}
+      </div>`;
+  };
+  const aiAutofillSection = _renderAiAutofillLog(d['AI Autofill Log']);
+
   // v113.73: Property Description / Location / AI Clarifying — relocated
   // from Property Details. Same input ids so existing autosave plumbing
   // keeps writing to property_description / location_description /
@@ -47560,7 +47747,7 @@ function renderNotesTab(d){
       </details>
     </div>`;
 
-  const leftPane = (descSection + nsSection + dealNotesSection + genNotesSection) ||
+  const leftPane = (descSection + nsSection + dealNotesSection + genNotesSection + aiAutofillSection) ||
     '<div style="color:#888;font-size:11px;padding:10px 0;">No notes recorded for this deal.</div>';
 
   return `

@@ -22088,6 +22088,20 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v127: Email Templates — lazy-fetch missing properties + manual link UI.
+//   * The Linked-vs-Unlinked badge was driven by a lookup against allDeals,
+//     which is filtered in personal-pipeline mode. Templates whose
+//     property_id pointed at a deal owned by another agent were rendering
+//     as "Unlinked / no deal" even though the DB row was correctly linked.
+//     Fix: _emailTplsLoadMissingProps fetches any property_ids referenced
+//     by the user's templates that aren't already in allDeals and stashes
+//     them in window._emailTplsExtraProps. Renderer merges allDeals +
+//     extraProps when building propById. Fires before the first paint.
+//   * Added a "🔗 Link to property…" affordance on every Unlinked row that
+//     opens a property picker (search by address/agent), then PATCHes
+//     property_id and auto-sets is_official=true when no other official
+//     template exists for that property. Bulk-promoted existing matches
+//     server-side via SQL (135 templates set as official one-time).
 // v126: Email Templates fixes.
 //   * Search input no longer loses focus on every keystroke. Captures
 //     focus + caret position in _emailTplsLibPaint before the
@@ -31392,11 +31406,175 @@ async function _emailTplsTabRender(){
     return;
   }
   _emailTplsLibState.rows = Array.isArray(rows) ? rows : [];
+  // v127: pull any properties referenced by the templates that aren't already
+  // in allDeals (personal pipeline filter excludes deals owned by other
+  // agents — without this, those templates render as "Unlinked"). Fire this
+  // before the first paint so the badges are correct.
+  if(typeof _emailTplsLoadMissingProps === 'function'){
+    try { await _emailTplsLoadMissingProps(); } catch(_){}
+  }
   // Reset to folder list when (re-)rendering.
   _emailTplsLibState.activeFolder = null;
   _emailTplsLibState.search = '';
   _emailTplsLibPaint();
 }
+
+// v127: lazy-fetched property cache for email templates. allDeals is filtered
+// in personal pipeline mode, so a template with property_id pointing at a
+// deal owned by another agent disappears from the lookup. We fetch any
+// missing property_ids from ace_properties on-demand and cache them here so
+// the Linked badge + Open Deal button render correctly.
+window._emailTplsExtraProps = window._emailTplsExtraProps || new Map();
+async function _emailTplsLoadMissingProps(){
+  const rows = (typeof _emailTplsLibState !== 'undefined' && _emailTplsLibState?.rows) || [];
+  const inAllDeals = new Set((allDeals||[]).map(d => d?.id).filter(Boolean));
+  const need = [];
+  for(const r of rows){
+    if(!r.property_id) continue;
+    if(inAllDeals.has(r.property_id)) continue;
+    if(window._emailTplsExtraProps.has(r.property_id)) continue;
+    need.push(r.property_id);
+  }
+  if(!need.length) return false;
+  try {
+    const ids = need.map(s => `"${s}"`).join(',');
+    const fresh = await _sbGet(SB_TABLES.properties,
+      `id=in.(${ids})&select=id,address,fub_assigned_to,owner_contact_id&deleted_at=is.null&limit=${need.length}`);
+    if(!Array.isArray(fresh)) return false;
+    for(const p of fresh){
+      // Match the Airtable-style shape the renderer expects.
+      window._emailTplsExtraProps.set(p.id, {
+        id: p.id,
+        'Address': p.address,
+        'Assigned Agent': p.fub_assigned_to || '',
+        'Owner': p.owner_contact_id ? [p.owner_contact_id] : [],
+      });
+    }
+    return true;
+  } catch(e){
+    console.warn('[email-tpls] missing-prop fetch failed:', e.message);
+    return false;
+  }
+}
+
+// v127: link an unlinked template to a property the user picks. Shows a
+// modal with a search input, lists matching properties from allDeals (and
+// the lazy cache), and on selection PATCHes the template + auto-sets
+// is_official=true when no other official template exists for that property.
+window._emailTplsLinkPicker = function(tplId){
+  const tpl = (_emailTplsLibState.rows || []).find(r => r.id === tplId);
+  if(!tpl){ alert('Template not found.'); return; }
+
+  // Build candidate property list (allDeals union with lazy cache).
+  const seen = new Set();
+  const candidates = [];
+  const seedHint = (tpl.subject || tpl.name || '').toLowerCase();
+  for(const d of (allDeals||[])){
+    if(!d?.id || seen.has(d.id)) continue;
+    seen.add(d.id);
+    candidates.push({ id: d.id, address: d['Address'] || '', agent: d['Assigned Agent'] || '' });
+  }
+  for(const [id, d] of window._emailTplsExtraProps.entries()){
+    if(seen.has(id)) continue;
+    seen.add(id);
+    candidates.push({ id, address: d['Address'] || '', agent: d['Assigned Agent'] || '' });
+  }
+
+  const modal = document.createElement('div');
+  modal.id = 'emailTplsLinkModal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:99998;display:flex;align-items:center;justify-content:center;padding:20px;';
+  modal.onclick = (e) => { if(e.target === modal) modal.remove(); };
+
+  const renderList = (q) => {
+    const ql = String(q||'').trim().toLowerCase();
+    const list = ql
+      ? candidates.filter(c => c.address.toLowerCase().includes(ql) || c.agent.toLowerCase().includes(ql))
+      : candidates.slice(0, 50);
+    if(!list.length) return '<div style="padding:20px;text-align:center;font-size:12px;color:#94a3b8;">No properties match.</div>';
+    return list.slice(0, 200).map(c => `
+      <div onclick="_emailTplsConfirmLink('${tplId}','${c.id}')" style="padding:9px 12px;border-bottom:1px solid #f1f5f9;cursor:pointer;font-size:12px;color:#0f172a;" onmouseenter="this.style.background='#f1f5f9'" onmouseleave="this.style.background=''">
+        <div style="font-weight:600;">${_ddEsc(c.address || '(no address)')}</div>
+        ${c.agent?`<div style="font-size:10px;color:#64748b;margin-top:2px;">🤵 ${_ddEsc(c.agent)}</div>`:''}
+      </div>`).join('');
+  };
+
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;width:560px;max-width:94vw;max-height:80vh;display:flex;flex-direction:column;overflow:hidden;box-shadow:0 25px 60px rgba(0,0,0,0.25);">
+      <div style="padding:16px 20px;border-bottom:1px solid #e2e8f0;background:#f8fafc;">
+        <div style="font-size:13px;font-weight:700;color:#0f172a;">Link template to a property</div>
+        <div style="font-size:11px;color:#64748b;margin-top:3px;">${_ddEsc((tpl.name || '').slice(0, 120))}${(tpl.name||'').length>120?'…':''}</div>
+        <div style="font-size:10px;color:#94a3b8;margin-top:4px;">Once linked, this template is auto-set as the property's official template if none exists yet.</div>
+      </div>
+      <div style="padding:12px 20px;border-bottom:1px solid #e2e8f0;">
+        <input id="emailTplsLinkSearch" type="text" autofocus
+          oninput="_emailTplsLinkSearchInput(this.value)"
+          placeholder="Search by address, city, or agent…${seedHint?'  (seeded from template name)':''}"
+          value="${_ddEsc((tpl.subject || tpl.name || '').replace(/[%].*?[%]/g, '').replace(/\(FUB IMPORT[^)]*\)/g, '').slice(0, 80).trim())}"
+          style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;outline:none;box-sizing:border-box;"/>
+      </div>
+      <div id="emailTplsLinkList" style="overflow-y:auto;flex:1;">${renderList(document.getElementById('emailTplsLinkSearch')?.value || '')}</div>
+      <div style="padding:10px 20px;border-top:1px solid #e2e8f0;display:flex;justify-content:flex-end;gap:8px;background:#f8fafc;">
+        <button onclick="this.closest('#emailTplsLinkModal').remove()" style="background:#fff;color:#475569;border:1px solid #cbd5e1;padding:7px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">Cancel</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  // Re-render the list with whatever the seeded search is showing
+  setTimeout(()=>{
+    const inp = document.getElementById('emailTplsLinkSearch');
+    if(inp){
+      const list = document.getElementById('emailTplsLinkList');
+      if(list) list.innerHTML = renderList(inp.value);
+      inp.focus();
+      try { inp.setSelectionRange(0, inp.value.length); } catch(_){}
+    }
+  }, 30);
+  // Stash the helper closures so the inline handlers can reach them.
+  modal._renderList = renderList;
+  modal._candidates = candidates;
+};
+
+window._emailTplsLinkSearchInput = function(q){
+  const modal = document.getElementById('emailTplsLinkModal');
+  const list  = document.getElementById('emailTplsLinkList');
+  if(!modal || !list || typeof modal._renderList !== 'function') return;
+  list.innerHTML = modal._renderList(q);
+};
+
+window._emailTplsConfirmLink = async function(tplId, propertyId){
+  const modal = document.getElementById('emailTplsLinkModal');
+  if(modal) modal.remove();
+  try {
+    // Check whether this property already has an official template.
+    const existing = await _sbGet('ace_user_email_templates',
+      `user_email=eq.${encodeURIComponent(_currentUser?.email||'')}&property_id=eq.${propertyId}&is_official=eq.true&select=id&limit=1`);
+    const shouldBeOfficial = !(Array.isArray(existing) && existing.length > 0);
+    const patch = { property_id: propertyId };
+    if(shouldBeOfficial) patch.is_official = true;
+    await _sbPatch('ace_user_email_templates', tplId, patch);
+    // Update in-memory state + repaint.
+    const r = (_emailTplsLibState.rows || []).find(x => x.id === tplId);
+    if(r){
+      r.property_id = propertyId;
+      if(shouldBeOfficial) r.is_official = true;
+    }
+    // Make sure the property is in our lookup cache.
+    if(typeof _emailTplsLoadMissingProps === 'function') await _emailTplsLoadMissingProps();
+    if(typeof _emailTplsLibPaint === 'function') _emailTplsLibPaint();
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('✓ Linked' + (shouldBeOfficial ? ' + made official' : ''));
+  } catch(e){
+    alert('Link failed: ' + e.message);
+  }
+};
+
+// v127: open a deal by id, pulling from allDeals or extraProps cache so we
+// don't break in personal pipeline mode (where the property may not be in
+// allDeals).
+window._emailTplsOpenDealById = function(propertyId){
+  const d = (allDeals||[]).find(x => x.id === propertyId);
+  if(d){ if(typeof openDeal === 'function') openDeal(d); return; }
+  // Fallback: trigger a load + open.
+  alert('This deal is outside your current view scope (personal pipeline filter). Switch to the full company pipeline to open it.');
+};
 
 // Pull the FUB source-folder embedded in template name:
 //   "(FUB IMPORT — Hot Deal Email Temp) Subject…"  ->  "Hot Deal Email Temp"
@@ -31529,6 +31707,13 @@ function _emailTplsLibPaintTemplates(folder){
 
   const propById = new Map();
   for(const d of (allDeals||[])) if(d?.id) propById.set(d.id, d);
+  // v127: lazy-fetched properties for templates whose property_id is real but
+  // outside the user's allDeals view (e.g. personal pipeline filter excludes
+  // deals assigned to other agents). Without this, DB-linked templates render
+  // as "Unlinked" / "no deal" even though property_id is set.
+  if(typeof window._emailTplsExtraProps !== 'undefined' && window._emailTplsExtraProps){
+    for(const [id, d] of window._emailTplsExtraProps.entries()) propById.set(id, d);
+  }
   const contactById = new Map();
   for(const c of (allContacts||[])) if(c?.id) contactById.set(c.id, c);
 
@@ -31607,8 +31792,8 @@ function _emailTplsLibPaintTemplates(folder){
           <div style="margin-top:3px;color:#64748b;font-size:10px;line-height:1.4;">${_ddEsc(bodyPreview)}${(r.body||'').length>120?'…':''}</div>
         </td>
         <td style="padding:9px 10px;vertical-align:top;text-align:right;white-space:nowrap;">
-          ${prop ? `<button onclick="event.stopPropagation(); openDeal(allDeals.find(d=>d.id==='${prop.id}'))" style="background:#1a3a6e;color:#fff;border:none;border-radius:5px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;">Open Deal →</button>`
-                 : `<span style="font-size:10px;color:#94a3b8;">no deal</span>`}
+          ${prop ? `<button onclick="event.stopPropagation(); _emailTplsOpenDealById('${prop.id}')" style="background:#1a3a6e;color:#fff;border:none;border-radius:5px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;">Open Deal →</button>`
+                 : `<button onclick="event.stopPropagation(); _emailTplsLinkPicker('${r.id}')" style="background:#fff;color:#1d4ed8;border:1px solid #93c5fd;border-radius:5px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;">🔗 Link to property…</button>`}
         </td>
       </tr>`;
   }).join('');

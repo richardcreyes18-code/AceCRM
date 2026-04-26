@@ -28931,7 +28931,9 @@ function _settingsSwitchTab(name){
 // tags. Templates with property_id=null show as "Unlinked".
 // ═══════════════════════════════════════════════════════════════════
 
-let _emailTplsLibState = { rows: [], search: '', filter: 'all' };
+// v113.48: folder-browser UX — folders list first, click into one to
+// see its templates. Mirrors the FUB email-template browser.
+let _emailTplsLibState = { rows: [], search: '', activeFolder: null };
 
 async function _emailTplsTabRender(){
   const root = document.getElementById('emailTplsTabRoot');
@@ -28951,47 +28953,142 @@ async function _emailTplsTabRender(){
     return;
   }
   _emailTplsLibState.rows = Array.isArray(rows) ? rows : [];
+  // Reset to folder list when (re-)rendering.
+  _emailTplsLibState.activeFolder = null;
+  _emailTplsLibState.search = '';
   _emailTplsLibPaint();
+}
+
+// Pull the FUB source-folder embedded in template name:
+//   "(FUB IMPORT — Hot Deal Email Temp) Subject…"  ->  "Hot Deal Email Temp"
+//   "(FUB IMPORT) Subject…"                          ->  "FUB Import (no folder)"
+//   "Custom user template name"                      ->  null (= user-created)
+function _emailTplsExtractFolder(name){
+  const m = String(name||'').match(/^\(FUB IMPORT(?:\s+—\s+([^)]+))?\)/);
+  if(!m) return null;
+  return m[1] ? m[1].trim() : 'FUB Import (no folder)';
 }
 
 function _emailTplsLibPaint(){
   const root = document.getElementById('emailTplsTabRoot');
   if(!root) return;
-  const rows = _emailTplsLibState.rows || [];
-  const filter = _emailTplsLibState.filter || 'all';
-  const q = (_emailTplsLibState.search || '').trim().toLowerCase();
+  if(_emailTplsLibState.activeFolder == null){
+    _emailTplsLibPaintFolders();
+  } else {
+    _emailTplsLibPaintTemplates(_emailTplsLibState.activeFolder);
+  }
+}
 
-  // Build property + owner lookups.
+function _emailTplsLibPaintFolders(){
+  const root = document.getElementById('emailTplsTabRoot');
+  const rows = _emailTplsLibState.rows || [];
+
+  // FUB-folder bucket counts
+  const folderCounts = new Map();
+  let userCreatedCount = 0;
+  for(const r of rows){
+    const f = _emailTplsExtractFolder(r.name);
+    if(f){
+      folderCounts.set(f, (folderCounts.get(f) || 0) + 1);
+    } else {
+      userCreatedCount++;
+    }
+  }
+
+  const total    = rows.length;
+  const linked   = rows.filter(r => !!r.property_id).length;
+  const unlinked = total - linked;
+  const fubTotal = rows.filter(r => /^\(FUB IMPORT/.test(r.name||'')).length;
+
+  // Sort FUB folders by count desc, then name asc.
+  const fubFolders = [...folderCounts.entries()].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+
+  const safeQ = _ddEsc(_emailTplsLibState.search || '');
+  const q = (_emailTplsLibState.search || '').trim().toLowerCase();
+  const visibleFolders = q
+    ? fubFolders.filter(([name]) => name.toLowerCase().includes(q))
+    : fubFolders;
+
+  const specialRow = (icon, name, count, target) => `
+    <tr style="border-top:1px solid #e2e8f0;cursor:pointer;"
+      onclick="_emailTplsLibState.activeFolder=${JSON.stringify(target)}; _emailTplsLibPaint();"
+      onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background=''">
+      <td style="padding:11px 14px;font-size:13px;color:#0f172a;">${icon} ${_ddEsc(name)}</td>
+      <td style="padding:11px 14px;font-size:12px;color:#475569;text-align:right;">${count.toLocaleString()}</td>
+      <td style="padding:11px 14px;text-align:right;width:60px;color:#94a3b8;font-size:12px;">›</td>
+    </tr>`;
+
+  const fubRow = (name, count) => `
+    <tr style="border-top:1px solid #e2e8f0;cursor:pointer;"
+      onclick="_emailTplsLibState.activeFolder=${JSON.stringify('fub:'+name)}; _emailTplsLibPaint();"
+      onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background=''">
+      <td style="padding:11px 14px;font-size:13px;color:#0f172a;">📁 ${_ddEsc(name)}</td>
+      <td style="padding:11px 14px;font-size:12px;color:#475569;text-align:right;">${count.toLocaleString()}</td>
+      <td style="padding:11px 14px;text-align:right;color:#94a3b8;font-size:12px;">›</td>
+    </tr>`;
+
+  root.innerHTML = `
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+      <div style="font-size:13px;color:#64748b;">
+        ${total.toLocaleString()} email template${total===1?'':'s'} across ${(fubFolders.length + (userCreatedCount?1:0)).toLocaleString()} folder${(fubFolders.length+(userCreatedCount?1:0))===1?'':'s'}.
+      </div>
+      <input type="text" value="${safeQ}"
+        oninput="_emailTplsLibState.search=this.value; _emailTplsLibPaint();"
+        placeholder="Search folders…"
+        style="width:220px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;outline:none;" />
+    </div>
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
+      <table style="width:100%;border-collapse:collapse;">
+        <thead>
+          <tr style="background:#f8fafc;font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;">
+            <th style="padding:8px 14px;text-align:left;font-weight:600;">Name</th>
+            <th style="padding:8px 14px;text-align:right;font-weight:600;width:140px;">Email Templates</th>
+            <th style="padding:8px 14px;text-align:right;font-weight:600;width:60px;"></th>
+          </tr>
+        </thead>
+        <tbody>
+          ${specialRow('📂', 'All Email Templates', total,    'all')}
+          ${specialRow('🏢', 'Linked to a Property', linked,  'linked')}
+          ${specialRow('🔗', 'Unlinked',             unlinked,'unlinked')}
+          ${userCreatedCount ? specialRow('✏️', 'User-Created (non-FUB)', userCreatedCount, 'usercreated') : ''}
+          ${visibleFolders.map(([name, count]) => fubRow(name, count)).join('')}
+          ${visibleFolders.length === 0 && q ? `<tr><td colspan="3" style="padding:18px;text-align:center;font-size:12px;color:#64748b;">No folders match "${safeQ}"</td></tr>` : ''}
+        </tbody>
+      </table>
+    </div>`;
+}
+
+function _emailTplsLibPaintTemplates(folder){
+  const root = document.getElementById('emailTplsTabRoot');
+  const allRows = _emailTplsLibState.rows || [];
+
+  // Resolve which rows belong to the active folder.
+  let rows;
+  let folderLabel;
+  if(folder === 'all')              { rows = allRows.slice();                   folderLabel = 'All Email Templates'; }
+  else if(folder === 'linked')      { rows = allRows.filter(r => !!r.property_id); folderLabel = '🏢 Linked to a Property'; }
+  else if(folder === 'unlinked')    { rows = allRows.filter(r => !r.property_id); folderLabel = '🔗 Unlinked'; }
+  else if(folder === 'usercreated') { rows = allRows.filter(r => !_emailTplsExtractFolder(r.name)); folderLabel = '✏️ User-Created (non-FUB)'; }
+  else if(folder.startsWith('fub:')){
+    const f = folder.slice(4);
+    rows = allRows.filter(r => _emailTplsExtractFolder(r.name) === f);
+    folderLabel = `📁 ${f}`;
+  } else { rows = []; folderLabel = folder; }
+
   const propById = new Map();
   for(const d of (allDeals||[])) if(d?.id) propById.set(d.id, d);
   const contactById = new Map();
   for(const c of (allContacts||[])) if(c?.id) contactById.set(c.id, c);
 
-  // Filter
-  let filtered = rows;
-  if(filter === 'linked')   filtered = filtered.filter(r => !!r.property_id);
-  if(filter === 'unlinked') filtered = filtered.filter(r => !r.property_id);
-  if(filter === 'fub')      filtered = filtered.filter(r => /^\(FUB IMPORT/.test(r.name||''));
-  if(q){
-    filtered = filtered.filter(r => {
-      const haystack = [r.name, r.subject, r.body, propById.get(r.property_id)?.['Address']]
-        .filter(Boolean).join(' ').toLowerCase();
-      return haystack.includes(q);
-    });
-  }
-
-  const totalAll      = rows.length;
-  const totalLinked   = rows.filter(r => !!r.property_id).length;
-  const totalUnlinked = rows.length - totalLinked;
-  const totalFub      = rows.filter(r => /^\(FUB IMPORT/.test(r.name||'')).length;
-
-  const filterPill = (id, label, n) => {
-    const active = filter === id;
-    return `<button onclick="_emailTplsLibState.filter='${id}'; _emailTplsLibPaint();"
-      style="padding:5px 11px;border:1px solid ${active?'#2563eb':'#cbd5e1'};background:${active?'#eff6ff':'#fff'};color:${active?'#1e40af':'#475569'};font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;">
-      ${label} <span style="opacity:.7;">${n}</span>
-    </button>`;
-  };
+  // Search within the folder.
+  const q = (_emailTplsLibState.search || '').trim().toLowerCase();
+  const filtered = q
+    ? rows.filter(r => {
+        const haystack = [r.name, r.subject, r.body, propById.get(r.property_id)?.['Address']]
+          .filter(Boolean).join(' ').toLowerCase();
+        return haystack.includes(q);
+      })
+    : rows;
 
   const safeQ = _ddEsc(_emailTplsLibState.search || '');
 
@@ -29022,11 +29119,6 @@ function _emailTplsLibPaint(){
         🔗 Unlinked
       </span>`;
     }
-    if(/^\(FUB IMPORT/.test(r.name||'')){
-      tags += `<span style="display:inline-block;background:#f1f5f9;color:#475569;border:1px solid #e2e8f0;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;margin-right:4px;">
-        📥 FUB
-      </span>`;
-    }
     if(r.is_official){
       tags += `<span style="display:inline-block;background:#fef9c3;color:#854d0e;border:1px solid #fde68a;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;margin-right:4px;">
         ★ Official
@@ -29051,20 +29143,18 @@ function _emailTplsLibPaint(){
   }).join('');
 
   root.innerHTML = `
-    <div style="font-size:13px;color:#64748b;margin-bottom:12px;">
-      Every email template saved to your account. Click 🏢 to open the linked property,
-      👤 to open the owner contact. Use <code>_fubLinkTemplates()</code> in the console
-      to import more from FUB.
-    </div>
-    <div style="display:flex;gap:10px;align-items:center;margin-bottom:12px;flex-wrap:wrap;">
-      <input id="_emailTplsLibSearch" type="text" value="${safeQ}"
+    <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+      <div style="font-size:13px;color:#0f172a;">
+        <a href="javascript:void(0)" onclick="_emailTplsLibState.activeFolder=null; _emailTplsLibState.search=''; _emailTplsLibPaint();"
+          style="color:#2563eb;text-decoration:none;font-weight:500;">← Folders</a>
+        <span style="color:#94a3b8;margin:0 8px;">/</span>
+        <span style="font-weight:600;">${_ddEsc(folderLabel)}</span>
+        <span style="color:#64748b;font-weight:400;font-size:12px;margin-left:8px;">${rows.length.toLocaleString()} template${rows.length===1?'':'s'}</span>
+      </div>
+      <input type="text" value="${safeQ}"
         oninput="_emailTplsLibState.search=this.value; _emailTplsLibPaint();"
-        placeholder="Search by name, subject, address, body…"
-        style="flex:1;min-width:240px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;outline:none;" />
-      ${filterPill('all',      'All',      totalAll)}
-      ${filterPill('linked',   '🏢 Linked', totalLinked)}
-      ${filterPill('unlinked', '🔗 Unlinked', totalUnlinked)}
-      ${filterPill('fub',      '📥 FUB',    totalFub)}
+        placeholder="Search this folder…"
+        style="width:260px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;outline:none;" />
     </div>
     <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
       ${filtered.length === 0
@@ -29081,17 +29171,9 @@ function _emailTplsLibPaint(){
           </table>`}
     </div>
     <div style="margin-top:10px;font-size:11px;color:#64748b;">
-      Showing ${filtered.length.toLocaleString()} of ${totalAll.toLocaleString()} templates
-      ${q ? `· filter: "${_ddEsc(q)}"` : ''}
+      Showing ${filtered.length.toLocaleString()} of ${rows.length.toLocaleString()} in this folder
+      ${q ? `· search: "${_ddEsc(q)}"` : ''}
     </div>`;
-
-  // Restore search input focus
-  requestAnimationFrame(() => {
-    const s = document.getElementById('_emailTplsLibSearch');
-    if(s && document.activeElement !== s && _emailTplsLibState.search){
-      // don't steal focus from elsewhere; only refocus if user was typing
-    }
-  });
 }
 
 // ═══════════════════════════════════════════════════════════════════

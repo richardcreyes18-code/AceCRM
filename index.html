@@ -2090,12 +2090,16 @@ const PROXY_URL = 'https://kxtuegjptvzqycgyzehj.supabase.co/functions/v1/crm-pro
 const SB_AUTH_URL = 'https://kxtuegjptvzqycgyzehj.supabase.co/auth/v1';
 const SB_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt4dHVlZ2pwdHZ6cXljZ3l6ZWhqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2ODg5NzQsImV4cCI6MjA5MTI2NDk3NH0.FctjQCWJfjxqD_07gbmKn9r5rCbNUNtEWNhYIhDo5Dc';
 
-async function _proxyCall(params, body = null) {
+async function _proxyCall(params, body = null, opts = {}) {
   const url = new URL(PROXY_URL);
   Object.entries(params).forEach(([k,v]) => { if(v !== null && v !== undefined) url.searchParams.set(k, String(v)); });
-  const opts = { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json' } };
-  if(body) opts.body = JSON.stringify(body);
-  const res = await fetch(url.toString(), opts);
+  const fetchOpts = { method: body ? 'POST' : 'GET', headers: { 'Content-Type': 'application/json' } };
+  if(body) fetchOpts.body = JSON.stringify(body);
+  // v113.67: keepalive lets unload-time saves (pagehide / window close)
+  // finish even after the page is gone. Browsers cap keepalive bodies to
+  // ~64 KB total per page, which is fine for our PATCH payloads.
+  if(opts.keepalive) fetchOpts.keepalive = true;
+  const res = await fetch(url.toString(), fetchOpts);
   const data = await res.json();
   if(data?.error) throw new Error(data.error);
   return data;
@@ -2117,8 +2121,8 @@ async function _sbGet(table, params = '') {
   return _proxyCall({ table, method: 'GET', ...qp });
 }
 
-async function _sbPatch(table, id, data) {
-  return _proxyCall({ table, method: 'PATCH', id }, data);
+async function _sbPatch(table, id, data, opts = {}) {
+  return _proxyCall({ table, method: 'PATCH', id }, data, opts);
 }
 async function _sbPost(table, data) {
   return _proxyCall({ table, method: 'POST' }, data);
@@ -6073,6 +6077,31 @@ function clearDirty(){
   if(btn)    btn.style.background = 'linear-gradient(180deg,#2a8a2a,#1a6a1a)';
 }
 
+// v113.67: failsafe autosave on page hide / window close.
+// `keepalive: true` on fetch lets the request finish even if the page
+// is being torn down. Snapshot the current tab first so any unsynced
+// DOM values land in pending before collectAllDealFields reads them.
+function _flushOnHide(){
+  if(!_dealDirty || !currentDeal?.id) return;
+  try { snapshotCurrentTab(); } catch(_) {}
+  clearTimeout(_autoSaveTimer);
+  // Best-effort: kick off the save with keepalive so the browser will
+  // let it complete even if the tab is closing. We deliberately don't
+  // await — pagehide can't wait on async work anyway.
+  masterSave({ silent: true, keepalive: true }).catch(() => {});
+}
+if(!window._flushOnHideInstalled){
+  // pagehide is the most reliable lifecycle event — fires on tab close,
+  // page navigation, and bfcache eviction (mobile Safari especially).
+  window.addEventListener('pagehide', _flushOnHide);
+  // visibilitychange catches the user backgrounding the tab on mobile
+  // and on desktop tab switching within the browser.
+  document.addEventListener('visibilitychange', () => {
+    if(document.hidden) _flushOnHide();
+  });
+  window._flushOnHideInstalled = true;
+}
+
 // v102.23: silent auto-flush. Previously this showed a confirm() dialog
 // asking "save before leaving?" — but everything should save automatically,
 // and the prompt was a friction point when switching between deals. Now:
@@ -6127,7 +6156,7 @@ async function masterSave(opts){
 
     if(isSupabase()){
       const sbData = _atToSb(fields, SB_PROP_MAP);
-      await _sbPatch(SB_TABLES.properties, dealId, sbData);
+      await _sbPatch(SB_TABLES.properties, dealId, sbData, { keepalive: !!(opts && opts.keepalive) });
     } else {
       const res = await fetch(
         `https://api.airtable.com/v0/${cfg.base}/${cfg.table}/${dealId}`,
@@ -6560,8 +6589,15 @@ function switchTab(name, btn){
   // 1. Snapshot whatever is currently in the DOM before we wipe it
   snapshotCurrentTab();
 
-  // Cancel any pending auto-save — tab switch is not a user edit
+  // v113.67: cancel the debounce timer and FLUSH immediately if dirty.
+  // Previously we just canceled (assuming the user would type more later
+  // and re-trigger the timer) — but a tab switch IS the moment to persist.
+  // Fire-and-forget so the new tab still renders without waiting on the
+  // network. On failure, pending stays populated for the next retry.
   clearTimeout(_autoSaveTimer);
+  if(_dealDirty && currentDeal?.id){
+    masterSave({ silent: true }).catch(() => { /* pending preserved */ });
+  }
 
   currentTab=name;
   document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
@@ -21744,7 +21780,7 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
-// v113.66: AI auto-fill ALL property details + financial analysis fields
+// v113.67: AI auto-fill ALL property details + financial analysis fields
 // using the ai-parse-deal-v2 edge function (v9). Modal lists every
 // FIELD_SPEC entry grouped by category, with four row states (value /
 // AI proposes N/A / already N/A / no info). Apply merges accepted N/A

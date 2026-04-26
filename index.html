@@ -20894,19 +20894,20 @@ window._fubLinkTemplates = async function(opts){
     `Re-runs are safe — already-imported (property_id, name) pairs are skipped.`
   )) return;
 
-  const cfg = getConfig();
-  const fetchHeaders = { apikey: cfg.key, Authorization: 'Bearer ' + cfg.key };
-
   console.log('[fub-link] fetching FUB templates from', folders);
-  // crm-proxy parses `folder=in.(a,b,c)` by splitting on comma. Don't wrap
-  // each value in quotes — the proxy passes them through to supabase-js's
-  // .in() and the column values aren't quoted in the table. (Our folder
-  // names contain no commas, so plain comma-separated is safe.)
+  // Use _sbGet (proxy / service-role) — direct PostgREST hits with the anon
+  // key get blocked by RLS on ace_email_templates. Folder names have no
+  // commas so plain comma-separated values work in the proxy's `in.()` parser.
   const folderList = folders.join(',');
-  const tplUrl = `${cfg.url}/rest/v1/ace_email_templates?select=id,name,subject,body_plain,body_html,folder,fub_template_id&deleted_at=is.null&folder=in.(${encodeURIComponent(folderList)})&order=folder.asc,name.asc`;
-  const tplRes = await fetch(tplUrl, { headers: fetchHeaders });
-  if(!tplRes.ok){ console.error('[fub-link] failed:', tplRes.status, await tplRes.text()); return; }
-  const templates = await tplRes.json();
+  let templates;
+  try {
+    templates = await _sbGet('ace_email_templates',
+      `select=id,name,subject,body_plain,body_html,folder,fub_template_id&deleted_at=is.null&folder=in.(${encodeURIComponent(folderList)})&order=folder.asc,name.asc`);
+  } catch(e){
+    console.error('[fub-link] failed to fetch templates:', e.message);
+    return;
+  }
+  if(!Array.isArray(templates)) templates = [];
   console.log(`[fub-link] fetched ${templates.length} FUB templates`);
 
   // Build property index — first-occurrence wins per normalized key.
@@ -20918,10 +20919,13 @@ window._fubLinkTemplates = async function(opts){
   }
   console.log(`[fub-link] indexed ${propByKey.size} unique property keys`);
 
-  // Existing rows for idempotency.
-  const existingUrl = `${cfg.url}/rest/v1/ace_user_email_templates?select=property_id,name&user_email=eq.${encodeURIComponent(userEmail)}`;
-  const existingRes = await fetch(existingUrl, { headers: fetchHeaders });
-  const existing = existingRes.ok ? await existingRes.json() : [];
+  // Existing rows for idempotency — also via proxy so service-role applies.
+  let existing = [];
+  try {
+    existing = await _sbGet('ace_user_email_templates',
+      `select=property_id,name&user_email=eq.${encodeURIComponent(userEmail)}`);
+  } catch(_e) { existing = []; }
+  if(!Array.isArray(existing)) existing = [];
   const existingSet = new Set(existing.map(r => `${r.property_id}::${r.name}`));
   console.log(`[fub-link] ${existing.length} existing rows for user ${userEmail}`);
 

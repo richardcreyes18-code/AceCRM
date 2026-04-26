@@ -20898,7 +20898,11 @@ window._fubLinkTemplates = async function(opts){
   const fetchHeaders = { apikey: cfg.key, Authorization: 'Bearer ' + cfg.key };
 
   console.log('[fub-link] fetching FUB templates from', folders);
-  const folderList = folders.map(f => `"${f.replace(/"/g,'')}"`).join(',');
+  // crm-proxy parses `folder=in.(a,b,c)` by splitting on comma. Don't wrap
+  // each value in quotes — the proxy passes them through to supabase-js's
+  // .in() and the column values aren't quoted in the table. (Our folder
+  // names contain no commas, so plain comma-separated is safe.)
+  const folderList = folders.join(',');
   const tplUrl = `${cfg.url}/rest/v1/ace_email_templates?select=id,name,subject,body_plain,body_html,folder,fub_template_id&deleted_at=is.null&folder=in.(${encodeURIComponent(folderList)})&order=folder.asc,name.asc`;
   const tplRes = await fetch(tplUrl, { headers: fetchHeaders });
   if(!tplRes.ok){ console.error('[fub-link] failed:', tplRes.status, await tplRes.text()); return; }

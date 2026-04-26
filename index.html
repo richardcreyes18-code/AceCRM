@@ -22001,6 +22001,15 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v122: AI Auto-Fill apply — also merge raw snake_case columns into
+//   currentDeal/allDeals. _sbToAt only writes Airtable labels, but several
+//   UI readers (notably the Offers tab Pitch Out Price card via
+//   _renderOffersSummary at line 9146 — `d.pitch_out_price`) read the
+//   snake_case key directly. Without merging the raw row, those readers saw
+//   undefined right after apply and showed blank despite a successful PATCH.
+//   Same pattern likely needed elsewhere (Cash Flow NOI computation reads
+//   d['NOI Override Active'] which is fine, but raw fallbacks elsewhere
+//   benefit from having the snake_case copy too).
 // v121: AI Auto-Fill apply polish.
 //   * Auto-flips noi_override_active=true when noi_actual_yr or
 //     noi_proforma_yr is in the apply patch but the override checkbox row
@@ -22699,9 +22708,15 @@ window._aiAutoFillApply = async function(propertyId, btn){
           const fresh = await _sbGet(SB_TABLES.properties, `id=eq.${propertyId}`);
           if(Array.isArray(fresh) && fresh[0]){
             const refreshed = _sbToAt(fresh[0], SB_PROP_MAP);
-            Object.assign(allDeals[idx], refreshed);
+            // v122: also merge raw snake_case columns. _sbToAt only writes
+            // Airtable-style labels, but several UI readers (e.g. the Offers
+            // tab's pitch_out_price card at _renderOffersSummary) read the
+            // snake_case key directly off currentDeal. Without this merge,
+            // those readers see undefined right after AI apply and show a
+            // blank value despite the DB write succeeding.
+            Object.assign(allDeals[idx], fresh[0], refreshed);
             if(typeof currentDeal !== 'undefined' && currentDeal?.id === propertyId){
-              Object.assign(currentDeal, refreshed);
+              Object.assign(currentDeal, fresh[0], refreshed);
               if(typeof renderDealPage === 'function') renderDealPage();
               // v121: force the active tab to re-render with fresh data so the
               // Financial Analysis NOI override + Asking Price input pick up

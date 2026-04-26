@@ -20913,20 +20913,33 @@ window._fubLinkTemplates = async function(opts){
   }
   console.log(`[fub-link] fetched ${templates.length} FUB templates total`);
 
-  // Build property index — full-key (street+zip) AND street-only fallback.
-  // The template name often lacks the zip, so a street-only match is needed
-  // for "701 Whittaker Avenue, Trenton" → property key "701whittakerave|08611".
+  // Build property index — fetch FULL property set from DB (don't trust
+  // allDeals, which is scoped to the current view mode). 8000+ rows × small
+  // payload (id + address + owner) = ~10s. Worth it for correctness.
+  console.log('[fub-link] fetching full property index from DB...');
+  const propRows = [];
+  let pageFrom = 0;
+  while(true){
+    const page = await _sbGet(SB_TABLES.properties,
+      `select=id,address,owner_contact_id,is_archived&deleted_at=is.null&order=id.asc&limit=1000&offset=${pageFrom}`);
+    if(!Array.isArray(page) || !page.length) break;
+    propRows.push(...page);
+    if(page.length < 1000) break;
+    pageFrom += 1000;
+  }
   const propByKey = new Map();
   const propByStreet = new Map();
-  for(const d of (allDeals || [])){
-    if(d['Is Archived']) continue;
+  for(const row of propRows){
+    if(row.is_archived) continue;
+    // Fake an Airtable-style object shape so _ddDealKey can read d['Address'].
+    const d = { id: row.id, 'Address': row.address, 'Owner': row.owner_contact_id ? [row.owner_contact_id] : [] };
     const k = _ddDealKey(d);
     if(!k) continue;
     if(!propByKey.has(k)) propByKey.set(k, d);
     const street = k.split('|')[0];
     if(street && !propByStreet.has(street)) propByStreet.set(street, d);
   }
-  console.log(`[fub-link] indexed ${propByKey.size} full keys / ${propByStreet.size} street keys`);
+  console.log(`[fub-link] indexed ${propByKey.size} full keys / ${propByStreet.size} street keys (from ${propRows.length} live rows)`);
 
   // Existing rows for idempotency — also via proxy so service-role applies.
   let existing = [];

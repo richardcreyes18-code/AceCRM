@@ -20946,43 +20946,65 @@ window._fubBackfillProperties = async function(opts){
 
   for(const t of work){
     stats.processed++;
-    // Build address candidates: deal_name first (more structured), then
-    // contact.addresses[i].street.
-    const cands = [];
-    for(const c of _fubExtractAddressCandidates(t.fc.deal_name)){
-      cands.push(c);
-    }
+    // Build candidate pools from BOTH deal_name and contact.addresses[].
+    // Contact addresses are more structured (fielded street/city/state/zip),
+    // so we prefer them, but the deal_name often pinpoints which contact
+    // address is the property (vs. the contact's home).
+    const fromDealName = _fubExtractAddressCandidates(t.fc.deal_name)
+      .map(c => _ddCleanAddrForGeocode(c)).filter(c => c && /\d/.test(c));
+    const fromContact = [];
     for(const a of (t.ac.addresses || [])){
       const street = String(a?.street || '').trim();
-      if(street && /\d/.test(street)){
-        const parts = [street];
-        if(a.city)  parts.push(a.city);
-        if(a.state) parts.push(a.state);
-        if(a.code)  parts.push(a.code);
-        cands.push(parts.join(', '));
-      }
+      if(!street || !/\d/.test(street)) continue;
+      const parts = [street];
+      if(a.city)  parts.push(a.city);
+      if(a.state) parts.push(a.state);
+      if(a.code)  parts.push(a.code);
+      fromContact.push(parts.join(', '));
     }
 
-    let pickedRaw = '';
-    for(const c of cands){
-      const cleaned = _ddCleanAddrForGeocode(c);
-      if(cleaned && /\d/.test(cleaned)){ pickedRaw = cleaned; break; }
+    // Order: contact addresses first, then deal_name fallback. Within each
+    // bucket, suffix-bearing strings (Ave/St/Rd/…) win.
+    const all = [...fromContact, ...fromDealName];
+    const withSuffix = all.filter(c => _FUB_SUFFIX_RE.test(c));
+    const withoutSuffix = all.filter(c => !_FUB_SUFFIX_RE.test(c));
+    let ordered = [...withSuffix, ...withoutSuffix];
+
+    // Hint from deal_name — its first suffix-bearing candidate's normalized
+    // street key. Used to push contact addresses that overlap the deal's
+    // street to the front (helps disambiguate home vs. property when the
+    // contact has multiple addresses).
+    const hintKey = fromDealName
+      .map(c => (_ddNormalizeDealAddr(c) || '').split('|')[0])
+      .find(Boolean);
+    if(hintKey){
+      ordered = ordered.slice().sort((a, b) => {
+        const ka = (_ddNormalizeDealAddr(a) || '').split('|')[0];
+        const kb = (_ddNormalizeDealAddr(b) || '').split('|')[0];
+        const am = ka && (ka.includes(hintKey) || hintKey.includes(ka)) ? 1 : 0;
+        const bm = kb && (kb.includes(hintKey) || hintKey.includes(kb)) ? 1 : 0;
+        return bm - am;
+      });
     }
 
-    if(!pickedRaw){
+    if(!ordered.length){
       stats.skipped_no_addr++;
       samples.push({ ok:false, reason:'no parseable address', contact: t.ac.name, deal_name: t.fc.deal_name });
       continue;
     }
 
-    // Geocode for canonical address.
-    let final = pickedRaw, geo = null;
-    try {
-      const r = await googleGeocodeAddress(pickedRaw);
-      if(r && r.ok && r.formatted && !r.partial_match){
-        final = r.formatted; geo = r; stats.geocoded++;
-      }
-    } catch(_){}
+    // Try each candidate through Google. First that comes back ok + not
+    // partial_match wins. If none geocode cleanly, fall back to the first
+    // ordered candidate as raw.
+    let final = ordered[0], geo = null, pickedRaw = ordered[0];
+    for(const c of ordered){
+      try {
+        const r = await googleGeocodeAddress(c);
+        if(r && r.ok && r.formatted && !r.partial_match){
+          final = r.formatted; geo = r; pickedRaw = c; stats.geocoded++; break;
+        }
+      } catch(_){}
+    }
 
     const sample = {
       ok: true,

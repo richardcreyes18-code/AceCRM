@@ -1862,6 +1862,7 @@ const SB_PROP_MAP = {
   fub_assigned_to:'Assigned Agent',
   ai_clarifying_notes:'AI Clarifying Notes',
   ai_parsed_at:'AI Parsed At',
+  na_fields:'NA Fields',
   import_source:'Import Source',
   // v102.28: portfolio grouping — nullable FK, zero default means "standalone".
   // portfolio_sort_order controls display order within a portfolio's detail view.
@@ -21400,10 +21401,14 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
-// v113.60: AI auto-fill ALL property details + financial analysis fields
-// using the ai-parse-deal-v2 edge function (v8). Modal now lists every
-// FIELD_SPEC entry grouped by category, with dim rows for fields the AI
-// couldn't fill — so the user sees the full schema, not just what landed. Reads property_description,
+// v113.61: AI auto-fill ALL property details + financial analysis fields
+// using the ai-parse-deal-v2 edge function (v9). Modal now lists every
+// FIELD_SPEC entry grouped by category. Each row is one of four states:
+//   1. AI proposes a value → checkbox "Apply value"
+//   2. AI proposes N/A     → orange row, checkbox "Mark N/A"
+//   3. Already N/A         → purple row, locked
+//   4. No info             → dim, uncheckable
+// Apply walks all checked rows and merges accepted N/A into na_fields. Reads property_description,
 // deal_notes, general_property_notes, ai_clarifying_notes, plus all
 // related text fields. Always runs dry-run first so the user can review
 // before committing.
@@ -21469,12 +21474,18 @@ window._aiAutoFillDeal = async function(propertyId, opts){
   }
 
   // Render the diff modal
-  // v113.60: show every FIELD_SPEC entry from resp.all_fields, grouped by
-  // category. Rows where AI returned no value are dimmed and uncheckable.
+  // v113.61: each row is in one of four states:
+  //   1. filled       — AI proposed a value; checkbox = "Apply value"
+  //   2. ai-proposes-na — AI thinks field is N/A; checkbox = "Mark N/A"
+  //   3. already-na   — column already in na_fields; locked italic "N/A"
+  //   4. dim          — AI had no value AND no N/A proposal
   const proposed = resp.proposed_changes || {};
   const uncertain = resp.uncertain_fields || [];
   const all = Array.isArray(resp.all_fields) ? resp.all_fields : [];
+  const naProposals = Array.isArray(resp.na_proposals) ? resp.na_proposals : [];
+  const currentNa = Array.isArray(resp.current_na_fields) ? resp.current_na_fields : [];
   const proposedCount = Object.keys(proposed).length;
+  const naProposedCount = naProposals.length;
 
   const fmtVal = (v) => {
     if(v === null || v === undefined || v === '') return '<span style="color:#cbd5e1;">—</span>';
@@ -21484,7 +21495,6 @@ window._aiAutoFillDeal = async function(propertyId, opts){
   };
   const fieldLabel = (col) => col.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 
-  // Group all_fields by category, preserving FIELD_SPEC order.
   const groupOrder = ['Pricing','Income','Returns','Expenses','Expense Details','Pro Forma','Mortgages','Financing','Physical','Quality','Components','Unit Mix','Asset-Specific','Seller','Flags','Identity'];
   const groups = {};
   for(const f of all){ (groups[f.group] = groups[f.group] || []).push(f); }
@@ -21493,21 +21503,42 @@ window._aiAutoFillDeal = async function(propertyId, opts){
   const rowsHtml = orderedGroups.map(g => {
     const groupRows = groups[g].map(f => {
       const hasProp = f.proposed !== null && f.proposed !== undefined;
-      const rowStyle = hasProp ? '' : 'opacity:0.45;background:#fafafa;';
-      const cbHtml = hasProp
-        ? `<input type="checkbox" id="aiAccept_${f.col}" checked />`
-        : `<input type="checkbox" disabled style="opacity:0.3;cursor:not-allowed;" title="AI had no info for this field" />`;
+      const isNa = !!f.na;
+      const naProp = !!f.na_proposed;
+      let rowStyle = '', cbHtml = '', proposedCellHtml = '';
+      if(isNa){
+        rowStyle = 'background:#f5f3ff;';
+        cbHtml = `<span title="Already marked N/A" style="color:#7c3aed;font-size:13px;">⊘</span>`;
+        proposedCellHtml = `<span style="color:#7c3aed;font-style:italic;font-weight:600;">N/A (saved)</span>`;
+      } else if(hasProp){
+        cbHtml = `<input type="checkbox" id="aiAccept_${f.col}" data-kind="value" checked />`;
+        proposedCellHtml = `<span style="color:#0f172a;font-weight:600;">${fmtVal(f.proposed)}</span>`;
+      } else if(naProp){
+        rowStyle = 'background:#fffbeb;';
+        cbHtml = `<input type="checkbox" id="aiAccept_${f.col}" data-kind="na" checked />`;
+        const reason = f.na_reason ? ` <span style="color:#92400e;font-size:9px;">— ${_ddEsc(f.na_reason)}</span>` : '';
+        proposedCellHtml = `<span style="color:#b45309;font-weight:600;font-style:italic;">Mark N/A</span>${reason}`;
+      } else {
+        rowStyle = 'opacity:0.45;background:#fafafa;';
+        cbHtml = `<input type="checkbox" disabled style="opacity:0.3;cursor:not-allowed;" title="AI had no info for this field" />`;
+        proposedCellHtml = fmtVal(null);
+      }
       return `
         <tr style="border-top:1px solid #e2e8f0;${rowStyle}">
           <td style="padding:6px 10px;text-align:center;width:30px;">${cbHtml}</td>
           <td style="padding:6px 10px;font-size:11px;color:#0f172a;font-weight:500;">${_ddEsc(fieldLabel(f.col))}<br><span style="color:#94a3b8;font-size:9px;font-family:ui-monospace,Menlo,monospace;">${f.col}</span></td>
           <td style="padding:6px 10px;font-size:11px;color:#475569;max-width:160px;word-break:break-word;">${fmtVal(f.current)}</td>
-          <td style="padding:6px 10px;font-size:11px;color:#0f172a;font-weight:600;max-width:200px;word-break:break-word;">${fmtVal(f.proposed)}</td>
+          <td style="padding:6px 10px;font-size:11px;max-width:240px;word-break:break-word;">${proposedCellHtml}</td>
         </tr>`;
     }).join('');
     const filledInGroup = groups[g].filter(f => f.proposed !== null && f.proposed !== undefined).length;
+    const naInGroup = groups[g].filter(f => !!f.na).length;
+    const naPropInGroup = groups[g].filter(f => !!f.na_proposed).length;
+    const naSummary = (naInGroup || naPropInGroup)
+      ? ` · <span style="color:#7c3aed;">${naInGroup} N/A</span>${naPropInGroup ? ` · <span style="color:#b45309;">${naPropInGroup} proposed N/A</span>` : ''}`
+      : '';
     return `
-      <tr><td colspan="4" style="padding:12px 10px 4px;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#475569;background:#f1f5f9;font-weight:700;border-top:2px solid #cbd5e1;">${_ddEsc(g)} <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">— ${filledInGroup}/${groups[g].length} filled</span></td></tr>
+      <tr><td colspan="4" style="padding:12px 10px 4px;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#475569;background:#f1f5f9;font-weight:700;border-top:2px solid #cbd5e1;">${_ddEsc(g)} <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">— ${filledInGroup}/${groups[g].length} filled${naSummary}</span></td></tr>
       ${groupRows}`;
   }).join('');
 
@@ -21524,15 +21555,18 @@ window._aiAutoFillDeal = async function(propertyId, opts){
       <div style="padding:14px 18px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;">
         <div>
           <div style="font-size:15px;font-weight:700;color:#0f172a;">✦ AI Auto-Fill — Review Changes</div>
-          <div style="font-size:11px;color:#64748b;margin-top:3px;">${proposedCount} of ${all.length} fields filled by AI${onlyFillEmpty ? ' (only filling empty fields)' : ' (overwriting existing values)'} · prompt ${(resp.prompt_chars||0).toLocaleString()} chars · response ${(resp.response_chars||0).toLocaleString()} chars</div>
+          <div style="font-size:11px;color:#64748b;margin-top:3px;">${proposedCount} value${proposedCount===1?'':'s'}, ${naProposedCount} N/A proposed, ${currentNa.length} already N/A · ${all.length} total fields${onlyFillEmpty ? ' · only filling empty' : ' · overwriting existing'} · prompt ${(resp.prompt_chars||0).toLocaleString()} chars · response ${(resp.response_chars||0).toLocaleString()} chars</div>
         </div>
         <button onclick="this.closest('#aiAutoFillModal').remove()" style="background:none;border:none;color:#94a3b8;font-size:22px;cursor:pointer;padding:4px 8px;">×</button>
       </div>
       <div style="padding:14px 18px;overflow-y:auto;flex:1;">
-        <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;">
-          <button onclick="document.querySelectorAll('#aiAutoFillModal input[type=checkbox]:not(:disabled)').forEach(c => c.checked = true);" style="background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:5px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;">Select all filled</button>
+        <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;flex-wrap:wrap;">
+          <button onclick="document.querySelectorAll('#aiAutoFillModal input[type=checkbox]:not(:disabled)').forEach(c => c.checked = true);" style="background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:5px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;">Select all</button>
           <button onclick="document.querySelectorAll('#aiAutoFillModal input[type=checkbox]:not(:disabled)').forEach(c => c.checked = false);" style="background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:5px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;">Clear</button>
-          <span style="font-size:10px;color:#94a3b8;margin-left:8px;">Dim rows = AI didn't have info to fill them.</span>
+          <span style="font-size:10px;color:#94a3b8;margin-left:6px;">Legend:</span>
+          <span style="font-size:10px;color:#0f172a;background:#fff;border:1px solid #e2e8f0;padding:2px 6px;border-radius:3px;">value</span>
+          <span style="font-size:10px;color:#b45309;background:#fffbeb;border:1px solid #fde68a;padding:2px 6px;border-radius:3px;">AI proposes N/A</span>
+          <span style="font-size:10px;color:#7c3aed;background:#f5f3ff;border:1px solid #ddd6fe;padding:2px 6px;border-radius:3px;">already N/A</span>
         </div>
         ${all.length ? `<table style="width:100%;border-collapse:collapse;">
           <thead><tr style="background:#f8fafc;font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;">
@@ -21555,6 +21589,8 @@ window._aiAutoFillDeal = async function(propertyId, opts){
     </div>`;
   // Stash the proposed changes on the modal for the apply step
   modal._proposed = proposed;
+  modal._naProposals = naProposals;
+  modal._currentNa = currentNa;
   modal._uncertain = uncertain;
 };
 
@@ -21562,20 +21598,38 @@ window._aiAutoFillApply = async function(propertyId, btn){
   const modal = document.getElementById('aiAutoFillModal');
   if(!modal) return;
   const proposed = modal._proposed || {};
+  const naProposals = modal._naProposals || [];
+  const currentNa = modal._currentNa || [];
   const uncertain = modal._uncertain || [];
-  // Collect checked fields
-  const patch = {};
-  for(const col of Object.keys(proposed)){
-    const cb = document.getElementById('aiAccept_'+col);
-    if(cb && cb.checked) patch[col] = proposed[col].proposed;
+
+  // Walk every checkbox in the modal — apply by data-kind.
+  const valuePatch = {};
+  const acceptedNa = [];
+  for(const cb of modal.querySelectorAll('input[type=checkbox][data-kind]')){
+    if(!cb.checked) continue;
+    const col = (cb.id || '').replace(/^aiAccept_/, '');
+    if(!col) continue;
+    if(cb.dataset.kind === 'value' && proposed[col]){
+      valuePatch[col] = proposed[col].proposed;
+    } else if(cb.dataset.kind === 'na'){
+      acceptedNa.push(col);
+    }
   }
-  if(Object.keys(patch).length === 0){
+
+  if(Object.keys(valuePatch).length === 0 && acceptedNa.length === 0){
     alert('Nothing selected.');
     return;
   }
   if(btn){ btn.disabled = true; btn.textContent = 'Applying…'; }
 
-  // Append uncertain notes to ai_clarifying_notes
+  const patch = { ...valuePatch };
+
+  // Merge accepted N/A into existing na_fields.
+  if(acceptedNa.length){
+    const merged = Array.from(new Set([...(currentNa || []), ...acceptedNa]));
+    patch.na_fields = merged;
+  }
+
   if(uncertain.length){
     const summary = uncertain.map(u => `• ${u.field}: ${u.reason}`).join('\n');
     try {
@@ -21589,7 +21643,12 @@ window._aiAutoFillApply = async function(propertyId, btn){
 
   try {
     await _sbPatch(SB_TABLES.properties, propertyId, patch);
-    if(typeof showSaveConfirm === 'function') showSaveConfirm(`✓ Applied ${Object.keys(patch).filter(k => k !== 'ai_parsed_at' && k !== 'ai_clarifying_notes').length} fields`);
+    const valCount = Object.keys(valuePatch).length;
+    const naCount = acceptedNa.length;
+    const summaryParts = [];
+    if(valCount) summaryParts.push(`${valCount} value${valCount===1?'':'s'}`);
+    if(naCount) summaryParts.push(`${naCount} N/A`);
+    if(typeof showSaveConfirm === 'function') showSaveConfirm(`✓ Applied ${summaryParts.join(' + ')}`);
     // Refresh in-memory deal
     if(typeof allDeals !== 'undefined' && Array.isArray(allDeals)){
       const idx = allDeals.findIndex(d => d.id === propertyId);

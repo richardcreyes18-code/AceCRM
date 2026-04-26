@@ -21049,18 +21049,23 @@ window._fubBackfillProperties = async function(opts){
 //   _fubLinkTemplates({dryRun:true})                      // dry-run all
 //   _fubLinkTemplates()                                   // apply for real
 //   _fubLinkTemplates({folders:['Hot Deal Email Temp']})  // single folder
+// v113.52: prefer segments containing a known street-suffix word (St, Ave,
+// Rd, Blvd, Hwy, Route…) so type/size descriptors like "5 Units", "MF 5U",
+// "WH 120k SqFt" lose to the actual address segment in deal names like
+// "MF 5U - 226 New Brunswick Ave, Perth Amboy - DK".
+const _FUB_SUFFIX_RE = new RegExp('\\b(' + _DD_SUFFIX_ALT + '|highway|route|hwy|rt)\\b', 'i');
 function _fubExtractAddressCandidates(text){
   if(!text) return [];
-  const out = [];
+  const withSuffix = [];
+  const withoutSuffix = [];
   for(const p of String(text).split(/\s+[-–—|]\s+/)){
     const t = p.trim();
-    if(!t) continue;
-    // Must contain a digit AND an alpha word; rules out county / agent
-    // initials / size-only segments.
-    if(/\d/.test(t) && /[a-z]/i.test(t) && t.length > 4) out.push(t);
+    if(!t || t.length <= 4) continue;
+    if(!/\d/.test(t) || !/[a-z]/i.test(t)) continue;
+    if(_FUB_SUFFIX_RE.test(t)) withSuffix.push(t);
+    else withoutSuffix.push(t);
   }
-  if(text && /\d/.test(text)) out.push(String(text));
-  return out;
+  return [...withSuffix, ...withoutSuffix];
 }
 
 function _fubBodyText(tpl){

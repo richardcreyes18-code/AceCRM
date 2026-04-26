@@ -7896,7 +7896,219 @@ function renderPropertyTab(d){
 
 // Renders the Unit Mix Information section. Extracted from renderPropertyTab so
 // the section can be conditionally included based on asset type.
+// v136: redesigned MF/Mixed-Use layout — stat tiles, sub-cards, wider inputs.
 function _renderUnitMixSection(d){
+  const _at = (d['CRM Asset Classification']||d['Simple Text Property Type']||'').toLowerCase();
+  const isMF = _at.includes('multifamily') || _at.includes('mixed');
+  const rentData = _mfRentLoad(d['MF Unit Rent Data']||'');
+
+  if(isMF){
+    const types = [
+      {key:'eff',  label:'Efficiency', countF:'Units Efficiency',  vacF:'Units Efficiency Vacant'},
+      {key:'1br',  label:'1 Bedroom',  countF:'Units 1 Bedroom',   vacF:'Units 1 Bedroom Vacant'},
+      {key:'2br',  label:'2 Bedroom',  countF:'Units 2 Bedroom',   vacF:'Units 2 Bedroom Vacant'},
+      {key:'3br',  label:'3 Bedroom',  countF:'Units 3 Bedroom',   vacF:'Units 3 Bedroom Vacant'},
+      {key:'4br',  label:'4 Bedroom',  countF:'Units 4 Bedroom',   vacF:'Units 4 Bedroom Vacant'},
+      {key:'oth',  label:'Other',      countF:'Units Other',       vacF:'Units Other Vacant'},
+    ];
+    const umId = {eff:'eff','1br':'1br','2br':'2br','3br':'3br','4br':'4br','oth':'other'};
+    const _unitsArr = Array.isArray(rentData.units) ? rentData.units : [];
+    const _hasUnitRents = _unitsArr.some(u => Number(u.rent) > 0);
+    const _typeKeyForUnit = (t) => ({
+      'Efficiency':'eff','1 Bedroom':'1br','2 Bedroom':'2br',
+      '3 Bedroom':'3br','4 Bedroom':'4br','Other':'oth'
+    })[t] || 'oth';
+    const _derivedAvgs = {};
+    if(_hasUnitRents){
+      const groups = {};
+      _unitsArr.forEach(u => {
+        const r = Number(u.rent)||0;
+        if(!r) return;
+        const k = _typeKeyForUnit(u.type);
+        if(!groups[k]) groups[k] = [];
+        groups[k].push(r);
+      });
+      Object.keys(groups).forEach(k => {
+        const arr = groups[k];
+        _derivedAvgs[k] = Math.round(arr.reduce((s,v)=>s+v,0) / arr.length);
+      });
+    }
+
+    // Stat tile values
+    const totalUnits = Number(d['No. of Units'])||0;
+    const occupancyPct = Number(d['Occupancy (%)'])||0;
+    let totalGRI = 0;
+    if(_hasUnitRents){
+      totalGRI = _unitsArr.reduce((s,u)=>s+(Number(u.rent)||0),0);
+    } else {
+      types.forEach(t => {
+        const cnt = Number(d[t.countF])||0;
+        const avg = (rentData.byType&&rentData.byType[t.key])||0;
+        totalGRI += cnt*avg;
+      });
+    }
+
+    const byTypeRows = types.map(t=>{
+      const cnt  = Number(d[t.countF]||0);
+      const vac  = Number(d[t.vacF]||0);
+      const stored = (rentData.byType&&rentData.byType[t.key])||0;
+      const avg  = _hasUnitRents ? (_derivedAvgs[t.key] || 0) : stored;
+      const tot  = cnt * avg;
+      const derivedStyle = _hasUnitRents ? 'background:#f1f5f9;color:#64748b;' : '';
+      const derivedTitle = _hasUnitRents ? 'Auto-averaged from individual units below' : '';
+      return `<tr style="border-bottom:1px solid #f1f5f9;">
+        <td style="padding:8px 8px;font-weight:600;color:#1e293b;font-size:12px;">${t.label}</td>
+        <td style="padding:6px 8px;text-align:center;"><input class="form-input" id="um_${umId[t.key]}" value="${d[t.countF]||''}" style="width:96px;text-align:center;" placeholder="0" oninput="mfRentCalcTotal();_umRefreshStats()"/></td>
+        <td style="padding:6px 8px;text-align:center;"><input class="form-input" id="um_${umId[t.key]}_v" value="${d[t.vacF]||''}" style="width:96px;text-align:center;" placeholder="0" oninput="_umRefreshStats()"/></td>
+        <td style="padding:6px 8px;text-align:right;position:relative;">
+          <span style="position:absolute;right:106px;top:50%;transform:translateY(-50%);color:#94a3b8;font-size:11px;pointer-events:none;">$</span>
+          <input class="form-input num-input" id="umr_${t.key}" type="text" inputmode="numeric" value="${_fmtNum(avg||'')}" style="width:120px;text-align:right;padding-left:14px;${derivedStyle}" placeholder="0" title="${derivedTitle}" oninput="mfRentCalcTotal();_umRefreshStats()"/>
+        </td>
+        <td style="padding:8px 8px;text-align:right;color:#1a3a6e;font-weight:700;font-size:13px;" id="umr_tot_${t.key}">${tot?'$'+(tot).toLocaleString():'<span style="color:#cbd5e1;font-weight:500;">—</span>'}</td>
+      </tr>`;
+    }).join('');
+
+    const unitRows = (rentData.units||[]).map((u,i)=>{
+      const statusColor = u.status==='Occupied'?'#16a34a':u.status==='Vacant'?'#dc2626':u.status==='Section 8'?'#0891b2':'#64748b';
+      return `<tr id="umunit_row_${i}" style="border-bottom:1px solid #f1f5f9;">
+        <td style="padding:6px 8px;"><input class="form-input" value="${u.label||''}" style="width:80px;font-size:12px;" placeholder="Unit 1A" oninput="mfRentSetUnit(${i},'label',this.value)"/></td>
+        <td style="padding:6px 8px;">
+          <select class="form-select" style="width:130px;font-size:12px;" onchange="mfRentSetUnit(${i},'type',this.value);_mfRentDeriveAvgs();mfRentCalcTotal()">
+            ${['Efficiency','1 Bedroom','2 Bedroom','3 Bedroom','4 Bedroom','Other'].map(t=>`<option${u.type===t?' selected':''}>${t}</option>`).join('')}
+          </select>
+        </td>
+        <td style="padding:6px 8px;text-align:right;position:relative;">
+          <span style="position:absolute;right:106px;top:50%;transform:translateY(-50%);color:#94a3b8;font-size:11px;pointer-events:none;">$</span>
+          <input class="form-input num-input" type="text" inputmode="numeric" value="${_fmtNum(u.rent||'')}" style="width:120px;text-align:right;padding-left:14px;font-size:12px;" placeholder="0" oninput="mfRentSetUnit(${i},'rent',this.value);_mfRentDeriveAvgs();mfRentCalcTotal();_umRefreshStats()"/>
+        </td>
+        <td style="padding:6px 8px;">
+          <div style="display:flex;align-items:center;gap:6px;">
+            <span style="width:8px;height:8px;border-radius:50%;background:${statusColor};display:inline-block;flex-shrink:0;"></span>
+            <select class="form-select" style="width:130px;font-size:12px;" onchange="mfRentSetUnit(${i},'status',this.value);mfRentCalcTotal();_umRefreshStats();_renderMFUnitRows()">
+              ${['Occupied','Vacant','Owner-Occupied','Section 8'].map(s=>`<option${u.status===s?' selected':''}>${s}</option>`).join('')}
+            </select>
+          </div>
+        </td>
+        <td style="padding:6px 8px;text-align:center;"><button onclick="mfRentRemoveUnit(${i})" style="background:none;border:none;color:#cbd5e1;font-size:16px;cursor:pointer;line-height:1;" title="Remove" onmouseenter="this.style.color='#dc2626'" onmouseleave="this.style.color='#cbd5e1'">✕</button></td>
+      </tr>`;
+    }).join('');
+    const unitsCount = (rentData.units||[]).length;
+
+    return `    <!-- UNIT MIX INFORMATION -->
+    <div class="info-box">
+      <div style="display:flex;align-items:flex-start;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
+        <div>
+          <div class="info-box-title" style="margin-bottom:2px;">Unit Mix Information</div>
+          <div style="font-size:11px;color:#64748b;">Capture the rent roll and bedroom mix. Totals here flow into Financial Analysis.</div>
+        </div>
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <div style="background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:8px 14px;min-width:110px;">
+            <div style="font-size:9px;font-weight:700;letter-spacing:0.5px;color:#64748b;text-transform:uppercase;margin-bottom:2px;">Total Units</div>
+            <div style="font-size:18px;font-weight:700;color:#1a3a6e;" id="umStat_totalUnits">${totalUnits||'—'}</div>
+          </div>
+          <div style="background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:8px 14px;min-width:110px;">
+            <div style="font-size:9px;font-weight:700;letter-spacing:0.5px;color:#64748b;text-transform:uppercase;margin-bottom:2px;">Occupancy</div>
+            <div style="font-size:18px;font-weight:700;color:#1a3a6e;" id="umStat_occupancy">${occupancyPct?occupancyPct+'<span style="font-size:11px;color:#64748b;font-weight:500;margin-left:3px;">%</span>':'—'}</div>
+          </div>
+          <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:8px 14px;min-width:130px;">
+            <div style="font-size:9px;font-weight:700;letter-spacing:0.5px;color:#1e40af;text-transform:uppercase;margin-bottom:2px;">Total GRI / Mo</div>
+            <div style="font-size:18px;font-weight:700;color:#1a3a6e;" id="umStat_gri">${totalGRI?'$'+totalGRI.toLocaleString():'—'}</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Overview row: No. of Units, Occupancy, tip -->
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:14px;margin-bottom:14px;">
+        <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start;">
+          <div style="min-width:160px;">
+            <label class="pd-lbl" style="display:block;margin-bottom:4px;">No. of Units</label>
+            <input class="form-input" id="um_totalUnits" value="${d['No. of Units']||''}" style="width:140px;" placeholder="—" oninput="_umRefreshStats()"/>
+            <div style="font-size:10px;color:#94a3b8;margin-top:4px;">Total doors at the property.</div>
+          </div>
+          <div style="min-width:160px;">
+            <label class="pd-lbl" style="display:block;margin-bottom:4px;">Occupancy</label>
+            <div style="display:flex;align-items:center;gap:6px;">
+              <input class="form-input" id="um_occupancy" value="${d['Occupancy (%)']||''}" style="width:100px;" placeholder="—" oninput="_umRefreshStats()"/>
+              <span style="color:#64748b;font-size:12px;">%</span>
+            </div>
+            <div style="font-size:10px;color:#94a3b8;margin-top:4px;">Auto-calc from rent roll when units are filled.</div>
+          </div>
+          <div style="flex:1;min-width:240px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:10px 12px;">
+            <div style="font-size:11px;font-weight:700;color:#1a3a6e;margin-bottom:4px;">💡 Two ways to enter rents</div>
+            <div style="font-size:11px;color:#475569;line-height:1.5;">Use <strong>Avg by Bedroom Type</strong> for quick comps, or <strong>By Individual Unit</strong> for an exact rent roll. Individual units override the averages.</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Avg by Bedroom Type card -->
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:14px;margin-bottom:14px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+          <div style="font-size:13px;font-weight:700;color:#1a3a6e;">Avg by Bedroom Type</div>
+          <span style="background:#f1f5f9;color:#64748b;font-size:9px;font-weight:700;letter-spacing:0.5px;padding:3px 10px;border-radius:99px;text-transform:uppercase;">Optional</span>
+        </div>
+        <div style="font-size:11px;color:#64748b;margin-bottom:12px;">${_hasUnitRents ? 'Auto-averaged from the individual unit rents below.' : "Quick estimate using averages — useful when you don't have a unit-level rent roll yet."}</div>
+        <table style="width:100%;border-collapse:collapse;font-size:11px;">
+          <thead>
+            <tr style="border-bottom:1px solid #e2e8f0;">
+              <th style="text-align:left;padding:6px 8px;font-size:9px;font-weight:700;letter-spacing:0.5px;color:#64748b;text-transform:uppercase;">Type</th>
+              <th style="text-align:center;padding:6px 8px;font-size:9px;font-weight:700;letter-spacing:0.5px;color:#64748b;text-transform:uppercase;">Units</th>
+              <th style="text-align:center;padding:6px 8px;font-size:9px;font-weight:700;letter-spacing:0.5px;color:#64748b;text-transform:uppercase;">Vacant</th>
+              <th style="text-align:right;padding:6px 8px;font-size:9px;font-weight:700;letter-spacing:0.5px;color:#64748b;text-transform:uppercase;">Avg Rent / Mo</th>
+              <th style="text-align:right;padding:6px 8px;font-size:9px;font-weight:700;letter-spacing:0.5px;color:#64748b;text-transform:uppercase;">Monthly Total</th>
+            </tr>
+          </thead>
+          <tbody>${byTypeRows}</tbody>
+        </table>
+        <div style="background:#f1f5f9;margin:10px -14px -14px;padding:12px 14px;border-radius:0 0 6px 6px;display:flex;justify-content:space-between;align-items:center;">
+          <span style="font-size:10px;font-weight:700;letter-spacing:0.5px;color:#1a3a6e;text-transform:uppercase;">Total GRI / Month</span>
+          <span style="font-size:18px;font-weight:700;color:#1a3a6e;" id="umr_grandTotal">${totalGRI?'$'+totalGRI.toLocaleString():'—'}</span>
+        </div>
+      </div>
+
+      <!-- By Individual Unit card -->
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:14px;margin-bottom:14px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
+          <div style="font-size:13px;font-weight:700;color:#1a3a6e;">By Individual Unit</div>
+          <span id="umUnitCountPill" style="background:#dbeafe;color:#1e40af;font-size:10px;font-weight:700;padding:3px 10px;border-radius:99px;">${unitsCount} unit${unitsCount===1?'':'s'}</span>
+        </div>
+        <div style="font-size:11px;color:#64748b;margin-bottom:12px;">Drives the averages above. Add a row per door — the bedroom-type table updates automatically.</div>
+        <table id="umUnitTable" style="width:100%;border-collapse:collapse;font-size:11px;">
+          <thead>
+            <tr style="border-bottom:1px solid #e2e8f0;">
+              <th style="text-align:left;padding:6px 8px;font-size:9px;font-weight:700;letter-spacing:0.5px;color:#64748b;text-transform:uppercase;">Unit</th>
+              <th style="text-align:left;padding:6px 8px;font-size:9px;font-weight:700;letter-spacing:0.5px;color:#64748b;text-transform:uppercase;">Type</th>
+              <th style="text-align:right;padding:6px 8px;font-size:9px;font-weight:700;letter-spacing:0.5px;color:#64748b;text-transform:uppercase;">Monthly Rent</th>
+              <th style="text-align:left;padding:6px 8px;font-size:9px;font-weight:700;letter-spacing:0.5px;color:#64748b;text-transform:uppercase;">Status</th>
+              <th style="width:30px;"></th>
+            </tr>
+          </thead>
+          <tbody id="umUnitBody">${unitRows}</tbody>
+        </table>
+        <div style="display:flex;justify-content:space-between;align-items:center;gap:14px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0;flex-wrap:wrap;">
+          <button onclick="mfRentAddUnit()" style="background:#fff;color:#1a3a6e;border:1px solid #1a3a6e;padding:6px 14px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;" onmouseenter="this.style.background='#1a3a6e';this.style.color='#fff'" onmouseleave="this.style.background='#fff';this.style.color='#1a3a6e'">+ Add Unit</button>
+          <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;">
+            <span id="umr_unitTotal" style="font-size:12px;color:#475569;"></span>
+            <span id="umr_griPreview" style="display:none;background:#e8f5e9;color:#2e7d32;font-size:11px;padding:5px 12px;border-radius:5px;border:1px solid #a5d6a7;font-weight:600;">✓ Calculated GRI: <strong id="umr_griValue"></strong>/mo — saved to Financial Analysis</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Other Unit Mix Notes card -->
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:14px;">
+        <div style="font-size:13px;font-weight:700;color:#1a3a6e;margin-bottom:4px;">Other Unit Mix Notes</div>
+        <div style="font-size:11px;color:#64748b;margin-bottom:8px;">Free-form notes on quirks, comps, future income, owner-occupied units, and seller commentary.</div>
+        <textarea id="um_otherNotes" class="form-textarea auto-expand" placeholder="—" style="min-height:80px;width:100%;box-sizing:border-box;font-size:12px;" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px';markDirty()">${d['Other Unit Mix Notes']||''}</textarea>
+      </div>
+
+      <div style="display:flex;gap:8px;margin-top:12px;">
+        <button class="save-btn" style="background:linear-gradient(180deg,#60c060,#409040);color:#fff;border-color:#206020;padding:6px 24px;" onclick="saveUnitMix()">✓ Save</button>
+        <button class="save-btn" style="padding:6px 18px;" onclick="renderDealPage()">Cancel</button>
+        <span id="umSaveMsg" style="font-size:10px;color:#080;display:none;align-self:center;"></span>
+      </div>
+    </div>`;
+  }
+
+  // Non-MF: original simple layout
   return `    <!-- UNIT MIX INFORMATION -->
     <div class="info-box">
       <div class="info-box-title">Unit Mix Information</div>
@@ -7908,170 +8120,30 @@ function _renderUnitMixSection(d){
         <tr>
           <td style="font-weight:bold;color:#333;text-align:right;padding-right:8px;">Occupancy</td>
           <td style="display:flex;align-items:center;gap:6px;padding-top:2px;">
-            <input class="form-input" id="um_occupancy" value="${d['Occupancy (%)']||''}" style="width:70px;" placeholder="—"/> %
+            <input class="form-input" id="um_occupancy" value="${d['Occupancy (%)']||''}" style="width:90px;" placeholder="—"/> %
           </td>
         </tr>
         <tr>
           <td></td>
           <td>
-            ${(()=>{
-              // v135: include Mixed-Use alongside Multifamily so the rent grid +
-              // individual-unit roll show on both. Mixed-Use commonly has a
-              // residential component with its own rent roll.
-              const _at = (d['CRM Asset Classification']||d['Simple Text Property Type']||'').toLowerCase();
-              const isMF = _at.includes('multifamily') || _at.includes('mixed');
-              const rentData = _mfRentLoad(d['MF Unit Rent Data']||'');
-              if(isMF){
-                // MF enhanced table: unit counts + avg rent per type + total
-                const types = [
-                  {key:'eff',  label:'Efficiency', countF:'Units Efficiency',        vacF:'Units Efficiency Vacant'},
-                  {key:'1br',  label:'1 Bedroom',  countF:'Units 1 Bedroom',         vacF:'Units 1 Bedroom Vacant'},
-                  {key:'2br',  label:'2 Bedroom',  countF:'Units 2 Bedroom',         vacF:'Units 2 Bedroom Vacant'},
-                  {key:'3br',  label:'3 Bedroom',  countF:'Units 3 Bedroom',         vacF:'Units 3 Bedroom Vacant'},
-                  {key:'4br',  label:'4 Bedroom',  countF:'Units 4 Bedroom',         vacF:'Units 4 Bedroom Vacant'},
-                  {key:'oth',  label:'Other',      countF:'Units Other',             vacF:'Units Other Vacant'},
-                ];
-                const umId = {eff:'eff','1br':'1br','2br':'2br','3br':'3br','4br':'4br','oth':'other'};
-                // v135: if individual units have rents, derive byType averages
-                // from them so the top table reflects what's in the rent roll.
-                const _unitsArr = Array.isArray(rentData.units) ? rentData.units : [];
-                const _hasUnitRents = _unitsArr.some(u => Number(u.rent) > 0);
-                const _typeKeyForUnit = (t) => ({
-                  'Efficiency':'eff','1 Bedroom':'1br','2 Bedroom':'2br',
-                  '3 Bedroom':'3br','4 Bedroom':'4br','Other':'oth'
-                })[t] || 'oth';
-                const _derivedAvgs = {};
-                if(_hasUnitRents){
-                  const groups = {};
-                  _unitsArr.forEach(u => {
-                    const r = Number(u.rent)||0;
-                    if(!r) return;
-                    const k = _typeKeyForUnit(u.type);
-                    if(!groups[k]) groups[k] = [];
-                    groups[k].push(r);
-                  });
-                  Object.keys(groups).forEach(k => {
-                    const arr = groups[k];
-                    _derivedAvgs[k] = Math.round(arr.reduce((s,v)=>s+v,0) / arr.length);
-                  });
-                }
-                const byTypeRows = types.map(t=>{
-                  const cnt  = Number(d[t.countF]||0);
-                  const vac  = Number(d[t.vacF]||0);
-                  const stored = (rentData.byType&&rentData.byType[t.key])||0;
-                  const avg  = _hasUnitRents ? (_derivedAvgs[t.key] || 0) : stored;
-                  const tot  = cnt * avg;
-                  // When derived from units, mark the cell visually so the user
-                  // knows it's auto-averaging from the rent roll below.
-                  const derivedStyle = _hasUnitRents ? 'background:#f8fafc;color:#475569;' : '';
-                  const derivedTitle = _hasUnitRents ? 'Auto-averaged from individual units below' : '';
-                  return `<tr>
-                    <td style="font-weight:600;color:#333;padding:4px 8px 4px 0;text-align:right;">${t.label}</td>
-                    <td style="padding:3px 6px;"><input class="form-input" id="um_${umId[t.key]}" value="${d[t.countF]||''}" style="width:68px;text-align:center;" placeholder="0" oninput="mfRentCalcTotal()"/></td>
-                    <td style="padding:3px 6px;"><input class="form-input" id="um_${umId[t.key]}_v" value="${d[t.vacF]||''}" style="width:68px;text-align:center;" placeholder="0"/></td>
-                    <td style="padding:3px 6px;position:relative;">
-                      <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);color:#666;font-size:11px;pointer-events:none;">$</span>
-                      <input class="form-input num-input" id="umr_${t.key}" type="text" inputmode="numeric" value="${_fmtNum(avg||'')}" style="width:90px;text-align:right;padding-left:18px;${derivedStyle}" placeholder="0" title="${derivedTitle}" oninput="mfRentCalcTotal()"/>
-                    </td>
-                    <td style="padding:3px 6px;color:#1a3a6e;font-weight:600;font-size:11px;" id="umr_tot_${t.key}">${tot?'$'+(tot).toLocaleString():''}</td>
-                  </tr>`;
-                }).join('');
-                // Individual unit rows
-                const unitRows = (rentData.units||[]).map((u,i)=>`
-                  <tr id="umunit_row_${i}">
-                    <td style="padding:2px 4px;"><input class="form-input" value="${u.label||''}" style="width:80px;font-size:11px;" placeholder="Unit 1A" oninput="mfRentSetUnit(${i},'label',this.value)"/></td>
-                    <td style="padding:2px 4px;">
-                      <select class="form-select" style="width:100px;font-size:11px;" onchange="mfRentSetUnit(${i},'type',this.value);_mfRentDeriveAvgs()">
-                        ${['Efficiency','1 Bedroom','2 Bedroom','3 Bedroom','4 Bedroom','Other'].map(t=>`<option${u.type===t?' selected':''}>${t}</option>`).join('')}
-                      </select>
-                    </td>
-                    <td style="padding:2px 4px;position:relative;">
-                      <span style="position:absolute;left:8px;top:50%;transform:translateY(-50%);color:#666;font-size:11px;pointer-events:none;">$</span>
-                      <input class="form-input num-input" type="text" inputmode="numeric" value="${_fmtNum(u.rent||'')}" style="width:90px;text-align:right;padding-left:16px;font-size:11px;" placeholder="0" oninput="mfRentSetUnit(${i},'rent',this.value);_mfRentDeriveAvgs();mfRentCalcTotal()"/>
-                    </td>
-                    <td style="padding:2px 4px;">
-                      <select class="form-select" style="width:110px;font-size:11px;" onchange="mfRentSetUnit(${i},'status',this.value);mfRentCalcTotal()">
-                        ${['Occupied','Vacant','Owner-Occupied','Section 8'].map(s=>`<option${u.status===s?' selected':''}>${s}</option>`).join('')}
-                      </select>
-                    </td>
-                    <td style="padding:2px 4px;"><button onclick="mfRentRemoveUnit(${i})" style="background:none;border:none;color:#999;font-size:14px;cursor:pointer;" title="Remove">✕</button></td>
-                  </tr>`).join('');
-                // v135: both sections render together. The mode toggle was
-                // removed because the user wanted to see Avg-by-Bedroom-Type
-                // and By-Individual-Unit at the same time. byType is editable
-                // when no unit rents exist; once a rent roll is filled in,
-                // byType auto-derives the per-bedroom averages from the units.
-                return `
-                  <div style="margin-top:6px;">
-                    <div id="umSection_byType">
-                      <div style="font-size:11px;font-weight:700;color:#1a3a6e;margin-bottom:6px;">Avg by Bedroom Type${_hasUnitRents?' <span style="font-weight:500;color:#64748b;font-style:italic;">(auto-averaged from individual units below)</span>':''}</div>
-                      <table style="border-collapse:collapse;font-size:11px;">
-                        <thead>
-                          <tr style="background:#f1f5f9;">
-                            <td style="width:100px;"></td>
-                            <td style="padding:4px 6px;font-weight:600;color:#555;width:80px;">Units</td>
-                            <td style="padding:4px 6px;font-weight:600;color:#555;width:80px;">Vacant</td>
-                            <td style="padding:4px 6px;font-weight:600;color:#555;width:110px;">Avg Rent/Mo</td>
-                            <td style="padding:4px 6px;font-weight:600;color:#555;width:100px;">Monthly Total</td>
-                          </tr>
-                        </thead>
-                        <tbody>${byTypeRows}</tbody>
-                        <tfoot>
-                          <tr style="background:#f0f9f0;border-top:2px solid #ccc;">
-                            <td colspan="4" style="padding:5px 6px;font-weight:700;color:#1a5c1a;text-align:right;font-size:12px;">Total GRI / Month</td>
-                            <td style="padding:5px 6px;font-weight:700;color:#1a5c1a;font-size:13px;" id="umr_grandTotal">&nbsp;</td>
-                          </tr>
-                        </tfoot>
-                      </table>
-                    </div>
-
-                    <div id="umSection_byUnit" style="margin-top:18px;padding-top:14px;border-top:1px solid #e2e8f0;">
-                      <div style="font-size:11px;font-weight:700;color:#1a3a6e;margin-bottom:6px;">By Individual Unit <span style="font-weight:500;color:#64748b;font-style:italic;">(rent roll — drives the averages above)</span></div>
-                      <table id="umUnitTable" style="border-collapse:collapse;font-size:11px;width:100%;margin-bottom:8px;">
-                        <thead>
-                          <tr style="background:#f1f5f9;">
-                            <td style="padding:4px 6px;font-weight:600;color:#555;width:90px;">Unit</td>
-                            <td style="padding:4px 6px;font-weight:600;color:#555;width:110px;">Type</td>
-                            <td style="padding:4px 6px;font-weight:600;color:#555;width:110px;">Monthly Rent</td>
-                            <td style="padding:4px 6px;font-weight:600;color:#555;width:120px;">Status</td>
-                            <td style="width:30px;"></td>
-                          </tr>
-                        </thead>
-                        <tbody id="umUnitBody">${unitRows}</tbody>
-                      </table>
-                      <button onclick="mfRentAddUnit()" style="background:var(--primary);color:#fff;border:none;padding:5px 14px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;">+ Add Unit</button>
-                      <div id="umr_unitTotal" style="margin-top:8px;font-size:13px;font-weight:700;color:#1a5c1a;"></div>
-                    </div>
-
-                    <div id="umr_griPreview" style="margin-top:10px;background:#e8f5e9;border:1px solid #a5d6a7;border-radius:6px;padding:8px 12px;font-size:12px;color:#2e7d32;display:none;">
-                      ✓ Calculated GRI: <strong id="umr_griValue"></strong>/mo — will be saved to Financial Analysis
-                    </div>
-                  </div>`;
-              } else {
-                // Non-MF: original simple table
-                return `<table style="border:none;font-size:11px;border-collapse:collapse;margin-top:6px;">
-                  <thead><tr>
-                    <td style="width:120px;"></td>
-                    <td style="width:120px;font-weight:bold;color:#333;padding:3px 8px;border-bottom:1px solid #ccc;">No. Units</td>
-                    <td style="width:120px;font-weight:bold;color:#333;padding:3px 8px;border-bottom:1px solid #ccc;">No. Vacant</td>
-                  </tr></thead>
-                  <tbody>
-                    ${[['Efficiency','eff','eff'],['1 Bedroom','1br','1br'],['2 Bedroom','2br','2br'],['3 Bedroom','3br','3br'],['4 Bedroom','4br','4br'],['Other','oth','other']].map(([label,key,id])=>`
-                    <tr>
-                      <td style="font-weight:bold;color:#333;padding:4px 8px 4px 0;text-align:right;">${label}</td>
-                      <td style="padding:3px 8px;"><input class="form-input" id="um_${id}" value="${d['Units '+(label==='Efficiency'?'Efficiency':label==='Other'?'Other':label)]||''}" style="width:80px;text-align:center;" placeholder="0"/></td>
-                      <td style="padding:3px 8px;"><input class="form-input" id="um_${id}_v" value="${d['Units '+(label==='Efficiency'?'Efficiency Vacant':label==='Other'?'Other Vacant':label+' Vacant')]||''}" style="width:80px;text-align:center;" placeholder="0"/></td>
-                    </tr>`).join('')}
-                  </tbody>
-                </table>`;
-              }
-            })()}
+            <table style="border:none;font-size:11px;border-collapse:collapse;margin-top:6px;">
+              <thead><tr>
+                <td style="width:120px;"></td>
+                <td style="width:120px;font-weight:bold;color:#333;padding:3px 8px;border-bottom:1px solid #ccc;">No. Units</td>
+                <td style="width:120px;font-weight:bold;color:#333;padding:3px 8px;border-bottom:1px solid #ccc;">No. Vacant</td>
+              </tr></thead>
+              <tbody>
+                ${[['Efficiency','eff','eff'],['1 Bedroom','1br','1br'],['2 Bedroom','2br','2br'],['3 Bedroom','3br','3br'],['4 Bedroom','4br','4br'],['Other','oth','other']].map(([label,key,id])=>`
+                <tr>
+                  <td style="font-weight:bold;color:#333;padding:4px 8px 4px 0;text-align:right;">${label}</td>
+                  <td style="padding:3px 8px;"><input class="form-input" id="um_${id}" value="${d['Units '+(label==='Efficiency'?'Efficiency':label==='Other'?'Other':label)]||''}" style="width:96px;text-align:center;" placeholder="0"/></td>
+                  <td style="padding:3px 8px;"><input class="form-input" id="um_${id}_v" value="${d['Units '+(label==='Efficiency'?'Efficiency Vacant':label==='Other'?'Other Vacant':label+' Vacant')]||''}" style="width:96px;text-align:center;" placeholder="0"/></td>
+                </tr>`).join('')}
+              </tbody>
+            </table>
           </td>
         </tr>
       </table>
-      <!-- v129: Other Unit Mix Notes — free-form context for the unit mix
-           section. Vacancy reasons, owner-occupied unit details, special unit
-           configurations, anything that doesn't fit the structured grid. -->
       <div class="pd-field" style="margin-top:8px;padding-left:188px;">
         <label class="pd-lbl">Other Unit Mix Notes</label>
         <textarea id="um_otherNotes" class="form-textarea auto-expand" placeholder="—" style="min-height:80px;width:100%;box-sizing:border-box;" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px';markDirty()">${d['Other Unit Mix Notes']||''}</textarea>
@@ -8082,6 +8154,21 @@ function _renderUnitMixSection(d){
         <span id="umSaveMsg" style="font-size:10px;color:#080;display:none;align-self:center;"></span>
       </div>
     </div>`;
+}
+
+// v136: refresh the top stat tiles when any field changes (No. of Units,
+// Occupancy, byType counts/avgs, individual unit rents/statuses).
+function _umRefreshStats(){
+  const totalEl = document.getElementById('umStat_totalUnits');
+  const occEl   = document.getElementById('umStat_occupancy');
+  const griEl   = document.getElementById('umStat_gri');
+  if(!totalEl) return;
+  const tu = Number(String(document.getElementById('um_totalUnits')?.value||'').replace(/,/g,''))||0;
+  const oc = Number(String(document.getElementById('um_occupancy')?.value||'').replace(/,/g,''))||0;
+  totalEl.textContent = tu || '—';
+  occEl.innerHTML = oc ? oc + '<span style="font-size:11px;color:#64748b;font-weight:500;margin-left:3px;">%</span>' : '—';
+  const gri = (typeof _mfRentCalcGRI === 'function') ? _mfRentCalcGRI() : 0;
+  griEl.textContent = gri ? '$'+gri.toLocaleString() : '—';
 }
 
 // ── MF RENT DATA HELPERS ─────────────────────────────────────────
@@ -8290,11 +8377,19 @@ function mfRentCalcTotal(){
   if(preview&&griVal){
     const occupied = _mfRentCalcGRIOccupied();
     if(occupied>0){
-      preview.style.display='block';
+      preview.style.display='inline-block';
       griVal.textContent='$'+occupied.toLocaleString();
     }
     else preview.style.display='none';
   }
+  // v136: refresh the unit-count pill on the By Individual Unit card.
+  const pill = document.getElementById('umUnitCountPill');
+  if(pill){
+    const n = (_mfRentUnits||[]).length;
+    pill.textContent = n + ' unit' + (n===1?'':'s');
+  }
+  // v136: refresh the top stat tiles
+  if(typeof _umRefreshStats === 'function') _umRefreshStats();
   // If the Financial Analysis tab is open AND using Unit Mix mode, refresh its GRI
   if(typeof _refreshFinGRIFromUnitMix === 'function') _refreshFinGRIFromUnitMix();
 }
@@ -8320,21 +8415,30 @@ function mfRentSetUnit(i,field,val){
 
 function _renderMFUnitRows(){
   const tbody=document.getElementById('umUnitBody'); if(!tbody) return;
-  tbody.innerHTML=_mfRentUnits.map((u,i)=>`
-    <tr id="umunit_row_${i}">
-      <td style="padding:2px 4px;"><input class="form-input" value="${u.label||''}" style="width:80px;font-size:11px;" placeholder="Unit 1A" oninput="mfRentSetUnit(${i},'label',this.value)"/></td>
-      <td style="padding:2px 4px;"><select class="form-select" style="width:100px;font-size:11px;" onchange="mfRentSetUnit(${i},'type',this.value);_mfRentDeriveAvgs()">
-        ${['Efficiency','1 Bedroom','2 Bedroom','3 Bedroom','4 Bedroom','Other'].map(t=>`<option${u.type===t?' selected':''}>${t}</option>`).join('')}
-      </select></td>
-      <td style="padding:2px 4px;position:relative;">
-        <span style="position:absolute;left:8px;top:50%;transform:translateY(-50%);color:#666;font-size:11px;pointer-events:none;">$</span>
-        <input class="form-input" value="${u.rent||''}" style="width:90px;text-align:right;padding-left:16px;font-size:11px;" placeholder="0" oninput="mfRentSetUnit(${i},'rent',this.value);_mfRentDeriveAvgs();mfRentCalcTotal()"/>
+  tbody.innerHTML=_mfRentUnits.map((u,i)=>{
+    const statusColor = u.status==='Occupied'?'#16a34a':u.status==='Vacant'?'#dc2626':u.status==='Section 8'?'#0891b2':'#64748b';
+    return `<tr id="umunit_row_${i}" style="border-bottom:1px solid #f1f5f9;">
+      <td style="padding:6px 8px;"><input class="form-input" value="${u.label||''}" style="width:80px;font-size:12px;" placeholder="Unit 1A" oninput="mfRentSetUnit(${i},'label',this.value)"/></td>
+      <td style="padding:6px 8px;">
+        <select class="form-select" style="width:130px;font-size:12px;" onchange="mfRentSetUnit(${i},'type',this.value);_mfRentDeriveAvgs();mfRentCalcTotal()">
+          ${['Efficiency','1 Bedroom','2 Bedroom','3 Bedroom','4 Bedroom','Other'].map(t=>`<option${u.type===t?' selected':''}>${t}</option>`).join('')}
+        </select>
       </td>
-      <td style="padding:2px 4px;"><select class="form-select" style="width:110px;font-size:11px;" onchange="mfRentSetUnit(${i},'status',this.value);mfRentCalcTotal()">
-        ${['Occupied','Vacant','Owner-Occupied','Section 8'].map(s=>`<option${u.status===s?' selected':''}>${s}</option>`).join('')}
-      </select></td>
-      <td><button onclick="mfRentRemoveUnit(${i})" style="background:none;border:none;color:#999;font-size:14px;cursor:pointer;">✕</button></td>
-    </tr>`).join('');
+      <td style="padding:6px 8px;text-align:right;position:relative;">
+        <span style="position:absolute;right:106px;top:50%;transform:translateY(-50%);color:#94a3b8;font-size:11px;pointer-events:none;">$</span>
+        <input class="form-input num-input" type="text" inputmode="numeric" value="${_fmtNum(u.rent||'')}" style="width:120px;text-align:right;padding-left:14px;font-size:12px;" placeholder="0" oninput="mfRentSetUnit(${i},'rent',this.value);_mfRentDeriveAvgs();mfRentCalcTotal();_umRefreshStats()"/>
+      </td>
+      <td style="padding:6px 8px;">
+        <div style="display:flex;align-items:center;gap:6px;">
+          <span style="width:8px;height:8px;border-radius:50%;background:${statusColor};display:inline-block;flex-shrink:0;"></span>
+          <select class="form-select" style="width:130px;font-size:12px;" onchange="mfRentSetUnit(${i},'status',this.value);mfRentCalcTotal();_umRefreshStats();_renderMFUnitRows()">
+            ${['Occupied','Vacant','Owner-Occupied','Section 8'].map(s=>`<option${u.status===s?' selected':''}>${s}</option>`).join('')}
+          </select>
+        </div>
+      </td>
+      <td style="padding:6px 8px;text-align:center;"><button onclick="mfRentRemoveUnit(${i})" style="background:none;border:none;color:#cbd5e1;font-size:16px;cursor:pointer;line-height:1;" title="Remove" onmouseenter="this.style.color='#dc2626'" onmouseleave="this.style.color='#cbd5e1'">✕</button></td>
+    </tr>`;
+  }).join('');
 }
 
 // v135: save BOTH byType and units. byType is whatever's currently in the
@@ -22251,6 +22355,20 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v136: Unit Mix UI redesign — stat tiles + sub-cards. Restructured the MF /
+//   Mixed-Use branch of _renderUnitMixSection to match the requested mockup:
+//   top-row stat tiles (Total Units / Occupancy / Total GRI/Mo) update live
+//   from inputs via _umRefreshStats(); No. of Units + Occupancy live in a
+//   compact Overview card alongside a "Two ways to enter rents" tip box;
+//   Avg by Bedroom Type and By Individual Unit each render in their own
+//   white sub-card with uppercase column headers and a blue Total GRI bar.
+//   Unit-count pill ("N units") on the rent-roll header updates via
+//   mfRentCalcTotal. Status dropdown gets a colored status dot (green
+//   Occupied / red Vacant / cyan Section 8 / gray Owner-Occupied).
+//   FIX: Units / Vacant inputs in the bedroom grid bumped 68 → 96px so the
+//   digits no longer get clipped behind the inline "× N/A" affordance.
+//   Occupancy field bumped 70 → 100px for the same reason.
+//   File: index.html:7901-8159 (_renderUnitMixSection MF branch)
 // v135: Unit Mix — show BOTH "Avg by Bedroom Type" and "By Individual Unit"
 //   simultaneously for multifamily AND mixed-use. Removed the mode toggle
 //   that forced an either-or choice. byType inputs auto-derive from the

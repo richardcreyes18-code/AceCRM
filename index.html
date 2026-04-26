@@ -1888,7 +1888,7 @@ const SB_PROP_MAP = {
   parking_type:'Parking Type', foundation:'Foundation', exterior:'Exterior',
   piping:'Piping', wiring:'Wiring', floor_covering:'Floor Covering', paving:'Paving',
   down_payment_pct:'Down Payment (%)', renovation_expense:'Renovation Expense',
-  unit_mix_text:'Unit Mix', mf_unit_rent_data:'MF Unit Rent Data',
+  unit_mix_text:'Unit Mix', mf_unit_rent_data:'MF Unit Rent Data', tenant_mix_data:'Tenant Mix Data',
   units_efficiency:'Units Efficiency', units_efficiency_vacant:'Units Efficiency Vacant',
   units_1br:'Units 1 Bedroom', units_1br_vacant:'Units 1 Bedroom Vacant',
   units_2br:'Units 2 Bedroom', units_2br_vacant:'Units 2 Bedroom Vacant',
@@ -21999,6 +21999,13 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v117: separate tenant_mix_data column for retail/industrial tenant
+// rosters; multifamily rent rolls keep mf_unit_rent_data exclusively.
+// AI auto-fill (edge fn v12) now routes commercial tenant rosters to
+// tenant_mix_data and writes them as a structured array covering all
+// 21 tenant-form fields. Tenant Mix tab UI now reads/writes the new
+// column. Edge fn also returns source_breakdown for upcoming v118
+// side-by-side modal (B).
 // v116: dedupe pipe-split also covers Address field (v115 only split
 // Name/Property Name, missing the case where Address itself contains
 // "addr1 | addr2" — which is what ace_properties rows actually use).
@@ -43214,8 +43221,8 @@ async function loadPitchOutTab(dealId){
   let tenants = [];
   try{
     if(isSupabase()){
-      const rows = await _sbGet(SB_TABLES.properties, `id=eq.${dealId}&select=mf_unit_rent_data`);
-      const raw = rows?.[0]?.mf_unit_rent_data;
+      const rows = await _sbGet(SB_TABLES.properties, `id=eq.${dealId}&select=tenant_mix_data`);
+      const raw = rows?.[0]?.tenant_mix_data;
       if(raw) tenants = typeof raw==='string' ? JSON.parse(raw) : (Array.isArray(raw) ? raw : []);
     } else if(cfg.key){
       let all=[], offset=null;
@@ -43482,9 +43489,11 @@ async function loadTenantMixTab(dealId){
 
   try{
     if(isSupabase()){
-      // Tenants stored as JSONB in mf_unit_rent_data on the property record
-      const rows = await _sbGet(SB_TABLES.properties, `id=eq.${dealId}&select=mf_unit_rent_data`);
-      const raw = rows?.[0]?.mf_unit_rent_data;
+      // v117: tenants now stored in tenant_mix_data (text JSON array). Multifamily
+      // rent rolls live in mf_unit_rent_data instead — they used to share this
+      // column but the AI auto-fill clobbered tenant arrays with multifamily objects.
+      const rows = await _sbGet(SB_TABLES.properties, `id=eq.${dealId}&select=tenant_mix_data`);
+      const raw = rows?.[0]?.tenant_mix_data;
       const parsed = raw ? (typeof raw==='string' ? JSON.parse(raw) : (Array.isArray(raw) ? raw : [])) : [];
       _tmTenants = parsed.map((t,i)=>({id: t.id||('tm_'+i), ...t}));
     } else {
@@ -43810,10 +43819,10 @@ async function tmImportAITenants(){
 
   let saved=0, failed=0;
   if(isSupabase()){
-    // Store tenants as JSON array in mf_unit_rent_data on the property
+    // v117: tenants stored in tenant_mix_data (text-typed JSONB column).
     const existing = _tmTenants||[];
     const merged = [...existing, ...tenants.map((t,i)=>({...t, id:'tm_'+Date.now()+'_'+i}))];
-    try{ await _sbPatch(SB_TABLES.properties, currentDeal.id, {mf_unit_rent_data: merged}); saved=tenants.length; }
+    try{ await _sbPatch(SB_TABLES.properties, currentDeal.id, {tenant_mix_data: JSON.stringify(merged)}); saved=tenants.length; }
     catch(e){ failed=tenants.length; }
     if(btn){ btn.disabled=false; btn.textContent=`✓ Done — ${saved} saved`; }
     if(statusEl) statusEl.textContent = `✓ ${saved} tenants imported${failed?` · ${failed} failed`:''}` ;
@@ -44213,7 +44222,7 @@ async function tmSaveTenant(existingId){
       const current = [...(_tmTenants||[])];
       if(existingId){ const idx=current.findIndex(t=>t.id===existingId); if(idx>=0) current[idx]={...current[idx],...fields}; }
       else current.push({id:'tm_'+Date.now(), ...fields});
-      await _sbPatch(SB_TABLES.properties, currentDeal.id, {mf_unit_rent_data: current});
+      await _sbPatch(SB_TABLES.properties, currentDeal.id, {tenant_mix_data: JSON.stringify(current)});
     } else {
       if(!existingId) fields['Property']=[currentDeal.id];
       const url = existingId ? `https://api.airtable.com/v0/${cfg.base}/${TM_TABLE}/${existingId}` : `https://api.airtable.com/v0/${cfg.base}/${TM_TABLE}`;
@@ -44230,7 +44239,7 @@ async function tmDeleteTenant(tenantId){
   try{
     if(isSupabase()){
       const current = (_tmTenants||[]).filter(t=>t.id!==tenantId);
-      await _sbPatch(SB_TABLES.properties, currentDeal.id, {mf_unit_rent_data: current});
+      await _sbPatch(SB_TABLES.properties, currentDeal.id, {tenant_mix_data: JSON.stringify(current)});
     } else {
       await fetch(`https://api.airtable.com/v0/${cfg.base}/${TM_TABLE}/${tenantId}`,{method:'DELETE',headers:{Authorization:`Bearer ${cfg.key}`}});
     }

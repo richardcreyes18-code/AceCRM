@@ -5653,10 +5653,18 @@ function _naReRenderActiveTab(){
   };
   const fn = renderers[currentTab];
   if(!fn){ renderDealPage(); return; }
+  // Snapshot the current tab so any in-progress user edits survive the
+  // re-render, then decorate, then restore.
+  if(typeof snapshotCurrentTab === 'function') snapshotCurrentTab();
   _rendering = true;
   tabContentEl.innerHTML = fn(currentDeal);
   _rendering = false;
   _naDecorate(tabContentEl);
+  if(typeof restorePendingEdits === 'function'){
+    _rendering = true;
+    restorePendingEdits();
+    _rendering = false;
+  }
 }
 
 window._naMark = async function(col){
@@ -6595,18 +6603,17 @@ function switchTab(name, btn){
   const _ma = document.getElementById('mainArea');
   if(_ma) _ma.scrollTop = 0;
 
-  // 3. Restore any pending edits the user had typed into this tab before
-  _rendering = true;
-  restorePendingEdits();
-  _rendering = false;
-
-  // v113.63: decorate inputs in the freshly-rendered tab with the inline
-  // N/A affordance. switchTab does its own innerHTML so the renderDealPage
-  // hook doesn't fire here.
+  // 3. Decorate inputs first so the wrap doesn't disturb a freshly-restored
+  //    value. Then restore pending edits — this becomes the final write to
+  //    each input.value, ensuring user-cleared fields stay cleared even if
+  //    the wrap-and-move dance had any side effects.
   if(typeof _naDecorate === 'function'){
     const tcEl = document.getElementById('tabContent');
     if(tcEl) _naDecorate(tcEl);
   }
+  _rendering = true;
+  restorePendingEdits();
+  _rendering = false;
 
   // v70: auto-size any textareas in the freshly-rendered tab content so
   // their full content shows without manual drag-resize. Double-rAF to wait
@@ -21733,7 +21740,7 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
-// v113.64: AI auto-fill ALL property details + financial analysis fields
+// v113.65: AI auto-fill ALL property details + financial analysis fields
 // using the ai-parse-deal-v2 edge function (v9). Modal lists every
 // FIELD_SPEC entry grouped by category, with four row states (value /
 // AI proposes N/A / already N/A / no info). Apply merges accepted N/A

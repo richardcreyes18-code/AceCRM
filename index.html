@@ -21414,7 +21414,11 @@ window._fubImportFromCsv = async function(opts){
 // Or click the "✦ AI Auto-Fill" button on the deal card header.
 window._aiAutoFillDeal = async function(propertyId, opts){
   opts = opts || {};
-  const onlyFillEmpty = opts.onlyFillEmpty !== false;   // default true
+  // v113.56: default to "show me everything" so the user can review AI's
+  // take on every field, including ones with stale/wrong data. The user
+  // unchecks any row they don't want to overwrite. Pass {onlyFillEmpty:true}
+  // to fall back to gap-filling mode that preserves existing values.
+  const onlyFillEmpty = opts.onlyFillEmpty === true;
   const cfg = getConfig();
   // v113.56: API key lives in the Supabase Edge Function secret
   // ANTHROPIC_API_KEY only — never browser-side. The edge function reads

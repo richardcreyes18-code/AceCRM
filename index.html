@@ -1889,6 +1889,8 @@ const SB_PROP_MAP = {
   piping:'Piping', wiring:'Wiring', floor_covering:'Floor Covering', paving:'Paving',
   down_payment_pct:'Down Payment (%)', renovation_expense:'Renovation Expense',
   unit_mix_text:'Unit Mix', mf_unit_rent_data:'MF Unit Rent Data', tenant_mix_data:'Tenant Mix Data',
+  noi_actual_yr:'NOI Actual Yr', noi_proforma_yr:'NOI Proforma Yr', noi_override_active:'NOI Override Active',
+  target_seller_net:'Target Seller Net',
   units_efficiency:'Units Efficiency', units_efficiency_vacant:'Units Efficiency Vacant',
   units_1br:'Units 1 Bedroom', units_1br_vacant:'Units 1 Bedroom Vacant',
   units_2br:'Units 2 Bedroom', units_2br_vacant:'Units 2 Bedroom Vacant',
@@ -21999,6 +22001,17 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v120: NOI routing + price-language routing.
+//   * Edge fn v14 adds noi_actual_yr / noi_proforma_yr / noi_override_active
+//     and target_seller_net to FIELD_SPEC. Prompt rules 18 + 19 explicitly
+//     route: only-NOI \u2192 override fields, "wants to Net" \u2192 target_seller_net,
+//     "Pitch Out @" \u2192 pitch_out_price, plain price \u2192 asking_price.
+//   * Server-side guard: if both `noi` and `noi_actual_yr` proposed, drop
+//     `noi` (override wins on ambiguity). Auto-flips noi_override_active=true.
+//   * Client mirror updated; SB_PROP_MAP gets the 4 new columns.
+//   * _aiAutoFillApply: when target_seller_net is in the patch, also
+//     upserts an ace_deal_offers row with offer_type='accepted_by_seller'
+//     so the value appears on the Offers tab card.
 // v119: shipped B + C of the AI Auto-Fill polish.
 //   B) Side-by-side modal: left pane = field table (existing UI), right
 //      pane = collapsible source-notes accordions (one <details> per
@@ -22102,9 +22115,10 @@ window._aiGenerateDescription = async function(propertyId, btn){
 // also offers a "fetch live from edge fn" button that hits the function
 // with meta_only:true and shows the live spec for verification.
 const _AI_FIELD_SPEC = [
-  {col:'asking_price',type:'number',group:'Pricing',hint:'Current asking price in dollars'},
+  {col:'asking_price',type:'number',group:'Pricing',hint:'Seller plain asking price (\u2192 Seller Original Asking card)'},
+  {col:'target_seller_net',type:'number',group:'Pricing',hint:'Seller target net (\u201Cwants to Net $X\u201D \u2192 Accepted From Seller card)'},
   {col:'offer_price',type:'number',group:'Pricing',hint:'Our offer price in dollars (if mentioned)'},
-  {col:'pitch_out_price',type:'number',group:'Pricing',hint:'The price we are pitching out to buyers'},
+  {col:'pitch_out_price',type:'number',group:'Pricing',hint:'Pitch-out price to buyers (\u201CPitch Out @ $X\u201D)'},
   {col:'seller_original_purchase_price',type:'number',group:'Pricing',hint:'What the seller originally paid'},
   {col:'seller_original_purchase_date',type:'date',group:'Pricing',hint:'When seller originally bought (YYYY-MM-DD)'},
   {col:'date_went_on_market',type:'date',group:'Pricing',hint:'When the property went on market'},
@@ -22117,7 +22131,10 @@ const _AI_FIELD_SPEC = [
   {col:'vacancy_rate_pct',type:'percent',group:'Income',hint:'Current vacancy rate %'},
   {col:'occupancy_pct',type:'percent',group:'Income',hint:'Current occupancy %'},
   {col:'non_revenue_units_pct',type:'percent',group:'Income',hint:'Non-revenue units %'},
-  {col:'noi',type:'number',group:'Returns',hint:'Net operating income, yearly (only if explicitly stated)'},
+  {col:'noi',type:'number',group:'Returns',hint:'NOI yearly \u2014 emit ONLY when source has gross income or itemized expenses too'},
+  {col:'noi_actual_yr',type:'number',group:'Returns',hint:'Custom NOI Override (Actual) \u2014 used when source has only top-line NOI'},
+  {col:'noi_proforma_yr',type:'number',group:'Returns',hint:'Custom NOI Override (Proforma) \u2014 same rules as actual'},
+  {col:'noi_override_active',type:'boolean',group:'Returns',hint:'Set true when override fields are the authoritative NOI'},
   {col:'expense_mode',type:'enum',group:'Expenses',hint:'itemized / ratio'},
   {col:'expenses_yearly',type:'number',group:'Expenses',hint:'Total expenses, yearly'},
   {col:'actual_expense_ratio_pct',type:'percent',group:'Expenses',hint:'Actual expense ratio % (only when ratio mode)'},
@@ -22605,6 +22622,29 @@ window._aiAutoFillApply = async function(propertyId, btn){
 
   try {
     await _sbPatch(SB_TABLES.properties, propertyId, patch);
+
+    // v120: when target_seller_net is applied, also upsert an Accepted-From-Seller
+    // offer row so the value lands on the Offers tab card. The "wants to net X"
+    // semantics map to that card per user spec.
+    if(valuePatch.target_seller_net != null && Number(valuePatch.target_seller_net) > 0){
+      try {
+        const existing = await _sbGet('ace_deal_offers',
+          `deal_id=eq.${propertyId}&offer_type=eq.accepted_by_seller&select=id&order=created_at.desc&limit=1`);
+        const amount = Number(valuePatch.target_seller_net);
+        if(existing && existing.length > 0){
+          await _sbPatch('ace_deal_offers', existing[0].id, { amount });
+        } else {
+          await _sbPost('ace_deal_offers', {
+            deal_id: propertyId,
+            offer_type: 'accepted_by_seller',
+            amount,
+            offer_date: new Date().toISOString().slice(0,10),
+            notes: 'AI Auto-Fill: seller target net'
+          });
+        }
+      } catch(e){ console.warn('[ai-autofill] accepted_by_seller upsert failed:', e.message); }
+    }
+
     const valCount = Object.keys(valuePatch).length;
     const naCount = acceptedNa.length;
     const summaryParts = [];

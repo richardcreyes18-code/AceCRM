@@ -22157,6 +22157,20 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v132: Pipeline filter panel — grouped cards + Do Not Include section.
+//   Old layout was a flat 2-column grid that mixed Stage / Asset Type /
+//   Region / State / County / Cities / Agent / Needs Review with the 5
+//   range inputs. Hard to scan. New layout groups filters into 5
+//   accent-striped cards: Location (region/state/county/city), Asset
+//   (asset type, square footage, units), Financial (price, cap rate,
+//   commission), Pipeline & Status (stage, agent, needs-review toggle),
+//   and the new Do Not Include card with two pills: ✓ Deal Reviewed
+//   and ✓ Agent Reviewed. Click a pill in Do Not Include to hide deals
+//   carrying that review tag.
+//   New filter shape field: f.excludeReviewTags (array). Plumbed into
+//   applyPipelineFilters predicate, _countActiveFilters, the chip strip,
+//   and removePipelineFilterChip. togglePipelineExcludeReviewTag drives
+//   the pill toggle.
 // v131: Estimated Expenses now sums into Total Operating Expenses.
 //   Two hardcoded category lists (renderFinancialTab's Total OpEx
 //   computation at line 11337 + updateExpenseTotals' EXP map at line
@@ -48511,6 +48525,9 @@ function _defaultPipelineFilters(){
     unitsMin: null, unitsMax: null,
     capMin: null, capMax: null,     // percent (e.g. 5 = 5%)
     commMin: null, commMax: null,   // dollar amount (asking * split%)
+    // v132: Do Not Include — exclude deals whose Review Tag is in this list.
+    // Values are review_tag column values: 'deal_reviewed' | 'agent_reviewed'.
+    excludeReviewTags: [],
   };
 }
 
@@ -48686,6 +48703,11 @@ function applyPipelineFilters(deals){
     }
     // Phase B: Needs Review filter — only show deals flagged for county review
     if(f.needsReviewOnly && !_isBadCountyName(d['Simple County'], d)) return false;
+    // v132: Do Not Include — exclude deals whose Review Tag is in the list.
+    if(Array.isArray(f.excludeReviewTags) && f.excludeReviewTags.length){
+      const tag = d['Review Tag'] || '';
+      if(tag && f.excludeReviewTags.includes(tag)) return false;
+    }
     // Phase A: Region chips — OR semantics (deal passes if ANY chip matches)
     if(f.regionChipIds && f.regionChipIds.length){
       const county = d['Simple County'] || '';
@@ -48755,6 +48777,7 @@ function _countActiveFilters(){
   if(f.unitsMin != null || f.unitsMax != null) n++;
   if(f.capMin != null || f.capMax != null) n++;
   if(f.commMin != null || f.commMax != null) n++;
+  if(Array.isArray(f.excludeReviewTags) && f.excludeReviewTags.length) n++;
   return n;
 }
 
@@ -48809,6 +48832,12 @@ function removePipelineFilterChip(type, val){
   else if(type === 'unitsRange'){ f.unitsMin = null; f.unitsMax = null; }
   else if(type === 'capRange'){ f.capMin = null; f.capMax = null; }
   else if(type === 'commRange'){ f.commMin = null; f.commMax = null; }
+  else if(type === 'excludeReviewTag'){
+    const list = Array.isArray(f.excludeReviewTags) ? f.excludeReviewTags : [];
+    const i = list.indexOf(val);
+    if(i >= 0) list.splice(i, 1);
+    f.excludeReviewTags = list;
+  }
   else if(Array.isArray(f[type])){
     const idx = f[type].indexOf(val);
     if(idx >= 0) f[type].splice(idx, 1);
@@ -49147,6 +49176,13 @@ function _buildPipelineFilterChipsHTML(){
     const hi = f.commMax != null ? fmtMoney(f.commMax) : '—';
     chips.push(chip('commRange','',`Comm ${lo}–${hi}`));
   }
+  // v132: review-tag exclusions
+  if(Array.isArray(f.excludeReviewTags)){
+    f.excludeReviewTags.forEach(tag => {
+      const label = tag === 'deal_reviewed' ? 'Deal Reviewed' : tag === 'agent_reviewed' ? 'Agent Reviewed' : tag;
+      chips.push(chip('excludeReviewTag', tag, '🚫 ' + label));
+    });
+  }
   return chips.join(' ');
 }
 
@@ -49314,25 +49350,72 @@ function _buildPipelineFilterPanelHTML(){
       ${reviewCount > 0 ? `<div style="font-size:10px;color:#94a3b8;margin-top:4px;">${reviewCount} deals have bad, missing, or mismatched county data.</div>` : ''}
     </div>`;
 
+  // v132: Do Not Include — exclude deals tagged Deal Reviewed / Agent Reviewed
+  const excl = Array.isArray(f.excludeReviewTags) ? f.excludeReviewTags : [];
+  const exclTagPill = (key, label, color, bg, border) => {
+    const on = excl.includes(key);
+    return `<span onclick="togglePipelineExcludeReviewTag('${key}')" style="display:inline-block;padding:6px 12px;border-radius:99px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${on?color:border};background:${on?color:bg};color:${on?'#fff':color};margin-right:6px;margin-bottom:5px;">
+      ${on?'✕ ':''}${label}
+    </span>`;
+  };
+  const excludeReviewHTML = `
+    <div style="margin-bottom:6px;">
+      <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Hide deals tagged</div>
+      ${exclTagPill('deal_reviewed',  '✓ Deal Reviewed',  '#1e40af', '#eff6ff', '#93c5fd')}
+      ${exclTagPill('agent_reviewed', '✓ Agent Reviewed', '#15803d', '#f0fdf4', '#86efac')}
+      <div style="font-size:10px;color:#94a3b8;margin-top:4px;">Click a pill to hide deals carrying that review tag.</div>
+    </div>`;
+
+  // v132: count helper for per-card "N filters" badges so each section
+  // surfaces its own active count (mirrors the mockup).
+  const countOf = keys => keys.reduce((n, k) => {
+    if(k === 'needsReviewOnly') return n + (f.needsReviewOnly ? 1 : 0);
+    if(/Min$/.test(k)){
+      const max = k.replace(/Min$/, 'Max');
+      return n + ((f[k] != null || f[max] != null) ? 1 : 0);
+    }
+    if(/Max$/.test(k)) return n;
+    const v = f[k];
+    if(Array.isArray(v)) return n + (v.length ? 1 : 0);
+    return n + (v ? 1 : 0);
+  }, 0);
+
+  // v132: panel split into 5 grouped cards — Location / Asset / Financial /
+  // Pipeline & Status / Do Not Include. Each card has a colored accent strip
+  // on the left + a per-card filter count in the top-right (mirroring the
+  // mockup the user shared).
+  const card = (accent, title, count, body) => `
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;gap:0;min-width:0;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="display:inline-block;width:4px;height:18px;border-radius:2px;background:${accent};"></span>
+          <span style="font-size:13px;font-weight:700;color:#0f172a;">${title}</span>
+        </div>
+        <span style="font-size:10px;font-weight:600;color:#94a3b8;">${count} filter${count===1?'':'s'}</span>
+      </div>
+      <div>${body}</div>
+    </div>`;
+
   return `
-    <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px 24px;padding:16px 20px;background:#f8fafc;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;">
-      <div>
-        ${stageCombo}
-        ${assetTypeCombo}
-        ${regionCombo}
-        ${stateCombo}
-        ${countyCombo}
-        ${reviewToggleHTML}
-      </div>
-      <div>
-        ${cityCombo}
-        ${agentCombo}
-        ${rangeInput('Price', 'priceMin', 'priceMax', '$', '')}
-        ${rangeInput('Square Footage', 'sfMin', 'sfMax', 'SF', 'SF')}
-        ${rangeInput('Units', 'unitsMin', 'unitsMax', '#', 'units')}
-        ${rangeInput('Cap Rate', 'capMin', 'capMax', '%', '%')}
-        ${rangeInput('Commission Amount', 'commMin', 'commMax', '$', '')}
-      </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(280px, 1fr));gap:14px;padding:16px 20px;background:#f8fafc;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 8px 8px;align-items:start;">
+      ${card('#3b82f6', 'Location', countOf(['regionChipIds','states','countiesMin']) + (f.counties && f.counties.length?1:0) + (f.cities && f.cities.length?1:0),
+        regionCombo + stateCombo + countyCombo + cityCombo)}
+      ${card('#22c55e', 'Asset', countOf(['assetTypesMin']) + (f.assetTypes && f.assetTypes.length?1:0)
+                       + ((f.sfMin != null || f.sfMax != null)?1:0)
+                       + ((f.unitsMin != null || f.unitsMax != null)?1:0),
+        assetTypeCombo + rangeInput('Square Footage', 'sfMin', 'sfMax', 'SF', 'SF') + rangeInput('Units', 'unitsMin', 'unitsMax', '#', 'units'))}
+      ${card('#7c3aed', 'Financial',
+        ((f.priceMin != null || f.priceMax != null)?1:0)
+        + ((f.capMin != null || f.capMax != null)?1:0)
+        + ((f.commMin != null || f.commMax != null)?1:0),
+        rangeInput('Price', 'priceMin', 'priceMax', '$', '')
+        + rangeInput('Cap Rate', 'capMin', 'capMax', '%', '%')
+        + rangeInput('Commission Amount', 'commMin', 'commMax', '$', ''))}
+      ${card('#f59e0b', 'Pipeline & Status',
+        (f.stages && f.stages.length?1:0) + (f.agents && f.agents.length?1:0) + (f.needsReviewOnly?1:0),
+        stageCombo + agentCombo + reviewToggleHTML)}
+      ${card('#dc2626', 'Do Not Include', excl.length,
+        excludeReviewHTML)}
     </div>`;
 }
 
@@ -49399,6 +49482,17 @@ function togglePipelineRegionChip(chipId){
 function togglePipelineNeedsReview(){
   const f = getPipelineFilters();
   f.needsReviewOnly = !f.needsReviewOnly;
+  savePipelineFilters();
+  showPipelineView();
+}
+
+// v132: Do Not Include — toggle a review tag in the exclusion list.
+function togglePipelineExcludeReviewTag(tag){
+  const f = getPipelineFilters();
+  const list = Array.isArray(f.excludeReviewTags) ? f.excludeReviewTags.slice() : [];
+  const i = list.indexOf(tag);
+  if(i >= 0) list.splice(i, 1); else list.push(tag);
+  f.excludeReviewTags = list;
   savePipelineFilters();
   showPipelineView();
 }

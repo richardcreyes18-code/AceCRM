@@ -21400,15 +21400,22 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
-// v113.57: AI auto-fill ALL property details + financial analysis fields
-// using the ai-parse-deal-v2 edge function (v5). Reads property_description,
+// v113.58: AI auto-fill ALL property details + financial analysis fields
+// using the ai-parse-deal-v2 edge function (v6). Reads property_description,
 // deal_notes, general_property_notes, ai_clarifying_notes, plus all
 // related text fields. Always runs dry-run first so the user can review
 // before committing.
 //
-// v5 schema notes: cap rates and expense ratios are calc-only and excluded.
-// Monthly revenue/expense fields are excluded where a yearly counterpart
-// exists (the CRM auto-converts). location_description is fillable.
+// v6 schema notes:
+//   * Cap rates excluded (calc-only).
+//   * Yearly revenue/expense fields only — CRM auto-converts monthly⇄yearly.
+//   * location_description is fillable.
+//   * expense_mode: AI picks "itemized" if line items present, "ratio" only
+//     when source provides nothing but a ratio. Cross-field guard strips
+//     the wrong-branch fields before applying.
+//   * mf_unit_rent_data: AI emits {mode:'byType'|'byUnit', byType, units}
+//     JSON. byType for averages-per-bedroom-type, byUnit for per-unit
+//     rent rolls.
 //
 // Usage from console:
 //   _aiAutoFillDeal(currentDeal.id)

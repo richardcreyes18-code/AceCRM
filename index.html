@@ -11613,34 +11613,8 @@ function renderAICommTab(d){
   return `
     <div class="section-hdr"><span class="icon">✦</span> AI Communication</div>
 
-    <!-- ─── v102.26: TEXT MESSAGE MAKER ─────────────────────────────── -->
-    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:20px;margin-bottom:20px;font-family:'Inter',system-ui,sans-serif;">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:4px;">
-        <div style="font-size:15px;font-weight:700;color:#0f172a;">💬 Text Message Maker</div>
-        <div style="display:flex;gap:8px;align-items:center;">
-          <span id="tmmCopyMsg" style="font-size:12px;color:#16a34a;font-weight:600;display:none;"></span>
-          <button onclick="_tmmCopy()" style="background:#0f172a;color:#fff;border:none;padding:8px 18px;font-size:12px;font-weight:600;border-radius:8px;cursor:pointer;font-family:inherit;">
-            📋 Copy to Clipboard
-          </button>
-        </div>
-      </div>
-      <div style="font-size:12px;color:#64748b;margin-bottom:14px;">
-        Auto-generated briefing you can paste into a text, email, or Slack message. Toggle sections below to include or exclude them.
-      </div>
-
-      <textarea id="tmmTextarea" readonly
-        style="width:100%;min-height:260px;padding:14px 16px;border:1px solid #e2e8f0;border-radius:10px;font-size:13px;font-family:ui-monospace,Menlo,Monaco,Consolas,monospace;background:#f8fafc;color:#0f172a;resize:vertical;line-height:1.55;box-sizing:border-box;">${initialText.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</textarea>
-
-      <div style="margin-top:14px;">
-        <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:8px;">Include in Message</div>
-        <div style="display:flex;flex-wrap:wrap;gap:8px;">
-          ${toggleRow}
-          <button onclick="_tmmResetToggles()" style="background:#fff;border:1px solid #e2e8f0;padding:6px 14px;border-radius:8px;font-size:12px;cursor:pointer;color:#475569;font-weight:500;font-family:inherit;margin-left:auto;">
-            Reset
-          </button>
-        </div>
-      </div>
-    </div>
+    <!-- v113.51: Email Template moved to the TOP — it's the primary tool used many
+         times per deal. Text Message Maker (used once per lead) is collapsed below. -->
 
     <!-- EMAIL TEMPLATE (v113.14 — saved templates, subject line, Gmail send, placeholders) -->
     <div class="info-box">
@@ -11741,7 +11715,39 @@ function renderAICommTab(d){
       <textarea id="emailTemplateText"
         style="width:100%;min-height:520px;font-size:12px;font-family:Tahoma,Arial,sans-serif;border:1px solid #94a3b8;padding:10px;resize:vertical;background:#fff;box-sizing:border-box;line-height:1.5;"
       >${((typeof d['Email Template']==='object' ? d['Email Template']?.value : d['Email Template'])||'').replace(/</g,'&lt;')}</textarea>
-    </div>`;
+    </div>
+
+    <!-- ─── v113.51: TEXT MESSAGE MAKER — collapsed (secondary tool) ─── -->
+    <details style="background:#fff;border:1px solid #e2e8f0;border-radius:12px;padding:14px 18px;margin-top:18px;margin-bottom:20px;font-family:'Inter',system-ui,sans-serif;">
+      <summary style="font-size:13px;font-weight:600;color:#0f172a;cursor:pointer;user-select:none;display:flex;align-items:center;gap:8px;">
+        💬 Text Message Maker
+        <span style="font-size:11px;color:#64748b;font-weight:400;">— quick paste-to-Slack briefing</span>
+      </summary>
+      <div style="margin-top:12px;">
+        <div style="display:flex;align-items:center;justify-content:flex-end;margin-bottom:8px;">
+          <div style="display:flex;gap:8px;align-items:center;">
+            <span id="tmmCopyMsg" style="font-size:12px;color:#16a34a;font-weight:600;display:none;"></span>
+            <button onclick="_tmmCopy()" style="background:#0f172a;color:#fff;border:none;padding:7px 16px;font-size:12px;font-weight:600;border-radius:8px;cursor:pointer;font-family:inherit;">
+              📋 Copy to Clipboard
+            </button>
+          </div>
+        </div>
+        <div style="font-size:11px;color:#64748b;margin-bottom:10px;">
+          Auto-generated briefing you can paste into a text, email, or Slack message. Toggle sections below to include or exclude them.
+        </div>
+        <textarea id="tmmTextarea" readonly
+          style="width:100%;min-height:200px;padding:12px 14px;border:1px solid #e2e8f0;border-radius:10px;font-size:12px;font-family:ui-monospace,Menlo,Monaco,Consolas,monospace;background:#f8fafc;color:#0f172a;resize:vertical;line-height:1.55;box-sizing:border-box;">${initialText.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</textarea>
+        <div style="margin-top:10px;">
+          <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">Include in Message</div>
+          <div style="display:flex;flex-wrap:wrap;gap:8px;">
+            ${toggleRow}
+            <button onclick="_tmmResetToggles()" style="background:#fff;border:1px solid #e2e8f0;padding:6px 14px;border-radius:8px;font-size:12px;cursor:pointer;color:#475569;font-weight:500;font-family:inherit;margin-left:auto;">
+              Reset
+            </button>
+          </div>
+        </div>
+      </div>
+    </details>`;
 }
 
 // v113.11: Airtable-style field picker for the AI Email Template.

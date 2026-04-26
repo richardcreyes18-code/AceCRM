@@ -6211,9 +6211,14 @@ function collectAllDealFields(){
     if(e) raw = e.value;
     else if(id in pending) raw = pending[id];
     else return undefined; // field absent — skip
-    if(raw === '' || raw === null || raw === undefined) return null; // intentional clear
+    // v113.68: per user request, treat "cleared by user" the same as 0.
+    // Render-side `_fmtNum(0||'')` evaluates to '' so blank display is
+    // preserved, and the DB now actually persists the change instead of
+    // silently dropping it. Eliminates the entire null-clear edge-case
+    // surface area — clearing always round-trips correctly.
+    if(raw === '' || raw === null || raw === undefined) return 0;
     const v = Number(String(raw).replace(/,/g,''));
-    return isNaN(v) ? null : v; // 0 passes through as 0
+    return isNaN(v) ? 0 : v;
   };
   const getChk  = id => {
     const e = document.getElementById(id);
@@ -21780,7 +21785,7 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
-// v113.67: AI auto-fill ALL property details + financial analysis fields
+// v113.68: AI auto-fill ALL property details + financial analysis fields
 // using the ai-parse-deal-v2 edge function (v9). Modal lists every
 // FIELD_SPEC entry grouped by category, with four row states (value /
 // AI proposes N/A / already N/A / no info). Apply merges accepted N/A
@@ -49483,33 +49488,36 @@ function saveFinInputs(dealId){
   // field never writes to the DB and the old value persists forever.
   // Send null instead of 0 so the DB column is actually cleared.
   fields['Gross Rental Income (Monthly)']  = aGRI_mo || null;
-  if(get('fin_aVacancy'))   fields['Vacancy Rate (%)']            = get('fin_aVacancy');
-  // v112.1: send null for zero so clearing the input actually wipes the DB.
-  // Same pattern as GRI above — the old `if(v) fields[x]=v` silently dropped
-  // zero writes and the old DB value persisted forever.
+  // v113.68: vacancy persists as 0 when cleared (same rationale as the
+  // size/building block below). Was conditional which dropped the clear.
+  fields['Vacancy Rate (%)']            = get('fin_aVacancy');
   fields['Other Income (Monthly)']    = aOI_mo   || null;
   fields['RUBS/CAM Income (Monthly)'] = aRUBS_mo || null;
   fields['Proforma Gross Rent (Monthly)']  = pGRI_mo || null;
-  if(get('fin_pVacancy'))   fields['Vacancy Rate Proforma (%)']   = get('fin_pVacancy');
+  fields['Vacancy Rate Proforma (%)']   = get('fin_pVacancy');
   fields['Proforma Other Income (Monthly)'] = pOI_mo   || null;
   fields['Proforma RUBS/CAM (Monthly)']     = pRUBS_mo || null;
 
   // ── Size & Building ──────────────────────────────────────────
-  if(get('fin_aNetRentSF')) fields['Net Rentable SF']    = get('fin_aNetRentSF');
-  if(get('fin_aTotalSF'))   fields['Total Building SF']  = get('fin_aTotalSF');
-  if(get('fin_aUnits'))     fields['No. of Units']        = get('fin_aUnits');
-  if(get('fin_aOccupancy')) fields['Occupancy (%)']       = get('fin_aOccupancy');
+  // v113.68: always write — `get()` returns 0 for cleared inputs so the
+  // DB now actually persists "user emptied this field". The old
+  // `if(get(id))` pattern silently dropped 0/empty writes which is why
+  // clearing Total Building SF used to revert to the old value on revisit.
+  fields['Net Rentable SF']    = get('fin_aNetRentSF');
+  fields['Total Building SF']  = get('fin_aTotalSF');
+  fields['No. of Units']       = get('fin_aUnits');
+  fields['Occupancy (%)']      = get('fin_aOccupancy');
 
   // ── Purchase ─────────────────────────────────────────────────
-  if(get('fin_a_downPct')) fields['Down Payment (%)'] = get('fin_a_downPct');
-  if(get('fin_renovation')) fields['Renovation Expense']  = get('fin_renovation');
+  fields['Down Payment (%)'] = get('fin_a_downPct');
+  fields['Renovation Expense']  = get('fin_renovation');
 
   // v102.6: remaining Financial Analysis fields that used to live only in
   // the fin_${dealId} localStorage blob. Now persisted to Supabase so
   // teammates see the same state.
-  if(get('fin_aNRU_pct'))   fields['Non-Revenue Units (%)']          = get('fin_aNRU_pct');
-  if(get('fin_pNRU_pct'))   fields['Proforma Non-Revenue Units (%)'] = get('fin_pNRU_pct');
-  if(get('fin_p_downPct'))  fields['Proforma Down Payment (%)']      = get('fin_p_downPct');
+  fields['Non-Revenue Units (%)']          = get('fin_aNRU_pct');
+  fields['Proforma Non-Revenue Units (%)'] = get('fin_pNRU_pct');
+  fields['Proforma Down Payment (%)']      = get('fin_p_downPct');
   // Radio button state: save the selected down-payment type for each side
   const aDpTypePctEl = document.getElementById('aDpTypePct');
   const pDpTypePctEl = document.getElementById('pDpTypePct');

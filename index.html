@@ -21400,11 +21400,15 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
-// v113.56: AI auto-fill ALL property details + financial analysis fields
-// using the ai-parse-deal-v2 edge function. Reads property_description,
+// v113.57: AI auto-fill ALL property details + financial analysis fields
+// using the ai-parse-deal-v2 edge function (v5). Reads property_description,
 // deal_notes, general_property_notes, ai_clarifying_notes, plus all
 // related text fields. Always runs dry-run first so the user can review
 // before committing.
+//
+// v5 schema notes: cap rates and expense ratios are calc-only and excluded.
+// Monthly revenue/expense fields are excluded where a yearly counterpart
+// exists (the CRM auto-converts). location_description is fillable.
 //
 // Usage from console:
 //   _aiAutoFillDeal(currentDeal.id)

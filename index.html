@@ -21999,6 +21999,10 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v118: AI Auto-Fill modal expands tenant_mix_data into 21 per-tenant
+// subfield rows so user can verify exactly which tenant fields the AI
+// filled vs left blank. Also added "Tenant Mix" + "Industrial" to the
+// group order so they render between Unit Mix and Asset-Specific.
 // v117: separate tenant_mix_data column for retail/industrial tenant
 // rosters; multifamily rent rolls keep mf_unit_rent_data exclusively.
 // AI auto-fill (edge fn v12) now routes commercial tenant rosters to
@@ -22146,10 +22150,48 @@ window._aiAutoFillDeal = async function(propertyId, opts){
   };
   const fieldLabel = (col) => col.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 
-  const groupOrder = ['Pricing','Income','Returns','Expenses','Expense Details','Pro Forma','Mortgages','Financing','Physical','Quality','Components','Unit Mix','Asset-Specific','Seller','Flags','Identity'];
+  const groupOrder = ['Pricing','Income','Returns','Expenses','Expense Details','Pro Forma','Mortgages','Financing','Physical','Quality','Components','Unit Mix','Tenant Mix','Industrial','Asset-Specific','Seller','Flags','Identity'];
   const groups = {};
   for(const f of all){ (groups[f.group] = groups[f.group] || []).push(f); }
   const orderedGroups = groupOrder.filter(g => groups[g]).concat(Object.keys(groups).filter(g => !groupOrder.includes(g)));
+
+  // v118: tenant_mix_data expands into per-tenant per-field rows so user can
+  // see exactly what the AI extracted for every position on the tenant form.
+  const TENANT_FIELD_LABELS = [
+    'Tenant / Business Name','Industry','Unit / Suite','Square Footage','Years in Unit',
+    'Monthly Rent','Rent Per SF (Annual)','CAM Charges (Monthly)','Lease Type','Lease Term (Years)',
+    'Years Remaining','Lease Start Date','Lease End Date','Options to Renew','Annual Increases',
+    'Security Deposit','Sort Order','First Right of Refusal','Personal Guarantee',
+    'Lease Document URL','Tenant Notes'
+  ];
+  const _aiParseTenantArr = (raw) => {
+    if(!raw) return [];
+    if(Array.isArray(raw)) return raw;
+    if(typeof raw === 'string'){ try { const a = JSON.parse(raw); return Array.isArray(a) ? a : []; } catch(e){ return []; } }
+    return [];
+  };
+  const renderTenantBreakdown = (proposedTenants, currentTenants) => {
+    // Match proposed[i] ↔ current[i] by tenant name; fall back to index alignment.
+    const byName = (arr) => { const m = new Map(); for(const t of arr) if(t && t['Tenant / Business Name']) m.set(String(t['Tenant / Business Name']).toLowerCase().trim(), t); return m; };
+    const curMap = byName(currentTenants);
+    return proposedTenants.map((pt, idx) => {
+      const cur = (pt && pt['Tenant / Business Name'] && curMap.get(String(pt['Tenant / Business Name']).toLowerCase().trim())) || currentTenants[idx] || {};
+      const subRows = TENANT_FIELD_LABELS.map(lbl => {
+        const pv = pt?.[lbl];
+        const cv = cur?.[lbl];
+        const has = pv !== null && pv !== undefined && pv !== '' && !(typeof pv === 'boolean' && pv === false);
+        return `<tr style="border-top:1px solid #f1f5f9;${has?'':'opacity:0.55;background:#fafafa;'}">
+          <td style="padding:4px 10px;text-align:center;width:30px;">${has?'<span style="color:#0f766e;font-size:13px;">✓</span>':'<span style="color:#cbd5e1;font-size:11px;">—</span>'}</td>
+          <td style="padding:4px 10px 4px 30px;font-size:11px;color:#475569;">${_ddEsc(lbl)}</td>
+          <td style="padding:4px 10px;font-size:11px;color:#475569;max-width:160px;word-break:break-word;">${fmtVal(cv)}</td>
+          <td style="padding:4px 10px;font-size:11px;max-width:240px;word-break:break-word;">${has ? `<span style="color:#0f172a;font-weight:600;">${fmtVal(pv)}</span>` : fmtVal(null)}</td>
+        </tr>`;
+      }).join('');
+      const filled = TENANT_FIELD_LABELS.filter(lbl => { const v = pt?.[lbl]; return v !== null && v !== undefined && v !== '' && !(typeof v === 'boolean' && v === false); }).length;
+      const tname = (pt && pt['Tenant / Business Name']) || `Tenant ${idx+1}`;
+      return `<tr><td colspan="4" style="padding:8px 10px 4px 10px;font-size:10px;color:#0f766e;background:#ecfdf5;font-weight:600;border-top:1px solid #a7f3d0;">↳ ${_ddEsc(tname)} <span style="color:#94a3b8;font-weight:500;">— ${filled}/${TENANT_FIELD_LABELS.length} subfields filled</span></td></tr>${subRows}`;
+    }).join('');
+  };
 
   const rowsHtml = orderedGroups.map(g => {
     const groupRows = groups[g].map(f => {
@@ -22163,7 +22205,13 @@ window._aiAutoFillDeal = async function(propertyId, opts){
         proposedCellHtml = `<span style="color:#7c3aed;font-style:italic;font-weight:600;">N/A (saved)</span>`;
       } else if(hasProp){
         cbHtml = `<input type="checkbox" id="aiAccept_${f.col}" data-kind="value" checked />`;
-        proposedCellHtml = `<span style="color:#0f172a;font-weight:600;">${fmtVal(f.proposed)}</span>`;
+        // tenant_mix_data: show tenant count in the proposed cell, then expand into subfield rows below.
+        if(f.col === 'tenant_mix_data'){
+          const tenants = _aiParseTenantArr(f.proposed);
+          proposedCellHtml = `<span style="color:#0f172a;font-weight:600;">${tenants.length} tenant${tenants.length===1?'':'s'}</span> <span style="color:#94a3b8;font-size:10px;">— see breakdown below</span>`;
+        } else {
+          proposedCellHtml = `<span style="color:#0f172a;font-weight:600;">${fmtVal(f.proposed)}</span>`;
+        }
       } else if(naProp){
         rowStyle = 'background:#fffbeb;';
         cbHtml = `<input type="checkbox" id="aiAccept_${f.col}" data-kind="na" checked />`;
@@ -22174,13 +22222,18 @@ window._aiAutoFillDeal = async function(propertyId, opts){
         cbHtml = `<input type="checkbox" disabled style="opacity:0.3;cursor:not-allowed;" title="AI had no info for this field" />`;
         proposedCellHtml = fmtVal(null);
       }
-      return `
+      const mainRow = `
         <tr style="border-top:1px solid #e2e8f0;${rowStyle}">
           <td style="padding:6px 10px;text-align:center;width:30px;">${cbHtml}</td>
           <td style="padding:6px 10px;font-size:11px;color:#0f172a;font-weight:500;">${_ddEsc(fieldLabel(f.col))}<br><span style="color:#94a3b8;font-size:9px;font-family:ui-monospace,Menlo,monospace;">${f.col}</span></td>
           <td style="padding:6px 10px;font-size:11px;color:#475569;max-width:160px;word-break:break-word;">${fmtVal(f.current)}</td>
           <td style="padding:6px 10px;font-size:11px;max-width:240px;word-break:break-word;">${proposedCellHtml}</td>
         </tr>`;
+      // tenant_mix_data: append per-tenant subfield breakdown rows under the main row.
+      if(f.col === 'tenant_mix_data' && hasProp){
+        return mainRow + renderTenantBreakdown(_aiParseTenantArr(f.proposed), _aiParseTenantArr(f.current));
+      }
+      return mainRow;
     }).join('');
     const filledInGroup = groups[g].filter(f => f.proposed !== null && f.proposed !== undefined).length;
     const naInGroup = groups[g].filter(f => !!f.na).length;

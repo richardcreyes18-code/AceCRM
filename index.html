@@ -6094,8 +6094,16 @@ function renderDealPage(){
   // Initialize MF rent unit list from deal data (for byUnit mode)
   const _mfRd = _mfRentLoad(currentDeal?.['MF Unit Rent Data']||'');
   _mfRentUnits = _mfRd.units||[];
-  // Trigger initial GRI total calculation if on MF deal
-  setTimeout(()=>{ if(document.getElementById('umr_grandTotal')) mfRentCalcTotal(); }, 50);
+  // v138: also run _mfRentDeriveAvgs on init so the per-bedroom Avg Rent
+  // inputs populate from the rent roll without waiting for a unit edit.
+  // Defensive: even if the initial render template put values in via
+  // _derivedAvgs, this guarantees the DOM is consistent after AI apply.
+  setTimeout(()=>{
+    if(document.getElementById('umr_grandTotal')){
+      if(typeof _mfRentDeriveAvgs === 'function') _mfRentDeriveAvgs();
+      mfRentCalcTotal();
+    }
+  }, 50);
   // v113.62: decorate any [data-na-col] inputs with the inline N/A affordance.
   // Runs after innerHTML so it can wrap the input nodes.
   if(typeof _naDecorate === 'function') _naDecorate();
@@ -22355,6 +22363,24 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v138: Three AI Auto-Fill modal fixes.
+//   (1) mf_unit_rent_data row now shows a readable summary in the proposed
+//       cell — "7 units · Eff $700 · 1BR avg $1,250 · 2BR avg $1,600 ·
+//       3BR $2,000" — and appends a per-unit breakdown table mirroring
+//       the tenant_mix_data layout so users can see every Apt A → Apt G
+//       row with label / type / rent / status before applying.
+//   (2) "Uncertain — N fields need clarification" was rendering blank
+//       "• :" bullets because the LLM sometimes returned uncertain entries
+//       with alt key names ({col, message} / {column, note} / {name,
+//       reason}) instead of the canonical {field, reason}. Now accepts
+//       all of those plus plain string entries.
+//   (3) After AI applies a rent roll, the per-bedroom Avg Rent inputs
+//       (umr_eff / umr_1br / etc.) were staying empty even though the
+//       Monthly Total cell showed correct sums. renderDealPage now calls
+//       _mfRentDeriveAvgs() in its init setTimeout so the inputs populate
+//       from the rent roll on every page load — not just on unit edits.
+//   File: index.html:6094-6105 (init), 22988-23068 (modal helpers),
+//          23090-23110 (uncertain rendering)
 // v137: Edge fn ai-parse-deal-v2 v24 — rent-roll extraction hardening. v23
 //   was emitting units arrays with stub entries (empty label, rent:0)
 //   because the LLM was using alt key names (name vs label, monthly_rent
@@ -22983,6 +23009,101 @@ window._aiAutoFillDeal = async function(propertyId, opts){
     if(typeof raw === 'string'){ try { const a = JSON.parse(raw); return Array.isArray(a) ? a : []; } catch(e){ return []; } }
     return [];
   };
+
+  // v138: parse mf_unit_rent_data JSON into {byType,units} for the modal.
+  // The proposed value comes through as a JSON string (edge fn coerces to
+  // string). Returns a normalized object with {byType, units, mode}.
+  const _aiParseUnitMix = (raw) => {
+    if(!raw) return { byType: {}, units: [], mode: '' };
+    let obj = raw;
+    if(typeof raw === 'string'){
+      try { obj = JSON.parse(raw); } catch(e){ return { byType: {}, units: [], mode: '' }; }
+    }
+    if(!obj || typeof obj !== 'object') return { byType: {}, units: [], mode: '' };
+    return {
+      byType: (obj.byType && typeof obj.byType === 'object') ? obj.byType : {},
+      units: Array.isArray(obj.units) ? obj.units : [],
+      mode: obj.mode || '',
+    };
+  };
+
+  // v138: short readable summary for the proposed-cell preview, like
+  // "7 units · Eff $700 · 1BR avg $1,250 · 2BR avg $1,600 · 3BR $2,000".
+  const _aiUnitMixSummary = (rd) => {
+    const units = rd.units || [];
+    const byType = rd.byType || {};
+    const parts = [];
+    if(units.length){
+      parts.push(units.length + ' unit' + (units.length===1?'':'s'));
+      // Group rents by type for the summary line
+      const groups = {};
+      units.forEach(u => {
+        const t = u.type || 'Other';
+        if(!groups[t]) groups[t] = [];
+        const r = Number(u.rent)||0;
+        if(r > 0) groups[t].push(r);
+      });
+      const order = ['Efficiency','1 Bedroom','2 Bedroom','3 Bedroom','4 Bedroom','Other'];
+      order.forEach(t => {
+        const arr = groups[t];
+        if(!arr || !arr.length) return;
+        const short = t==='Efficiency'?'Eff':t.replace(' Bedroom','BR');
+        if(arr.length === 1) parts.push(short + ' $' + arr[0].toLocaleString());
+        else {
+          const avg = Math.round(arr.reduce((s,v)=>s+v,0) / arr.length);
+          parts.push(short + ' avg $' + avg.toLocaleString());
+        }
+      });
+    } else {
+      const order = [['eff','Eff'],['1br','1BR'],['2br','2BR'],['3br','3BR'],['4br','4BR'],['oth','Other']];
+      order.forEach(([k,short]) => {
+        const v = Number(byType[k])||0;
+        if(v > 0) parts.push(short + ' avg $' + v.toLocaleString());
+      });
+      if(parts.length) parts.unshift('per-bedroom averages');
+    }
+    return parts.length ? parts.join(' · ') : 'no rent data';
+  };
+
+  // v138: per-unit breakdown table (mirrors the tenant_mix_data approach).
+  // Renders one sub-row per individual unit with label / type / rent / status.
+  // If only byType averages are present, render that breakdown instead.
+  const renderUnitMixBreakdown = (proposed, current) => {
+    const units = proposed.units || [];
+    const byType = proposed.byType || {};
+    let html = '';
+    if(units.length){
+      html += `<tr><td colspan="5" style="padding:8px 10px 4px 10px;font-size:10px;color:#0f766e;background:#ecfdf5;font-weight:600;border-top:1px solid #a7f3d0;">↳ Per-unit rent roll <span style="color:#94a3b8;font-weight:500;">— ${units.length} unit${units.length===1?'':'s'}</span></td></tr>`;
+      units.forEach((u, i) => {
+        const rent = Number(u.rent)||0;
+        const has = rent > 0 || (u.label && String(u.label).trim());
+        const statusColor = u.status==='Occupied'?'#16a34a':u.status==='Vacant'?'#dc2626':u.status==='Section 8'?'#0891b2':'#64748b';
+        html += `<tr style="border-top:1px solid #f1f5f9;${has?'':'opacity:0.55;background:#fafafa;'}">
+          <td style="padding:4px 10px;text-align:center;width:30px;">${has?'<span style="color:#0f766e;font-size:13px;">✓</span>':'<span style="color:#cbd5e1;font-size:11px;">—</span>'}</td>
+          <td style="padding:4px 10px 4px 30px;font-size:11px;color:#475569;">${_ddEsc(u.label || ('Unit '+(i+1)))}</td>
+          <td style="padding:4px 10px;font-size:11px;color:#475569;">${_ddEsc(u.type || '—')}</td>
+          <td style="padding:4px 10px;font-size:11px;"><span style="color:#0f172a;font-weight:600;">${rent ? '$'+rent.toLocaleString() : '—'}</span></td>
+          <td style="padding:4px 10px;font-size:10px;"><span style="color:${statusColor};font-weight:600;">● ${_ddEsc(u.status || 'Occupied')}</span></td>
+        </tr>`;
+      });
+    }
+    const byTypeRows = ['eff','1br','2br','3br','4br','oth']
+      .map(k => ({k, val: Number(byType[k])||0}))
+      .filter(o => o.val > 0);
+    if(byTypeRows.length){
+      const labelOf = {eff:'Efficiency','1br':'1 Bedroom','2br':'2 Bedroom','3br':'3 Bedroom','4br':'4 Bedroom',oth:'Other'};
+      html += `<tr><td colspan="5" style="padding:8px 10px 4px 10px;font-size:10px;color:#0f766e;background:#ecfdf5;font-weight:600;border-top:1px solid #a7f3d0;">↳ Per-bedroom averages</td></tr>`;
+      byTypeRows.forEach(({k, val}) => {
+        html += `<tr style="border-top:1px solid #f1f5f9;">
+          <td style="padding:4px 10px;text-align:center;width:30px;"><span style="color:#0f766e;font-size:13px;">✓</span></td>
+          <td style="padding:4px 10px 4px 30px;font-size:11px;color:#475569;" colspan="2">${labelOf[k]} avg rent</td>
+          <td style="padding:4px 10px;font-size:11px;"><span style="color:#0f172a;font-weight:600;">$${val.toLocaleString()}</span></td>
+          <td style="padding:4px 10px;font-size:10px;color:#cbd5e1;">—</td>
+        </tr>`;
+      });
+    }
+    return html;
+  };
   const renderTenantBreakdown = (proposedTenants, currentTenants) => {
     // Match proposed[i] ↔ current[i] by tenant name; fall back to index alignment.
     const byName = (arr) => { const m = new Map(); for(const t of arr) if(t && t['Tenant / Business Name']) m.set(String(t['Tenant / Business Name']).toLowerCase().trim(), t); return m; };
@@ -23028,7 +23149,11 @@ window._aiAutoFillDeal = async function(propertyId, opts){
           const tenants = _aiParseTenantArr(f.proposed);
           proposedCellHtml = `<span style="color:#0f172a;font-weight:600;">${tenants.length} tenant${tenants.length===1?'':'s'}</span> <span style="color:#94a3b8;font-size:10px;">— see breakdown below (not editable)</span>`;
         } else if(f.col === 'mf_unit_rent_data'){
-          proposedCellHtml = `<span style="color:#0f172a;font-weight:600;">unit-mix JSON</span> <span style="color:#94a3b8;font-size:10px;">— not editable inline</span>`;
+          // v138: show a readable summary of what AI extracted instead of
+          // "unit-mix JSON". Full per-unit breakdown is appended below.
+          const _rd = _aiParseUnitMix(f.proposed);
+          const _summary = _aiUnitMixSummary(_rd);
+          proposedCellHtml = `<span style="color:#0f172a;font-weight:600;">${_ddEsc(_summary)}</span> <span style="color:#94a3b8;font-size:10px;">— see breakdown below (not editable)</span>`;
         } else if(typeof f.proposed === 'boolean'){
           proposedCellHtml = `<select id="aiVal_${f.col}" data-edit-type="boolean" style="width:100%;font-size:11px;padding:3px 5px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;color:#0f172a;font-weight:600;">
             <option value="true" ${f.proposed===true?'selected':''}>✓ Yes</option>
@@ -23068,6 +23193,11 @@ window._aiAutoFillDeal = async function(propertyId, opts){
       if(f.col === 'tenant_mix_data' && hasProp){
         return mainRow + renderTenantBreakdown(_aiParseTenantArr(f.proposed), _aiParseTenantArr(f.current));
       }
+      // v138: mf_unit_rent_data: append per-unit breakdown so the user can
+      // see exactly what AI proposes (label, type, rent, status per unit).
+      if(f.col === 'mf_unit_rent_data' && hasProp){
+        return mainRow + renderUnitMixBreakdown(_aiParseUnitMix(f.proposed), _aiParseUnitMix(f.current));
+      }
       return mainRow;
     }).join('');
     const filledInGroup = groups[g].filter(f => f.proposed !== null && f.proposed !== undefined).length;
@@ -23081,11 +23211,27 @@ window._aiAutoFillDeal = async function(propertyId, opts){
       ${groupRows}`;
   }).join('');
 
+  // v138: accept several key-name variants for uncertain entries. The LLM
+  // sometimes returns {col, reason} or {name, message} or {column, note}
+  // instead of {field, reason} — without this, every bullet rendered as
+  // "• :" with both halves blank. Fallback: if a string came through
+  // instead of an object, use it as the field with no reason.
   const uncertainHtml = uncertain.length ? `
     <details style="margin-top:14px;background:#fef3c7;border:1px solid #fde68a;border-radius:8px;padding:8px 12px;">
       <summary style="font-size:12px;font-weight:600;color:#78350f;cursor:pointer;">⚠ Uncertain — ${uncertain.length} field${uncertain.length===1?'':'s'} need clarification</summary>
       <div style="margin-top:8px;font-size:11px;color:#78350f;line-height:1.55;">
-        ${uncertain.map(u => `<div style="padding:3px 0;">• <strong>${_ddEsc(fieldLabel(u.field || ''))}</strong>: ${_ddEsc(u.reason || '')}</div>`).join('')}
+        ${uncertain.map(u => {
+          if(typeof u === 'string'){
+            return `<div style="padding:3px 0;">• <strong>${_ddEsc(fieldLabel(u))}</strong></div>`;
+          }
+          if(!u || typeof u !== 'object') return '';
+          const fld = u.field || u.col || u.column || u.name || u.key || '';
+          const rsn = u.reason || u.message || u.note || u.description || u.explanation || '';
+          if(!fld && !rsn) return '';
+          if(!fld) return `<div style="padding:3px 0;">• ${_ddEsc(rsn)}</div>`;
+          if(!rsn) return `<div style="padding:3px 0;">• <strong>${_ddEsc(fieldLabel(fld))}</strong></div>`;
+          return `<div style="padding:3px 0;">• <strong>${_ddEsc(fieldLabel(fld))}</strong>: ${_ddEsc(rsn)}</div>`;
+        }).filter(Boolean).join('')}
       </div>
     </details>` : '';
 

@@ -21416,11 +21416,10 @@ window._aiAutoFillDeal = async function(propertyId, opts){
   opts = opts || {};
   const onlyFillEmpty = opts.onlyFillEmpty !== false;   // default true
   const cfg = getConfig();
-  const anthropicKey = (typeof _store !== 'undefined' && _store && _store.get) ? _store.get('anthropic_key') : '';
-  if(!anthropicKey){
-    alert('No Anthropic API key configured.\nAdd one in Settings → Configuration → Anthropic Key.');
-    return;
-  }
+  // v113.56: client-side key is OPTIONAL. Edge function falls back to the
+  // ANTHROPIC_API_KEY Supabase secret if no client key is set, so the team
+  // can share one centralized key.
+  const anthropicKey = (typeof _store !== 'undefined' && _store && _store.get) ? (_store.get('anthropic_key') || '') : '';
   if(!propertyId){
     alert('No deal selected. Open a deal and try again, or call with a deal id.');
     return;

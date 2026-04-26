@@ -5540,9 +5540,10 @@ const _NA_INPUT_MAP = {
   'prop_numBuildings':'no_of_buildings',
   'prop_parkingType':'parking_type', 'prop_parkingSpaces':'no_of_parking_spaces',
   'prop_parkingRatio':'parking_ratio',
-  'name:propUse':'property_use', 'name:constStatus':'construction_status',
-  'name:distressed':'is_distressed', 'name:groundLease':'is_on_ground_lease',
-  'name:saleLeaseback':'sale_leaseback',
+  // v113.74: these were radio groups, now <select> with id (not name).
+  'propUse':'property_use', 'constStatus':'construction_status',
+  'distressed':'is_distressed', 'groundLease':'is_on_ground_lease',
+  'saleLeaseback':'sale_leaseback',
   'sellerMotivation':'seller_motivation_level', 'whySelling':'why_selling',
   'propClass':'property_class', 'propCondition':'property_condition',
   'locationClass':'location_class', 'locationTrending':'location_trending',
@@ -6281,13 +6282,20 @@ function collectAllDealFields(){
   const street1 = getVal('nameStreet1'), city=getVal('nameCity'), state=getVal('nameState'), zip=getVal('nameZip');
   if(street1){ let a=street1; if(city) a+=', '+city; if(state) a+=', '+state; if(zip) a+=' '+zip; s(fields,'Address',a); }
 
-  const propUse = getRadio('propUse');
-  const useMap = {investment:'Investment/Cash Flow',owneruser:'Owner/User',turnaround:'Turnaround',vacant:'Vacant',forsale:'Business Also For Sale'};
-  s(fields,'Property Use', useMap[propUse]||propUse||null);
-
-  const conStatus = getRadio('constStatus');
-  s(fields,'Construction Status', conStatus==='existing'?'Existing':conStatus==='proposed'?'Under Construction/Proposed':null);
-  if(getRadio('distressed')) fields['Is Distressed'] = getRadio('distressed')==='yes';
+  // v113.74: propUse / constStatus are now <select> with display-string
+  // values. Distressed / Ground Lease / Sale Leaseback are select-of-
+  // (yes / no / blank). getVal returns '' when blank → s() persists null.
+  s(fields,'Property Use',          getVal('propUse'));
+  s(fields,'Construction Status',   getVal('constStatus'));
+  const distVal = getVal('distressed');
+  if(distVal === 'yes' || distVal === 'no') fields['Is Distressed'] = (distVal === 'yes');
+  else if(distVal === '') fields['Is Distressed'] = null;
+  const glVal = getVal('groundLease');
+  if(glVal === 'yes' || glVal === 'no') fields['Is On Ground Lease'] = (glVal === 'yes');
+  else if(glVal === '') fields['Is On Ground Lease'] = null;
+  const slbVal = getVal('saleLeaseback');
+  if(slbVal === 'yes' || slbVal === 'no') fields['Sale Leaseback'] = (slbVal === 'yes');
+  else if(slbVal === '') fields['Sale Leaseback'] = null;
 
   s(fields,'Property Class',    getVal('propClass'));
   s(fields,'Property Condition',getVal('propCondition'));
@@ -7404,42 +7412,114 @@ function renderPropertyTab(d){
             </div>
 
             ${_propMode === 'simple' ? '' : `
+            <!-- v113.74: Property Use & Status — compact dropdowns, moved up
+                 from the standalone section below. Each select includes a
+                 blank "—" option so unset reads as truly empty. Boolean
+                 fields render as Yes/No selects (no more radio rows). -->
+            <div class="pd-field-grid" style="grid-template-columns:repeat(5,1fr);">
+              <div class="pd-field">
+                <label class="pd-lbl">Property Use</label>
+                <select id="propUse" class="form-select" onchange="markDirty()">
+                  <option value="">—</option>
+                  ${['Investment/Cash Flow','Owner/User','Vacant','Turnaround','Business Also For Sale']
+                    .map(v=>`<option${d['Property Use']===v?' selected':''}>${v}</option>`).join('')}
+                </select>
+              </div>
+              <div class="pd-field">
+                <label class="pd-lbl">Construction</label>
+                <select id="constStatus" class="form-select" onchange="markDirty()">
+                  <option value="">—</option>
+                  ${['Existing','Under Construction/Proposed']
+                    .map(v=>`<option${d['Construction Status']===v?' selected':''}>${v}</option>`).join('')}
+                </select>
+              </div>
+              <div class="pd-field">
+                <label class="pd-lbl">Distressed?</label>
+                <select id="distressed" class="form-select" onchange="markDirty()">
+                  <option value="">—</option>
+                  <option value="yes"${d['Is Distressed']===true?' selected':''}>Yes</option>
+                  <option value="no"${d['Is Distressed']===false?' selected':''}>No</option>
+                </select>
+              </div>
+              <div class="pd-field">
+                <label class="pd-lbl">Ground Lease?</label>
+                <select id="groundLease" class="form-select" onchange="markDirty()">
+                  <option value="">—</option>
+                  <option value="yes"${d['Is On Ground Lease']===true?' selected':''}>Yes</option>
+                  <option value="no"${d['Is On Ground Lease']===false?' selected':''}>No</option>
+                </select>
+              </div>
+              <div class="pd-field">
+                <label class="pd-lbl">Sale Leaseback?</label>
+                <select id="saleLeaseback" class="form-select" onchange="markDirty()">
+                  <option value="">—</option>
+                  <option value="yes"${d['Sale Leaseback']===true?' selected':''}>Yes</option>
+                  <option value="no"${d['Sale Leaseback']===false?' selected':''}>No</option>
+                </select>
+              </div>
+            </div>
+
+            <!-- v113.74: Asset Class — moved up from standalone section. -->
+            <div class="pd-field-grid" style="grid-template-columns:repeat(5,1fr);">
+              <div class="pd-field">
+                <label class="pd-lbl">Property Class</label>
+                <select id="propClass" class="form-select" onchange="markDirty()">
+                  <option value="">—</option>
+                  ${['A','B','C','D'].map(v=>`<option${d['Property Class']===v?' selected':''}>${v}</option>`).join('')}
+                </select>
+              </div>
+              <div class="pd-field">
+                <label class="pd-lbl">Condition</label>
+                <select id="propCondition" class="form-select" onchange="markDirty()">
+                  <option value="">—</option>
+                  ${['Excellent','Good','Average','Fair','Poor'].map(v=>`<option${d['Property Condition']===v?' selected':''}>${v}</option>`).join('')}
+                </select>
+              </div>
+              <div class="pd-field">
+                <label class="pd-lbl">Location Class</label>
+                <select id="locationClass" class="form-select" onchange="markDirty()">
+                  <option value="">—</option>
+                  ${['A','B','C','D'].map(v=>`<option${d['Location Class']===v?' selected':''}>${v}</option>`).join('')}
+                </select>
+              </div>
+              <div class="pd-field">
+                <label class="pd-lbl">Location Trending</label>
+                <select id="locationTrending" class="form-select" onchange="markDirty()">
+                  <option value="">—</option>
+                  ${['Up-and-coming','Stable','Declining'].map(v=>`<option${d['Location Trending']===v?' selected':''}>${v}</option>`).join('')}
+                </select>
+              </div>
+              <div class="pd-field">
+                <label class="pd-lbl">Location Type</label>
+                <select id="locationType" class="form-select" onchange="markDirty()">
+                  <option value="">—</option>
+                  ${['Urban','Suburban','Rural'].map(v=>`<option${d['Location Type']===v?' selected':''}>${v}</option>`).join('')}
+                </select>
+              </div>
+            </div>
+
             <div class="pd-field-grid">
-              <div class="pd-field">
-                <label class="pd-lbl">Property on Ground Lease</label>
-                <div class="pd-radio-row">
-                  <label><input type="radio" name="groundLease" value="yes"/> Yes</label>
-                  <label><input type="radio" name="groundLease" value="no" checked/> No</label>
-                </div>
-              </div>
-              <div class="pd-field">
-                <label class="pd-lbl">Sale Leaseback</label>
-                <div class="pd-radio-row">
-                  <label><input type="radio" name="saleLeaseback" value="yes"/> Yes</label>
-                  <label><input type="radio" name="saleLeaseback" value="no" checked/> No</label>
-                </div>
-              </div>
               <div class="pd-field">
                 <label class="pd-lbl">Parking Type</label>
                 <select id="prop_parkingType" class="form-select" onchange="markDirty()">
-                  ${['Uncovered','Covered','Garage','Street','Underground','None'].map(v=>`<option${(d['Parking Type']||'Uncovered')===v?' selected':''}>${v}</option>`).join('')}
+                  <option value="">—</option>
+                  ${['Uncovered','Covered','Garage','Street','Underground','None'].map(v=>`<option${d['Parking Type']===v?' selected':''}>${v}</option>`).join('')}
                 </select>
               </div>
               <div class="pd-field">
                 <label class="pd-lbl">Parking Spaces · Ratio</label>
                 <div class="pd-row">
-                  <input id="prop_parkingSpaces" class="form-input" value="${d['No. of Parking Spaces']||''}" placeholder="210" oninput="markDirty()" style="width:60%;"/>
-                  <input id="prop_parkingRatio" class="form-input" value="${d['Parking Ratio']||'1:1'}" placeholder="1:1" oninput="markDirty()" style="width:40%;"/>
+                  <input id="prop_parkingSpaces" class="form-input" value="${d['No. of Parking Spaces']||''}" placeholder="—" oninput="markDirty()" style="width:60%;"/>
+                  <input id="prop_parkingRatio" class="form-input" value="${d['Parking Ratio']||''}" placeholder="—" oninput="markDirty()" style="width:40%;"/>
                 </div>
               </div>
             </div>
 
+            <!-- v113.74: Highlights default to 2 rows; user can add more -->
             <div class="pd-hl-section">
               <label class="pd-lbl">🔦 Property Highlights</label>
               <div id="highlightsContainer">
                 <div style="display:flex;flex-direction:column;gap:5px;" id="highlightsList">
-                  <div style="display:flex;gap:6px;align-items:center;"><input class="form-input" style="flex:1;" placeholder="—"/><button class="save-btn" style="padding:2px 7px;" onclick="removeHighlight(this)">✕</button></div>
-                  <div style="display:flex;gap:6px;align-items:center;"><input class="form-input" style="flex:1;" placeholder="—"/><button class="save-btn" style="padding:2px 7px;" onclick="removeHighlight(this)">✕</button></div>
                   <div style="display:flex;gap:6px;align-items:center;"><input class="form-input" style="flex:1;" placeholder="—"/><button class="save-btn" style="padding:2px 7px;" onclick="removeHighlight(this)">✕</button></div>
                   <div style="display:flex;gap:6px;align-items:center;"><input class="form-input" style="flex:1;" placeholder="—"/><button class="save-btn" style="padding:2px 7px;" onclick="removeHighlight(this)">✕</button></div>
                 </div>
@@ -7459,41 +7539,8 @@ function renderPropertyTab(d){
     ${_showUnitMix ? _renderUnitMixSection(d) : ''}
     ${_showIndustrial ? _renderIndustrialSection(d) : ''}
 
-    <!-- PROPERTY USE + CONSTRUCTION STATUS — side by side as grid fields -->
-    <div class="info-box">
-      <div class="info-box-title">Property Use & Status</div>
-      <div class="pd-field-grid" style="grid-template-columns:1fr 1fr;">
-        <div class="pd-field">
-          <label class="pd-lbl">Property Use</label>
-          <div style="display:flex;flex-direction:column;gap:5px;font-size:12px;padding-top:4px;">
-            <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="radio" name="propUse" value="investment" checked/> Investment / Current Cash Flow</label>
-            <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="radio" name="propUse" value="owneruser"/> Owner/User</label>
-            <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="radio" name="propUse" value="vacant"/> Vacant</label>
-            <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="radio" name="propUse" value="turnaround"/> Investment / Turnaround</label>
-            <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="radio" name="propUse" value="business"/> Business Also For Sale</label>
-          </div>
-        </div>
-        <div class="pd-field">
-          <label class="pd-lbl">Construction & Status</label>
-          <div style="display:flex;flex-direction:column;gap:10px;font-size:12px;padding-top:4px;">
-            <div>
-              <div style="font-size:11px;font-weight:600;color:#334155;margin-bottom:3px;">Construction Status</div>
-              <div style="display:flex;gap:16px;">
-                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="radio" name="constStatus" id="conStatus_existing" value="existing" checked/> Existing</label>
-                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="radio" name="constStatus" id="conStatus_proposed" value="proposed"/> Under Construction / Proposed</label>
-              </div>
-            </div>
-            <div>
-              <div style="font-size:11px;font-weight:600;color:#334155;margin-bottom:3px;">Is Property Distressed?</div>
-              <div style="display:flex;gap:16px;">
-                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="radio" name="distressed" value="yes"/> Yes</label>
-                <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="radio" name="distressed" value="no" checked/> No</label>
-              </div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+    <!-- v113.74: Property Use & Status section removed — moved into the
+         compact dropdown row inside Property Information above. -->
 
     <!-- SELLER MOTIVATION -->
     <div class="info-box">
@@ -7515,52 +7562,23 @@ function renderPropertyTab(d){
       </div>
     </div>
 
-    <!-- ASSET CLASS -->
+    <!-- v113.74: Asset Class section moved into Property Information.
+         Simple-mode keeps a hidden block so save logic still finds the IDs
+         when collectAllDealFields runs in simple mode. -->
     ${_propMode === 'simple' ? `
       <div style="display:none;">
-        <select id="propClass"><option>A</option><option selected>B</option><option>C</option><option>D</option></select>
-        <select id="propCondition"><option>Excellent</option><option selected>Good</option><option>Fair</option><option>Poor</option></select>
-        <select id="locationClass"><option>A</option><option selected>B</option><option>C</option><option>D</option></select>
-        <select id="locationTrending"><option>Growth</option><option>Stable</option><option>Declining</option></select>
-        <select id="locationType"><option>Urban</option><option>Suburban</option><option>Rural</option></select>
+        <select id="propClass"><option value=""></option><option>A</option><option>B</option><option>C</option><option>D</option></select>
+        <select id="propCondition"><option value=""></option><option>Excellent</option><option>Good</option><option>Average</option><option>Fair</option><option>Poor</option></select>
+        <select id="locationClass"><option value=""></option><option>A</option><option>B</option><option>C</option><option>D</option></select>
+        <select id="locationTrending"><option value=""></option><option>Up-and-coming</option><option>Stable</option><option>Declining</option></select>
+        <select id="locationType"><option value=""></option><option>Urban</option><option>Suburban</option><option>Rural</option></select>
+        <select id="propUse"><option value=""></option><option>Investment/Cash Flow</option><option>Owner/User</option><option>Vacant</option><option>Turnaround</option><option>Business Also For Sale</option></select>
+        <select id="constStatus"><option value=""></option><option>Existing</option><option>Under Construction/Proposed</option></select>
+        <select id="distressed"><option value=""></option><option value="yes">Yes</option><option value="no">No</option></select>
+        <select id="groundLease"><option value=""></option><option value="yes">Yes</option><option value="no">No</option></select>
+        <select id="saleLeaseback"><option value=""></option><option value="yes">Yes</option><option value="no">No</option></select>
       </div>
-    ` : `
-      <div class="info-box">
-        <div class="info-box-title">Asset Class</div>
-        <div class="pd-field-grid" style="grid-template-columns:repeat(5,1fr);">
-          <div class="pd-field">
-            <label class="pd-lbl">Property Class</label>
-            <select class="form-select" id="propClass" style="width:100%;box-sizing:border-box;">
-              <option>A</option><option selected>B</option><option>C</option><option>D</option>
-            </select>
-          </div>
-          <div class="pd-field">
-            <label class="pd-lbl">Condition</label>
-            <select class="form-select" id="propCondition" style="width:100%;box-sizing:border-box;">
-              <option>Excellent</option><option selected>Good</option><option>Fair</option><option>Poor</option>
-            </select>
-          </div>
-          <div class="pd-field">
-            <label class="pd-lbl">Location Class</label>
-            <select class="form-select" id="locationClass" style="width:100%;box-sizing:border-box;">
-              <option>A</option><option selected>B</option><option>C</option><option>D</option>
-            </select>
-          </div>
-          <div class="pd-field">
-            <label class="pd-lbl">Location Trending</label>
-            <select class="form-select" id="locationTrending" style="width:100%;box-sizing:border-box;">
-              <option>Growth</option><option>Stable</option><option>Declining</option>
-            </select>
-          </div>
-          <div class="pd-field">
-            <label class="pd-lbl">Location Type</label>
-            <select class="form-select" id="locationType" style="width:100%;box-sizing:border-box;">
-              <option>Urban</option><option>Suburban</option><option>Rural</option>
-            </select>
-          </div>
-        </div>
-      </div>
-    `}
+    ` : ''}
 
     <!-- LISTING & SELLER DETAILS -->
     ${_propMode === 'simple' ? `
@@ -11889,18 +11907,15 @@ async function saveAllPropertyDetails(){
     fields['CRM Asset Classification'] = pending['CRM Asset Classification'];
   }
 
-  // ── Property Use ───────────────────────────────────────────
-  const propUse = getRadio('propUse');
-  const useMap = {
-    investment:'Investment/Cash Flow', owneruser:'Owner/User',
-    turnaround:'Turnaround', vacant:'Vacant', forsale:'Business Also For Sale'
-  };
-  if(propUse) s('Property Use', useMap[propUse]||propUse);
-
-  // ── Construction Status ────────────────────────────────────
-  const conStatus = getRadio('constStatus');
-  if(conStatus) s('Construction Status', conStatus==='existing'?'Existing':'Under Construction/Proposed');
-  s('Is Distressed', getRadio('distressed')==='yes');
+  // ── Property Use / Construction Status (v113.74: now selects) ──
+  s('Property Use',         getVal('propUse'));
+  s('Construction Status',  getVal('constStatus'));
+  const _distVal = getVal('distressed');
+  if(_distVal === 'yes' || _distVal === 'no') fields['Is Distressed'] = (_distVal === 'yes');
+  const _glVal = getVal('groundLease');
+  if(_glVal === 'yes' || _glVal === 'no') fields['Is On Ground Lease'] = (_glVal === 'yes');
+  const _slbVal = getVal('saleLeaseback');
+  if(_slbVal === 'yes' || _slbVal === 'no') fields['Sale Leaseback'] = (_slbVal === 'yes');
 
   // ── Asset Class ────────────────────────────────────────────
   s('Property Class',     getVal('propClass'));
@@ -21918,7 +21933,7 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
-// v113.73: AI auto-fill ALL property details + financial analysis fields
+// v113.74: AI auto-fill ALL property details + financial analysis fields
 // using the ai-parse-deal-v2 edge function (v9). Modal lists every
 // FIELD_SPEC entry grouped by category, with four row states (value /
 // AI proposes N/A / already N/A / no info). Apply merges accepted N/A

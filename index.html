@@ -3143,19 +3143,70 @@ async function syncData(){
       // each OFFSET >= 2000 page did a full table sort and timed out under
       // the JS supabase client. Result: allDeals capped at ~2000 rows.
       // Migration v113_40_ace_properties_load_idx adds the index.
-      const pages = await Promise.all(
+      // v133: hardened parallel fetch. The previous version did a silent
+      // `.catch(e => return [])` on each page, so any page that failed
+      // (timeout, proxy hiccup, server 5xx) just dropped its rows on the
+      // floor — the user saw a partial allDeals on first load and a
+      // different partial set on refresh. Now we track per-page success,
+      // retry failures serially with backoff, and throw a hard error if a
+      // page can't be recovered after 3 attempts so the loader surfaces
+      // it instead of silently rendering the wrong number of deals.
+      const fetchPage = (i) => _sbGet(SB_TABLES.properties,
+        `select=*&deleted_at=is.null&order=created_at.desc,id.asc&limit=${batchSize}&offset=${i*batchSize}${agentFilter}`);
+
+      const pageResults = await Promise.all(
         Array.from({length: MAX_PARALLEL_PAGES}, (_, i) =>
-          _sbGet(SB_TABLES.properties,
-            `select=*&deleted_at=is.null&order=created_at.desc,id.asc&limit=${batchSize}&offset=${i*batchSize}${agentFilter}`)
-          .catch(e => { console.warn('deal page '+i+' failed:', e.message); return []; })
+          fetchPage(i).then(rows => ({ ok:true, rows: rows||[], i }))
+                      .catch(err => ({ ok:false, err, i, rows: [] }))
         )
       );
-      pages.forEach(mapRows);
+
+      // Retry any failed pages with up to 3 attempts, exponential backoff.
+      for(const p of pageResults){
+        if(p.ok) continue;
+        let attempt = 0, lastErr = p.err;
+        while(attempt < 3 && !p.ok){
+          attempt++;
+          await new Promise(r => setTimeout(r, 400 * attempt));
+          try {
+            const rows = await fetchPage(p.i);
+            p.rows = rows || [];
+            p.ok = true;
+          } catch(e){ lastErr = e; }
+        }
+        if(!p.ok){
+          throw new Error('Failed to load deal page ' + p.i + ' after 3 retries: ' + (lastErr && lastErr.message || 'unknown'));
+        }
+      }
+
+      // Belt-and-suspenders: a non-final page returning fewer rows than
+      // batchSize while a later page returns data means part of that page
+      // got truncated mid-flight. Refetch up to 3 times until consistent.
+      for(let i = 0; i < pageResults.length - 1; i++){
+        const cur = pageResults[i];
+        const next = pageResults[i+1];
+        if(cur.rows.length < batchSize && next.rows.length > 0){
+          let attempt = 0;
+          while(attempt < 3 && cur.rows.length < batchSize){
+            attempt++;
+            await new Promise(r => setTimeout(r, 400 * attempt));
+            try {
+              const rows = await fetchPage(cur.i);
+              if((rows||[]).length > cur.rows.length){
+                cur.rows = rows;
+              } else { break; }
+            } catch(_){ /* keep what we have */ }
+          }
+        }
+      }
+
+      pageResults.forEach(p => mapRows(p.rows));
       if(typeof _splashStep==='function') _splashStep(`Loading deals (${records.length})`, 3, 8);
       // Serial tail — only runs if the database has more than MAX_PARALLEL_PAGES*batchSize rows
       let from = MAX_PARALLEL_PAGES * batchSize;
       // If the last parallel page was full, there might be more data
-      if(pages[MAX_PARALLEL_PAGES - 1] && pages[MAX_PARALLEL_PAGES - 1].length === batchSize){
+      const lastPageRows = pageResults[MAX_PARALLEL_PAGES - 1] && pageResults[MAX_PARALLEL_PAGES - 1].rows;
+      if(lastPageRows && lastPageRows.length === batchSize){
         while(true){
           const rows = await _sbGet(SB_TABLES.properties,
             `select=*&deleted_at=is.null&order=created_at.desc,id.asc&limit=${batchSize}&offset=${from}${agentFilter}`);
@@ -3165,6 +3216,30 @@ async function syncData(){
           from += batchSize;
         }
       }
+
+      // v133: cross-check against a server-side count. If allDeals comes
+      // up short, log a warning AND walk the gap by re-fetching from
+      // records.length forward. Catches edge cases where a page succeeded
+      // HTTP-wise but PostgREST returned fewer rows than asked (e.g.
+      // statement timeout returning a partial result).
+      try {
+        if(typeof _sbGetCount === 'function'){
+          const expectedTotal = await _sbGetCount(SB_TABLES.properties, 'deleted_at=is.null' + agentFilter);
+          if(typeof expectedTotal === 'number' && expectedTotal > records.length){
+            console.warn('[loadAllDeals] count mismatch — expected ' + expectedTotal + ', got ' + records.length + '. Walking gap.');
+            let walkFrom = records.length;
+            let safety = 20; // prevent infinite loop on persistent shortfall
+            while(walkFrom < expectedTotal && safety-- > 0){
+              const rows = await _sbGet(SB_TABLES.properties,
+                `select=*&deleted_at=is.null&order=created_at.desc,id.asc&limit=${batchSize}&offset=${walkFrom}${agentFilter}`);
+              if(!rows || !rows.length) break;
+              mapRows(rows);
+              walkFrom += rows.length;
+              if(rows.length < batchSize) break;
+            }
+          }
+        }
+      } catch(e){ console.warn('[loadAllDeals] count cross-check failed:', e && e.message); }
       // v113.35: belt-and-suspenders — dedupe records by id before assigning
       // to allDeals. Pagination tiebreak + deleted_at filter should make this
       // unnecessary, but the sidebar was still showing the same deal twice
@@ -22157,6 +22232,22 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v133: Hardened deal load — fix the "first load shows partial deals,
+//   refresh shows more" race. The previous parallel page fetch did
+//   `.catch(e => return [])` on each of 8 concurrent _sbGet calls, so a
+//   single failed page (timeout / proxy hiccup / 5xx) silently dropped
+//   ~1000 deals from allDeals. The user saw inconsistent counts: Hot
+//   Active Listing showed 2 deals on first load, 8 after refresh.
+//   New behavior:
+//   - Per-page success tracking (returns {ok, rows, i, err}).
+//   - Failed pages get up to 3 retries with exponential backoff.
+//   - Hard error if any page can't be recovered after 3 attempts —
+//     the loader surfaces "Failed to load deal page N" instead of
+//     silently rendering the wrong number of deals.
+//   - Truncated-page detection: if a non-final page returns < batchSize
+//     while a later page has data, refetch up to 3 times.
+//   - Final cross-check: HEAD count vs records.length. If short, walk
+//     the gap from records.length forward until we hit the count.
 // v132: Pipeline filter panel — grouped cards + Do Not Include section.
 //   Old layout was a flat 2-column grid that mixed Stage / Asset Type /
 //   Region / State / County / Cities / Agent / Needs Review with the 5

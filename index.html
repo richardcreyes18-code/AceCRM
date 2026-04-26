@@ -20831,6 +20831,207 @@ async function _ddPrePromoteNotesToGPN(survivor, losers){
   }
 }
 
+// v113.52: backfill missing ace_properties rows for FUB Sellers-pipeline
+// contacts. The original FUB import created ace_contacts (with addresses
+// in their JSONB) but never created the corresponding ace_properties rows
+// — leaving ~1,173 contacts with deals visible in FUB but no property
+// card in Ace. This walks the gap and INSERTs the missing rows.
+//
+// Resolution order for the property's address:
+//   1. Parse address from fub_contacts.deal_name (e.g. "MU 18 Unit - 226
+//      New Brunswick Ave, Perth Amboy - DK") via _fubExtractAddressCandidates
+//   2. Fall back to ace_contacts.addresses[0].street + city + state
+//   3. Geocode through Google for canonical formatting; partial_match falls
+//      back to the raw address.
+//
+// Idempotent — skips contacts that already own at least one ace_properties
+// row (so re-runs only fill gaps, never duplicate).
+//
+// Usage:
+//   _fubBackfillProperties({dryRun:true, limit:5})
+//   _fubBackfillProperties({dryRun:true})           // all active stages
+//   _fubBackfillProperties()                          // apply
+//   _fubBackfillProperties({all:true})                // include Nurture/Lead/etc
+//   _fubBackfillProperties({stages:['Nurture']})      // single stage
+window._fubBackfillProperties = async function(opts){
+  opts = opts || {};
+  const dryRun  = !!opts.dryRun;
+  const limit   = opts.limit || null;
+  const includeAll = !!opts.all;
+  const ACTIVE_STAGES = ['Market Price Active','Active Listing','Hot Active Listing',
+    'Needs Offer','Top G Review','Closed','CLOSED 2025','Lease Listing',
+    'Attorney Review','GHL','Hot Deal','Active Deal','Pitch Out','Negotiating',
+    'In Negotiations','Under Contract','Limbo','New Lead','Need INFO','Overpriced'];
+  const targetStages = opts.stages || (includeAll ? null : ACTIVE_STAGES);
+
+  if(!_currentUser?.email){ alert('Sign in first.'); return; }
+  if(!dryRun && !confirm(
+    `Backfill ace_properties rows for FUB Sellers-pipeline contacts that\n` +
+    `currently have no property card in Ace.\n\n` +
+    `Stages: ${targetStages ? targetStages.join(', ') : '(all Sellers stages)'}\n\n` +
+    `For each missing one:\n` +
+    `• Address parsed from FUB deal_name → geocoded via Google\n` +
+    `• owner_contact_id linked to the existing Ace contact\n` +
+    `• pipeline_stage stripped of "Sellers - " prefix\n` +
+    `• asking_price + fub_assigned_to from fub_contacts\n` +
+    `• import_source = "fub_backfill"\n\n` +
+    `Re-runs are safe — contacts that already own a property are skipped.`
+  )) return;
+
+  console.log('[fub-backfill] starting…', { dryRun, limit, stages: targetStages, includeAll });
+
+  // 1. Fetch all Sellers-pipeline fub_contacts (paginated). The proxy's
+  //    in.(...) filter is unreliable, so we fetch by ilike pattern + filter
+  //    client-side.
+  console.log('[fub-backfill] fetching FUB Sellers contacts…');
+  const fubRows = [];
+  let from = 0;
+  while(true){
+    const page = await _sbGet('fub_contacts',
+      `select=id,name,deal_stage,deal_name,deal_price,deal_status,assigned_to&deal_stage=ilike.Sellers%20-%20*&order=id.asc&limit=1000&offset=${from}`);
+    if(!Array.isArray(page) || !page.length) break;
+    fubRows.push(...page);
+    if(page.length < 1000) break;
+    from += 1000;
+  }
+  console.log(`[fub-backfill] fetched ${fubRows.length} Sellers-pipeline FUB contacts`);
+
+  // 2. Build ace_contacts lookup by fub_contact_id (paginated direct fetch
+  //    so we don't trust allContacts which may not include all of them yet).
+  console.log('[fub-backfill] fetching ace_contacts…');
+  const aceContactByFubId = new Map();
+  let af = 0;
+  while(true){
+    const page = await _sbGet('ace_contacts',
+      `select=id,name,fub_contact_id,addresses&deleted_at=is.null&fub_contact_id=not.is.null&order=id.asc&limit=1000&offset=${af}`);
+    if(!Array.isArray(page) || !page.length) break;
+    for(const c of page){ if(c.fub_contact_id) aceContactByFubId.set(c.fub_contact_id, c); }
+    if(page.length < 1000) break;
+    af += 1000;
+  }
+  console.log(`[fub-backfill] indexed ${aceContactByFubId.size} ace_contacts with FUB ids`);
+
+  // 3. Build set of contact ids that already own at least one property.
+  console.log('[fub-backfill] fetching property→owner mappings…');
+  const ownedContactIds = new Set();
+  let pf = 0;
+  while(true){
+    const page = await _sbGet(SB_TABLES.properties,
+      `select=owner_contact_id&deleted_at=is.null&owner_contact_id=not.is.null&limit=1000&offset=${pf}`);
+    if(!Array.isArray(page) || !page.length) break;
+    for(const r of page) ownedContactIds.add(r.owner_contact_id);
+    if(page.length < 1000) break;
+    pf += 1000;
+  }
+  console.log(`[fub-backfill] ${ownedContactIds.size} contacts already own ≥1 property`);
+
+  // 4. Build target list — Sellers contact has Ace match, no property yet,
+  //    and (optionally) the stage is in the target set.
+  const targets = [];
+  for(const fc of fubRows){
+    const ac = aceContactByFubId.get(fc.id);
+    if(!ac) continue;
+    if(ownedContactIds.has(ac.id)) continue;
+    const stage = String(fc.deal_stage || '').replace(/^Sellers\s*[-–—]\s*/i, '').trim();
+    if(targetStages && !targetStages.includes(stage)) continue;
+    targets.push({ fc, ac, stage });
+  }
+  console.log(`[fub-backfill] ${targets.length} contacts need a property row`);
+
+  const work = limit ? targets.slice(0, limit) : targets;
+  console.log(`[fub-backfill] processing ${work.length}, dryRun=${dryRun}`);
+
+  const stats = { processed:0, inserted:0, geocoded:0, skipped_no_addr:0, skipped_dup:0, errors:0 };
+  const samples = [];
+
+  for(const t of work){
+    stats.processed++;
+    // Build address candidates: deal_name first (more structured), then
+    // contact.addresses[i].street.
+    const cands = [];
+    for(const c of _fubExtractAddressCandidates(t.fc.deal_name)){
+      cands.push(c);
+    }
+    for(const a of (t.ac.addresses || [])){
+      const street = String(a?.street || '').trim();
+      if(street && /\d/.test(street)){
+        const parts = [street];
+        if(a.city)  parts.push(a.city);
+        if(a.state) parts.push(a.state);
+        if(a.code)  parts.push(a.code);
+        cands.push(parts.join(', '));
+      }
+    }
+
+    let pickedRaw = '';
+    for(const c of cands){
+      const cleaned = _ddCleanAddrForGeocode(c);
+      if(cleaned && /\d/.test(cleaned)){ pickedRaw = cleaned; break; }
+    }
+
+    if(!pickedRaw){
+      stats.skipped_no_addr++;
+      samples.push({ ok:false, reason:'no parseable address', contact: t.ac.name, deal_name: t.fc.deal_name });
+      continue;
+    }
+
+    // Geocode for canonical address.
+    let final = pickedRaw, geo = null;
+    try {
+      const r = await googleGeocodeAddress(pickedRaw);
+      if(r && r.ok && r.formatted && !r.partial_match){
+        final = r.formatted; geo = r; stats.geocoded++;
+      }
+    } catch(_){}
+
+    const sample = {
+      ok: true,
+      contact: t.ac.name,
+      contact_id: t.ac.id,
+      stage: t.stage,
+      raw: pickedRaw,
+      final,
+      geocoded: !!geo,
+      price: t.fc.deal_price,
+    };
+    samples.push(sample);
+
+    if(!dryRun){
+      const payload = {
+        address: final,
+        owner_contact_id: t.ac.id,
+        pipeline_stage: t.stage,
+        asking_price: (t.fc.deal_price && Number(t.fc.deal_price) > 0) ? Number(t.fc.deal_price) : null,
+        fub_assigned_to: t.fc.assigned_to || null,
+        import_source: 'fub_backfill',
+      };
+      if(geo){
+        if(geo.lat) payload.latitude = geo.lat;
+        if(geo.lng) payload.longitude = geo.lng;
+        if(geo.state) payload.state = geo.state;
+        if(geo.county) payload.simple_county = geo.county;
+      }
+      try {
+        await _sbPost(SB_TABLES.properties, payload);
+        ownedContactIds.add(t.ac.id);   // mark so a re-run within the same loop skips
+        stats.inserted++;
+      } catch(e){
+        stats.errors++;
+        sample.error = e.message;
+      }
+    }
+    if(stats.processed % 25 === 0) console.log(`[fub-backfill] ${stats.processed}/${work.length}`, stats);
+  }
+
+  console.log('[fub-backfill] DONE', stats);
+  console.log('[fub-backfill] samples (first 10):');
+  for(const s of samples.slice(0, 10)){
+    if(!s.ok){ console.log(`  NO  ${s.contact}  (${s.reason})`); continue; }
+    console.log(`  OK  ${s.contact.padEnd(28)}  [${s.stage.padEnd(20)}]  ${s.geocoded?'✓':'·'}  ${s.final}`);
+  }
+  return { stats, samples, total: work.length };
+};
+
 // v113.46: link FUB-imported email templates to properties.
 // Source: ace_email_templates (FUB import landing table).
 // Destination: ace_user_email_templates (per-user, per-property template

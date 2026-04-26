@@ -20831,6 +20831,235 @@ async function _ddPrePromoteNotesToGPN(survivor, losers){
   }
 }
 
+// v113.53: import only the FUB deals that aren't already in Ace, sourced
+// from a CSV export the user provides (FUB → Deals → Export). The CSV is
+// authoritative for "what deals exist in FUB"; we use it to find the gap
+// and create the missing ace_properties rows. Anything already matched in
+// Ace is left alone — the CSV is NOT a source of truth beyond the gap.
+//
+// Per row we read:
+//   Name   — deal name (parsed for the property address)
+//   Stage  — pipeline stage to copy onto the property
+//   Status — Active/Closed/etc.
+//   Price  — asking_price
+//   People — primary contact name (used to look up ace_contacts)
+//   Team   — fub_assigned_to
+//
+// Match against ace_properties via _ddDealKey (full + street fallback).
+// For unmatched deals, find the People contact in ace_contacts by case-
+// insensitive name match. If found, link as owner_contact_id. If not,
+// create the property without an owner (still better than nothing).
+//
+// Usage:
+//   _fubImportFromCsv({dryRun:true})   // pick CSV file, preview the gap
+//   _fubImportFromCsv()                  // pick CSV, create the missing rows
+function _fubImportPickCsv(){
+  return new Promise((resolve) => {
+    const inp = document.createElement('input');
+    inp.type = 'file'; inp.accept = '.csv,text/csv';
+    inp.style.display = 'none';
+    inp.onchange = () => { const f = inp.files?.[0] || null; inp.remove(); resolve(f); };
+    document.body.appendChild(inp);
+    inp.click();
+  });
+}
+
+function _fubImportParseCsv(text){
+  const out = [];
+  let i = 0, field = '', row = [], inQuote = false;
+  while(i < text.length){
+    const c = text[i];
+    if(inQuote){
+      if(c === '"' && text[i+1] === '"'){ field += '"'; i += 2; continue; }
+      if(c === '"'){ inQuote = false; i++; continue; }
+      field += c; i++;
+    } else {
+      if(c === '"'){ inQuote = true; i++; continue; }
+      if(c === ','){ row.push(field); field = ''; i++; continue; }
+      if(c === '\n'){ row.push(field); out.push(row); row = []; field = ''; i++; continue; }
+      if(c === '\r'){ i++; continue; }
+      field += c; i++;
+    }
+  }
+  if(field || row.length){ row.push(field); out.push(row); }
+  return out;
+}
+
+window._fubImportFromCsv = async function(opts){
+  opts = opts || {};
+  const dryRun = !!opts.dryRun;
+  const limit  = opts.limit || null;
+
+  if(!_currentUser?.email){ alert('Sign in first.'); return; }
+
+  console.log('[fub-csv-import] click the file picker to choose a FUB deals CSV export…');
+  const file = await _fubImportPickCsv();
+  if(!file){ console.warn('[fub-csv-import] no file selected'); return; }
+
+  const text = await file.text();
+  const rows = _fubImportParseCsv(text);
+  if(rows.length < 2){ console.error('[fub-csv-import] CSV looks empty'); return; }
+  const headers = rows[0];
+  const idx = name => headers.indexOf(name);
+  const NAME_I=idx('Name'), STAGE_I=idx('Stage'), STATUS_I=idx('Status'),
+        PRICE_I=idx('Price'), PEOPLE_I=idx('People'), TEAM_I=idx('Team');
+  if(NAME_I < 0 || STAGE_I < 0){
+    console.error('[fub-csv-import] CSV missing required columns Name/Stage');
+    return;
+  }
+  const deals = rows.slice(1).filter(r => r.length > 1 && (r[NAME_I]||'').trim()).map(r => ({
+    name:   r[NAME_I],
+    stage:  r[STAGE_I],
+    status: r[STATUS_I],
+    price:  String(r[PRICE_I]||'').replace(/[^\d.]/g,''),
+    people: r[PEOPLE_I],
+    team:   r[TEAM_I],
+  }));
+  console.log(`[fub-csv-import] parsed ${deals.length} CSV rows`);
+
+  if(!dryRun && !confirm(
+    `Found ${deals.length} deals in the FUB CSV.\n\n` +
+    `Will diff against ace_properties; for any FUB deal NOT already in Ace,\n` +
+    `create a new ace_properties row linked to the People contact.\n\n` +
+    `Existing matches are left alone. The CSV is not used to update any\n` +
+    `current data — only to fill the gap.`
+  )) return;
+
+  // Fetch all properties (full DB, not allDeals which is view-mode-scoped).
+  console.log('[fub-csv-import] fetching property index…');
+  const propRows = [];
+  let pf = 0;
+  while(true){
+    const page = await _sbGet(SB_TABLES.properties,
+      `select=id,address,owner_contact_id&deleted_at=is.null&order=id.asc&limit=1000&offset=${pf}`);
+    if(!Array.isArray(page) || !page.length) break;
+    propRows.push(...page);
+    if(page.length < 1000) break;
+    pf += 1000;
+  }
+  const propByKey = new Map(), propByStreet = new Map();
+  for(const r of propRows){
+    const k = _ddNormalizeDealAddr(r.address || '');
+    if(!k) continue;
+    if(!propByKey.has(k)) propByKey.set(k, r);
+    const s = k.split('|')[0];
+    if(s && !propByStreet.has(s)) propByStreet.set(s, r);
+  }
+  console.log(`[fub-csv-import] indexed ${propByKey.size} properties`);
+
+  // Fetch all contacts → name lookup.
+  console.log('[fub-csv-import] fetching contact name index…');
+  const contactByName = new Map();
+  let cf = 0;
+  while(true){
+    const page = await _sbGet('ace_contacts',
+      `select=id,name&deleted_at=is.null&order=id.asc&limit=1000&offset=${cf}`);
+    if(!Array.isArray(page) || !page.length) break;
+    for(const c of page){
+      const k = String(c.name||'').trim().toLowerCase();
+      if(k && !contactByName.has(k)) contactByName.set(k, c);
+    }
+    if(page.length < 1000) break;
+    cf += 1000;
+  }
+  console.log(`[fub-csv-import] indexed ${contactByName.size} contacts by name`);
+
+  // Walk CSV deals.
+  const work = limit ? deals.slice(0, limit) : deals;
+  const stats = { matched_existing:0, fub_only_inserted:0, fub_only_geocoded:0,
+                  no_address:0, no_contact:0, errors:0 };
+  const samples = [];
+
+  function matchExisting(name){
+    for(const c of _fubExtractAddressCandidates(name)){
+      const cleaned = _ddCleanAddrForGeocode(c);
+      const k = _ddNormalizeDealAddr(cleaned);
+      if(!k) continue;
+      if(propByKey.has(k)) return propByKey.get(k);
+      const s = k.split('|')[0];
+      if(s && propByStreet.has(s)) return propByStreet.get(s);
+    }
+    return null;
+  }
+
+  for(const d of work){
+    const existing = matchExisting(d.name);
+    if(existing){
+      stats.matched_existing++;
+      continue;
+    }
+
+    // Build address candidates and geocode.
+    const cands = _fubExtractAddressCandidates(d.name)
+      .map(c => _ddCleanAddrForGeocode(c))
+      .filter(c => c && /\d/.test(c));
+    if(!cands.length){
+      stats.no_address++;
+      samples.push({ ok:false, reason:'no parseable address', name:d.name });
+      continue;
+    }
+
+    let final = cands[0], geo = null;
+    for(const c of cands){
+      try {
+        const r = await googleGeocodeAddress(c);
+        if(r && r.ok && r.formatted && !r.partial_match){ final = r.formatted; geo = r; stats.fub_only_geocoded++; break; }
+      } catch(_){}
+    }
+
+    // Find People contact.
+    const peopleName = String(d.people||'').split(';')[0].trim();
+    const contact = peopleName ? contactByName.get(peopleName.toLowerCase()) : null;
+
+    const sample = {
+      ok:true, name:d.name, stage:d.stage, price:d.price,
+      people:peopleName, contact_id: contact?.id || null, contact_name: contact?.name || null,
+      addr_final: final, geocoded: !!geo,
+    };
+    samples.push(sample);
+    if(!contact) stats.no_contact++;
+
+    if(!dryRun){
+      const payload = {
+        address: final,
+        owner_contact_id: contact?.id || null,
+        pipeline_stage: d.stage || null,
+        asking_price: d.price ? Number(d.price) : null,
+        fub_assigned_to: d.team || null,
+        import_source: 'fub_csv_import',
+      };
+      if(geo){
+        if(geo.lat) payload.latitude = geo.lat;
+        if(geo.lng) payload.longitude = geo.lng;
+        if(geo.state) payload.state = geo.state;
+        if(geo.county) payload.simple_county = geo.county;
+      }
+      try {
+        await _sbPost(SB_TABLES.properties, payload);
+        stats.fub_only_inserted++;
+      } catch(e){
+        stats.errors++;
+        sample.error = e.message;
+      }
+    } else {
+      stats.fub_only_inserted++;   // would be inserted
+    }
+    if((stats.matched_existing + stats.fub_only_inserted + stats.no_address) % 50 === 0){
+      console.log(`[fub-csv-import] progress`, stats);
+    }
+  }
+
+  console.log('[fub-csv-import] DONE', stats);
+  console.log('[fub-csv-import] FUB-only samples (first 15):');
+  for(const s of samples.slice(0, 15)){
+    if(!s.ok){ console.log(`  NO  ${s.name}  (${s.reason})`); continue; }
+    const owner = s.contact_id ? `owner=${s.contact_name}` : 'owner=(none)';
+    const geoTag = s.geocoded ? '✓' : '·';
+    console.log(`  IN  ${geoTag}  [${(s.stage||'').padEnd(20)}]  ${s.addr_final}  →  ${owner}`);
+  }
+  return { stats, samples, total: work.length };
+};
+
 // v113.52: backfill missing ace_properties rows for FUB Sellers-pipeline
 // contacts. The original FUB import created ace_contacts (with addresses
 // in their JSONB) but never created the corresponding ace_properties rows

@@ -28935,6 +28935,109 @@ function _settingsSwitchTab(name){
 // see its templates. Mirrors the FUB email-template browser.
 let _emailTplsLibState = { rows: [], search: '', activeFolder: null };
 
+// Click handler used by both folder list rows and the breadcrumb
+// "← Folders" link. Resets search when navigating.
+window._emailTplsOpenFolder = function(folder){
+  _emailTplsLibState.activeFolder = folder;
+  _emailTplsLibState.search = '';
+  _emailTplsLibPaint();
+};
+
+// v113.49: per-template editor modal. Opens on row click, lets the user
+// view / edit / save / delete the template. Mirrors the FUB "Edit Email
+// Template" dialog.
+window._emailTplsOpenEditor = function(templateId){
+  const t = (_emailTplsLibState.rows || []).find(r => r.id === templateId);
+  if(!t) return;
+  document.getElementById('emailTplsEditorModal')?.remove();
+
+  const propById = new Map();
+  for(const d of (allDeals||[])) if(d?.id) propById.set(d.id, d);
+  const contactById = new Map();
+  for(const c of (allContacts||[])) if(c?.id) contactById.set(c.id, c);
+  const prop = t.property_id ? propById.get(t.property_id) : null;
+  const ownerId = prop?.['Owner']?.[0];
+  const owner = ownerId ? contactById.get(ownerId) : null;
+
+  const modal = document.createElement('div');
+  modal.id = 'emailTplsEditorModal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:99998;display:flex;align-items:center;justify-content:center;padding:20px;';
+  modal.onclick = (e) => { if(e.target === modal) modal.remove(); };
+
+  const created = t.created_at ? new Date(t.created_at).toLocaleDateString() : '';
+  const updated = t.updated_at && t.updated_at !== t.created_at ? new Date(t.updated_at).toLocaleDateString() : '';
+
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;width:100%;max-width:780px;max-height:90vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 25px 60px rgba(0,0,0,0.25);">
+      <div style="padding:16px 20px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;gap:12px;">
+        <div>
+          <div style="font-size:15px;font-weight:700;color:#0f172a;">📧 Edit Email Template</div>
+          <div style="font-size:11px;color:#64748b;margin-top:3px;">
+            ${created ? `Created ${created}` : ''}
+            ${updated ? ` · Updated ${updated}` : ''}
+          </div>
+          <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
+            ${prop ? `<span onclick="openDeal(allDeals.find(d=>d.id==='${prop.id}'))" style="display:inline-block;background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;cursor:pointer;">🏢 ${_ddEsc((prop['Address']||'').slice(0,60))}</span>` : '<span style="display:inline-block;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;">🔗 Unlinked</span>'}
+            ${owner ? `<span onclick="openContactModal('${owner.id}')" style="display:inline-block;background:#dcfce7;color:#15803d;border:1px solid #86efac;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;cursor:pointer;">👤 ${_ddEsc(owner['Name']||'')}</span>` : ''}
+          </div>
+        </div>
+        <button onclick="this.closest('#emailTplsEditorModal').remove()" style="background:none;border:none;color:#94a3b8;font-size:22px;line-height:1;cursor:pointer;padding:4px 8px;">×</button>
+      </div>
+      <div style="padding:16px 20px;overflow-y:auto;flex:1;">
+        <div style="font-size:11px;font-weight:600;color:#475569;margin-bottom:5px;">Template Name</div>
+        <input id="_etplName" type="text" value="${_ddEsc(t.name||'')}"
+          style="width:100%;padding:8px 10px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;margin-bottom:14px;box-sizing:border-box;outline:none;" />
+        <div style="font-size:11px;font-weight:600;color:#475569;margin-bottom:5px;">Subject</div>
+        <input id="_etplSubject" type="text" value="${_ddEsc(t.subject||'')}"
+          style="width:100%;padding:8px 10px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;margin-bottom:14px;box-sizing:border-box;outline:none;" />
+        <div style="font-size:11px;font-weight:600;color:#475569;margin-bottom:5px;">Body</div>
+        <textarea id="_etplBody" rows="16"
+          style="width:100%;padding:10px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;font-family:inherit;line-height:1.5;box-sizing:border-box;resize:vertical;outline:none;">${_ddEsc(t.body||'')}</textarea>
+        <div style="margin-top:8px;font-size:10px;color:#94a3b8;">
+          Placeholders like %sender_name%, %contact_first_name% are filled at send-time.
+        </div>
+      </div>
+      <div style="padding:12px 20px;border-top:1px solid #e2e8f0;display:flex;justify-content:space-between;gap:10px;">
+        <button onclick="_emailTplsDeleteOne('${t.id}')" style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:6px;padding:7px 14px;font-size:11px;font-weight:600;cursor:pointer;">🗑 Delete</button>
+        <div style="display:flex;gap:8px;">
+          <button onclick="this.closest('#emailTplsEditorModal').remove()" style="background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;padding:7px 14px;font-size:11px;font-weight:600;cursor:pointer;">Close</button>
+          <button onclick="_emailTplsSaveOne('${t.id}')" style="background:#1a3a6e;color:#fff;border:none;border-radius:6px;padding:7px 16px;font-size:11px;font-weight:700;cursor:pointer;">✓ Save</button>
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  // Focus the name field for quick edits
+  requestAnimationFrame(() => document.getElementById('_etplName')?.focus());
+};
+
+window._emailTplsSaveOne = async function(id){
+  const name    = document.getElementById('_etplName')?.value || '';
+  const subject = document.getElementById('_etplSubject')?.value || '';
+  const body    = document.getElementById('_etplBody')?.value || '';
+  if(!name.trim()){ alert('Name is required.'); return; }
+  try {
+    await _sbPatch('ace_user_email_templates', id, { name, subject, body });
+    const r = (_emailTplsLibState.rows || []).find(x => x.id === id);
+    if(r){ r.name = name; r.subject = subject; r.body = body; r.updated_at = new Date().toISOString(); }
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('✓ Template saved');
+    document.getElementById('emailTplsEditorModal')?.remove();
+    _emailTplsLibPaint();
+  } catch(e){ alert('Save failed: '+e.message); }
+};
+
+window._emailTplsDeleteOne = async function(id){
+  const r = (_emailTplsLibState.rows || []).find(x => x.id === id);
+  if(!r) return;
+  if(!confirm(`Delete template:\n\n${r.name}\n\nThis cannot be undone.`)) return;
+  try {
+    await _sbDelete('ace_user_email_templates', id);
+    _emailTplsLibState.rows = (_emailTplsLibState.rows || []).filter(x => x.id !== id);
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('✓ Template deleted');
+    document.getElementById('emailTplsEditorModal')?.remove();
+    _emailTplsLibPaint();
+  } catch(e){ alert('Delete failed: '+e.message); }
+};
+
 async function _emailTplsTabRender(){
   const root = document.getElementById('emailTplsTabRoot');
   if(!root) return;
@@ -29011,7 +29114,7 @@ function _emailTplsLibPaintFolders(){
 
   const specialRow = (icon, name, count, target) => `
     <tr style="border-top:1px solid #e2e8f0;cursor:pointer;"
-      onclick="_emailTplsLibState.activeFolder=${JSON.stringify(target)}; _emailTplsLibPaint();"
+      onclick="_emailTplsOpenFolder('${target.replace(/'/g, "\\'")}')"
       onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background=''">
       <td style="padding:11px 14px;font-size:13px;color:#0f172a;">${icon} ${_ddEsc(name)}</td>
       <td style="padding:11px 14px;font-size:12px;color:#475569;text-align:right;">${count.toLocaleString()}</td>
@@ -29020,7 +29123,7 @@ function _emailTplsLibPaintFolders(){
 
   const fubRow = (name, count) => `
     <tr style="border-top:1px solid #e2e8f0;cursor:pointer;"
-      onclick="_emailTplsLibState.activeFolder=${JSON.stringify('fub:'+name)}; _emailTplsLibPaint();"
+      onclick="_emailTplsOpenFolder('fub:${name.replace(/'/g, "\\'")}')"
       onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background=''">
       <td style="padding:11px 14px;font-size:13px;color:#0f172a;">📁 ${_ddEsc(name)}</td>
       <td style="padding:11px 14px;font-size:12px;color:#475569;text-align:right;">${count.toLocaleString()}</td>
@@ -29126,9 +29229,11 @@ function _emailTplsLibPaintTemplates(folder){
     }
 
     return `
-      <tr style="border-top:1px solid #e2e8f0;">
+      <tr style="border-top:1px solid #e2e8f0;cursor:pointer;"
+        onclick="_emailTplsOpenEditor('${r.id}')"
+        onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background=''">
         <td style="padding:9px 10px;vertical-align:top;font-size:12px;color:#0f172a;max-width:340px;">
-          <div style="font-weight:600;line-height:1.3;">${_ddEsc(r.name || '(unnamed)')}</div>
+          <div style="font-weight:600;line-height:1.3;color:#1d4ed8;">${_ddEsc(r.name || '(unnamed)')}</div>
           <div style="margin-top:4px;">${tags}</div>
         </td>
         <td style="padding:9px 10px;vertical-align:top;font-size:11px;color:#475569;max-width:280px;">
@@ -29136,7 +29241,7 @@ function _emailTplsLibPaintTemplates(folder){
           <div style="margin-top:3px;color:#64748b;font-size:10px;line-height:1.4;">${_ddEsc(bodyPreview)}${(r.body||'').length>120?'…':''}</div>
         </td>
         <td style="padding:9px 10px;vertical-align:top;text-align:right;white-space:nowrap;">
-          ${prop ? `<button onclick="openDeal(allDeals.find(d=>d.id==='${prop.id}'))" style="background:#1a3a6e;color:#fff;border:none;border-radius:5px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;">Open Deal →</button>`
+          ${prop ? `<button onclick="event.stopPropagation(); openDeal(allDeals.find(d=>d.id==='${prop.id}'))" style="background:#1a3a6e;color:#fff;border:none;border-radius:5px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;">Open Deal →</button>`
                  : `<span style="font-size:10px;color:#94a3b8;">no deal</span>`}
         </td>
       </tr>`;
@@ -29145,7 +29250,7 @@ function _emailTplsLibPaintTemplates(folder){
   root.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
       <div style="font-size:13px;color:#0f172a;">
-        <a href="javascript:void(0)" onclick="_emailTplsLibState.activeFolder=null; _emailTplsLibState.search=''; _emailTplsLibPaint();"
+        <a href="javascript:void(0)" onclick="_emailTplsOpenFolder(null)"
           style="color:#2563eb;text-decoration:none;font-weight:500;">← Folders</a>
         <span style="color:#94a3b8;margin:0 8px;">/</span>
         <span style="font-weight:600;">${_ddEsc(folderLabel)}</span>

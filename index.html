@@ -22355,6 +22355,22 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v137: Edge fn ai-parse-deal-v2 v24 — rent-roll extraction hardening. v23
+//   was emitting units arrays with stub entries (empty label, rent:0)
+//   because the LLM was using alt key names (name vs label, monthly_rent
+//   vs rent, bedroom_type vs type) and emitting nested rent objects
+//   {current,proforma}. Fixes (edge fn only, no CRM code change):
+//   - coerce() unitMix now accepts label||name||unit||unit_label||apartment;
+//     type||bedroom_type||unit_type||bedrooms||bed||bedroom_count;
+//     rent||monthly_rent||current_rent||rent_amount||monthly||rent_current
+//     (incl. nested {current,proforma,monthly,amount}); status||occupancy.
+//   - normalizeType() coerces "2BR"/"2 bed"/"studio"/"eff" into the canonical
+//     "Efficiency"/"1 Bedroom"/.../"4 Bedroom"/"Other" forms.
+//   - Stub units (empty label AND rent=0) are dropped from the output.
+//   - Rule 11 in the prompt gains a concrete worked-example JSON for a
+//     7-unit rent roll so the LLM has a template to mirror.
+//   For the Browns Mills 7-unit deal: re-running AI Auto-Fill should now
+//   populate Apt A through Apt G with their actual rents.
 // v136: Unit Mix UI redesign — stat tiles + sub-cards. Restructured the MF /
 //   Mixed-Use branch of _renderUnitMixSection to match the requested mockup:
 //   top-row stat tiles (Total Units / Occupancy / Total GRI/Mo) update live

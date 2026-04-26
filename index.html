@@ -21999,6 +21999,16 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v119: shipped B + C of the AI Auto-Fill polish.
+//   B) Side-by-side modal: left pane = field table (existing UI), right
+//      pane = collapsible source-notes accordions (one <details> per
+//      source column, first two open by default). Edge fn v12 already
+//      returns source_breakdown; this is purely a UI refactor.
+//   C) Settings → Tools → "AI Auto-Fill catalog" tile + modal. Read-only
+//      grouped display of every FIELD_SPEC entry, the 11 source columns,
+//      and a "how to add a field" callout. Mirror of edge fn v13's
+//      FIELD_SPEC (~130 fields) — drift caught manually when the edge
+//      fn changes.
 // v118: AI Auto-Fill modal expands tenant_mix_data into 21 per-tenant
 // subfield rows so user can verify exactly which tenant fields the AI
 // filled vs left blank. Also added "Tenant Mix" + "Industrial" to the
@@ -22083,6 +22093,210 @@ window._aiGenerateDescription = async function(propertyId, btn){
   }
   if(btn){ btn.disabled = false; btn.textContent = '✦ AI Generate'; }
   if(typeof showSaveConfirm === 'function') showSaveConfirm(`✓ Description written (${resp.response_chars} chars from ${resp.source_chars} chars of source)`);
+};
+
+// v119: AI Auto-Fill catalog. Mirror of FIELD_SPEC from ai-parse-deal-v2
+// edge function. Read-only display in Settings → Tools so user can see
+// every field the AI extracts, grouped by category. When the edge fn's
+// FIELD_SPEC changes, this list needs a manual update — but the modal
+// also offers a "fetch live from edge fn" button that hits the function
+// with meta_only:true and shows the live spec for verification.
+const _AI_FIELD_SPEC = [
+  {col:'asking_price',type:'number',group:'Pricing',hint:'Current asking price in dollars'},
+  {col:'offer_price',type:'number',group:'Pricing',hint:'Our offer price in dollars (if mentioned)'},
+  {col:'pitch_out_price',type:'number',group:'Pricing',hint:'The price we are pitching out to buyers'},
+  {col:'seller_original_purchase_price',type:'number',group:'Pricing',hint:'What the seller originally paid'},
+  {col:'seller_original_purchase_date',type:'date',group:'Pricing',hint:'When seller originally bought (YYYY-MM-DD)'},
+  {col:'date_went_on_market',type:'date',group:'Pricing',hint:'When the property went on market'},
+  {col:'commission_split_pct',type:'percent',group:'Pricing',hint:'Commission split %'},
+  {col:'is_property_listed',type:'enum',group:'Pricing',hint:'Listed / Off-Market / Pocket Listing'},
+  {col:'gross_revenue_yearly',type:'number',group:'Income',hint:'Total gross yearly income (rent + other)'},
+  {col:'gross_rental_income_monthly',type:'number',group:'Income',hint:'Rental income only — monthly'},
+  {col:'other_income_monthly',type:'number',group:'Income',hint:'Non-rent income monthly (laundry, parking, vending, storage, fees)'},
+  {col:'rubs_cam_income_monthly',type:'number',group:'Income',hint:'RUBS / CAM reimbursements monthly'},
+  {col:'vacancy_rate_pct',type:'percent',group:'Income',hint:'Current vacancy rate %'},
+  {col:'occupancy_pct',type:'percent',group:'Income',hint:'Current occupancy %'},
+  {col:'non_revenue_units_pct',type:'percent',group:'Income',hint:'Non-revenue units %'},
+  {col:'noi',type:'number',group:'Returns',hint:'Net operating income, yearly (only if explicitly stated)'},
+  {col:'expense_mode',type:'enum',group:'Expenses',hint:'itemized / ratio'},
+  {col:'expenses_yearly',type:'number',group:'Expenses',hint:'Total expenses, yearly'},
+  {col:'actual_expense_ratio_pct',type:'percent',group:'Expenses',hint:'Actual expense ratio % (only when ratio mode)'},
+  {col:'pro_forma_expense_ratio_pct',type:'percent',group:'Expenses',hint:'Pro-forma expense ratio % (only when ratio mode)'},
+  {col:'property_tax_monthly',type:'number',group:'Expense Details',hint:'Property tax monthly'},
+  {col:'insurance_monthly',type:'number',group:'Expense Details',hint:'Insurance monthly'},
+  {col:'electric_monthly',type:'number',group:'Expense Details',hint:'Electric monthly'},
+  {col:'gas_monthly',type:'number',group:'Expense Details',hint:'Gas monthly'},
+  {col:'water_sewer_monthly',type:'number',group:'Expense Details',hint:'Water/sewer monthly'},
+  {col:'trash_monthly',type:'number',group:'Expense Details',hint:'Trash / waste removal monthly'},
+  {col:'janitorial_monthly',type:'number',group:'Expense Details',hint:'Janitorial monthly'},
+  {col:'landscaping_monthly',type:'number',group:'Expense Details',hint:'Landscaping / snow removal monthly'},
+  {col:'maintenance_repair_monthly',type:'number',group:'Expense Details',hint:'Maintenance & repair monthly'},
+  {col:'maintenance_salary_monthly',type:'number',group:'Expense Details',hint:'Maintenance staff salary monthly'},
+  {col:'pool_monthly',type:'number',group:'Expense Details',hint:'Pool monthly'},
+  {col:'supplies_monthly',type:'number',group:'Expense Details',hint:'Supplies monthly'},
+  {col:'misc_expenses_monthly',type:'number',group:'Expense Details',hint:'Miscellaneous / reserves monthly'},
+  {col:'property_mgmt_fee_monthly',type:'number',group:'Expense Details',hint:'Property mgmt fee monthly'},
+  {col:'capital_reserve_monthly',type:'number',group:'Expense Details',hint:'Capital reserves monthly'},
+  {col:'admin_expenses_monthly',type:'number',group:'Expense Details',hint:'Admin monthly'},
+  {col:'accounting_monthly',type:'number',group:'Expense Details',hint:'Accounting monthly'},
+  {col:'legal_monthly',type:'number',group:'Expense Details',hint:'Legal monthly'},
+  {col:'liability_insurance_monthly',type:'number',group:'Expense Details',hint:'Liability insurance monthly'},
+  {col:'proforma_gross_rent_monthly',type:'number',group:'Pro Forma',hint:'Pro-forma rent monthly'},
+  {col:'proforma_other_income_monthly',type:'number',group:'Pro Forma',hint:'Pro-forma other income monthly'},
+  {col:'proforma_rubs_cam_monthly',type:'number',group:'Pro Forma',hint:'Pro-forma RUBS/CAM monthly'},
+  {col:'proforma_vacancy_rate_pct',type:'percent',group:'Pro Forma',hint:'Pro-forma vacancy %'},
+  {col:'proforma_non_revenue_units_pct',type:'percent',group:'Pro Forma',hint:'Pro-forma non-revenue %'},
+  {col:'pro_forma_gross_revenue_yearly',type:'number',group:'Pro Forma',hint:'Pro-forma gross revenue yearly'},
+  {col:'pro_forma_expenses_yearly',type:'number',group:'Pro Forma',hint:'Pro-forma expenses yearly'},
+  {col:'mortgage1_loan_type',type:'text',group:'Mortgages',hint:'Loan 1 type'},
+  {col:'mortgage1_principal',type:'number',group:'Mortgages',hint:'Loan 1 principal'},
+  {col:'mortgage1_interest_rate_pct',type:'percent',group:'Mortgages',hint:'Loan 1 rate %'},
+  {col:'mortgage1_amortization_yrs',type:'integer',group:'Mortgages',hint:'Loan 1 amortization yrs'},
+  {col:'mortgage1_assumable',type:'boolean',group:'Mortgages',hint:'Loan 1 assumable?'},
+  {col:'mortgage1_years_remaining',type:'integer',group:'Mortgages',hint:'Loan 1 years left'},
+  {col:'mortgage2_loan_type',type:'text',group:'Mortgages',hint:'Loan 2 type'},
+  {col:'mortgage2_principal',type:'number',group:'Mortgages',hint:'Loan 2 principal'},
+  {col:'mortgage2_interest_rate_pct',type:'percent',group:'Mortgages',hint:'Loan 2 rate %'},
+  {col:'mortgage2_amortization_yrs',type:'integer',group:'Mortgages',hint:'Loan 2 amort yrs'},
+  {col:'mortgage2_assumable',type:'boolean',group:'Mortgages',hint:'Loan 2 assumable'},
+  {col:'mortgage2_years_remaining',type:'integer',group:'Mortgages',hint:'Loan 2 years left'},
+  {col:'annual_debt_service',type:'number',group:'Mortgages',hint:'Annual debt service total'},
+  {col:'dscr_manual',type:'number',group:'Mortgages',hint:'DSCR (e.g. 1.25)'},
+  {col:'down_payment_pct',type:'percent',group:'Financing',hint:'Down payment %'},
+  {col:'down_payment_type',type:'text',group:'Financing',hint:'Down payment type'},
+  {col:'renovation_expense',type:'number',group:'Financing',hint:'Total renovation budget'},
+  {col:'square_footage',type:'number',group:'Physical',hint:'Total building SF'},
+  {col:'total_building_sf',type:'integer',group:'Physical',hint:'Total building SF (integer)'},
+  {col:'net_rentable_sf',type:'integer',group:'Physical',hint:'Net rentable SF'},
+  {col:'total_lot_size',type:'number',group:'Physical',hint:'Lot size (acres unless lot_size_unit says SF)'},
+  {col:'lot_size_unit',type:'enum',group:'Physical',hint:'acres / square_feet'},
+  {col:'no_of_buildings',type:'integer',group:'Physical',hint:'Number of buildings'},
+  {col:'no_of_units',type:'integer',group:'Physical',hint:'Total units'},
+  {col:'number_of_units',type:'integer',group:'Physical',hint:'Total units (legacy)'},
+  {col:'no_of_stories',type:'integer',group:'Physical',hint:'Number of floors'},
+  {col:'no_of_parking_spaces',type:'integer',group:'Physical',hint:'Parking spaces'},
+  {col:'parking_ratio',type:'text',group:'Physical',hint:'Parking ratio e.g. 3:1000'},
+  {col:'year_built',type:'integer',group:'Physical',hint:'Year built'},
+  {col:'year_renovated',type:'integer',group:'Physical',hint:'Year of last renovation'},
+  {col:'location_description',type:'text',group:'Quality',hint:'Short location/neighborhood description'},
+  {col:'property_class',type:'enum',group:'Quality',hint:'A / B / C / D'},
+  {col:'property_condition',type:'enum',group:'Quality',hint:'Excellent / Good / Average / Fair / Poor'},
+  {col:'location_class',type:'enum',group:'Quality',hint:'A / B / C / D'},
+  {col:'location_trending',type:'enum',group:'Quality',hint:'Up-and-coming / Stable / Declining'},
+  {col:'location_type',type:'enum',group:'Quality',hint:'Urban / Suburban / Rural'},
+  {col:'construction_status',type:'enum',group:'Quality',hint:'Existing / Under Construction / Proposed'},
+  {col:'property_use',type:'enum',group:'Quality',hint:'Investment/Cash Flow / Owner/User / Vacant / Turnaround / Business Also For Sale'},
+  {col:'hvac',type:'text',group:'Components',hint:'HVAC type / condition'},
+  {col:'roof_type',type:'text',group:'Components',hint:'Roof type'},
+  {col:'parking_type',type:'text',group:'Components',hint:'Parking type'},
+  {col:'foundation',type:'text',group:'Components',hint:'Foundation type'},
+  {col:'exterior',type:'text',group:'Components',hint:'Exterior material'},
+  {col:'piping',type:'text',group:'Components',hint:'Plumbing material/condition'},
+  {col:'wiring',type:'text',group:'Components',hint:'Electrical wiring type/condition'},
+  {col:'floor_covering',type:'text',group:'Components',hint:'Floor covering'},
+  {col:'paving',type:'text',group:'Components',hint:'Paving'},
+  {col:'units_efficiency',type:'integer',group:'Unit Mix',hint:'Studio/efficiency count'},
+  {col:'units_efficiency_vacant',type:'integer',group:'Unit Mix',hint:'Vacant studios'},
+  {col:'units_1br',type:'integer',group:'Unit Mix',hint:'1BR count'},
+  {col:'units_1br_vacant',type:'integer',group:'Unit Mix',hint:'Vacant 1BR'},
+  {col:'units_2br',type:'integer',group:'Unit Mix',hint:'2BR count'},
+  {col:'units_2br_vacant',type:'integer',group:'Unit Mix',hint:'Vacant 2BR'},
+  {col:'units_3br',type:'integer',group:'Unit Mix',hint:'3BR count'},
+  {col:'units_3br_vacant',type:'integer',group:'Unit Mix',hint:'Vacant 3BR'},
+  {col:'units_4br',type:'integer',group:'Unit Mix',hint:'4BR+ count'},
+  {col:'units_4br_vacant',type:'integer',group:'Unit Mix',hint:'Vacant 4BR+'},
+  {col:'units_other',type:'integer',group:'Unit Mix',hint:'Other unit count'},
+  {col:'units_other_vacant',type:'integer',group:'Unit Mix',hint:'Vacant other'},
+  {col:'mf_unit_rent_data',type:'unitMix',group:'Unit Mix',hint:'Multifamily rent-roll JSON (byType averages or byUnit per-unit list)'},
+  {col:'tenant_mix_data',type:'tenantMix',group:'Tenant Mix',hint:'Retail/industrial/office tenant roster — array of 21-field tenant records'},
+  {col:'num_tenants',type:'integer',group:'Industrial',hint:'Number of tenants in the building'},
+  {col:'office_sf',type:'integer',group:'Industrial',hint:'Office portion square feet'},
+  {col:'warehouse_sf',type:'integer',group:'Industrial',hint:'Warehouse / non-office portion square feet'},
+  {col:'office_sf_pct',type:'percent',group:'Industrial',hint:'Office portion % (alt to office_sf)'},
+  {col:'num_loading_docks',type:'integer',group:'Industrial',hint:'Number of dock-high loading doors'},
+  {col:'num_drive_ins',type:'integer',group:'Industrial',hint:'Number of drive-in / grade-level doors'},
+  {col:'ceiling_height_ft',type:'number',group:'Industrial',hint:'Clear ceiling height in feet'},
+  {col:'automotive_gas_type',type:'text',group:'Asset-Specific',hint:'Gas station type if automotive'},
+  {col:'automotive_wash_type',type:'text',group:'Asset-Specific',hint:'Car wash type'},
+  {col:'retail_lease_type',type:'text',group:'Asset-Specific',hint:'Retail lease type (NNN, NN, gross, etc.)'},
+  {col:'shopping_lease_type',type:'text',group:'Asset-Specific',hint:'Shopping center lease type'},
+  {col:'seller_motivation_level',type:'enum',group:'Seller',hint:'Highly Motivated / Motivated / Lukewarm / Not Motivated'},
+  {col:'seller_financial_strength',type:'enum',group:'Seller',hint:'Strong / Average / Weak'},
+  {col:'mortgage_payments_status',type:'enum',group:'Seller',hint:'Current / Late / Default / Free and Clear'},
+  {col:'why_selling',type:'text',group:'Seller',hint:'Why the seller is selling'},
+  {col:'owner_occupied',type:'boolean',group:'Flags',hint:'Owner currently occupying?'},
+  {col:'no_financials_yet',type:'boolean',group:'Flags',hint:'Seller hasn\u2019t shared financials'},
+  {col:'fully_vacant',type:'boolean',group:'Flags',hint:'100% vacant'},
+  {col:'is_distressed',type:'boolean',group:'Flags',hint:'Distressed sale'},
+  {col:'is_on_ground_lease',type:'boolean',group:'Flags',hint:'On ground lease'},
+  {col:'sale_leaseback',type:'boolean',group:'Flags',hint:'Sale-leaseback'},
+  {col:'property_type_text',type:'text',group:'Identity',hint:'Property type, free text'},
+  {col:'crm_asset_classification',type:'enum',group:'Identity',hint:'Multifamily / Industrial / Retail / Office / Hospitality / Mixed Use / Land / Self Storage / Mobile Home Park / Automotive / Special Purpose'},
+];
+
+const _AI_SOURCE_COLS = [
+  'property_description','deal_notes','general_property_notes','ai_clarifying_notes',
+  'location_description','financial_property_notes','asking_price_explanation',
+  'ace_starter_note','accepted_by_seller_note','pitch_out_note','ace_chat_summary'
+];
+
+window._aiCatalogOpen = function(){
+  const groupOrder = ['Pricing','Income','Returns','Expenses','Expense Details','Pro Forma','Mortgages','Financing','Physical','Quality','Components','Unit Mix','Tenant Mix','Industrial','Asset-Specific','Seller','Flags','Identity'];
+  const groups = {};
+  for(const f of _AI_FIELD_SPEC){ (groups[f.group] = groups[f.group] || []).push(f); }
+  const ordered = groupOrder.filter(g => groups[g]).concat(Object.keys(groups).filter(g => !groupOrder.includes(g)));
+  const typeColor = {
+    number:'#0f766e', integer:'#0f766e', percent:'#b45309', boolean:'#7c3aed',
+    enum:'#1d4ed8', text:'#475569', date:'#0891b2', unitMix:'#be185d', tenantMix:'#be185d', capRate:'#0f766e'
+  };
+  const rowsHtml = ordered.map(g => {
+    const rows = groups[g].map(f => `
+      <tr style="border-top:1px solid #f1f5f9;">
+        <td style="padding:6px 10px;font-size:11px;color:#0f172a;font-family:ui-monospace,Menlo,monospace;">${_ddEsc(f.col)}</td>
+        <td style="padding:6px 10px;font-size:10px;"><span style="background:#fff;color:${typeColor[f.type]||'#475569'};border:1px solid currentColor;padding:1px 6px;border-radius:3px;font-weight:600;">${_ddEsc(f.type)}</span></td>
+        <td style="padding:6px 10px;font-size:11px;color:#475569;line-height:1.45;">${_ddEsc(f.hint)}</td>
+      </tr>`).join('');
+    return `
+      <tr><td colspan="3" style="padding:10px 10px 4px;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#475569;background:#f1f5f9;font-weight:700;border-top:2px solid #cbd5e1;">${_ddEsc(g)} <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">— ${groups[g].length} field${groups[g].length===1?'':'s'}</span></td></tr>
+      ${rows}`;
+  }).join('');
+
+  const sourcesHtml = _AI_SOURCE_COLS.map(c => `<code style="background:#f1f5f9;color:#475569;padding:2px 7px;border-radius:3px;font-size:11px;">${_ddEsc(c)}</code>`).join(' ');
+
+  const modal = document.createElement('div');
+  modal.id = 'aiCatalogModal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:99998;display:flex;align-items:center;justify-content:center;padding:20px;';
+  modal.onclick = (e) => { if(e.target === modal) modal.remove(); };
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;width:100%;max-width:1100px;max-height:92vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 25px 60px rgba(0,0,0,0.25);">
+      <div style="padding:16px 22px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;">
+        <div>
+          <div style="font-size:16px;font-weight:700;color:#0f172a;">✦ AI Auto-Fill catalog</div>
+          <div style="font-size:11px;color:#64748b;margin-top:3px;">${_AI_FIELD_SPEC.length} fields across ${ordered.length} groups · edge fn <code style="background:#f1f5f9;padding:1px 6px;border-radius:3px;">ai-parse-deal-v2</code></div>
+        </div>
+        <button onclick="this.closest('#aiCatalogModal').remove()" style="background:none;border:none;color:#94a3b8;font-size:22px;cursor:pointer;padding:4px 8px;">×</button>
+      </div>
+      <div style="padding:14px 22px 6px;border-bottom:1px solid #f1f5f9;background:#fafbfc;">
+        <div style="font-size:11px;color:#475569;line-height:1.55;">
+          <strong style="color:#0f172a;">Source columns the AI reads from:</strong><br>
+          <div style="margin-top:6px;display:flex;flex-wrap:wrap;gap:5px;">${sourcesHtml}</div>
+        </div>
+      </div>
+      <div style="overflow-y:auto;flex:1;padding:0 22px 22px;">
+        <table style="width:100%;border-collapse:collapse;margin-top:6px;">
+          <thead><tr style="background:#fff;font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;position:sticky;top:0;">
+            <th style="padding:9px 10px;text-align:left;border-bottom:1px solid #e2e8f0;">Column</th>
+            <th style="padding:9px 10px;text-align:left;border-bottom:1px solid #e2e8f0;">Type</th>
+            <th style="padding:9px 10px;text-align:left;border-bottom:1px solid #e2e8f0;">What the AI extracts</th>
+          </tr></thead>
+          <tbody>${rowsHtml}</tbody>
+        </table>
+        <div style="margin-top:18px;padding:12px 14px;background:#fef3c7;border:1px solid #fde68a;border-radius:8px;font-size:11px;color:#78350f;line-height:1.6;">
+          <strong>How to add a new field:</strong> extend FIELD_SPEC in the <code>ai-parse-deal-v2</code> Supabase Edge Function (and the <code>_AI_FIELD_SPEC</code> mirror in <code>index.html</code>), then redeploy the edge fn. The new field appears here automatically.
+        </div>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
 };
 
 window._aiAutoFillDeal = async function(propertyId, opts){
@@ -22254,8 +22468,41 @@ window._aiAutoFillDeal = async function(propertyId, opts){
       </div>
     </details>` : '';
 
+  // v118: right pane shows the source notes the AI read from. Each source
+  // column = one collapsible <details>. First two are open by default; the
+  // rest are collapsed so the pane stays scannable.
+  const sourceBreakdown = (resp.source_breakdown && typeof resp.source_breakdown === 'object') ? resp.source_breakdown : {};
+  const SOURCE_LABELS = {
+    general_property_notes: 'General Property Notes',
+    deal_notes: 'Deal Notes',
+    property_description: 'Property Description',
+    ai_clarifying_notes: 'AI Clarifying Notes',
+    location_description: 'Location Description',
+    financial_property_notes: 'Financial Property Notes',
+    asking_price_explanation: 'Asking Price Explanation',
+    ace_starter_note: 'Ace Starter Note',
+    accepted_by_seller_note: 'Accepted by Seller Note',
+    pitch_out_note: 'Pitch Out Note',
+    ace_chat_summary: 'Ace Chat Summary',
+  };
+  const sourceKeysWithText = Object.keys(SOURCE_LABELS).filter(k => sourceBreakdown[k] && String(sourceBreakdown[k]).trim());
+  const sourceTotalChars = sourceKeysWithText.reduce((n, k) => n + String(sourceBreakdown[k] || '').length, 0);
+  const sourcesHtml = sourceKeysWithText.length
+    ? sourceKeysWithText.map((k, i) => {
+        const txt = String(sourceBreakdown[k] || '').trim();
+        const open = i < 2 ? 'open' : '';
+        return `<details ${open} style="border-bottom:1px solid #e2e8f0;">
+          <summary style="padding:8px 12px;cursor:pointer;font-size:11px;font-weight:600;color:#0f172a;background:#f8fafc;display:flex;align-items:center;justify-content:space-between;gap:8px;">
+            <span>${_ddEsc(SOURCE_LABELS[k])}</span>
+            <span style="color:#94a3b8;font-size:10px;font-weight:500;">${txt.length.toLocaleString()} chars</span>
+          </summary>
+          <pre style="margin:0;padding:10px 14px;font-size:11px;line-height:1.55;color:#334155;background:#fff;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Menlo,Monaco,monospace;max-height:none;">${_ddEsc(txt)}</pre>
+        </details>`;
+      }).join('')
+    : `<div style="padding:24px;text-align:center;font-size:11px;color:#94a3b8;">No source notes on this property — AI had nothing to read from.</div>`;
+
   modal.querySelector('div').outerHTML = `
-    <div style="background:#fff;border-radius:12px;width:100%;max-width:900px;max-height:90vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 25px 60px rgba(0,0,0,0.25);">
+    <div style="background:#fff;border-radius:12px;width:100%;max-width:1500px;max-height:92vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 25px 60px rgba(0,0,0,0.25);">
       <div style="padding:14px 18px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;">
         <div>
           <div style="font-size:15px;font-weight:700;color:#0f172a;">✦ AI Auto-Fill — Review Changes</div>
@@ -22263,25 +22510,36 @@ window._aiAutoFillDeal = async function(propertyId, opts){
         </div>
         <button onclick="this.closest('#aiAutoFillModal').remove()" style="background:none;border:none;color:#94a3b8;font-size:22px;cursor:pointer;padding:4px 8px;">×</button>
       </div>
-      <div style="padding:14px 18px;overflow-y:auto;flex:1;">
-        <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;flex-wrap:wrap;">
-          <button onclick="document.querySelectorAll('#aiAutoFillModal input[type=checkbox]:not(:disabled)').forEach(c => c.checked = true);" style="background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:5px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;">Select all</button>
-          <button onclick="document.querySelectorAll('#aiAutoFillModal input[type=checkbox]:not(:disabled)').forEach(c => c.checked = false);" style="background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:5px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;">Clear</button>
-          <span style="font-size:10px;color:#94a3b8;margin-left:6px;">Legend:</span>
-          <span style="font-size:10px;color:#0f172a;background:#fff;border:1px solid #e2e8f0;padding:2px 6px;border-radius:3px;">value</span>
-          <span style="font-size:10px;color:#b45309;background:#fffbeb;border:1px solid #fde68a;padding:2px 6px;border-radius:3px;">AI proposes N/A</span>
-          <span style="font-size:10px;color:#7c3aed;background:#f5f3ff;border:1px solid #ddd6fe;padding:2px 6px;border-radius:3px;">already N/A</span>
+      <div style="display:flex;flex:1;min-height:0;">
+        <!-- LEFT PANE: field table -->
+        <div style="flex:1 1 60%;min-width:0;padding:14px 18px;overflow-y:auto;border-right:1px solid #e2e8f0;">
+          <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;flex-wrap:wrap;">
+            <button onclick="document.querySelectorAll('#aiAutoFillModal input[type=checkbox]:not(:disabled)').forEach(c => c.checked = true);" style="background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:5px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;">Select all</button>
+            <button onclick="document.querySelectorAll('#aiAutoFillModal input[type=checkbox]:not(:disabled)').forEach(c => c.checked = false);" style="background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:5px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;">Clear</button>
+            <span style="font-size:10px;color:#94a3b8;margin-left:6px;">Legend:</span>
+            <span style="font-size:10px;color:#0f172a;background:#fff;border:1px solid #e2e8f0;padding:2px 6px;border-radius:3px;">value</span>
+            <span style="font-size:10px;color:#b45309;background:#fffbeb;border:1px solid #fde68a;padding:2px 6px;border-radius:3px;">AI proposes N/A</span>
+            <span style="font-size:10px;color:#7c3aed;background:#f5f3ff;border:1px solid #ddd6fe;padding:2px 6px;border-radius:3px;">already N/A</span>
+          </div>
+          ${all.length ? `<table style="width:100%;border-collapse:collapse;">
+            <thead><tr style="background:#f8fafc;font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;">
+              <th style="padding:7px 10px;text-align:center;">Use</th>
+              <th style="padding:7px 10px;text-align:left;">Field</th>
+              <th style="padding:7px 10px;text-align:left;">Current</th>
+              <th style="padding:7px 10px;text-align:left;">AI Proposed</th>
+            </tr></thead>
+            <tbody>${rowsHtml}</tbody>
+          </table>` : '<div style="padding:20px;text-align:center;font-size:12px;color:#64748b;">No fields available.</div>'}
+          ${uncertainHtml}
         </div>
-        ${all.length ? `<table style="width:100%;border-collapse:collapse;">
-          <thead><tr style="background:#f8fafc;font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;">
-            <th style="padding:7px 10px;text-align:center;">Use</th>
-            <th style="padding:7px 10px;text-align:left;">Field</th>
-            <th style="padding:7px 10px;text-align:left;">Current</th>
-            <th style="padding:7px 10px;text-align:left;">AI Proposed</th>
-          </tr></thead>
-          <tbody>${rowsHtml}</tbody>
-        </table>` : '<div style="padding:20px;text-align:center;font-size:12px;color:#64748b;">No fields available.</div>'}
-        ${uncertainHtml}
+        <!-- RIGHT PANE: source notes -->
+        <div style="flex:1 1 40%;min-width:0;display:flex;flex-direction:column;background:#fafbfc;">
+          <div style="padding:10px 14px;border-bottom:1px solid #e2e8f0;background:#fff;font-size:11px;color:#475569;">
+            <strong style="color:#0f172a;font-size:12px;">Source notes the AI read</strong>
+            <span style="color:#94a3b8;margin-left:6px;">${sourceKeysWithText.length} source${sourceKeysWithText.length===1?'':'s'} · ${sourceTotalChars.toLocaleString()} chars total</span>
+          </div>
+          <div style="overflow-y:auto;flex:1;">${sourcesHtml}</div>
+        </div>
       </div>
       <div style="padding:12px 18px;border-top:1px solid #e2e8f0;display:flex;justify-content:space-between;gap:10px;">
         <div style="font-size:11px;color:#64748b;align-self:center;">Uncheck rows you don't want to apply.</div>
@@ -30340,6 +30598,18 @@ function showSettingsPage(){
             </div>
           </div>
           <button onclick="_streetViewBulkOpen()" style="background:#059669;color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Bulk fill →</button>
+        </section>
+
+        <!-- v119: AI Auto-Fill catalog tile -->
+        <section data-settings-tab="tools" style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
+          <div style="font-size:28px;flex-shrink:0;">✦</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:15px;font-weight:700;color:#0f172a;">AI Auto-Fill catalog</div>
+            <div style="font-size:12px;color:#64748b;margin-top:3px;line-height:1.5;">
+              Every field the AI Auto-Fill currently extracts, grouped by category. Use this to verify nothing's missing and to plan additions. To add a new field: extend FIELD_SPEC in the <code>ai-parse-deal-v2</code> edge function and redeploy.
+            </div>
+          </div>
+          <button onclick="_aiCatalogOpen()" style="background:#7c3aed;color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Open catalog →</button>
         </section>
 
         <!-- v111 Ship 3: Asset Cleanup tile -->

@@ -743,28 +743,47 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   border-bottom: 1px solid #e2e8f0;
 }
 
-/* v113.63: inline N/A affordance (Phase 2). Empty fields show a faint
-   "✕ N/A" link that brightens on hover. Filled fields show no chrome.
-   N/A fields render as a purple badge with a revert icon. The button
-   is a sibling of the input — no wrapper, so layouts don't reflow. */
-.na-mark-btn {
-  display: none;
-  font-size: 9px; font-weight: 600;
-  color: #94a3b8; cursor: pointer;
-  text-decoration: none; user-select: none;
-  white-space: nowrap;
-  margin-left: 4px;
-  opacity: 0.5;
-  transition: opacity 0.12s, color 0.12s;
+/* v113.64: inline N/A affordance (Phase 2). Empty inputs/selects/
+   textareas wear a tiny "✕ N/A" link tucked inside their right edge.
+   Filled fields show no chrome. N/A fields render as a purple badge
+   with a revert icon. */
+.na-input-wrap {
+  display: inline-block;
+  position: relative;
+  width: 100%;
+  flex: 1 1 auto; /* play nice in flex rows like .pd-row */
   vertical-align: middle;
 }
-input[data-na-col]:placeholder-shown ~ .na-mark-btn,
-textarea[data-na-col]:placeholder-shown ~ .na-mark-btn,
-select[data-na-col][data-na-empty="true"] ~ .na-mark-btn {
+.na-input-wrap > .form-input,
+.na-input-wrap > .form-select,
+.na-input-wrap > .form-textarea,
+.na-input-wrap > input,
+.na-input-wrap > select,
+.na-input-wrap > textarea { padding-right: 52px; }
+.na-mark-btn {
+  display: none;
+  font-size: 10px; font-weight: 700;
+  color: #cbd5e1; cursor: pointer;
+  text-decoration: none; user-select: none;
+  white-space: nowrap;
+  opacity: 0.7;
+  transition: color 0.12s, opacity 0.12s;
+  vertical-align: middle;
+}
+.na-input-wrap > .na-mark-btn {
+  position: absolute;
+  right: 8px; top: 50%;
+  transform: translateY(-50%);
+  z-index: 2;
+}
+.na-input-wrap > select.form-select ~ .na-mark-btn { right: 28px; } /* clear chevron */
+.na-input-wrap > input[data-na-col]:placeholder-shown ~ .na-mark-btn,
+.na-input-wrap > textarea[data-na-col]:placeholder-shown ~ .na-mark-btn,
+.na-input-wrap > select[data-na-col][data-na-empty="true"] ~ .na-mark-btn {
   display: inline;
 }
 .na-mark-btn:hover { opacity: 1; color: #b45309; }
-.na-mark-btn.na-radio { display: inline; opacity: 0.4; }
+.na-mark-btn.na-radio { display: inline; opacity: 0.4; margin-left: 8px; }
 .na-mark-btn.na-radio:hover { opacity: 1; color: #b45309; }
 .na-badge {
   display: inline-flex; align-items: center; gap: 4px;
@@ -5609,13 +5628,44 @@ async function _naWrite(propertyId, nextArray){
   }
 }
 
+// Re-render only the active tab so clicking N/A doesn't yank the user
+// back to the Summary tab. Falls back to renderDealPage if the tab
+// renderer isn't found.
+function _naReRenderActiveTab(){
+  const tabContentEl = document.getElementById('tabContent');
+  if(!tabContentEl){ renderDealPage(); return; }
+  const renderers = {
+    summary: typeof renderSummaryTab === 'function' ? renderSummaryTab : null,
+    property: typeof renderPropertyTab === 'function' ? renderPropertyTab : null,
+    financial: typeof renderFinancialTab === 'function' ? renderFinancialTab : null,
+    offers: typeof renderOffersTab === 'function' ? renderOffersTab : null,
+    documents: typeof renderDocumentsTab === 'function' ? renderDocumentsTab : null,
+    dealstatus: typeof renderDealStatusTab === 'function' ? renderDealStatusTab : null,
+    contacts: typeof renderContactsTab === 'function' ? renderContactsTab : null,
+    notes: typeof renderNotesTab === 'function' ? renderNotesTab : null,
+    tasks: typeof renderTasksTab === 'function' ? renderTasksTab : null,
+    comps: typeof renderCompsTab === 'function' ? renderCompsTab : null,
+    aicomm: typeof renderAICommTab === 'function' ? renderAICommTab : null,
+    brochure: typeof renderBrochureTab === 'function' ? renderBrochureTab : null,
+    buyermatch: typeof renderBuyerMatchTab === 'function' ? renderBuyerMatchTab : null,
+    tenantmix: typeof renderTenantMixTab === 'function' ? renderTenantMixTab : null,
+    pitchout: typeof renderPitchOutTab === 'function' ? renderPitchOutTab : null,
+  };
+  const fn = renderers[currentTab];
+  if(!fn){ renderDealPage(); return; }
+  _rendering = true;
+  tabContentEl.innerHTML = fn(currentDeal);
+  _rendering = false;
+  _naDecorate(tabContentEl);
+}
+
 window._naMark = async function(col){
   if(!currentDeal || !col) return;
   const list = _naList(currentDeal);
   if(list.includes(col)) return;
   const next = list.concat([col]);
   const ok = await _naWrite(currentDeal.id, next);
-  if(ok) renderDealPage();
+  if(ok) _naReRenderActiveTab();
 };
 
 window._naClear = async function(col){
@@ -5624,12 +5674,12 @@ window._naClear = async function(col){
   if(!list.includes(col)) return;
   const next = list.filter(c => c !== col);
   const ok = await _naWrite(currentDeal.id, next);
-  if(ok) renderDealPage();
+  if(ok) _naReRenderActiveTab();
 };
 
 // Decorate every recognized input inside `root` (defaults to mainArea):
 //   • already-NA   → swap input out for badge with ↺ revert
-//   • empty input  → faint "✕ N/A" link appears beside it (sibling)
+//   • empty input  → "✕ N/A" tucked inside the right edge of the input
 //   • filled input → no chrome
 // Recognition: `data-na-col` attribute OR known id/name in _NA_INPUT_MAP
 // OR matches the fin_(a|p)_<key>_(mo|yr) pattern.
@@ -5644,7 +5694,7 @@ function _naDecorate(root){
     const col = _naColForElement(el);
     if(!col) return;
     el.setAttribute('data-na-decorated','1');
-    el.setAttribute('data-na-col', col); // CSS sibling selectors need the attribute
+    el.setAttribute('data-na-col', col);
 
     if(naSet.has(col)){
       const badge = document.createElement('span');
@@ -5663,13 +5713,19 @@ function _naDecorate(root){
       el.addEventListener('change', sync);
     }
 
-    // Append the mark-N/A button as a sibling immediately after the input.
+    // Wrap the input in a relative-positioned span so the N/A button can
+    // sit absolutely-positioned at the right edge inside the field. The
+    // wrapper's `flex: 1 1 auto` keeps .pd-row layouts intact.
+    const wrap = document.createElement('span');
+    wrap.className = 'na-input-wrap';
+    el.parentNode.insertBefore(wrap, el);
+    wrap.appendChild(el);
     const btn = document.createElement('a');
     btn.className = 'na-mark-btn';
     btn.textContent = '✕ N/A';
     btn.title = 'Mark this field as Not Applicable';
     btn.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); _naMark(col); };
-    el.parentNode.insertBefore(btn, el.nextSibling);
+    wrap.appendChild(btn);
   });
 
   // Radio groups: decorate the wrapper of each named group once.
@@ -6101,17 +6157,26 @@ function collectAllDealFields(){
   snapshotCurrentTab();
   const pending = (currentDeal?.id && _pendingEdits[currentDeal.id]) || {};
 
-  // Helpers: check DOM first, then pending edits cache
+  // Helpers: check DOM first, then pending edits cache.
+  // Return value semantics:
+  //   undefined → field is absent from DOM and pending — caller should SKIP
+  //   null      → user intentionally cleared the field — caller should send null (to clear DB column)
+  //   value     → user-entered value (including 0 and '')
   const getVal  = id => {
     const e = document.getElementById(id);
     if(e) return e.value.trim();
-    return (id in pending) ? String(pending[id]).trim() : '';
+    if(id in pending) return String(pending[id] ?? '').trim();
+    return undefined;
   };
   const getNum  = id => {
     const e = document.getElementById(id);
-    const raw = e ? e.value : (id in pending ? pending[id] : '');
-    const v = Number(String(raw||'').replace(/,/g,''));
-    return isNaN(v)||v===0 ? null : v;
+    let raw;
+    if(e) raw = e.value;
+    else if(id in pending) raw = pending[id];
+    else return undefined; // field absent — skip
+    if(raw === '' || raw === null || raw === undefined) return null; // intentional clear
+    const v = Number(String(raw).replace(/,/g,''));
+    return isNaN(v) ? null : v; // 0 passes through as 0
   };
   const getChk  = id => {
     const e = document.getElementById(id);
@@ -6123,24 +6188,30 @@ function collectAllDealFields(){
     if(e) return e.value;
     return pending['_radio_'+name] || '';
   };
-  const s = (fields,f,v) => { if(v!==''&&v!==null&&v!==undefined) fields[f]=v; };
+  // s(): set fields[f] = v, but skip if v is undefined (field truly absent).
+  // null and '' BOTH mean "clear" — sent through as null so the DB column
+  // gets set to NULL (this is what unblocks emptying a field, and unblocks
+  // typing 0 since 0 !== undefined).
+  const s = (fields,f,v) => {
+    if(v === undefined) return;
+    fields[f] = (v === '' || v === null) ? null : v;
+  };
 
   const fields = {};
 
   // ── DEAL HEADER ──────────────────────────────────────────────
-  const ask = getNum('fin_askPrice')||getNum('bi_asking');
-  const off = getNum('fin_offerPrice')||getNum('bi_offer');
-  s(fields,'Asking Price', ask||null);
-  s(fields,'Offer Price',  off||null);
+  const ask = getNum('fin_askPrice') ?? getNum('bi_asking');
+  const off = getNum('fin_offerPrice') ?? getNum('bi_offer');
+  s(fields,'Asking Price', ask);
+  s(fields,'Offer Price',  off);
   // v102.23: REMOVED dead writes for 'Top Priority' and 'Discuss in Meeting'.
   // They were reading from bi_priority / bi_meeting checkbox IDs that no
   // longer exist in the DOM, so getChk() was returning false on every save
   // and silently overwriting the real values set by toggleStar() and the
   // meeting toggle. Priority is now saved exclusively via toggleStar().
-  const stage = getVal('bi_stage')||getVal('dealStageSelect');
-  s(fields,'Pipeline Stage', stage||null);
-  const noi = getNum('bi_noi');
-  s(fields,'NOI', noi||null);
+  const stage = getVal('bi_stage') ?? getVal('dealStageSelect');
+  s(fields,'Pipeline Stage', stage);
+  s(fields,'NOI', getNum('bi_noi'));
 
   // ── PROPERTY DETAILS ─────────────────────────────────────────
   const street1 = getVal('nameStreet1'), city=getVal('nameCity'), state=getVal('nameState'), zip=getVal('nameZip');
@@ -6154,35 +6225,35 @@ function collectAllDealFields(){
   s(fields,'Construction Status', conStatus==='existing'?'Existing':conStatus==='proposed'?'Under Construction/Proposed':null);
   if(getRadio('distressed')) fields['Is Distressed'] = getRadio('distressed')==='yes';
 
-  s(fields,'Property Class',    getVal('propClass')||null);
-  s(fields,'Property Condition',getVal('propCondition')||null);
-  s(fields,'Location Class',    getVal('locationClass')||null);
-  s(fields,'Location Trending', getVal('locationTrending')||null);
-  s(fields,'Location Type',     getVal('locationType')||null);
+  s(fields,'Property Class',    getVal('propClass'));
+  s(fields,'Property Condition',getVal('propCondition'));
+  s(fields,'Location Class',    getVal('locationClass'));
+  s(fields,'Location Trending', getVal('locationTrending'));
+  s(fields,'Location Type',     getVal('locationType'));
 
   // Seller info
   const listed = getRadio('propListed');
   s(fields,'Is Property Listed', listed==='broker'?'Broker':listed==='fsbo'?'For Sale By Owner':null);
   s(fields,'Commission Split (%)',      getNum('commSplit'));
-  s(fields,'Seller Motivation Level',   getVal('sellerMotivation')||null);
-  s(fields,'Seller Financial Strength', getVal('financialStrength')||null);
+  s(fields,'Seller Motivation Level',   getVal('sellerMotivation'));
+  s(fields,'Seller Financial Strength', getVal('financialStrength'));
   const mortStatus = getRadio('mortgagePayments');
   s(fields,'Mortgage Payments Status', mortStatus==='current'?'Current':mortStatus==='pastdue'?'Past Due':null);
-  s(fields,'Why Selling',                   getVal('whySelling')||null);
-  s(fields,'Date Property Went on Market',  getVal('dateOnMarket')||null);
-  s(fields,'Seller Original Purchase Date', getVal('sellerOrigDate')||null);
+  s(fields,'Why Selling',                   getVal('whySelling'));
+  s(fields,'Date Property Went on Market',  getVal('dateOnMarket'));
+  s(fields,'Seller Original Purchase Date', getVal('sellerOrigDate'));
   const origPrice = getNum('sellerOrigPrice'); s(fields,'Seller Original Purchase Price', origPrice);
   const sellerTypes = [...document.querySelectorAll('input[name="sellerType"]:checked')].map(c=>c.value);
   if(sellerTypes.length) fields['Seller Type'] = sellerTypes;
 
   // Construction - updated to use prop_ prefixed IDs from Property Information section
-  s(fields,'Year Built',            getNum('prop_yearBuilt')   || getNum('yearBuilt'));
-  s(fields,'Year Renovated',        getNum('prop_yearRenov')   || getNum('yearRenovated'));
-  s(fields,'Total Building SF',     getNum('prop_totalBuildingSF') || getNum('fin_aTotalSF'));
-  s(fields,'Net Rentable SF',       getNum('prop_netRentableSF')   || getNum('fin_aNetRentSF'));
+  s(fields,'Year Built',            getNum('prop_yearBuilt')   ?? getNum('yearBuilt'));
+  s(fields,'Year Renovated',        getNum('prop_yearRenov')   ?? getNum('yearRenovated'));
+  s(fields,'Total Building SF',     getNum('prop_totalBuildingSF') ?? getNum('fin_aTotalSF'));
+  s(fields,'Net Rentable SF',       getNum('prop_netRentableSF')   ?? getNum('fin_aNetRentSF'));
   s(fields,'No. of Buildings',      getNum('prop_numBuildings'));
   s(fields,'No. of Stories',        getNum('noStories'));
-  s(fields,'No. of Parking Spaces', getNum('prop_parkingSpaces') || getNum('parkingSpaces'));
+  s(fields,'No. of Parking Spaces', getNum('prop_parkingSpaces') ?? getNum('parkingSpaces'));
   const parkRatio = getVal('prop_parkingRatio'); if(parkRatio) fields['Parking Ratio'] = parkRatio;
   // v102.8: Total Lot Size was previously wired with oninput="markDirty()"
   // but never collected here — values typed silently vanished. Now collected.
@@ -6190,14 +6261,14 @@ function collectAllDealFields(){
   // v102.8: Lot size unit (sf vs acres) — the radio toggle persists now too
   const lotUnit = getRadio('lotUnit');
   if(lotUnit) fields['Lot Size Unit'] = lotUnit;
-  s(fields,'Roof Type',   getVal('roofType')||null);
-  s(fields,'Foundation',  getVal('foundationType')||null);
-  s(fields,'Exterior',    getVal('exteriorType')||null);
-  s(fields,'Piping',      getVal('pipingType')||null);
-  s(fields,'Wiring',      getVal('wiringType')||null);
-  s(fields,'HVAC',        getVal('prop_hvac') || getVal('hvacType')||null);
-  s(fields,'Paving',      getVal('prop_parkingType') || getVal('pavingType')||null);
-  s(fields,'Parking Type',getVal('prop_parkingType')||null);
+  s(fields,'Roof Type',   getVal('roofType'));
+  s(fields,'Foundation',  getVal('foundationType'));
+  s(fields,'Exterior',    getVal('exteriorType'));
+  s(fields,'Piping',      getVal('pipingType'));
+  s(fields,'Wiring',      getVal('wiringType'));
+  s(fields,'HVAC',        getVal('prop_hvac') ?? getVal('hvacType'));
+  s(fields,'Paving',      getVal('prop_parkingType') ?? getVal('pavingType'));
+  s(fields,'Parking Type',getVal('prop_parkingType'));
 
   // Property info text
   const propDesc = getVal('prop_propDesc');  if(propDesc) fields['General Property Notes'] = propDesc;
@@ -6275,9 +6346,9 @@ function collectAllDealFields(){
   if(annDebt) s(fields,'Annual Debt Service', annDebt);
 
   // ── NOTES ─────────────────────────────────────────────────────
-  s(fields,'Next Steps',             getVal('nextSteps')||null);
-  s(fields,'Deal Notes',             getVal('dealNotes')||null);
-  s(fields,'General Property Notes', getVal('generalNotes')||null);
+  s(fields,'Next Steps',             getVal('nextSteps'));
+  s(fields,'Deal Notes',             getVal('dealNotes'));
+  s(fields,'General Property Notes', getVal('generalNotes'));
 
   // Remove null/undefined/empty-string entries to avoid overwriting with blanks
   Object.keys(fields).forEach(k => { if(fields[k]===null||fields[k]===''||fields[k]===undefined) delete fields[k]; });
@@ -21662,7 +21733,7 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
-// v113.63: AI auto-fill ALL property details + financial analysis fields
+// v113.64: AI auto-fill ALL property details + financial analysis fields
 // using the ai-parse-deal-v2 edge function (v9). Modal lists every
 // FIELD_SPEC entry grouped by category, with four row states (value /
 // AI proposes N/A / already N/A / no info). Apply merges accepted N/A

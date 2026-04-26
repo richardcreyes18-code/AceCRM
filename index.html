@@ -7330,30 +7330,12 @@ function renderPropertyTab(d){
       <div class="info-box-title">Property Information</div>
       <table style="width:100%;border:none;font-size:11px;border-collapse:separate;border-spacing:0 7px;">
 
-        <tr>
-          <td colspan="2" style="padding-top:4px;">
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;" data-equalize-group="descriptions">
-              <div>
-                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
-                  <div style="font-size:10px;font-weight:700;color:#334155;text-transform:uppercase;letter-spacing:0.5px;">Property Description</div>
-                  <button onclick="_aiGenerateDescription('${d.id}', this)" title="Use AI to write a clean polished description from the raw notes (general_property_notes, deal_notes, etc.)" style="background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border:none;padding:3px 9px;font-size:9px;font-weight:700;border-radius:4px;cursor:pointer;">✦ AI Generate</button>
-                </div>
-                <textarea id="prop_propDesc" class="form-textarea form-textarea-readable auto-expand" data-equalize="descriptions" placeholder="Clean, polished description for OMs and pitches. Click ✦ AI Generate to summarize the raw notes (which live in the Notes tab)." style="min-height:130px;height:auto;width:100%;box-sizing:border-box;" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px';if(typeof _equalizeTextareaGroup==='function')_equalizeTextareaGroup('descriptions');markDirty()">${d['Property Description']||''}</textarea>
-              </div>
-              <div>
-                <div style="font-size:10px;font-weight:700;color:#334155;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px;">Location Description</div>
-                <textarea id="prop_locDesc" class="form-textarea form-textarea-readable auto-expand" data-equalize="descriptions" style="min-height:130px;height:auto;width:100%;box-sizing:border-box;" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px';if(typeof _equalizeTextareaGroup==='function')_equalizeTextareaGroup('descriptions');markDirty()">${d['Location Description']||''}</textarea>
-              </div>
-              <div>
-                <div style="font-size:10px;font-weight:700;color:#334155;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px;">🤖 AI Clarifying Notes</div>
-                ${d['AI Clarifying Notes']
-                  ? `<textarea id="prop_aiClarifying" class="form-textarea form-textarea-readable auto-expand" data-equalize="descriptions" style="min-height:130px;height:auto;width:100%;box-sizing:border-box;" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px';if(typeof _equalizeTextareaGroup==='function')_equalizeTextareaGroup('descriptions');markDirty()">${d['AI Clarifying Notes']}</textarea>`
-                  : `<textarea id="prop_aiClarifying" class="form-textarea form-textarea-readable auto-expand" data-equalize="descriptions" placeholder="AI-generated review questions will appear here after parsing." style="min-height:130px;height:auto;width:100%;box-sizing:border-box;color:#94a3b8;" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px';if(typeof _equalizeTextareaGroup==='function')_equalizeTextareaGroup('descriptions');markDirty()"></textarea>`
-                }
-              </div>
-            </div>
-          </td>
-        </tr>
+        <!-- v113.73: Property Description / Location Description / AI
+             Clarifying Notes textareas moved to the Notes tab. The
+             columns are still saved (same input ids, just rendered in a
+             different tab) — Property Details now stays focused on the
+             numbers. Raw merged notes (general_property_notes) also
+             live on the Notes tab. -->
 
         <tr>
           <td colspan="2" style="padding-top:14px;">
@@ -21936,7 +21918,7 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
-// v113.72: AI auto-fill ALL property details + financial analysis fields
+// v113.73: AI auto-fill ALL property details + financial analysis fields
 // using the ai-parse-deal-v2 edge function (v9). Modal lists every
 // FIELD_SPEC entry grouped by category, with four row states (value /
 // AI proposes N/A / already N/A / no info). Apply merges accepted N/A
@@ -46612,7 +46594,38 @@ function renderNotesTab(d){
   const dealNotesSection = _renderBlobCards('Deal Notes',             d['Deal Notes'],             '#1a3a6e');
   const genNotesSection  = _renderBlobCards('General Property Notes', d['General Property Notes'], '#1a3a6e');
 
-  const leftPane = (nsSection + dealNotesSection + genNotesSection) ||
+  // v113.73: Property Description / Location / AI Clarifying — relocated
+  // from Property Details. Same input ids so existing autosave plumbing
+  // keeps writing to property_description / location_description /
+  // ai_clarifying_notes. Collapsible to keep the Notes tab tidy.
+  const descSection = `
+    <div style="margin-bottom:12px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;">
+      <details ${(d['Property Description']||d['Location Description']||d['AI Clarifying Notes']) ? 'open' : ''}>
+        <summary style="cursor:pointer;font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.05em;display:flex;align-items:center;gap:6px;user-select:none;">
+          📝 Marketing Descriptions
+          <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">— Property / Location / AI Clarifying</span>
+        </summary>
+        <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;margin-top:10px;" data-equalize-group="descriptions">
+          <div>
+            <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
+              <div style="font-size:10px;font-weight:700;color:#334155;text-transform:uppercase;letter-spacing:0.5px;">Property Description</div>
+              <button onclick="_aiGenerateDescription('${d.id}', this)" title="Use AI to write a clean polished description from the raw notes." style="background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border:none;padding:3px 9px;font-size:9px;font-weight:700;border-radius:4px;cursor:pointer;">✦ AI Generate</button>
+            </div>
+            <textarea id="prop_propDesc" class="form-textarea form-textarea-readable auto-expand" data-equalize="descriptions" placeholder="Clean polished description for OMs and pitches." style="min-height:130px;height:auto;width:100%;box-sizing:border-box;" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px';if(typeof _equalizeTextareaGroup==='function')_equalizeTextareaGroup('descriptions');markDirty()">${d['Property Description']||''}</textarea>
+          </div>
+          <div>
+            <div style="font-size:10px;font-weight:700;color:#334155;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px;">Location Description</div>
+            <textarea id="prop_locDesc" class="form-textarea form-textarea-readable auto-expand" data-equalize="descriptions" placeholder="—" style="min-height:130px;height:auto;width:100%;box-sizing:border-box;" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px';if(typeof _equalizeTextareaGroup==='function')_equalizeTextareaGroup('descriptions');markDirty()">${d['Location Description']||''}</textarea>
+          </div>
+          <div>
+            <div style="font-size:10px;font-weight:700;color:#334155;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px;">🤖 AI Clarifying Notes</div>
+            <textarea id="prop_aiClarifying" class="form-textarea form-textarea-readable auto-expand" data-equalize="descriptions" placeholder="AI-generated review questions appear here after parsing." style="min-height:130px;height:auto;width:100%;box-sizing:border-box;${d['AI Clarifying Notes']?'':'color:#94a3b8;'}" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px';if(typeof _equalizeTextareaGroup==='function')_equalizeTextareaGroup('descriptions');markDirty()">${d['AI Clarifying Notes']||''}</textarea>
+          </div>
+        </div>
+      </details>
+    </div>`;
+
+  const leftPane = (descSection + nsSection + dealNotesSection + genNotesSection) ||
     '<div style="color:#888;font-size:11px;padding:10px 0;">No notes recorded for this deal.</div>';
 
   return `

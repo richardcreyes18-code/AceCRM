@@ -20895,18 +20895,19 @@ function _ddDealKey(d){
   return '';
 }
 
-// v115: portfolio rows ("Hot MF 20U Portfolio - 338 Harvard Ave… | 414 Clements
+// v116: portfolio rows ("Hot MF 20U Portfolio - 338 Harvard Ave… | 414 Clements
 // Bridge Rd…") cover two addresses joined by "|". The single-key scan only
 // indexes off the *last* suffix match, so a portfolio row's Harvard segment
 // never groups with a standalone "338 Harvard Ave" row. _ddDealKeys returns
-// EVERY plausible normalized key for a deal — Address + each pipe-separated
-// segment of Name/Property Name — so the scanners can fan the row into each
-// matching group. Empty keys filtered, dedup'd.
+// EVERY plausible normalized key for a deal — each of Address / Name /
+// Property Name normalized whole, plus each |-separated segment of those
+// fields normalized — so the scanners can fan the row into each matching
+// group. v116 fix: also pipe-split Address (v115 only split Name/Property
+// Name, but in ace_properties the pipe lives in Address).
 function _ddDealKeys(d){
   const out = new Set();
   const tryAdd = s => { const k = _ddNormalizeDealAddr(s); if(k) out.add(k); };
-  tryAdd(d['Address'] || '');
-  for(const fld of ['Name','Property Name']){
+  for(const fld of ['Address','Name','Property Name']){
     const v = d[fld] || '';
     if(!v) continue;
     tryAdd(v);
@@ -21998,6 +21999,9 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v116: dedupe pipe-split also covers Address field (v115 only split
+// Name/Property Name, missing the case where Address itself contains
+// "addr1 | addr2" — which is what ace_properties rows actually use).
 // v115: dedupe scanner now keys off every pipe-separated address segment
 // of a deal name (portfolio listings cover 2+ properties on one row).
 // v114: AI auto-fill ALL property details + financial analysis fields

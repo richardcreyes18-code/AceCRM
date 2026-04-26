@@ -28979,6 +28979,8 @@ window._emailTplsOpenEditor = function(templateId){
           <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
             ${prop ? `<span onclick="openDeal(allDeals.find(d=>d.id==='${prop.id}'))" style="display:inline-block;background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;cursor:pointer;">🏢 ${_ddEsc((prop['Address']||'').slice(0,60))}</span>` : '<span style="display:inline-block;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;">🔗 Unlinked</span>'}
             ${owner ? `<span onclick="openContactModal('${owner.id}')" style="display:inline-block;background:#dcfce7;color:#15803d;border:1px solid #86efac;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;cursor:pointer;">👤 ${_ddEsc(owner['Name']||'')}</span>` : ''}
+            ${prop && prop['Assigned Agent'] ? (typeof _agentList === 'function' ? _agentList(prop['Assigned Agent']) : String(prop['Assigned Agent']).split('|').map(s=>s.trim()).filter(Boolean)).map(a => `<span style="display:inline-block;background:#ede9fe;color:#5b21b6;border:1px solid #ddd6fe;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;" title="${_ddEsc(a)}">🤵 ${_ddEsc(typeof _agentDisplayName==='function'?_agentDisplayName(a):a)}</span>`).join('') : ''}
+            ${/^\(FUB IMPORT/.test(t.name||'') ? '<span style="display:inline-block;background:#f1f5f9;color:#475569;border:1px solid #e2e8f0;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;">📥 FUB Import</span>' : ''}
           </div>
         </div>
         <button onclick="this.closest('#emailTplsEditorModal').remove()" style="background:none;border:none;color:#94a3b8;font-size:22px;line-height:1;cursor:pointer;padding:4px 8px;">×</button>
@@ -29202,28 +29204,45 @@ function _emailTplsLibPaintTemplates(folder){
     const subjectPreview = (r.subject || '').slice(0, 90);
     const bodyPreview    = (r.body || '').replace(/\s+/g, ' ').slice(0, 120);
 
+    // v113.50: full chip set — Property, Owner, Agent, FUB, Unlinked, Official.
     let tags = '';
     if(prop){
       tags += `<span onclick="event.stopPropagation(); openDeal(allDeals.find(d=>d.id==='${prop.id}'))"
         title="${_ddEsc(prop['Address']||'')}"
-        style="display:inline-block;background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;cursor:pointer;margin-right:4px;">
+        style="display:inline-block;background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;cursor:pointer;margin-right:4px;margin-bottom:3px;">
         🏢 ${_ddEsc((prop['Address']||'').slice(0, 40))}${(prop['Address']||'').length > 40 ? '…' : ''}
+      </span>`;
+    } else {
+      tags += `<span style="display:inline-block;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;margin-right:4px;margin-bottom:3px;">
+        🔗 Unlinked
       </span>`;
     }
     if(owner){
       tags += `<span onclick="event.stopPropagation(); openContactModal('${owner.id}')"
         title="${_ddEsc(owner['Name']||'')}"
-        style="display:inline-block;background:#dcfce7;color:#15803d;border:1px solid #86efac;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;cursor:pointer;margin-right:4px;">
+        style="display:inline-block;background:#dcfce7;color:#15803d;border:1px solid #86efac;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;cursor:pointer;margin-right:4px;margin-bottom:3px;">
         👤 ${_ddEsc(owner['Name']||'(no name)')}
       </span>`;
     }
-    if(!prop){
-      tags += `<span style="display:inline-block;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;margin-right:4px;">
-        🔗 Unlinked
+    // Agent pill — pulls 'Assigned Agent' from the property. May be a
+    // pipe-delimited list ("Daniel Keenan|Aidan Alverson"); show each as
+    // its own chip.
+    if(prop && prop['Assigned Agent']){
+      const agents = (typeof _agentList === 'function' ? _agentList(prop['Assigned Agent']) : String(prop['Assigned Agent']).split('|').map(s => s.trim()).filter(Boolean));
+      for(const a of agents){
+        const display = (typeof _agentDisplayName === 'function') ? _agentDisplayName(a) : a;
+        tags += `<span style="display:inline-block;background:#ede9fe;color:#5b21b6;border:1px solid #ddd6fe;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;margin-right:4px;margin-bottom:3px;" title="${_ddEsc(a)}">
+          🤵 ${_ddEsc(display)}
+        </span>`;
+      }
+    }
+    if(/^\(FUB IMPORT/.test(r.name||'')){
+      tags += `<span style="display:inline-block;background:#f1f5f9;color:#475569;border:1px solid #e2e8f0;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;margin-right:4px;margin-bottom:3px;">
+        📥 FUB Import
       </span>`;
     }
     if(r.is_official){
-      tags += `<span style="display:inline-block;background:#fef9c3;color:#854d0e;border:1px solid #fde68a;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;margin-right:4px;">
+      tags += `<span style="display:inline-block;background:#fef9c3;color:#854d0e;border:1px solid #fde68a;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;margin-right:4px;margin-bottom:3px;">
         ★ Official
       </span>`;
     }

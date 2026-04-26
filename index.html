@@ -6335,7 +6335,11 @@ function collectAllDealFields(){
   s(fields,'Parking Type',getVal('prop_parkingType'));
 
   // Property info text
-  const propDesc = getVal('prop_propDesc');  if(propDesc) fields['General Property Notes'] = propDesc;
+  // v113.72: prop_propDesc now binds to the clean `property_description`
+  // column. The raw merged notes from FUB/dedupe live in `general_property_notes`
+  // and are still visible on the Notes tab — but no longer dumped into the
+  // Property Details textarea.
+  s(fields,'Property Description', getVal('prop_propDesc'));
   const locDesc  = getVal('prop_locDesc');   if(locDesc)  fields['Location Description']   = locDesc;
   // v102.11: AI clarifying notes had markDirty() on oninput but was never collected.
   // Every value users typed here silently vanished on save.
@@ -7330,8 +7334,11 @@ function renderPropertyTab(d){
           <td colspan="2" style="padding-top:4px;">
             <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;" data-equalize-group="descriptions">
               <div>
-                <div style="font-size:10px;font-weight:700;color:#334155;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px;">Property Description</div>
-                <textarea id="prop_propDesc" class="form-textarea form-textarea-readable auto-expand" data-equalize="descriptions" style="min-height:130px;height:auto;width:100%;box-sizing:border-box;" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px';if(typeof _equalizeTextareaGroup==='function')_equalizeTextareaGroup('descriptions');markDirty()">${d['General Property Notes']||''}</textarea>
+                <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:5px;">
+                  <div style="font-size:10px;font-weight:700;color:#334155;text-transform:uppercase;letter-spacing:0.5px;">Property Description</div>
+                  <button onclick="_aiGenerateDescription('${d.id}', this)" title="Use AI to write a clean polished description from the raw notes (general_property_notes, deal_notes, etc.)" style="background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border:none;padding:3px 9px;font-size:9px;font-weight:700;border-radius:4px;cursor:pointer;">✦ AI Generate</button>
+                </div>
+                <textarea id="prop_propDesc" class="form-textarea form-textarea-readable auto-expand" data-equalize="descriptions" placeholder="Clean, polished description for OMs and pitches. Click ✦ AI Generate to summarize the raw notes (which live in the Notes tab)." style="min-height:130px;height:auto;width:100%;box-sizing:border-box;" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px';if(typeof _equalizeTextareaGroup==='function')_equalizeTextareaGroup('descriptions');markDirty()">${d['Property Description']||''}</textarea>
               </div>
               <div>
                 <div style="font-size:10px;font-weight:700;color:#334155;text-transform:uppercase;letter-spacing:0.5px;margin-bottom:5px;">Location Description</div>
@@ -21929,7 +21936,7 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
-// v113.71: AI auto-fill ALL property details + financial analysis fields
+// v113.72: AI auto-fill ALL property details + financial analysis fields
 // using the ai-parse-deal-v2 edge function (v9). Modal lists every
 // FIELD_SPEC entry grouped by category, with four row states (value /
 // AI proposes N/A / already N/A / no info). Apply merges accepted N/A
@@ -21957,6 +21964,48 @@ window._fubImportFromCsv = async function(opts){
 //   _aiAutoFillDeal('<uuid>', { onlyFillEmpty: false })  // overwrite mode
 //
 // Or click the "✦ AI Auto-Fill" button on the deal card header.
+
+// v113.72: AI-generate a clean property_description from the raw merged
+// notes (general_property_notes etc.). Calls the ai-clean-description
+// edge function. On success, updates currentDeal in-memory + the textarea
+// in place so the user can edit further before saving.
+window._aiGenerateDescription = async function(propertyId, btn){
+  if(!propertyId) return;
+  const cfg = getConfig();
+  if(!cfg.url || !cfg.key){ alert('Connect your database first (Settings).'); return; }
+  if(btn){ btn.disabled = true; btn.textContent = '⏳ Generating…'; }
+  let resp;
+  try {
+    const r = await fetch(`${cfg.url}/functions/v1/ai-clean-description`, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', apikey: cfg.key, Authorization: 'Bearer '+cfg.key },
+      body: JSON.stringify({ property_id: propertyId, dry_run: false }),
+    });
+    resp = await r.json();
+    if(!r.ok || !resp.ok) throw new Error(resp.error || `HTTP ${r.status}`);
+  } catch(e){
+    if(btn){ btn.disabled = false; btn.textContent = '✦ AI Generate'; }
+    alert('AI generation failed: ' + e.message);
+    return;
+  }
+  // Patch in-memory deal + textarea
+  if(currentDeal && currentDeal.id === propertyId){
+    currentDeal['Property Description'] = resp.description;
+  }
+  if(typeof allDeals !== 'undefined' && Array.isArray(allDeals)){
+    const idx = allDeals.findIndex(x => x.id === propertyId);
+    if(idx >= 0) allDeals[idx]['Property Description'] = resp.description;
+  }
+  const ta = document.getElementById('prop_propDesc');
+  if(ta){
+    ta.value = resp.description;
+    ta.style.height = 'auto';
+    ta.style.height = ta.scrollHeight + 'px';
+  }
+  if(btn){ btn.disabled = false; btn.textContent = '✦ AI Generate'; }
+  if(typeof showSaveConfirm === 'function') showSaveConfirm(`✓ Description written (${resp.response_chars} chars from ${resp.source_chars} chars of source)`);
+};
+
 window._aiAutoFillDeal = async function(propertyId, opts){
   opts = opts || {};
   // v113.56: default to "show me everything" so the user can review AI's

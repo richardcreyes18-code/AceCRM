@@ -22088,6 +22088,15 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v125: AI Auto-Fill modal — new "AI Explanation" column.
+//   Edge fn ai-parse-deal-v2 v18 now returns a per-field `explanation`
+//   alongside `proposed` — a <=160-char source quote / paraphrase that
+//   justifies the proposed value. The modal renders it as a 5th column to
+//   the right of "AI Proposed", italic gray. Empty rows show an em-dash.
+//   Tenant subfield + group separator rows widened to colspan=5 to keep
+//   the table aligned.
+//   For derived numbers (cap-target → pitch-out, auto-flipped override
+//   booleans), the server fills its own justification string.
 // v124: Review Tag — single-select pill (Deal Reviewed | Agent Reviewed)
 //   on every deal, independent of the existing Deal Tag.
 //   * New ace_properties.review_tag column (text, CHECK in 'deal_reviewed' /
@@ -22542,13 +22551,14 @@ window._aiAutoFillDeal = async function(propertyId, opts){
         return `<tr style="border-top:1px solid #f1f5f9;${has?'':'opacity:0.55;background:#fafafa;'}">
           <td style="padding:4px 10px;text-align:center;width:30px;">${has?'<span style="color:#0f766e;font-size:13px;">✓</span>':'<span style="color:#cbd5e1;font-size:11px;">—</span>'}</td>
           <td style="padding:4px 10px 4px 30px;font-size:11px;color:#475569;">${_ddEsc(lbl)}</td>
-          <td style="padding:4px 10px;font-size:11px;color:#475569;max-width:160px;word-break:break-word;">${fmtVal(cv)}</td>
-          <td style="padding:4px 10px;font-size:11px;max-width:240px;word-break:break-word;">${has ? `<span style="color:#0f172a;font-weight:600;">${fmtVal(pv)}</span>` : fmtVal(null)}</td>
+          <td style="padding:4px 10px;font-size:11px;color:#475569;max-width:140px;word-break:break-word;">${fmtVal(cv)}</td>
+          <td style="padding:4px 10px;font-size:11px;max-width:200px;word-break:break-word;">${has ? `<span style="color:#0f172a;font-weight:600;">${fmtVal(pv)}</span>` : fmtVal(null)}</td>
+          <td style="padding:4px 10px;font-size:10px;color:#cbd5e1;max-width:260px;">—</td>
         </tr>`;
       }).join('');
       const filled = TENANT_FIELD_LABELS.filter(lbl => { const v = pt?.[lbl]; return v !== null && v !== undefined && v !== '' && !(typeof v === 'boolean' && v === false); }).length;
       const tname = (pt && pt['Tenant / Business Name']) || `Tenant ${idx+1}`;
-      return `<tr><td colspan="4" style="padding:8px 10px 4px 10px;font-size:10px;color:#0f766e;background:#ecfdf5;font-weight:600;border-top:1px solid #a7f3d0;">↳ ${_ddEsc(tname)} <span style="color:#94a3b8;font-weight:500;">— ${filled}/${TENANT_FIELD_LABELS.length} subfields filled</span></td></tr>${subRows}`;
+      return `<tr><td colspan="5" style="padding:8px 10px 4px 10px;font-size:10px;color:#0f766e;background:#ecfdf5;font-weight:600;border-top:1px solid #a7f3d0;">↳ ${_ddEsc(tname)} <span style="color:#94a3b8;font-weight:500;">— ${filled}/${TENANT_FIELD_LABELS.length} subfields filled</span></td></tr>${subRows}`;
     }).join('');
   };
 
@@ -22581,12 +22591,20 @@ window._aiAutoFillDeal = async function(propertyId, opts){
         cbHtml = `<input type="checkbox" disabled style="opacity:0.3;cursor:not-allowed;" title="AI had no info for this field" />`;
         proposedCellHtml = fmtVal(null);
       }
+      // v125: AI Explanation column. Edge fn v18 returns a per-field
+      // `explanation` quote/paraphrase from the source notes. Empty when
+      // the AI had no value to propose.
+      const expText = (hasProp && f.explanation) ? String(f.explanation) : '';
+      const explanationCellHtml = expText
+        ? `<span style="color:#475569;font-size:10px;line-height:1.5;font-style:italic;">${_ddEsc(expText)}</span>`
+        : `<span style="color:#cbd5e1;font-size:10px;">—</span>`;
       const mainRow = `
         <tr style="border-top:1px solid #e2e8f0;${rowStyle}">
-          <td style="padding:6px 10px;text-align:center;width:30px;">${cbHtml}</td>
-          <td style="padding:6px 10px;font-size:11px;color:#0f172a;font-weight:500;">${_ddEsc(fieldLabel(f.col))}<br><span style="color:#94a3b8;font-size:9px;font-family:ui-monospace,Menlo,monospace;">${f.col}</span></td>
-          <td style="padding:6px 10px;font-size:11px;color:#475569;max-width:160px;word-break:break-word;">${fmtVal(f.current)}</td>
-          <td style="padding:6px 10px;font-size:11px;max-width:240px;word-break:break-word;">${proposedCellHtml}</td>
+          <td style="padding:6px 10px;text-align:center;width:30px;vertical-align:top;">${cbHtml}</td>
+          <td style="padding:6px 10px;font-size:11px;color:#0f172a;font-weight:500;vertical-align:top;">${_ddEsc(fieldLabel(f.col))}<br><span style="color:#94a3b8;font-size:9px;font-family:ui-monospace,Menlo,monospace;">${f.col}</span></td>
+          <td style="padding:6px 10px;font-size:11px;color:#475569;max-width:140px;word-break:break-word;vertical-align:top;">${fmtVal(f.current)}</td>
+          <td style="padding:6px 10px;font-size:11px;max-width:200px;word-break:break-word;vertical-align:top;">${proposedCellHtml}</td>
+          <td style="padding:6px 10px;font-size:10px;max-width:260px;word-break:break-word;vertical-align:top;">${explanationCellHtml}</td>
         </tr>`;
       // tenant_mix_data: append per-tenant subfield breakdown rows under the main row.
       if(f.col === 'tenant_mix_data' && hasProp){
@@ -22601,7 +22619,7 @@ window._aiAutoFillDeal = async function(propertyId, opts){
       ? ` · <span style="color:#7c3aed;">${naInGroup} N/A</span>${naPropInGroup ? ` · <span style="color:#b45309;">${naPropInGroup} proposed N/A</span>` : ''}`
       : '';
     return `
-      <tr><td colspan="4" style="padding:12px 10px 4px;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#475569;background:#f1f5f9;font-weight:700;border-top:2px solid #cbd5e1;">${_ddEsc(g)} <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">— ${filledInGroup}/${groups[g].length} filled${naSummary}</span></td></tr>
+      <tr><td colspan="5" style="padding:12px 10px 4px;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#475569;background:#f1f5f9;font-weight:700;border-top:2px solid #cbd5e1;">${_ddEsc(g)} <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">— ${filledInGroup}/${groups[g].length} filled${naSummary}</span></td></tr>
       ${groupRows}`;
   }).join('');
 
@@ -22672,6 +22690,7 @@ window._aiAutoFillDeal = async function(propertyId, opts){
               <th style="padding:7px 10px;text-align:left;">Field</th>
               <th style="padding:7px 10px;text-align:left;">Current</th>
               <th style="padding:7px 10px;text-align:left;">AI Proposed</th>
+              <th style="padding:7px 10px;text-align:left;">AI Explanation</th>
             </tr></thead>
             <tbody>${rowsHtml}</tbody>
           </table>` : '<div style="padding:20px;text-align:center;font-size:12px;color:#64748b;">No fields available.</div>'}

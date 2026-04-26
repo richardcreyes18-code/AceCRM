@@ -1373,13 +1373,21 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
         </div>
         <button onclick="closeDealSnapshot()" style="background:none;border:none;color:#94a3b8;font-size:22px;cursor:pointer;line-height:1;padding:0 4px;flex-shrink:0;">✕</button>
       </div>
-      <!-- Stage picker chip -->
-      <div style="margin-top:12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-        <div style="font-size:10px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;">Stage:</div>
-        <div id="dsStageChip" onclick="toggleDsStagePicker()" style="cursor:pointer;"></div>
+      <!-- Stage picker chip + Review Tag picker chip -->
+      <div style="margin-top:12px;display:flex;align-items:center;gap:14px;flex-wrap:wrap;">
+        <div style="display:flex;align-items:center;gap:8px;">
+          <div style="font-size:10px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;">Stage:</div>
+          <div id="dsStageChip" onclick="toggleDsStagePicker()" style="cursor:pointer;"></div>
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <div style="font-size:10px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;">Tags:</div>
+          <div id="dsReviewChip" onclick="toggleDsReviewPicker()" style="cursor:pointer;"></div>
+        </div>
       </div>
       <!-- Stage picker dropdown (hidden by default) -->
       <div id="dsStagePicker" style="display:none;margin-top:10px;background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:8px;max-height:220px;overflow-y:auto;"></div>
+      <!-- Review tag picker dropdown (hidden by default) -->
+      <div id="dsReviewPicker" style="display:none;margin-top:10px;background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:8px;"></div>
     </div>
 
     <!-- Body — scrollable -->
@@ -1780,7 +1788,7 @@ const SB_TABLES = {
 // Properties (ace_properties <-> allDeals entries)
 const SB_PROP_MAP = {
   id:'id', address:'Address', pipeline_stage:'Pipeline Stage',
-  deal_tag:'Deal Tag', crm_asset_classification:'CRM Asset Classification',
+  deal_tag:'Deal Tag', review_tag:'Review Tag', crm_asset_classification:'CRM Asset Classification',
   property_type_text:'Simple Text Property Type',
   legacy_property_type:'Legacy Property Type (Backup)',
   simple_county:'Simple County', region:'Region for County',
@@ -5211,6 +5219,10 @@ function openDealSnapshot(dealId){
   // Stage chip
   _renderDsStageChip(d);
   document.getElementById('dsStagePicker').style.display = 'none';
+  // v124: Review tag chip + picker (sits next to Stage)
+  _renderDsReviewChip(d);
+  const _rp = document.getElementById('dsReviewPicker');
+  if(_rp) _rp.style.display = 'none';
 
   // Stats grid
   const ask = Number(d['Asking Price']) || 0;
@@ -5288,6 +5300,81 @@ function toggleDsStagePicker(){
     picker.style.display = 'block';
   } else {
     picker.style.display = 'none';
+  }
+}
+
+// v124: Review-tag chip + picker — single-select dropdown next to Stage in
+// the deal-snapshot modal. Same shape as Stage chip/picker so it feels
+// native. Renders the empty "+ Add tag" pill when nothing is set.
+function _renderDsReviewChip(d){
+  const chip = document.getElementById('dsReviewChip');
+  if(!chip) return;
+  const cur = d['Review Tag'] || '';
+  const meta = (typeof _reviewTagMeta === 'function') ? _reviewTagMeta(cur) : null;
+  if(meta){
+    chip.innerHTML = `
+      <div style="display:inline-flex;align-items:center;gap:6px;background:${meta.bg};color:${meta.color};border:1px solid ${meta.border};padding:4px 11px;border-radius:99px;font-size:11px;font-weight:700;">
+        ${meta.label}
+        <span style="font-size:9px;opacity:0.7;">▼</span>
+      </div>`;
+  } else {
+    chip.innerHTML = `
+      <div style="display:inline-flex;align-items:center;gap:6px;background:#f1f5f9;color:#64748b;border:1px dashed #cbd5e1;padding:4px 11px;border-radius:99px;font-size:11px;font-weight:600;">
+        + Add tag
+        <span style="font-size:9px;opacity:0.7;">▼</span>
+      </div>`;
+  }
+}
+
+function toggleDsReviewPicker(){
+  const picker = document.getElementById('dsReviewPicker');
+  if(!picker) return;
+  if(picker.style.display === 'none'){
+    const d = allDeals.find(x => x.id === _snapshotDealId);
+    if(!d) return;
+    const cur = d['Review Tag'] || '';
+    const opts = (typeof REVIEW_TAGS !== 'undefined' ? REVIEW_TAGS : []);
+    picker.innerHTML = opts.map(t => {
+      const active = t.key === cur;
+      return `<div onclick="dsPickReviewTag('${t.key}')" style="padding:7px 12px;border-radius:5px;cursor:pointer;font-size:12px;font-weight:600;display:flex;align-items:center;gap:8px;${active?'background:'+t.bg+';':''}" onmouseenter="this.style.background='${t.bg}'" onmouseleave="this.style.background='${active?t.bg:'transparent'}'">
+        <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${t.color};flex-shrink:0;"></span>
+        <span style="color:#0f172a;">${t.label}</span>
+        ${active?`<span style="margin-left:auto;color:${t.color};font-size:11px;">✓</span>`:''}
+      </div>`;
+    }).join('') + (cur ? `<div onclick="dsPickReviewTag('')" style="padding:7px 12px;border-radius:5px;cursor:pointer;font-size:12px;font-weight:600;color:#64748b;border-top:1px solid #e2e8f0;margin-top:4px;" onmouseenter="this.style.background='#f1f5f9'" onmouseleave="this.style.background='transparent'">✕ Clear tag</div>` : '');
+    picker.style.display = 'block';
+  } else {
+    picker.style.display = 'none';
+  }
+}
+
+async function dsPickReviewTag(newTag){
+  if(!_snapshotDealId) return;
+  const picker = document.getElementById('dsReviewPicker');
+  if(picker) picker.style.display = 'none';
+  const d = allDeals.find(x => x.id === _snapshotDealId);
+  if(!d) return;
+  const value = newTag || null;
+  try {
+    const ok = await airtableUpdate(_snapshotDealId, { 'Review Tag': value });
+    if(ok){
+      d['Review Tag'] = newTag || '';
+      if(currentDeal && currentDeal.id === _snapshotDealId) currentDeal['Review Tag'] = newTag || '';
+      _renderDsReviewChip(d);
+      if(document.querySelector('.pipeline-card')){
+        showPipelineView();
+        openDealSnapshot(_snapshotDealId);
+      }
+      const msg = document.getElementById('dsSaveMsg');
+      if(msg){
+        msg.textContent = newTag ? '✓ Tag updated' : '✓ Tag cleared';
+        msg.style.color = '#16a34a';
+        msg.style.opacity = '1';
+        setTimeout(()=>{ msg.style.opacity='0'; }, 1800);
+      }
+    }
+  } catch(e){
+    console.warn('dsPickReviewTag failed:', e.message);
   }
 }
 
@@ -22001,6 +22088,18 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v124: Review Tag — single-select pill (Deal Reviewed | Agent Reviewed)
+//   on every deal, independent of the existing Deal Tag.
+//   * New ace_properties.review_tag column (text, CHECK in 'deal_reviewed' /
+//     'agent_reviewed' / NULL). SB_PROP_MAP gets `review_tag:'Review Tag'`.
+//   * Pipeline detail (deal-snapshot) modal: dropdown chip next to the
+//     Stage chip, labeled TAGS. Click = open picker, select = save +
+//     refresh card. Empty state shows a dashed "+ Add tag" affordance.
+//   * Pipeline kanban cards: render the colored pill at the top when set
+//     (3 card renderers updated — main pipeline, scope-toggled view,
+//     and `_myPipelineCardHTML` for the personal pipeline).
+//   * Deal Status / Pipeline tab: new Review Tag section below Deal Tag
+//     mirroring the same button-pill pattern.
 // v123: Custom NOI Override — actually drive the displayed NOI.
 //   * recalcFinancials now reads the override checkbox + inputs and uses
 //     them when computing _noi_yr / _pnoi_yr. Previously the override was
@@ -26029,6 +26128,7 @@ function _myPipelineCardHTML(d){
     +     ' style="position:absolute;top:4px;right:4px;background:transparent;border:none;color:#94a3b8;font-size:16px;font-weight:700;cursor:pointer;line-height:1;padding:2px 6px;border-radius:4px;"'
     +     ' onmouseenter="this.style.background=\'#fee2e2\';this.style.color=\'#b91c1c\';"'
     +     ' onmouseleave="this.style.background=\'transparent\';this.style.color=\'#94a3b8\';">×</button>'
+    +   ((typeof _reviewPillHTML==='function')?_reviewPillHTML(d):'')
     +   '<div class="pc-addr" style="padding-right:18px;">' + _esc(addr) + '</div>'
     +   (price  ? '<div class="pc-price">' + _esc(price) + '</div>' : '')
     +   (asset  ? '<div class="pc-row"><span class="pc-icon">🏷️</span><span>' + _esc(asset) + '</span></div>' : '')
@@ -46662,6 +46762,17 @@ function renderDealStatusTab(d){
     {key:'Not Motivated',      label:'😐 Not Motivated', bg:'#f8fafc', color:'#64748b', border:'#cbd5e1'},
     {key:'Dead Deal',          label:'💀 Dead',      bg:'#fef2f2', color:'#991b1b', border:'#fca5a5'},
   ];
+  // v124: separate single-select Review Tag (deal_reviewed | agent_reviewed)
+  // — independent from Deal Tag so an "Urgent + Deal Reviewed" deal renders
+  // both pills.
+  const curReview = d['Review Tag'] || '';
+  const reviewTagButtons = REVIEW_TAGS.map(t=>`
+    <button onclick="setReviewTag('${t.key}')" style="
+      padding:6px 12px;border-radius:99px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;
+      background:${t.key===curReview?t.bg:'var(--surface2)'};
+      color:${t.key===curReview?t.color:'var(--text2)'};
+      border:1px solid ${t.key===curReview?t.border:'var(--border)'};
+      transition:all 0.1s;">${t.label}</button>`).join('');
 
   const current  = getStage(d);
   const curTag   = d['Deal Tag'] || '';
@@ -46789,6 +46900,15 @@ function renderDealStatusTab(d){
       </div>
     </div>
 
+    <!-- REVIEW TAG (single-select; v124) -->
+    <div class="info-box" style="margin-top:12px;">
+      <div class="info-box-title">Review Tag &nbsp;<span style="font-size:11px;font-weight:400;color:var(--text3);">Track whether the deal or the seller's agent has been reviewed</span></div>
+      <div style="display:flex;flex-wrap:wrap;gap:8px;align-items:center;">
+        ${reviewTagButtons}
+        ${curReview?`<button onclick="setReviewTag('')" style="padding:6px 10px;border-radius:99px;font-size:12px;cursor:pointer;background:none;border:1px solid var(--border);color:var(--text3);">✕ Clear review tag</button>`:''}
+      </div>
+    </div>
+
     <!-- ARCHIVE -->
     <div class="info-box" style="margin-top:12px;border-color:${d['Is Archived']?'#dc2626':'var(--border)'};">
       <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:12px;">
@@ -46884,6 +47004,35 @@ function setDealTag(tag){
   renderDealPage();
   setTimeout(()=>switchTab('dealstatus',null),10);
   showSaveConfirm(tag ? '✓ Deal tag set: '+tag : '✓ Deal tag cleared');
+}
+
+// v124: Review Tag — single-select pill ('deal_reviewed' | 'agent_reviewed').
+// Backed by ace_properties.review_tag. Used as a quick onboarding signal
+// while we go through the existing Hot Active deals one by one.
+const REVIEW_TAGS = [
+  {key:'deal_reviewed',  label:'✓ Deal Reviewed',  bg:'#eff6ff', color:'#1e40af', border:'#93c5fd'},
+  {key:'agent_reviewed', label:'✓ Agent Reviewed', bg:'#f0fdf4', color:'#15803d', border:'#86efac'},
+];
+function _reviewTagMeta(key){ return REVIEW_TAGS.find(t => t.key === key) || null; }
+// Tiny pill renderer used by the kanban cards. Returns '' when no tag set
+// so unset deals stay visually clean.
+function _reviewPillHTML(d){
+  const tag = d && d['Review Tag'];
+  const m = tag ? _reviewTagMeta(tag) : null;
+  if(!m) return '';
+  return `<div style="display:inline-block;margin-bottom:5px;padding:2px 8px;background:${m.bg};color:${m.color};border:1px solid ${m.border};border-radius:99px;font-size:9px;font-weight:700;letter-spacing:0.2px;">${m.label}</div>`;
+}
+
+function setReviewTag(tag){
+  if(!currentDeal) return;
+  currentDeal['Review Tag'] = tag;
+  const entry = allDeals.find(d=>d.id===currentDeal.id);
+  if(entry) entry['Review Tag'] = tag;
+  airtableUpdate(currentDeal.id, {'Review Tag': tag||null});
+  renderDealPage();
+  setTimeout(()=>switchTab('dealstatus',null),10);
+  const meta = _reviewTagMeta(tag);
+  showSaveConfirm(tag ? '✓ Review tag set: '+(meta?meta.label.replace(/^✓\s*/,''):tag) : '✓ Review tag cleared');
 }
 
 async function archiveDeal(dealId){
@@ -48188,7 +48337,7 @@ function _refreshPipelineBody(){
                 return `<div class="pipeline-card" draggable="true"
                   ondragstart="pipelineDragStart(event, '${d.id}')"
                   ondragend="pipelineDragEnd(event)"
-                  onclick="openDealSnapshot('${d.id}')">${_isBadCountyName(d['Simple County'], d) ? '<div style="background:#fef3c7;color:#92400e;font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;margin-bottom:4px;display:inline-block;" title="County name needs review">⚠ BAD COUNTY</div>' : ''}${rows}</div>`;
+                  onclick="openDealSnapshot('${d.id}')">${_isBadCountyName(d['Simple County'], d) ? '<div style="background:#fef3c7;color:#92400e;font-size:9px;font-weight:700;padding:2px 6px;border-radius:3px;margin-bottom:4px;display:inline-block;" title="County name needs review">⚠ BAD COUNTY</div>' : ''}${(typeof _reviewPillHTML==='function')?_reviewPillHTML(d):''}${rows}</div>`;
               }).join('')}
               ${col.length===0?'<div style="font-size:11px;color:#94a3b8;text-align:center;padding:20px;font-style:italic;">Empty</div>':''}
             </div>
@@ -48908,7 +49057,7 @@ function showPipelineView(){
                   return `<div class="pipeline-card" draggable="true"
                     ondragstart="pipelineDragStart(event, '${d.id}')"
                     ondragend="pipelineDragEnd(event)"
-                    onclick="openDealSnapshot('${d.id}')">${rows}</div>`;
+                    onclick="openDealSnapshot('${d.id}')">${(typeof _reviewPillHTML==='function')?_reviewPillHTML(d):''}${rows}</div>`;
                 }).join('')}
                 ${(col.length===0 && colPortfolios.length===0)?'<div style="font-size:11px;color:#94a3b8;text-align:center;padding:20px;font-style:italic;">Empty</div>':''}
               </div>

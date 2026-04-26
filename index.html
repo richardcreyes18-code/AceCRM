@@ -20825,6 +20825,171 @@ async function _ddPrePromoteNotesToGPN(survivor, losers){
   }
 }
 
+// v113.46: link FUB-imported email templates to properties.
+// Source: ace_email_templates (FUB import landing table).
+// Destination: ace_user_email_templates (per-user, per-property template
+// library — same one the AI Email Template UI on each deal card reads).
+//
+// Matching: parse address candidates from the FUB template's `name` and
+// `subject`, normalize via _ddNormalizeDealAddr, and look up in a key→deal
+// index built from allDeals. The first key that hits wins.
+//
+// Idempotent: existing (user_email, property_id, name) rows are detected
+// up-front and skipped, so re-runs just fill gaps.
+//
+// Usage from browser console:
+//   _fubLinkTemplates({dryRun:true, limit:5})            // spot-check 5
+//   _fubLinkTemplates({dryRun:true})                      // dry-run all
+//   _fubLinkTemplates()                                   // apply for real
+//   _fubLinkTemplates({folders:['Hot Deal Email Temp']})  // single folder
+function _fubExtractAddressCandidates(text){
+  if(!text) return [];
+  const out = [];
+  for(const p of String(text).split(/\s+[-–—|]\s+/)){
+    const t = p.trim();
+    if(!t) continue;
+    // Must contain a digit AND an alpha word; rules out county / agent
+    // initials / size-only segments.
+    if(/\d/.test(t) && /[a-z]/i.test(t) && t.length > 4) out.push(t);
+  }
+  if(text && /\d/.test(text)) out.push(String(text));
+  return out;
+}
+
+function _fubBodyText(tpl){
+  const plain = String(tpl?.body_plain || '').trim();
+  if(plain) return plain;
+  const html = String(tpl?.body_html || '');
+  if(!html) return '';
+  return html
+    .replace(/<\s*br\s*\/?>/gi, '\n')
+    .replace(/<\s*\/p\s*>/gi, '\n\n')
+    .replace(/<[^>]+>/g, '')
+    .replace(/&nbsp;/g, ' ')
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\n{3,}/g, '\n\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .trim();
+}
+
+window._fubLinkTemplates = async function(opts){
+  opts = opts || {};
+  const dryRun  = !!opts.dryRun;
+  const limit   = opts.limit || null;
+  const folders = opts.folders || ['Hot Deal Email Temp','Active Deal Email Temp','Overpriced / Unmotivated'];
+  const userEmail = opts.userEmail || _currentUser?.email;
+  if(!userEmail){ alert('Sign in first — _currentUser.email is required.'); return; }
+
+  if(!dryRun && !confirm(
+    `Import FUB email templates as property-level templates?\n\n` +
+    `User:    ${userEmail}\n` +
+    `Folders: ${folders.join(', ')}\n\n` +
+    `Each template gets matched to a property via address parsed from name/subject,\n` +
+    `then saved as "(FUB IMPORT) <subject>" in that property's template library.\n` +
+    `is_official stays false — pick the official one per deal yourself later.\n\n` +
+    `Re-runs are safe — already-imported (property_id, name) pairs are skipped.`
+  )) return;
+
+  const cfg = getConfig();
+  const fetchHeaders = { apikey: cfg.key, Authorization: 'Bearer ' + cfg.key };
+
+  console.log('[fub-link] fetching FUB templates from', folders);
+  const folderList = folders.map(f => `"${f.replace(/"/g,'')}"`).join(',');
+  const tplUrl = `${cfg.url}/rest/v1/ace_email_templates?select=id,name,subject,body_plain,body_html,folder,fub_template_id&deleted_at=is.null&folder=in.(${encodeURIComponent(folderList)})&order=folder.asc,name.asc`;
+  const tplRes = await fetch(tplUrl, { headers: fetchHeaders });
+  if(!tplRes.ok){ console.error('[fub-link] failed:', tplRes.status, await tplRes.text()); return; }
+  const templates = await tplRes.json();
+  console.log(`[fub-link] fetched ${templates.length} FUB templates`);
+
+  // Build property index — first-occurrence wins per normalized key.
+  const propByKey = new Map();
+  for(const d of (allDeals || [])){
+    if(d['Is Archived']) continue;
+    const k = _ddDealKey(d);
+    if(k && !propByKey.has(k)) propByKey.set(k, d);
+  }
+  console.log(`[fub-link] indexed ${propByKey.size} unique property keys`);
+
+  // Existing rows for idempotency.
+  const existingUrl = `${cfg.url}/rest/v1/ace_user_email_templates?select=property_id,name&user_email=eq.${encodeURIComponent(userEmail)}`;
+  const existingRes = await fetch(existingUrl, { headers: fetchHeaders });
+  const existing = existingRes.ok ? await existingRes.json() : [];
+  const existingSet = new Set(existing.map(r => `${r.property_id}::${r.name}`));
+  console.log(`[fub-link] ${existing.length} existing rows for user ${userEmail}`);
+
+  const work = limit ? templates.slice(0, limit) : templates;
+  console.log(`[fub-link] processing ${work.length}, dryRun=${dryRun}`);
+
+  const stats = { matched:0, unmatched:0, skipped_dup:0, inserted:0, errors:0, empty_body:0 };
+  const samples = [];
+
+  function matchOne(tpl){
+    const cands = [
+      ..._fubExtractAddressCandidates(tpl.name),
+      ..._fubExtractAddressCandidates(tpl.subject),
+    ];
+    for(const raw of cands){
+      const cleaned = raw.replace(/\s+in\s+/gi, ', ').replace(/\s+/g, ' ').trim();
+      const key = _ddNormalizeDealAddr(cleaned);
+      if(key && propByKey.has(key)){
+        return { property: propByKey.get(key), key, cand: cleaned };
+      }
+    }
+    return null;
+  }
+
+  for(const t of work){
+    const m = matchOne(t);
+    const sample = { fub_id: t.id, folder: t.folder, name: t.name, subject: t.subject };
+    if(!m){
+      stats.unmatched++; sample.ok = false; sample.reason = 'no match';
+      samples.push(sample); continue;
+    }
+    stats.matched++;
+    sample.matched_addr = m.property['Address'];
+    sample.matched_key  = m.key;
+
+    const tplName = `(FUB IMPORT) ${t.subject || t.name}`.slice(0, 240);
+    const dupKey  = `${m.property.id}::${tplName}`;
+    if(existingSet.has(dupKey)){
+      stats.skipped_dup++; sample.ok = 'dup'; sample.tpl_name = tplName;
+      samples.push(sample); continue;
+    }
+    const body = _fubBodyText(t);
+    if(!body){
+      stats.empty_body++; sample.ok = false; sample.reason = 'empty body';
+      samples.push(sample); continue;
+    }
+    sample.ok = true; sample.tpl_name = tplName; sample.body_len = body.length;
+    samples.push(sample);
+
+    if(!dryRun){
+      try {
+        await _sbPost('ace_user_email_templates', {
+          user_email: userEmail, property_id: m.property.id,
+          name: tplName, subject: t.subject || '', body, is_official: false,
+        });
+        existingSet.add(dupKey);
+        stats.inserted++;
+      } catch(e){
+        stats.errors++; sample.error = e.message;
+      }
+    }
+  }
+
+  console.log(`[fub-link] DONE`, stats);
+  console.log('[fub-link] samples (first 10):');
+  for(const s of samples.slice(0, 10)){
+    const flag = s.ok === true ? 'OK ' : s.ok === 'dup' ? 'DUP' : 'NO ';
+    console.log(`  ${flag} ${s.matched_addr || '—'}  ←  ${s.name}${s.reason ? ` (${s.reason})` : ''}`);
+  }
+  return { stats, samples, total: work.length };
+};
+
 // v113.43: browser-side retro fix for past merges. Walks
 // ace_property_merge_log entries (undone_at IS NULL) since the given date,
 // and for each:

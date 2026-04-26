@@ -20913,14 +20913,20 @@ window._fubLinkTemplates = async function(opts){
   }
   console.log(`[fub-link] fetched ${templates.length} FUB templates total`);
 
-  // Build property index — first-occurrence wins per normalized key.
+  // Build property index — full-key (street+zip) AND street-only fallback.
+  // The template name often lacks the zip, so a street-only match is needed
+  // for "701 Whittaker Avenue, Trenton" → property key "701whittakerave|08611".
   const propByKey = new Map();
+  const propByStreet = new Map();
   for(const d of (allDeals || [])){
     if(d['Is Archived']) continue;
     const k = _ddDealKey(d);
-    if(k && !propByKey.has(k)) propByKey.set(k, d);
+    if(!k) continue;
+    if(!propByKey.has(k)) propByKey.set(k, d);
+    const street = k.split('|')[0];
+    if(street && !propByStreet.has(street)) propByStreet.set(street, d);
   }
-  console.log(`[fub-link] indexed ${propByKey.size} unique property keys`);
+  console.log(`[fub-link] indexed ${propByKey.size} full keys / ${propByStreet.size} street keys`);
 
   // Existing rows for idempotency — also via proxy so service-role applies.
   let existing = [];
@@ -20944,10 +20950,20 @@ window._fubLinkTemplates = async function(opts){
       ..._fubExtractAddressCandidates(tpl.subject),
     ];
     for(const raw of cands){
-      const cleaned = raw.replace(/\s+in\s+/gi, ', ').replace(/\s+/g, ' ').trim();
+      let cleaned = raw.replace(/\s+in\s+/gi, ', ').replace(/\s+/g, ' ').trim();
+      // Fix "110, Cushman Ave" → "110 Cushman Ave" (misplaced comma after
+      // the street number, sometimes from messy hand-typed FUB names).
+      cleaned = cleaned.replace(/^(\d+(?:[-–—]\d+)?)\s*,\s*/, '$1 ');
       const key = _ddNormalizeDealAddr(cleaned);
-      if(key && propByKey.has(key)){
-        return { property: propByKey.get(key), key, cand: cleaned };
+      if(!key) continue;
+      // 1) full match (template has same zip as the live property)
+      if(propByKey.has(key)){
+        return { property: propByKey.get(key), key, cand: cleaned, via: 'full' };
+      }
+      // 2) street-only fallback — template name typically lacks the zip
+      const street = key.split('|')[0];
+      if(street && propByStreet.has(street)){
+        return { property: propByStreet.get(street), key: street, cand: cleaned, via: 'street' };
       }
     }
     return null;

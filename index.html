@@ -1895,6 +1895,8 @@ const SB_PROP_MAP = {
   property_use:'Property Use', hvac:'HVAC', roof_type:'Roof Type',
   parking_type:'Parking Type', foundation:'Foundation', exterior:'Exterior',
   piping:'Piping', wiring:'Wiring', floor_covering:'Floor Covering', paving:'Paving',
+  construction_type:'Construction Type',
+  est_gross_minus_noi_monthly:'Est Gross Minus NOI (Monthly)',
   down_payment_pct:'Down Payment (%)', renovation_expense:'Renovation Expense',
   unit_mix_text:'Unit Mix', mf_unit_rent_data:'MF Unit Rent Data', tenant_mix_data:'Tenant Mix Data',
   noi_actual_yr:'NOI Actual Yr', noi_proforma_yr:'NOI Proforma Yr', noi_override_active:'NOI Override Active',
@@ -5635,6 +5637,11 @@ const _NA_INPUT_MAP = {
   'prop_numBuildings':'no_of_buildings',
   'prop_parkingType':'parking_type', 'prop_parkingSpaces':'no_of_parking_spaces',
   'prop_parkingRatio':'parking_ratio',
+  // v130: Construction section now wired to actual columns (was display-only).
+  'prop_roofType':'roof_type', 'prop_constructionType':'construction_type',
+  'prop_foundation':'foundation', 'prop_exterior':'exterior',
+  'prop_floorCovering':'floor_covering', 'prop_piping':'piping',
+  'prop_paving':'paving', 'prop_wiring':'wiring',
   // v113.74: these were radio groups, now <select> with id (not name).
   'propUse':'property_use', 'constStatus':'construction_status',
   'distressed':'is_distressed', 'groundLease':'is_on_ground_lease',
@@ -6400,14 +6407,19 @@ function collectAllDealFields(){
   s(fields,'Total Lot Size',        getNum('prop_lotSize'));
   // v113.75: lot unit is now a <select id="lotUnit"> (was radio name).
   s(fields,'Lot Size Unit', getVal('lotUnit'));
-  s(fields,'Roof Type',   getVal('roofType'));
-  s(fields,'Foundation',  getVal('foundationType'));
-  s(fields,'Exterior',    getVal('exteriorType'));
-  s(fields,'Piping',      getVal('pipingType'));
-  s(fields,'Wiring',      getVal('wiringType'));
-  s(fields,'HVAC',        pick(getVal('prop_hvac'),        getVal('hvacType')));
-  s(fields,'Paving',      pick(getVal('prop_parkingType'), getVal('pavingType')));
-  s(fields,'Parking Type',getVal('prop_parkingType'));
+  // v130: Construction inputs gained proper ids (prop_roofType, prop_foundation,
+  // …). The old getVal('roofType' / 'foundationType' / etc.) calls were
+  // pointing at non-existent ids — every save dropped these fields silently.
+  s(fields,'Roof Type',         getVal('prop_roofType'));
+  s(fields,'Construction Type', getVal('prop_constructionType'));
+  s(fields,'Foundation',        getVal('prop_foundation'));
+  s(fields,'Exterior',          getVal('prop_exterior'));
+  s(fields,'Piping',            getVal('prop_piping'));
+  s(fields,'Wiring',            getVal('prop_wiring'));
+  s(fields,'Floor Covering',    getVal('prop_floorCovering'));
+  s(fields,'Paving',            pick(getVal('prop_paving'), getVal('prop_parkingType')));
+  s(fields,'HVAC',              getVal('prop_hvac'));
+  s(fields,'Parking Type',      getVal('prop_parkingType'));
 
   // Property info text
   // v113.72: prop_propDesc now binds to the clean `property_description`
@@ -7733,52 +7745,69 @@ function renderPropertyTab(d){
       </div>
     `}
 
-    <!-- CONSTRUCTION -->
+    <!-- CONSTRUCTION (v130: read from deal data; default empty so each
+         field shows a "—" placeholder until the agent or AI fills it. The
+         old hardcoded "Pitched / Brick / Concrete / Brick / Siding / Tile /
+         Steel / Asphalt / Copper" defaults were misleading — they made
+         empty deals look fully populated.) -->
+    ${(()=>{
+      const _esc = s => String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+      const sel = (cur, opt) => (String(cur||'').trim() === opt ? ' selected' : '');
+      const roofVal = d['Roof Type'] || '';
+      const ctVal   = d['Construction Type'] || '';
+      const roofOpts = ['Flat','Pitched','Hip','Gable','Metal','Rubber','Other'];
+      const ctOpts   = ['Brick','Wood Frame','Steel Frame','Concrete Block','Masonry','Other'];
+      const roofKnown = roofOpts.includes(roofVal);
+      const ctKnown   = ctOpts.includes(ctVal);
+      return `
     <div class="info-box">
       <div class="info-box-title">Construction</div>
       <div class="pd-field-grid" style="grid-template-columns:repeat(4,1fr);">
         <div class="pd-field">
           <label class="pd-lbl">Roof</label>
-          <select class="form-select" style="width:100%;box-sizing:border-box;" onchange="markDirty()">
-            <option>Flat</option><option selected>Pitched</option><option>Hip</option>
-            <option>Gable</option><option>Metal</option><option>Rubber</option><option>Other</option>
+          <select id="prop_roofType" class="form-select" style="width:100%;box-sizing:border-box;" onchange="markDirty()">
+            <option value="" ${roofVal===''?'selected':''}>—</option>
+            ${roofOpts.map(o => `<option${sel(roofVal,o)}>${o}</option>`).join('')}
+            ${(!roofKnown && roofVal) ? `<option value="${_esc(roofVal)}" selected>${_esc(roofVal)}</option>` : ''}
           </select>
         </div>
         <div class="pd-field">
           <label class="pd-lbl">Construction Type</label>
-          <select class="form-select" style="width:100%;box-sizing:border-box;" onchange="markDirty()">
-            <option selected>Brick</option><option>Wood Frame</option><option>Steel Frame</option>
-            <option>Concrete Block</option><option>Masonry</option><option>Other</option>
+          <select id="prop_constructionType" class="form-select" style="width:100%;box-sizing:border-box;" onchange="markDirty()">
+            <option value="" ${ctVal===''?'selected':''}>—</option>
+            ${ctOpts.map(o => `<option${sel(ctVal,o)}>${o}</option>`).join('')}
+            ${(!ctKnown && ctVal) ? `<option value="${_esc(ctVal)}" selected>${_esc(ctVal)}</option>` : ''}
           </select>
         </div>
         <div class="pd-field">
           <label class="pd-lbl">Foundation</label>
-          <input class="form-input" value="Concrete" style="width:100%;box-sizing:border-box;" oninput="markDirty()"/>
+          <input id="prop_foundation" class="form-input" value="${_esc(d['Foundation']||'')}" placeholder="—" style="width:100%;box-sizing:border-box;" oninput="markDirty()"/>
         </div>
         <div class="pd-field">
           <label class="pd-lbl">Exterior</label>
-          <input class="form-input" value="Brick / Siding" style="width:100%;box-sizing:border-box;" oninput="markDirty()"/>
+          <input id="prop_exterior" class="form-input" value="${_esc(d['Exterior']||'')}" placeholder="—" style="width:100%;box-sizing:border-box;" oninput="markDirty()"/>
         </div>
       </div>
       <div class="pd-field-grid" style="grid-template-columns:repeat(4,1fr);">
         <div class="pd-field">
           <label class="pd-lbl">Floor Covering</label>
-          <input class="form-input" value="Tile" style="width:100%;box-sizing:border-box;" oninput="markDirty()"/>
+          <input id="prop_floorCovering" class="form-input" value="${_esc(d['Floor Covering']||'')}" placeholder="—" style="width:100%;box-sizing:border-box;" oninput="markDirty()"/>
         </div>
         <div class="pd-field">
           <label class="pd-lbl">Piping</label>
-          <input class="form-input" value="Steel" style="width:100%;box-sizing:border-box;" oninput="markDirty()"/>
+          <input id="prop_piping" class="form-input" value="${_esc(d['Piping']||'')}" placeholder="—" style="width:100%;box-sizing:border-box;" oninput="markDirty()"/>
         </div>
         <div class="pd-field">
           <label class="pd-lbl">Paving</label>
-          <input class="form-input" value="Asphalt - Parking &amp; Street" style="width:100%;box-sizing:border-box;" oninput="markDirty()"/>
+          <input id="prop_paving" class="form-input" value="${_esc(d['Paving']||'')}" placeholder="—" style="width:100%;box-sizing:border-box;" oninput="markDirty()"/>
         </div>
         <div class="pd-field">
           <label class="pd-lbl">Wiring</label>
-          <input class="form-input" value="Copper" style="width:100%;box-sizing:border-box;" oninput="markDirty()"/>
+          <input id="prop_wiring" class="form-input" value="${_esc(d['Wiring']||'')}" placeholder="—" style="width:100%;box-sizing:border-box;" oninput="markDirty()"/>
         </div>
       </div>
-    </div>
+    </div>`;
+    })()}
 
     <!-- AMENITIES / FEATURES (hidden in simple mode) -->
     ${_propMode === 'simple' ? '' : `
@@ -7985,7 +8014,7 @@ function _renderUnitMixSection(d){
            configurations, anything that doesn't fit the structured grid. -->
       <div class="pd-field" style="margin-top:8px;padding-left:188px;">
         <label class="pd-lbl">Other Unit Mix Notes</label>
-        <textarea id="um_otherNotes" class="form-textarea auto-expand" placeholder='Vacancy reasons, owner-occupied unit details, special configurations, anything unit-mix-specific that doesn&apos;t fit the grid above. e.g. "Owner lives in unit 2A; 1 unit converted to office."' style="min-height:80px;width:100%;box-sizing:border-box;" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px';markDirty()">${d['Other Unit Mix Notes']||''}</textarea>
+        <textarea id="um_otherNotes" class="form-textarea auto-expand" placeholder="—" style="min-height:80px;width:100%;box-sizing:border-box;" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px';markDirty()">${d['Other Unit Mix Notes']||''}</textarea>
       </div>
       <div style="display:flex;gap:8px;margin-top:10px;padding-left:188px;">
         <button class="save-btn" style="background:linear-gradient(180deg,#60c060,#409040);color:#fff;border-color:#206020;padding:4px 20px;" onclick="saveUnitMix()">✓ Save</button>
@@ -8074,7 +8103,7 @@ function _renderIndustrialSection(d){
            special-purpose use, etc. AI Auto-Fill routes overflow context here. -->
       <div class="pd-field" style="margin-top:10px;">
         <label class="pd-lbl">Other Industrial Notes</label>
-        <textarea id="ind_otherNotes" class="form-textarea auto-expand" placeholder='Owner-occupied situation, additional tenant info, special-purpose use, anything industrial-specific that doesn&apos;t fit the fields above. e.g. "Owner uses 3-4 of the units personally and has not tried to rent them out."' style="min-height:80px;width:100%;box-sizing:border-box;" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px';markDirty()">${d['Other Industrial Notes']||''}</textarea>
+        <textarea id="ind_otherNotes" class="form-textarea auto-expand" placeholder="—" style="min-height:80px;width:100%;box-sizing:border-box;" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px';markDirty()">${d['Other Industrial Notes']||''}</textarea>
       </div>
       <div style="text-align:right;margin-top:6px;">
         <button class="save-btn" onclick="masterSave().catch(e=>console.warn('manual save error:',e))">Save</button>
@@ -10141,6 +10170,8 @@ function renderFinancialTab(d){
     // Property Management
     'a_pm_fee_mo':      d['Property Management Fee (Monthly)'],
     'a_pm_other_mo':    d['Other Mgmt (Monthly)'],
+    // v130: Estimated Expenses (gross-NOI gap)
+    'a_est_grossMinusNoi_mo': d['Est Gross Minus NOI (Monthly)'],
     // Reserves
     'aCapRes_mo':       d['Capital Reserve (Monthly)'],
   };
@@ -11075,6 +11106,12 @@ function renderFinancialTab(d){
           items:[{id:'ins_prop',label:'Property Insurance'},{id:'ins_liab',label:'Liability Insurance'}] },
         { id:'pm',      label:'Property Management', tip:'Fee paid to a property management company, typically 6-10% of gross rents.',                  fixed:true,
           items:[{id:'pm_fee',label:'Management Fee %'},{id:'pm_other',label:'Other Mgmt'}] },
+        // v130: Estimated Expenses — populated when source provides Gross
+        // Income + NOI but no itemized expense breakdown. AI Auto-Fill
+        // routes (Gross − NOI)/12 here so NOI naturally falls out of EGI −
+        // Expenses instead of getting bolted on as a manual override.
+        { id:'est',     label:'Estimated Expenses', tip:'Catch-all when the source gives top-line numbers (gross income + NOI) but no itemized expense breakdown. The CRM derives this so the NOI math closes naturally instead of using the manual NOI override.', fixed:false,
+          items:[{id:'est_grossMinusNoi',label:'Gross Income - NOI, EXP not given'}] },
       ];
 
       // Build rows
@@ -22116,6 +22153,31 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v130: Three fixes — dash placeholders, NOI routing, Construction defaults.
+//   * Replaced verbose example placeholders on the new Other Notes
+//     textareas with em-dash. The user wants empty fields to be visually
+//     empty, not pre-narrated.
+//   * Construction section now reads from d['Roof Type'] / d['Construction
+//     Type'] / d['Foundation'] / d['Exterior'] / d['Floor Covering'] /
+//     d['Piping'] / d['Paving'] / d['Wiring'] and defaults to empty
+//     (placeholder "—"). The previous hardcoded "Pitched / Brick /
+//     Concrete / Brick·Siding / Tile / Steel / Asphalt / Copper" defaults
+//     made every empty deal look fully populated. Inputs got proper ids
+//     so masterSave actually persists them (was previously reading from
+//     non-existent ids — every save dropped these silently). New
+//     `construction_type` column on ace_properties.
+//   * Edge fn ai-parse-deal-v2 v21: NOI routing rule rewritten. When
+//     source provides Gross Income + NOI but no itemized expense
+//     breakdown, the AI used to flip noi_override_active=true and skip
+//     the math. Now it computes monthly_est = (gross_yr − noi_yr) / 12
+//     and routes it to the new Estimated Expenses category in the
+//     Operating Expenses table. NOI then falls out of EGI − Expenses
+//     naturally instead of relying on a manual override. Server-side
+//     guard catches LLM regressions and rewrites the patch even if the
+//     model still proposes the override path.
+//   * New Estimated Expenses category in Financial Analysis expense
+//     table (after Property Management) with a single sub-row "Gross
+//     Income - NOI, EXP not given" backed by est_gross_minus_noi_monthly.
 // v129: Other Industrial Notes + Other Unit Mix Notes overflow buckets.
 //   Two new free-form text columns on ace_properties (other_industrial_notes,
 //   other_unit_mix_notes). Textareas appear at the bottom of the Industrial
@@ -22372,6 +22434,7 @@ const _AI_FIELD_SPEC = [
   {col:'misc_expenses_monthly',type:'number',group:'Expense Details',hint:'Miscellaneous / reserves monthly'},
   {col:'property_mgmt_fee_monthly',type:'number',group:'Expense Details',hint:'Property mgmt fee monthly'},
   {col:'capital_reserve_monthly',type:'number',group:'Expense Details',hint:'Capital reserves monthly'},
+  {col:'est_gross_minus_noi_monthly',type:'number',group:'Expense Details',hint:'Estimated monthly expense derived as (Gross − NOI)/12 when source has gross income + NOI but no itemized expense breakdown'},
   {col:'admin_expenses_monthly',type:'number',group:'Expense Details',hint:'Admin monthly'},
   {col:'accounting_monthly',type:'number',group:'Expense Details',hint:'Accounting monthly'},
   {col:'legal_monthly',type:'number',group:'Expense Details',hint:'Legal monthly'},
@@ -22422,7 +22485,8 @@ const _AI_FIELD_SPEC = [
   {col:'construction_status',type:'enum',group:'Quality',hint:'Existing / Under Construction / Proposed'},
   {col:'property_use',type:'enum',group:'Quality',hint:'Investment/Cash Flow / Owner/User / Vacant / Turnaround / Business Also For Sale'},
   {col:'hvac',type:'text',group:'Components',hint:'HVAC type / condition'},
-  {col:'roof_type',type:'text',group:'Components',hint:'Roof type'},
+  {col:'roof_type',type:'text',group:'Components',hint:'Roof type (Flat / Pitched / Hip / Gable / Metal / Rubber / Other)'},
+  {col:'construction_type',type:'text',group:'Components',hint:'Construction type (Brick / Wood Frame / Steel Frame / Concrete Block / Masonry / Other)'},
   {col:'parking_type',type:'text',group:'Components',hint:'Parking type'},
   {col:'foundation',type:'text',group:'Components',hint:'Foundation type'},
   {col:'exterior',type:'text',group:'Components',hint:'Exterior material'},
@@ -51074,6 +51138,8 @@ function saveFinInputs(dealId){
     // Property Management
     'fin_a_pm_fee_mo':      'Property Management Fee (Monthly)',   // "Management Fee %" under PM
     'fin_a_pm_other_mo':    'Other Mgmt (Monthly)',                // NEW
+    // v130: Estimated Expenses (gross-NOI gap)
+    'fin_a_est_grossMinusNoi_mo': 'Est Gross Minus NOI (Monthly)',
     // Reserves
     'fin_aCapRes_mo':        'Capital Reserve (Monthly)',
   };
@@ -51129,6 +51195,7 @@ function saveFinInputs(dealId){
     'tax_prop','tax_other',
     'ins_prop','ins_liab',
     'pm_fee','pm_other',
+    'est_grossMinusNoi', // v130
   ];
   const proFormaBreakdown = {};
   proFormaExpenseKeys.forEach(k => {

@@ -20970,13 +20970,15 @@ window._fubBackfillProperties = async function(opts){
     const withoutSuffix = all.filter(c => !_FUB_SUFFIX_RE.test(c));
     let ordered = [...withSuffix, ...withoutSuffix];
 
-    // Hint from deal_name — its first suffix-bearing candidate's normalized
-    // street key. Used to push contact addresses that overlap the deal's
-    // street to the front (helps disambiguate home vs. property when the
-    // contact has multiple addresses).
+    // Hint from deal_name — the LAST non-empty normalized street key from
+    // its candidates. FUB names typically run "TYPE PREFIX - ADDRESS - AGENT",
+    // so the real address segment is later. Picking the first match (e.g.
+    // "5 Units" → "5units") gave a useless hint and made the sort tie-break
+    // pick contact's home address instead of the property.
     const hintKey = fromDealName
       .map(c => (_ddNormalizeDealAddr(c) || '').split('|')[0])
-      .find(Boolean);
+      .filter(Boolean)
+      .pop();
     if(hintKey){
       ordered = ordered.slice().sort((a, b) => {
         const ka = (_ddNormalizeDealAddr(a) || '').split('|')[0];

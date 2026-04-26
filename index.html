@@ -22001,6 +22001,15 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v121: AI Auto-Fill apply polish.
+//   * Auto-flips noi_override_active=true when noi_actual_yr or
+//     noi_proforma_yr is in the apply patch but the override checkbox row
+//     wasn't ticked. The user kept seeing EGI-Expenses NOI ($13.5K) despite
+//     the override being filled with $135K.
+//   * Mirrors asking_price into ace_deal_offers (offer_type='asking') so
+//     Seller Original Asking card matches Financial Analysis Asking Price.
+//   * Forces a tab re-render after apply (Financial / Offers / Tenant Mix)
+//     so newly-applied AI values appear without a manual tab switch.
 // v120: NOI routing + price-language routing.
 //   * Edge fn v14 adds noi_actual_yr / noi_proforma_yr / noi_override_active
 //     and target_seller_net to FIELD_SPEC. Prompt rules 18 + 19 explicitly
@@ -22620,12 +22629,21 @@ window._aiAutoFillApply = async function(propertyId, btn){
   }
   patch.ai_parsed_at = new Date().toISOString();
 
+  // v121: when the user accepts noi_actual_yr or noi_proforma_yr but didn't
+  // tick the noi_override_active row, auto-flip it on. Otherwise the
+  // Financial Analysis NOI display keeps using EGI-Expenses instead of the
+  // override value. The edge fn v14+ proposes the boolean too, but it's a
+  // separate checkbox row in the modal and easy to miss.
+  if((valuePatch.noi_actual_yr != null || valuePatch.noi_proforma_yr != null) && valuePatch.noi_override_active !== true){
+    valuePatch.noi_override_active = true;
+    patch.noi_override_active = true;
+  }
+
   try {
     await _sbPatch(SB_TABLES.properties, propertyId, patch);
 
     // v120: when target_seller_net is applied, also upsert an Accepted-From-Seller
-    // offer row so the value lands on the Offers tab card. The "wants to net X"
-    // semantics map to that card per user spec.
+    // offer row so the value lands on the Offers tab card.
     if(valuePatch.target_seller_net != null && Number(valuePatch.target_seller_net) > 0){
       try {
         const existing = await _sbGet('ace_deal_offers',
@@ -22643,6 +22661,28 @@ window._aiAutoFillApply = async function(propertyId, btn){
           });
         }
       } catch(e){ console.warn('[ai-autofill] accepted_by_seller upsert failed:', e.message); }
+    }
+
+    // v121: same upsert pattern for asking_price -> ace_deal_offers (offer_type='asking')
+    // so the Seller Original Asking card on the Offers tab matches asking_price.
+    // Without this, the column is updated but the offer row drifts.
+    if(valuePatch.asking_price != null && Number(valuePatch.asking_price) > 0){
+      try {
+        const existing = await _sbGet('ace_deal_offers',
+          `deal_id=eq.${propertyId}&offer_type=eq.asking&select=id&order=created_at.desc&limit=1`);
+        const amount = Number(valuePatch.asking_price);
+        if(existing && existing.length > 0){
+          await _sbPatch('ace_deal_offers', existing[0].id, { amount });
+        } else {
+          await _sbPost('ace_deal_offers', {
+            deal_id: propertyId,
+            offer_type: 'asking',
+            amount,
+            offer_date: new Date().toISOString().slice(0,10),
+            notes: 'AI Auto-Fill: seller asking'
+          });
+        }
+      } catch(e){ console.warn('[ai-autofill] asking offer upsert failed:', e.message); }
     }
 
     const valCount = Object.keys(valuePatch).length;
@@ -22663,6 +22703,21 @@ window._aiAutoFillApply = async function(propertyId, btn){
             if(typeof currentDeal !== 'undefined' && currentDeal?.id === propertyId){
               Object.assign(currentDeal, refreshed);
               if(typeof renderDealPage === 'function') renderDealPage();
+              // v121: force the active tab to re-render with fresh data so the
+              // Financial Analysis NOI override + Asking Price input pick up
+              // newly-applied AI values without a manual tab switch.
+              try {
+                const tabContentEl = document.getElementById('tabContent');
+                if(tabContentEl && typeof currentTab !== 'undefined'){
+                  if(currentTab === 'financial' && typeof renderFinancialTab === 'function'){
+                    tabContentEl.innerHTML = renderFinancialTab(currentDeal);
+                  } else if(currentTab === 'offers' && typeof loadOffersTab === 'function'){
+                    loadOffersTab(propertyId);
+                  } else if(currentTab === 'tenantmix' && typeof loadTenantMixTab === 'function'){
+                    loadTenantMixTab(propertyId);
+                  }
+                }
+              } catch(_){}
             }
           }
         } catch(_){}

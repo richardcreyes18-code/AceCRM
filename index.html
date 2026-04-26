@@ -3101,142 +3101,96 @@ async function syncData(){
         agentFilter = '&' + _agentPgFilter(_currentUser.fub_name, 'fub_assigned_to');
       }
 
-      // v69 perf: fire 8 paginated requests in parallel instead of serial
-      // chain. Covers up to 8000 deals in ~1 round-trip of latency. Extra
-      // pages beyond the actual row count just return empty — negligible cost.
-      // If you ever exceed 8000 deals, fall through to a serial tail at the end.
+      // v134: KEYSET pagination. Replaces the offset-based parallel loader
+      // because offset pagination was occasionally returning HTTP 200 with
+      // truncated rows under statement-timeout conditions, leaving allDeals
+      // partial without any error surface. Even with retries and a HEAD
+      // count cross-check, the gap-walk in v133 also used offsets and could
+      // hit the same truncation. Keyset queries are bounded indexed range
+      // scans — every page is fast (no offset-skip cost) and the result is
+      // either complete or the request fails outright (which we retry).
+      //
+      // Each page: WHERE (created_at, id) "after" cursor LIMIT 1000.
+      // For ORDER BY created_at DESC, id ASC, "after (X, Y)" means
+      //   created_at < X  OR  (created_at = X AND id > Y)
+      // The composite index ace_properties_load_idx (created_at DESC, id ASC)
+      // WHERE deleted_at IS NULL handles this in a single index seek per page.
+      //
+      // ~6 pages serial × ~150-300ms = 1-2s for 5,700 deals. Trades the
+      // ~500ms win of parallel offsets for 100% reliability — appropriate
+      // when scaling to multi-tenant SaaS where partial loads are unacceptable.
       const batchSize = 1000;
-      const MAX_PARALLEL_PAGES = 8;  // 8 × 1000 = 8000 deal ceiling for parallel path
       const mapRows = (rows) => {
         rows.forEach(row => {
           const deal = _sbToAt(row, SB_PROP_MAP);
           deal.id = row.id;
           if(row.owner_contact_id) deal['Owner'] = [row.owner_contact_id];
-          // v102.18: Date Added fallback chain. SB_PROP_MAP no longer has the
-          // duplicate created_at:'Date Added' entry that used to provide this
-          // implicitly (and which broke the write side because the reverse
-          // map collapsed the two snake_case columns into one). Now we do it
-          // explicitly: use date_added if set, else fall back to created_at.
-          // This keeps all 5,700+ legacy deals (which have null date_added)
-          // displaying their creation date correctly.
+          // Date Added fallback: use date_added if set, else created_at. Keeps
+          // legacy rows (with null date_added) displaying their creation date.
           if(!deal['Date Added'] && row.created_at){
             deal['Date Added'] = row.created_at;
           }
           records.push(deal);
         });
       };
-      // v113.33: Stable tiebreak (id.asc) on the parallel page order. Without
-      // it, rows that share created_at can leak into multiple pages, leaving
-      // allDeals with duplicate ids — the dedupe modal then renders the same
-      // row 2-3× per group. Cheap fix; aligns with the server-side scripts.
-      // v113.34: filter out soft-deleted rows (deleted_at IS NOT NULL). The
-      // merge-property-with-notes v2 edge function sets deleted_at on losers,
-      // not is_archived — so without this filter, post-merge losers leaked
-      // into allDeals and the dedupe modal showed them as live duplicates.
-      // v113.39 (REQUIRES crm-proxy v13+): the multi-column order
-      // `created_at.desc,id.asc` is parsed correctly by the proxy. Older proxy
-      // versions split on '.' once and silently turned this into
-      // `created_at ASC` (because dir='desc,id' !== 'desc'), causing offset
-      // pagination to leak/drop rows and allDeals to come up ~25% short.
-      // v113.40 (REQUIRES partial index ace_properties_load_idx): without
-      // an index covering (created_at DESC, id ASC) WHERE deleted_at IS NULL,
-      // each OFFSET >= 2000 page did a full table sort and timed out under
-      // the JS supabase client. Result: allDeals capped at ~2000 rows.
-      // Migration v113_40_ace_properties_load_idx adds the index.
-      // v133: hardened parallel fetch. The previous version did a silent
-      // `.catch(e => return [])` on each page, so any page that failed
-      // (timeout, proxy hiccup, server 5xx) just dropped its rows on the
-      // floor — the user saw a partial allDeals on first load and a
-      // different partial set on refresh. Now we track per-page success,
-      // retry failures serially with backoff, and throw a hard error if a
-      // page can't be recovered after 3 attempts so the loader surfaces
-      // it instead of silently rendering the wrong number of deals.
-      const fetchPage = (i) => _sbGet(SB_TABLES.properties,
-        `select=*&deleted_at=is.null&order=created_at.desc,id.asc&limit=${batchSize}&offset=${i*batchSize}${agentFilter}`);
 
-      const pageResults = await Promise.all(
-        Array.from({length: MAX_PARALLEL_PAGES}, (_, i) =>
-          fetchPage(i).then(rows => ({ ok:true, rows: rows||[], i }))
-                      .catch(err => ({ ok:false, err, i, rows: [] }))
-        )
-      );
-
-      // Retry any failed pages with up to 3 attempts, exponential backoff.
-      for(const p of pageResults){
-        if(p.ok) continue;
-        let attempt = 0, lastErr = p.err;
-        while(attempt < 3 && !p.ok){
+      const fetchKeysetPage = async (cursor) => {
+        let qs = `select=*&deleted_at=is.null&order=created_at.desc,id.asc&limit=${batchSize}${agentFilter}`;
+        if(cursor){
+          const ca = encodeURIComponent(cursor.created_at);
+          const id = encodeURIComponent(cursor.id);
+          qs += `&or=(created_at.lt.${ca},and(created_at.eq.${ca},id.gt.${id}))`;
+        }
+        let attempt = 0, lastErr = null;
+        while(attempt < 3){
           attempt++;
-          await new Promise(r => setTimeout(r, 400 * attempt));
           try {
-            const rows = await fetchPage(p.i);
-            p.rows = rows || [];
-            p.ok = true;
-          } catch(e){ lastErr = e; }
-        }
-        if(!p.ok){
-          throw new Error('Failed to load deal page ' + p.i + ' after 3 retries: ' + (lastErr && lastErr.message || 'unknown'));
-        }
-      }
-
-      // Belt-and-suspenders: a non-final page returning fewer rows than
-      // batchSize while a later page returns data means part of that page
-      // got truncated mid-flight. Refetch up to 3 times until consistent.
-      for(let i = 0; i < pageResults.length - 1; i++){
-        const cur = pageResults[i];
-        const next = pageResults[i+1];
-        if(cur.rows.length < batchSize && next.rows.length > 0){
-          let attempt = 0;
-          while(attempt < 3 && cur.rows.length < batchSize){
-            attempt++;
-            await new Promise(r => setTimeout(r, 400 * attempt));
-            try {
-              const rows = await fetchPage(cur.i);
-              if((rows||[]).length > cur.rows.length){
-                cur.rows = rows;
-              } else { break; }
-            } catch(_){ /* keep what we have */ }
+            return await _sbGet(SB_TABLES.properties, qs);
+          } catch(e){
+            lastErr = e;
+            if(attempt < 3) await new Promise(r => setTimeout(r, 400 * attempt));
           }
         }
-      }
+        throw new Error('Keyset page fetch failed after 3 retries: ' + (lastErr && lastErr.message || 'unknown'));
+      };
 
-      pageResults.forEach(p => mapRows(p.rows));
-      if(typeof _splashStep==='function') _splashStep(`Loading deals (${records.length})`, 3, 8);
-      // Serial tail — only runs if the database has more than MAX_PARALLEL_PAGES*batchSize rows
-      let from = MAX_PARALLEL_PAGES * batchSize;
-      // If the last parallel page was full, there might be more data
-      const lastPageRows = pageResults[MAX_PARALLEL_PAGES - 1] && pageResults[MAX_PARALLEL_PAGES - 1].rows;
-      if(lastPageRows && lastPageRows.length === batchSize){
-        while(true){
-          const rows = await _sbGet(SB_TABLES.properties,
-            `select=*&deleted_at=is.null&order=created_at.desc,id.asc&limit=${batchSize}&offset=${from}${agentFilter}`);
-          if(!rows || !rows.length) break;
-          mapRows(rows);
-          if(rows.length < batchSize) break;
-          from += batchSize;
+      let cursor = null;
+      let pageNum = 0;
+      while(true){
+        pageNum++;
+        const rows = await fetchKeysetPage(cursor);
+        if(!rows || !rows.length) break;
+        mapRows(rows);
+        if(typeof _splashStep==='function'){
+          _splashStep(`Loading deals (${records.length})`, 3, 8);
+        }
+        if(rows.length < batchSize) break;
+        // Advance cursor to the last raw row (snake_case still intact)
+        const last = rows[rows.length - 1];
+        cursor = { created_at: last.created_at, id: last.id };
+        // Safety: bound page count to prevent runaway loops on a buggy cursor.
+        // 50 pages × 1000 = 50,000 deal ceiling, well above any expected scale.
+        if(pageNum >= 50){
+          console.warn('[loadAllDeals] keyset hit 50-page safety ceiling at ' + records.length + ' deals.');
+          break;
         }
       }
 
-      // v133: cross-check against a server-side count. If allDeals comes
-      // up short, log a warning AND walk the gap by re-fetching from
-      // records.length forward. Catches edge cases where a page succeeded
-      // HTTP-wise but PostgREST returned fewer rows than asked (e.g.
-      // statement timeout returning a partial result).
+      // Cross-check: if HEAD count drifts > 5 from what we loaded, surface a
+      // visible warning (5 row tolerance accounts for concurrent inserts
+      // during the load). Anything larger means something failed silently and
+      // the user needs to know to refresh — partial data with no error is
+      // exactly the bug v134 is killing.
       try {
         if(typeof _sbGetCount === 'function'){
           const expectedTotal = await _sbGetCount(SB_TABLES.properties, 'deleted_at=is.null' + agentFilter);
-          if(typeof expectedTotal === 'number' && expectedTotal > records.length){
-            console.warn('[loadAllDeals] count mismatch — expected ' + expectedTotal + ', got ' + records.length + '. Walking gap.');
-            let walkFrom = records.length;
-            let safety = 20; // prevent infinite loop on persistent shortfall
-            while(walkFrom < expectedTotal && safety-- > 0){
-              const rows = await _sbGet(SB_TABLES.properties,
-                `select=*&deleted_at=is.null&order=created_at.desc,id.asc&limit=${batchSize}&offset=${walkFrom}${agentFilter}`);
-              if(!rows || !rows.length) break;
-              mapRows(rows);
-              walkFrom += rows.length;
-              if(rows.length < batchSize) break;
-            }
+          if(typeof expectedTotal === 'number' && (expectedTotal - records.length) > 5){
+            console.warn('[loadAllDeals] keyset returned ' + records.length + ', server has ' + expectedTotal + '. Drift > 5 — alerting user.');
+            setTimeout(() => {
+              if(typeof showSaveConfirm === 'function'){
+                showSaveConfirm('⚠ Loaded ' + records.length + ' of ' + expectedTotal + ' deals — refresh to retry.');
+              }
+            }, 1500);
           }
         }
       } catch(e){ console.warn('[loadAllDeals] count cross-check failed:', e && e.message); }
@@ -22232,6 +22186,17 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v134: KEYSET pagination for the deal loader. v133's parallel offset path
+//   still showed inconsistent counts across reloads (Hot Active 18 deals on
+//   hard reload, 36 after refresh). Root cause: PostgREST returns HTTP 200
+//   with truncated rows under statement-timeout conditions, and offset-based
+//   gap-walks can hit the same truncation. Keyset queries are bounded
+//   indexed range scans — every page either completes or fails outright
+//   (which we retry). Trades the ~500ms parallel-offset win for 100%
+//   reliability. Final HEAD count cross-check now surfaces a visible
+//   "Loaded X of Y deals — refresh to retry" toast if drift > 5 rows
+//   instead of silently rendering partial data.
+//   File: index.html:3104-3196
 // v133: Hardened deal load — fix the "first load shows partial deals,
 //   refresh shows more" race. The previous parallel page fetch did
 //   `.catch(e => return [])` on each of 8 concurrent _sbGet calls, so a

@@ -21400,8 +21400,10 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
-// v113.59: AI auto-fill ALL property details + financial analysis fields
-// using the ai-parse-deal-v2 edge function (v7). Reads property_description,
+// v113.60: AI auto-fill ALL property details + financial analysis fields
+// using the ai-parse-deal-v2 edge function (v8). Modal now lists every
+// FIELD_SPEC entry grouped by category, with dim rows for fields the AI
+// couldn't fill — so the user sees the full schema, not just what landed. Reads property_description,
 // deal_notes, general_property_notes, ai_clarifying_notes, plus all
 // related text fields. Always runs dry-run first so the user can review
 // before committing.
@@ -21467,18 +21469,12 @@ window._aiAutoFillDeal = async function(propertyId, opts){
   }
 
   // Render the diff modal
+  // v113.60: show every FIELD_SPEC entry from resp.all_fields, grouped by
+  // category. Rows where AI returned no value are dimmed and uncheckable.
   const proposed = resp.proposed_changes || {};
   const uncertain = resp.uncertain_fields || [];
-  const fieldKeys = Object.keys(proposed);
-
-  if(fieldKeys.length === 0 && uncertain.length === 0){
-    modal.querySelector('div').innerHTML = `
-      <div style="font-size:28px;margin-bottom:10px;">✓</div>
-      <div style="font-size:14px;font-weight:600;color:#0f172a;margin-bottom:6px;">Nothing to fill in</div>
-      <div style="font-size:12px;color:#64748b;margin-bottom:14px;">All fields are already populated, or the notes don't contain extractable values.</div>
-      <button onclick="this.closest('#aiAutoFillModal').remove()" style="background:#1a3a6e;color:#fff;border:none;border-radius:6px;padding:8px 16px;font-size:12px;font-weight:600;cursor:pointer;">Close</button>`;
-    return;
-  }
+  const all = Array.isArray(resp.all_fields) ? resp.all_fields : [];
+  const proposedCount = Object.keys(proposed).length;
 
   const fmtVal = (v) => {
     if(v === null || v === undefined || v === '') return '<span style="color:#cbd5e1;">—</span>';
@@ -21488,17 +21484,31 @@ window._aiAutoFillDeal = async function(propertyId, opts){
   };
   const fieldLabel = (col) => col.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
 
-  const rowsHtml = fieldKeys.sort().map(col => {
-    const { current, proposed: prop } = proposed[col];
+  // Group all_fields by category, preserving FIELD_SPEC order.
+  const groupOrder = ['Pricing','Income','Returns','Expenses','Expense Details','Pro Forma','Mortgages','Financing','Physical','Quality','Components','Unit Mix','Asset-Specific','Seller','Flags','Identity'];
+  const groups = {};
+  for(const f of all){ (groups[f.group] = groups[f.group] || []).push(f); }
+  const orderedGroups = groupOrder.filter(g => groups[g]).concat(Object.keys(groups).filter(g => !groupOrder.includes(g)));
+
+  const rowsHtml = orderedGroups.map(g => {
+    const groupRows = groups[g].map(f => {
+      const hasProp = f.proposed !== null && f.proposed !== undefined;
+      const rowStyle = hasProp ? '' : 'opacity:0.45;background:#fafafa;';
+      const cbHtml = hasProp
+        ? `<input type="checkbox" id="aiAccept_${f.col}" checked />`
+        : `<input type="checkbox" disabled style="opacity:0.3;cursor:not-allowed;" title="AI had no info for this field" />`;
+      return `
+        <tr style="border-top:1px solid #e2e8f0;${rowStyle}">
+          <td style="padding:6px 10px;text-align:center;width:30px;">${cbHtml}</td>
+          <td style="padding:6px 10px;font-size:11px;color:#0f172a;font-weight:500;">${_ddEsc(fieldLabel(f.col))}<br><span style="color:#94a3b8;font-size:9px;font-family:ui-monospace,Menlo,monospace;">${f.col}</span></td>
+          <td style="padding:6px 10px;font-size:11px;color:#475569;max-width:160px;word-break:break-word;">${fmtVal(f.current)}</td>
+          <td style="padding:6px 10px;font-size:11px;color:#0f172a;font-weight:600;max-width:200px;word-break:break-word;">${fmtVal(f.proposed)}</td>
+        </tr>`;
+    }).join('');
+    const filledInGroup = groups[g].filter(f => f.proposed !== null && f.proposed !== undefined).length;
     return `
-      <tr style="border-top:1px solid #e2e8f0;">
-        <td style="padding:6px 10px;text-align:center;width:30px;">
-          <input type="checkbox" id="aiAccept_${col}" checked />
-        </td>
-        <td style="padding:6px 10px;font-size:11px;color:#0f172a;font-weight:500;">${_ddEsc(fieldLabel(col))}<br><span style="color:#94a3b8;font-size:9px;font-family:ui-monospace,Menlo,monospace;">${col}</span></td>
-        <td style="padding:6px 10px;font-size:11px;color:#475569;max-width:160px;word-break:break-word;">${fmtVal(current)}</td>
-        <td style="padding:6px 10px;font-size:11px;color:#0f172a;font-weight:600;max-width:200px;word-break:break-word;">${fmtVal(prop)}</td>
-      </tr>`;
+      <tr><td colspan="4" style="padding:12px 10px 4px;font-size:10px;text-transform:uppercase;letter-spacing:.06em;color:#475569;background:#f1f5f9;font-weight:700;border-top:2px solid #cbd5e1;">${_ddEsc(g)} <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">— ${filledInGroup}/${groups[g].length} filled</span></td></tr>
+      ${groupRows}`;
   }).join('');
 
   const uncertainHtml = uncertain.length ? `
@@ -21514,16 +21524,17 @@ window._aiAutoFillDeal = async function(propertyId, opts){
       <div style="padding:14px 18px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;">
         <div>
           <div style="font-size:15px;font-weight:700;color:#0f172a;">✦ AI Auto-Fill — Review Changes</div>
-          <div style="font-size:11px;color:#64748b;margin-top:3px;">${fieldKeys.length} proposed change${fieldKeys.length===1?'':'s'}${onlyFillEmpty ? ' (only filling empty fields)' : ' (overwriting existing values)'} · prompt ${(resp.prompt_chars||0).toLocaleString()} chars · response ${(resp.response_chars||0).toLocaleString()} chars</div>
+          <div style="font-size:11px;color:#64748b;margin-top:3px;">${proposedCount} of ${all.length} fields filled by AI${onlyFillEmpty ? ' (only filling empty fields)' : ' (overwriting existing values)'} · prompt ${(resp.prompt_chars||0).toLocaleString()} chars · response ${(resp.response_chars||0).toLocaleString()} chars</div>
         </div>
         <button onclick="this.closest('#aiAutoFillModal').remove()" style="background:none;border:none;color:#94a3b8;font-size:22px;cursor:pointer;padding:4px 8px;">×</button>
       </div>
       <div style="padding:14px 18px;overflow-y:auto;flex:1;">
-        <div style="display:flex;gap:8px;margin-bottom:10px;">
-          <button onclick="document.querySelectorAll('#aiAutoFillModal input[type=checkbox]').forEach(c => c.checked = true);" style="background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:5px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;">Select all</button>
-          <button onclick="document.querySelectorAll('#aiAutoFillModal input[type=checkbox]').forEach(c => c.checked = false);" style="background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:5px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;">Clear</button>
+        <div style="display:flex;gap:8px;margin-bottom:10px;align-items:center;">
+          <button onclick="document.querySelectorAll('#aiAutoFillModal input[type=checkbox]:not(:disabled)').forEach(c => c.checked = true);" style="background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:5px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;">Select all filled</button>
+          <button onclick="document.querySelectorAll('#aiAutoFillModal input[type=checkbox]:not(:disabled)').forEach(c => c.checked = false);" style="background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:5px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;">Clear</button>
+          <span style="font-size:10px;color:#94a3b8;margin-left:8px;">Dim rows = AI didn't have info to fill them.</span>
         </div>
-        ${fieldKeys.length ? `<table style="width:100%;border-collapse:collapse;">
+        ${all.length ? `<table style="width:100%;border-collapse:collapse;">
           <thead><tr style="background:#f8fafc;font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;">
             <th style="padding:7px 10px;text-align:center;">Use</th>
             <th style="padding:7px 10px;text-align:left;">Field</th>
@@ -21531,7 +21542,7 @@ window._aiAutoFillDeal = async function(propertyId, opts){
             <th style="padding:7px 10px;text-align:left;">AI Proposed</th>
           </tr></thead>
           <tbody>${rowsHtml}</tbody>
-        </table>` : '<div style="padding:20px;text-align:center;font-size:12px;color:#64748b;">No fillable changes — see uncertain list below.</div>'}
+        </table>` : '<div style="padding:20px;text-align:center;font-size:12px;color:#64748b;">No fields available.</div>'}
         ${uncertainHtml}
       </div>
       <div style="padding:12px 18px;border-top:1px solid #e2e8f0;display:flex;justify-content:space-between;gap:10px;">

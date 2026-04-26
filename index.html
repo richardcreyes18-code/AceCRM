@@ -11111,7 +11111,7 @@ function renderFinancialTab(d){
         // routes (Gross − NOI)/12 here so NOI naturally falls out of EGI −
         // Expenses instead of getting bolted on as a manual override.
         { id:'est',     label:'Estimated Expenses', tip:'Catch-all when the source gives top-line numbers (gross income + NOI) but no itemized expense breakdown. The CRM derives this so the NOI math closes naturally instead of using the manual NOI override.', fixed:false,
-          items:[{id:'est_grossMinusNoi',label:'Gross Income - NOI, EXP not given'}] },
+          items:[{id:'est_grossMinusNoi',label:'Gross Income - NOI, expenses not given'}] },
       ];
 
       // Build rows
@@ -11334,7 +11334,10 @@ function renderFinancialTab(d){
             <!-- TOTAL OPERATING EXPENSES -->
             ${(()=>{
               // Sum all expense categories
-              const allCatIds = ['admin','rm','util','misc','tax','ins','pm'];
+              // v131: include 'est' (Estimated Expenses) so the gross-NOI gap
+              // routes into Total Operating Expenses. Without this, typing into
+              // the Estimated Expenses sub-row left Total OpEx unchanged.
+              const allCatIds = ['admin','rm','util','misc','tax','ins','pm','est'];
               let aTotalOpEx_mo=0, pTotalOpEx_mo=0;
               allCatIds.forEach(cat => {
                 const items = {
@@ -11344,7 +11347,8 @@ function renderFinancialTab(d){
                   misc:['misc_adv','misc_other'],
                   tax:['tax_prop','tax_other'],
                   ins:['ins_prop','ins_liab'],
-                  pm:['pm_fee','pm_other']
+                  pm:['pm_fee','pm_other'],
+                  est:['est_grossMinusNoi']
                 }[cat]||[];
                 items.forEach(id=>{
                   aTotalOpEx_mo += Number(fi['a_'+id+'_mo'])||0;
@@ -22153,6 +22157,16 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v131: Estimated Expenses now sums into Total Operating Expenses.
+//   Two hardcoded category lists (renderFinancialTab's Total OpEx
+//   computation at line 11337 + updateExpenseTotals' EXP map at line
+//   50266) didn't know about the new 'est' category — so typing into
+//   the Estimated Expenses sub-row left Total OpEx unchanged. Added
+//   'est' / ['est_grossMinusNoi'] to both. The Variable/Fixed
+//   subtotals intentionally stay split as-was; the est row is a
+//   top-line estimate, not an itemized line that belongs to either
+//   bucket. Also renamed the sub-row from "EXP not given" to
+//   "expenses not given".
 // v130: Three fixes — dash placeholders, NOI routing, Construction defaults.
 //   * Replaced verbose example placeholders on the new Other Notes
 //     textareas with em-dash. The user wants empty fields to be visually
@@ -50270,7 +50284,11 @@ function updateExpenseTotals(){
     misc:  ['misc_adv','misc_other'],
     tax:   ['tax_prop','tax_other'],
     ins:   ['ins_prop','ins_liab'],
-    pm:    ['pm_fee','pm_other']
+    pm:    ['pm_fee','pm_other'],
+    // v131: Estimated Expenses (gross-NOI gap). Counted in totalA/P only,
+    // not in VAR or FIX subtotals — it's a top-line override, not a real
+    // itemized line that belongs to the variable/fixed split.
+    est:   ['est_grossMinusNoi']
   };
 
   let varA_mo=0, varP_mo=0, fixA_mo=0, fixP_mo=0, totalA_mo=0, totalP_mo=0;

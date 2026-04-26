@@ -22088,6 +22088,17 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v126: Email Templates fixes.
+//   * Search input no longer loses focus on every keystroke. Captures
+//     focus + caret position in _emailTplsLibPaint before the
+//     root.innerHTML rebuild, restores them after. Search input gets a
+//     stable id so the lookup is reliable.
+//   * _fubLinkTemplates default folders list extended to include the
+//     uncategorized bucket (folder IS NULL) plus 3 other meaningful FUB
+//     folders. ~87 FUB templates — including "179 Branchport Ave –
+//     Mixed-Use / Industrial Opportunity" — were silently skipped
+//     because the original list only covered 3 specific folders.
+//     PostgREST encoding fixed to use folder=is.null for the null branch.
 // v125: AI Auto-Fill modal — new "AI Explanation" column.
 //   Edge fn ai-parse-deal-v2 v18 now returns a per-field `explanation`
 //   alongside `proposed` — a <=160-char source quote / paraphrase that
@@ -23159,7 +23170,20 @@ window._fubLinkTemplates = async function(opts){
   opts = opts || {};
   const dryRun  = !!opts.dryRun;
   const limit   = opts.limit || null;
-  const folders = opts.folders || ['Hot Deal Email Temp','Active Deal Email Temp','Overpriced / Unmotivated'];
+  // v126: include `null` (uncategorized FUB templates with no folder) plus
+  // the other meaningful FUB folders. Without `null` here, ~87 templates
+  // — like the "179 Branchport Ave – Mixed-Use / Industrial Opportunity"
+  // one — were silently skipped because the original folder list only
+  // covered 3 specific folders. DEAD EMAIL TEMPS is intentionally excluded.
+  const folders = opts.folders || [
+    'Hot Deal Email Temp',
+    'Active Deal Email Temp',
+    'Overpriced / Unmotivated',
+    'Follow Up Boss',
+    'TRUE LOIs 2026',
+    'Sale Inquire',
+    null, // uncategorized
+  ];
   const userEmail = opts.userEmail || _currentUser?.email;
   if(!userEmail){ alert('Sign in first — _currentUser.email is required.'); return; }
 
@@ -23180,14 +23204,20 @@ window._fubLinkTemplates = async function(opts){
   let templates = [];
   for(const f of folders){
     try {
+      // v126: PostgREST encodes a missing folder via `folder=is.null` (NOT
+      // `folder=eq.null`). Branch on `f == null` so the uncategorized bucket
+      // is fetched correctly.
+      const filter = (f == null)
+        ? 'folder=is.null'
+        : 'folder=eq.' + encodeURIComponent(f);
       const rows = await _sbGet('ace_email_templates',
-        `select=id,name,subject,body_plain,body_html,folder,fub_template_id&deleted_at=is.null&folder=eq.${encodeURIComponent(f)}&order=name.asc`);
+        `select=id,name,subject,body_plain,body_html,folder,fub_template_id&deleted_at=is.null&${filter}&order=name.asc`);
       if(Array.isArray(rows)){
         templates.push(...rows);
-        console.log(`[fub-link]   ${f}: ${rows.length}`);
+        console.log(`[fub-link]   ${f === null ? '(uncategorized)' : f}: ${rows.length}`);
       }
     } catch(e){
-      console.warn(`[fub-link] folder fetch failed for "${f}":`, e.message);
+      console.warn(`[fub-link] folder fetch failed for "${f === null ? '(uncategorized)' : f}":`, e.message);
     }
   }
   console.log(`[fub-link] fetched ${templates.length} FUB templates total`);
@@ -31381,10 +31411,23 @@ function _emailTplsExtractFolder(name){
 function _emailTplsLibPaint(){
   const root = document.getElementById('emailTplsTabRoot');
   if(!root) return;
+  // v126: capture focus + caret on the search input BEFORE we rebuild
+  // root.innerHTML — otherwise every keystroke destroys the element and
+  // the user has to click back in. Restore after the repaint.
+  const active = document.activeElement;
+  const wasSearch = active && active.id === 'emailTplsSearchInput';
+  const caret = wasSearch ? active.selectionStart : null;
   if(_emailTplsLibState.activeFolder == null){
     _emailTplsLibPaintFolders();
   } else {
     _emailTplsLibPaintTemplates(_emailTplsLibState.activeFolder);
+  }
+  if(wasSearch){
+    const newInput = document.getElementById('emailTplsSearchInput');
+    if(newInput){
+      newInput.focus();
+      try { newInput.setSelectionRange(caret, caret); } catch(_){}
+    }
   }
 }
 
@@ -31441,7 +31484,7 @@ function _emailTplsLibPaintFolders(){
       <div style="font-size:13px;color:#64748b;">
         ${total.toLocaleString()} email template${total===1?'':'s'} across ${(fubFolders.length + (userCreatedCount?1:0)).toLocaleString()} folder${(fubFolders.length+(userCreatedCount?1:0))===1?'':'s'}.
       </div>
-      <input type="text" value="${safeQ}"
+      <input type="text" id="emailTplsSearchInput" value="${safeQ}"
         oninput="_emailTplsLibState.search=this.value; _emailTplsLibPaint();"
         placeholder="Search folders…"
         style="width:220px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;outline:none;" />
@@ -31579,7 +31622,7 @@ function _emailTplsLibPaintTemplates(folder){
         <span style="font-weight:600;">${_ddEsc(folderLabel)}</span>
         <span style="color:#64748b;font-weight:400;font-size:12px;margin-left:8px;">${rows.length.toLocaleString()} template${rows.length===1?'':'s'}</span>
       </div>
-      <input type="text" value="${safeQ}"
+      <input type="text" id="emailTplsSearchInput" value="${safeQ}"
         oninput="_emailTplsLibState.search=this.value; _emailTplsLibPaint();"
         placeholder="Search this folder…"
         style="width:260px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;outline:none;" />

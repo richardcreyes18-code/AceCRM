@@ -1934,6 +1934,8 @@ const SB_PROP_MAP = {
   num_tenants:'Num Tenants', office_sf:'Office SF', warehouse_sf:'Warehouse SF',
   office_sf_pct:'Office SF Pct', num_loading_docks:'Num Loading Docks',
   num_drive_ins:'Num Drive Ins', ceiling_height_ft:'Ceiling Height Ft',
+  other_industrial_notes:'Other Industrial Notes',
+  other_unit_mix_notes:'Other Unit Mix Notes',
   // v113.76: NOI override
   noi_actual_yr:'NOI Actual Yr', noi_proforma_yr:'NOI Proforma Yr',
   noi_override_active:'NOI Override Active',
@@ -5660,6 +5662,8 @@ const _NA_INPUT_MAP = {
   'ind_loadingDocks':'num_loading_docks', 'ind_driveIns':'num_drive_ins',
   'ind_ceilingHeight':'ceiling_height_ft',
   'name:indOwnerOcc':'owner_occupied',
+  'ind_otherNotes':'other_industrial_notes',
+  'um_otherNotes':'other_unit_mix_notes',
   // v113.76: Financial Analysis fields are NOT in this map. The wrap-and-
   // sibling decoration breaks the financial tab's "$ <input>" inline layout
   // (the wrapper takes 100% width and pushes the $ glyph to a new line),
@@ -6443,6 +6447,11 @@ function collectAllDealFields(){
   // Industrial reuses the global owner_occupied column via its own radio
   const indOcc = getRadio('indOwnerOcc');
   if(indOcc) fields['Owner Occupied'] = (indOcc === 'yes');
+  // v129: Other Industrial Notes + Other Unit Mix Notes — free-form text.
+  const indOtherEl = document.getElementById('ind_otherNotes');
+  if(indOtherEl) fields['Other Industrial Notes'] = indOtherEl.value || '';
+  const umOtherEl = document.getElementById('um_otherNotes');
+  if(umOtherEl) fields['Other Unit Mix Notes'] = umOtherEl.value || '';
 
   // ── FINANCIAL ANALYSIS ────────────────────────────────────────
   const aGRI = getNum('fin_aGrossRent_mo');
@@ -7971,6 +7980,13 @@ function _renderUnitMixSection(d){
           </td>
         </tr>
       </table>
+      <!-- v129: Other Unit Mix Notes — free-form context for the unit mix
+           section. Vacancy reasons, owner-occupied unit details, special unit
+           configurations, anything that doesn't fit the structured grid. -->
+      <div class="pd-field" style="margin-top:8px;padding-left:188px;">
+        <label class="pd-lbl">Other Unit Mix Notes</label>
+        <textarea id="um_otherNotes" class="form-textarea auto-expand" placeholder='Vacancy reasons, owner-occupied unit details, special configurations, anything unit-mix-specific that doesn&apos;t fit the grid above. e.g. "Owner lives in unit 2A; 1 unit converted to office."' style="min-height:80px;width:100%;box-sizing:border-box;" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px';markDirty()">${d['Other Unit Mix Notes']||''}</textarea>
+      </div>
       <div style="display:flex;gap:8px;margin-top:10px;padding-left:188px;">
         <button class="save-btn" style="background:linear-gradient(180deg,#60c060,#409040);color:#fff;border-color:#206020;padding:4px 20px;" onclick="saveUnitMix()">✓ Save</button>
         <button class="save-btn" style="padding:4px 16px;" onclick="renderDealPage()">Cancel</button>
@@ -8052,6 +8068,13 @@ function _renderIndustrialSection(d){
             <span class="pd-unit">ft</span>
           </div>
         </div>
+      </div>
+      <!-- v129: Other Industrial Notes — free-form context that doesn't fit
+           structured fields. Owner-occupied details, additional tenant info,
+           special-purpose use, etc. AI Auto-Fill routes overflow context here. -->
+      <div class="pd-field" style="margin-top:10px;">
+        <label class="pd-lbl">Other Industrial Notes</label>
+        <textarea id="ind_otherNotes" class="form-textarea auto-expand" placeholder='Owner-occupied situation, additional tenant info, special-purpose use, anything industrial-specific that doesn&apos;t fit the fields above. e.g. "Owner uses 3-4 of the units personally and has not tried to rent them out."' style="min-height:80px;width:100%;box-sizing:border-box;" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px';markDirty()">${d['Other Industrial Notes']||''}</textarea>
       </div>
       <div style="text-align:right;margin-top:6px;">
         <button class="save-btn" onclick="masterSave().catch(e=>console.warn('manual save error:',e))">Save</button>
@@ -11981,6 +12004,10 @@ async function saveUnitMix(){
   n('um_4br_v',      'Units 4 Bedroom Vacant');
   n('um_other',      'Units Other');
   n('um_other_v',    'Units Other Vacant');
+
+  // v129: Other Unit Mix Notes — free-form textarea
+  const umOtherEl = document.getElementById('um_otherNotes');
+  if(umOtherEl) fields['Other Unit Mix Notes'] = umOtherEl.value || '';
 
   // ── MF Rent Data ─────────────────────────────────────────────
   const isMF = (currentDeal['CRM Asset Classification']||currentDeal['Simple Text Property Type']||'').toLowerCase().includes('multifamily');
@@ -22089,6 +22116,17 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v129: Other Industrial Notes + Other Unit Mix Notes overflow buckets.
+//   Two new free-form text columns on ace_properties (other_industrial_notes,
+//   other_unit_mix_notes). Textareas appear at the bottom of the Industrial
+//   Details and Unit Mix Information sections. AI Auto-Fill (edge fn v20)
+//   now routes overflow context here — owner-occupied details, vacancy
+//   reasons, additional tenant info, anything that doesn't fit a structured
+//   field. Prompt rule 22 spells out the routing with worked examples;
+//   includes both columns as readable source blocks so future runs can see
+//   what was previously captured. Without this, details like "Owner uses 3
+//   of the units personally and hasn't tried to rent them out" got reduced
+//   to a boolean flag and the verbatim quote was lost.
 // v128: AI Auto-Fill — email templates as context + editable suggestions
 //   + Notes log of every run.
 //   * Edge fn v19 fetches up to 20 saved email templates linked to the
@@ -22413,6 +22451,8 @@ const _AI_FIELD_SPEC = [
   {col:'num_loading_docks',type:'integer',group:'Industrial',hint:'Number of dock-high loading doors'},
   {col:'num_drive_ins',type:'integer',group:'Industrial',hint:'Number of drive-in / grade-level doors'},
   {col:'ceiling_height_ft',type:'number',group:'Industrial',hint:'Clear ceiling height in feet'},
+  {col:'other_industrial_notes',type:'text',group:'Industrial',hint:'Free-form overflow context for industrial deals — owner-occupied details, additional tenant info, special-purpose use'},
+  {col:'other_unit_mix_notes',type:'text',group:'Unit Mix',hint:'Free-form overflow context for the unit mix — vacancy reasons, owner-occupied unit details, special configurations'},
   {col:'automotive_gas_type',type:'text',group:'Asset-Specific',hint:'Gas station type if automotive'},
   {col:'automotive_wash_type',type:'text',group:'Asset-Specific',hint:'Car wash type'},
   {col:'retail_lease_type',type:'text',group:'Asset-Specific',hint:'Retail lease type (NNN, NN, gross, etc.)'},

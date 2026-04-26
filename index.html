@@ -2351,7 +2351,9 @@ async function _toggleMyRelationship(contactId){
     try {
       const created = await _sbPost('ace_agent_contacts', {
         user_id: _currentUser.id,
-        contact_id: contactId
+        contact_id: contactId,
+        source: 'manual',                         // v113.54
+        since_date: new Date().toISOString().slice(0,10),
       });
       const row = Array.isArray(created) ? created[0] : created;
       if(row && row.id){
@@ -2370,6 +2372,204 @@ async function _toggleMyRelationship(contactId){
       throw e;
     }
   }
+}
+
+// ─── v113.54: AGENT RELATIONSHIPS (multi-agent per contact) ──────────────
+// Sits on top of ace_agent_contacts (same table the ★ button writes to).
+// New columns: since_date, source, source_ref_id, updated_at.
+//
+// Helper: cached list of all users so the dropdown doesn't refetch per render.
+let _relAllUsers = null;
+async function _relLoadUsers(force){
+  if(!force && _relAllUsers) return _relAllUsers;
+  try {
+    const rows = await _sbGet('ace_users', 'select=id,name,fub_name,role&order=fub_name.asc');
+    _relAllUsers = Array.isArray(rows) ? rows : [];
+  } catch(e){ console.warn('[_relLoadUsers] failed:', e.message); _relAllUsers = []; }
+  return _relAllUsers;
+}
+
+async function _relListForContact(contactId){
+  if(!contactId) return [];
+  try {
+    const rows = await _sbGet('ace_agent_contacts',
+      `select=id,user_id,since_date,notes,source,source_ref_id,created_at&contact_id=eq.${contactId}&order=since_date.asc.nullslast,created_at.asc&limit=100`);
+    return Array.isArray(rows) ? rows : [];
+  } catch(e){ console.warn('[_relListForContact] failed:', e.message); return []; }
+}
+
+// UPSERT helper. If (contact, user) already exists, returns existing row.
+// `source`: 'manual' / 'property_assignment' / 'buyer_criteria_edit'
+async function _relAddAgent(contactId, userId, opts){
+  opts = opts || {};
+  if(!contactId || !userId) return null;
+  // Quick existence check
+  try {
+    const existing = await _sbGet('ace_agent_contacts',
+      `select=id&contact_id=eq.${contactId}&user_id=eq.${userId}&limit=1`);
+    if(Array.isArray(existing) && existing[0]) return existing[0];
+  } catch(_){}
+  const payload = {
+    user_id: userId,
+    contact_id: contactId,
+    source: opts.source || 'manual',
+    source_ref_id: opts.sourceRefId || null,
+    since_date: opts.sinceDate || new Date().toISOString().slice(0,10),
+    notes: opts.notes || null,
+  };
+  try {
+    const created = await _sbPost('ace_agent_contacts', payload);
+    return Array.isArray(created) ? created[0] : created;
+  } catch(e){
+    if(String(e.message||'').includes('duplicate') || String(e.message||'').includes('unique')){
+      // race condition — re-fetch
+      const rows = await _sbGet('ace_agent_contacts',
+        `select=id&contact_id=eq.${contactId}&user_id=eq.${userId}&limit=1`);
+      return rows?.[0] || null;
+    }
+    console.warn('[_relAddAgent] failed:', e.message);
+    return null;
+  }
+}
+
+async function _relRemoveAgent(rowId){
+  if(!rowId) return false;
+  try { await _sbDelete('ace_agent_contacts', rowId); return true; }
+  catch(e){ alert('Could not remove relationship: '+e.message); return false; }
+}
+
+async function _relUpdateRow(rowId, patch){
+  if(!rowId || !patch) return false;
+  try { await _sbPatch('ace_agent_contacts', rowId, patch); return true; }
+  catch(e){ alert('Could not save: '+e.message); return false; }
+}
+
+// Render the section into <div id="rp_relationships_{contactId}">.
+async function _relRenderForContact(contactId){
+  const host = document.getElementById('rp_relationships_'+contactId);
+  if(!host) return;
+  const [users, rows] = await Promise.all([_relLoadUsers(), _relListForContact(contactId)]);
+  const userById = new Map(users.map(u => [u.id, u]));
+  const inSet = new Set(rows.map(r => r.user_id));
+  const available = users.filter(u => !inSet.has(u.id));
+
+  const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;').replace(/"/g,'&quot;');
+  const sourceLabel = {
+    'manual':              '✋ Manual',
+    'property_assignment': '🏢 Property',
+    'buyer_criteria_edit': '🎯 Buyer Criteria',
+    'fub_import_backfill': '📥 FUB Import',
+  };
+
+  const rowsHtml = rows.map(r => {
+    const u = userById.get(r.user_id);
+    const name  = u ? (u.name || u.fub_name) : ('user '+String(r.user_id).slice(0,8));
+    const since = r.since_date || '';
+    const notes = r.notes || '';
+    const src   = sourceLabel[r.source] || (r.source ? esc(r.source) : '—');
+    return `
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-bottom:8px;">
+        <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">
+          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+            <strong style="font-size:13px;color:#0f172a;">👤 ${esc(name)}</strong>
+            <span style="font-size:10px;color:#64748b;background:#f1f5f9;padding:2px 7px;border-radius:99px;">${src}</span>
+          </div>
+          <button onclick="_relRowRemove('${r.id}','${contactId}')"
+            title="Remove relationship"
+            style="background:none;border:none;color:#94a3b8;font-size:14px;cursor:pointer;padding:2px 6px;">✕</button>
+        </div>
+        <div style="display:flex;gap:10px;align-items:center;margin-bottom:6px;">
+          <label style="font-size:10px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.04em;">Since</label>
+          <input type="date" value="${esc(since)}"
+            onchange="_relRowPatch('${r.id}', {since_date: this.value || null})"
+            style="font-size:12px;padding:3px 6px;border:1px solid #cbd5e1;border-radius:5px;outline:none;" />
+        </div>
+        <textarea rows="2" placeholder="Relationship notes — e.g. 'Met at NJBIZ event, interested in self-storage', referral source, deal preferences…"
+          onchange="_relRowPatch('${r.id}', {notes: this.value || null})"
+          style="width:100%;padding:6px 8px;font-size:12px;border:1px solid #cbd5e1;border-radius:5px;font-family:inherit;line-height:1.45;box-sizing:border-box;outline:none;resize:vertical;">${esc(notes)}</textarea>
+      </div>`;
+  }).join('');
+
+  const dropdownOptions = available
+    .map(u => `<option value="${u.id}">${esc(u.name || u.fub_name)}${u.role ? ' · '+esc(u.role) : ''}</option>`)
+    .join('');
+  const addRow = available.length ? `
+    <div style="display:flex;gap:6px;align-items:center;margin-top:6px;">
+      <select id="rp_rel_add_${contactId}"
+        style="flex:1;font-size:12px;padding:6px 8px;border:1px solid #cbd5e1;border-radius:6px;background:#fff;">
+        <option value="">+ Add an agent…</option>
+        ${dropdownOptions}
+      </select>
+      <button onclick="_relAddFromDropdown('${contactId}')"
+        style="background:#1a3a6e;color:#fff;border:none;border-radius:6px;padding:6px 14px;font-size:12px;font-weight:700;cursor:pointer;">Add</button>
+    </div>` : '<div style="font-size:11px;color:#94a3b8;margin-top:6px;">All agents are already linked.</div>';
+
+  host.innerHTML = `
+    <div>
+      <label style="display:flex;align-items:center;justify-content:space-between;font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:6px;">
+        <span>🤝 Relationships${rows.length ? ` (${rows.length})` : ''}</span>
+      </label>
+      ${rows.length ? rowsHtml : '<div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:14px;font-size:12px;color:#94a3b8;text-align:center;">No agents linked yet.</div>'}
+      ${addRow}
+    </div>`;
+}
+
+window._relAddFromDropdown = async function(contactId){
+  const sel = document.getElementById('rp_rel_add_'+contactId);
+  const userId = sel?.value;
+  if(!userId) return;
+  const row = await _relAddAgent(contactId, userId, { source: 'manual' });
+  if(row){ _relRenderForContact(contactId); }
+};
+
+window._relRowRemove = async function(rowId, contactId){
+  if(!confirm('Remove this agent from the contact\'s relationships?')) return;
+  const ok = await _relRemoveAgent(rowId);
+  if(ok){ _relRenderForContact(contactId); }
+};
+
+window._relRowPatch = async function(rowId, patch){
+  await _relUpdateRow(rowId, patch);
+};
+
+// v113.54: auto-sync relationships from a deal/property record. For each
+// agent in the deal's Assigned Agent list, ensure ace_agent_contacts has a
+// row linking them to the deal's owner_contact_id. Adds only — never removes.
+async function _relSyncFromDeal(deal){
+  if(!deal) return;
+  const ownerId = Array.isArray(deal['Owner']) ? deal['Owner'][0] : null;
+  if(!ownerId) return;
+  const agentList = (typeof _agentList === 'function')
+    ? _agentList(deal['Assigned Agent'] || '')
+    : String(deal['Assigned Agent']||'').split('|').map(s => s.trim()).filter(Boolean);
+  if(!agentList.length) return;
+  const users = await _relLoadUsers();
+  // Name aliases mirror the SQL backfill
+  const ALIAS = {
+    'Dan Keenan':'Daniel Keenan', 'Joe Domenech':'Joseph Domenech',
+    'Joe Spinella':'Joseph Spinella', 'Tim Emrich':'Timothy Emrich',
+    'William Hartgers':'Will Hartgers', 'Everett James':'Everett McNulty',
+  };
+  for(const raw of agentList){
+    const name = ALIAS[raw] || raw;
+    const u = users.find(x => x.fub_name === name || x.name === name);
+    if(!u) continue;
+    await _relAddAgent(ownerId, u.id, { source: 'property_assignment', sourceRefId: deal.id });
+  }
+}
+
+// v113.54: same idea for buyer-criteria edits — ensure the current user
+// has a relationship with the criteria's contact. Only the current user
+// (since they're the one editing).
+async function _relSyncFromBuyerCriteriaEdit(criteria){
+  if(!criteria) return;
+  const contactId = criteria.contact_id || (criteria['Contact ID']) || null;
+  if(!contactId) return;
+  if(!_currentUser?.id) return;
+  await _relAddAgent(contactId, _currentUser.id, {
+    source: 'buyer_criteria_edit',
+    sourceRefId: criteria.id || null,
+  });
 }
 
 // Small transient toast for quick action feedback
@@ -4286,6 +4486,11 @@ async function pickAgent(dealId, agentName, action){
       const tabContentEl = document.getElementById('tabContent');
       if(tabContentEl) tabContentEl.innerHTML = renderSummaryTab(currentDeal);
     }
+  }
+  // v113.54: auto-sync relationships — every agent on the deal gets a
+  // relationship row linking them to the property's owner contact.
+  if(action !== 'remove' && action !== 'clear'){
+    _relSyncFromDeal(deal);
   }
   // Confirm toast
   let msg;
@@ -22199,6 +22404,11 @@ async function toggleContactRelationship(contactId, btnEl){
     if(!nowIn && _contactScope === 'mine'){
       filterContacts();
     }
+    // v113.54: refresh the contact card's Relationships panel if it's open
+    // for this contact, so the new agent row appears immediately.
+    if(typeof _relRenderForContact === 'function'){
+      _relRenderForContact(contactId);
+    }
   } catch(e){
     _showToast('Failed: '+e.message, 'err');
   } finally {
@@ -26339,11 +26549,18 @@ async function _contactLoadRichProfile(contactId){
         </div>
       </div>`;
 
+    // v113.54: Relationships section — multi-agent links via
+    // ace_agent_contacts. Loaded async because it needs an extra query.
+    const relationshipsHtml = `<div id="rp_relationships_${contactId}"></div>`;
+
     // phones/emails sections always render (they host the Add button). The
     // other sections only render when they have data.
     host.innerHTML = `<div style="display:flex;flex-direction:column;gap:18px;">
-      ${metaHtml}${linksHtml}${phonesHtml}${emailsHtml}${addrsHtml}${tagsHtml}
+      ${metaHtml}${linksHtml}${relationshipsHtml}${phonesHtml}${emailsHtml}${addrsHtml}${tagsHtml}
     </div>`;
+
+    // Render the relationships block (async — fetches the rows and the user list).
+    _relRenderForContact(contactId);
   } catch(e) {
     console.warn('Rich profile load failed:', e.message);
   }
@@ -33522,6 +33739,17 @@ async function bcSaveExpanded(recordId, isAuto=false){
     // Update local cache
     const idx = allBuyerCriteria.findIndex(r=>r.id===recordId);
     if(idx>=0) Object.assign(allBuyerCriteria[idx].fields, fields);
+
+    // v113.54: ensure the editing user has a relationship with the buyer's
+    // contact. Fire-and-forget — failure here doesn't block the save UX.
+    try {
+      const contactId = (idx>=0 ? allBuyerCriteria[idx].contact_id : null)
+                     || allBuyerCriteria[idx]?.fields?.['Contact ID']
+                     || null;
+      if(contactId && typeof _relSyncFromBuyerCriteriaEdit === 'function'){
+        _relSyncFromBuyerCriteriaEdit({ id: recordId, contact_id: contactId });
+      }
+    } catch(_e){ /* non-fatal */ }
 
     if(msg){
       msg.textContent = isAuto ? '✓ Auto-saved' : '✓ Saved!';

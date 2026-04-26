@@ -10710,8 +10710,18 @@ function renderFinancialTab(d){
               <td style="padding:3px 6px;border:1px solid #ddd;font-weight:bold;">
                 Gross Rental Income ${tip('gri','Gross Rental Income = Total potential rent if 100% occupied. Enter the actual monthly rent roll.')}
                 ${(()=>{
-                  const isMF = (d['CRM Asset Classification']||d['Simple Text Property Type']||'').toLowerCase().includes('multifamily');
-                  if(!isMF) return '';
+                  const ac = (d['CRM Asset Classification']||d['Simple Text Property Type']||'').toLowerCase();
+                  const isMF = ac.includes('multifamily') || ac.includes('mixed use');
+                  const isInd = ac.includes('industrial') || ac.includes('warehouse') || ac.includes('flex');
+                  // v113.80: "📋 Details" button opens a modal with the right
+                  // editor (rent roll for MF, tenant mix for industrial).
+                  const detailsBtn = (isMF || isInd) ? `
+                    <button type="button" onclick="_openRentRollModal('${d.id}', '${isMF?'mf':'industrial'}')"
+                      title="${isMF?'Edit the rent roll without leaving Financial Analysis':'Edit tenant mix without leaving Financial Analysis'}"
+                      style="margin-left:8px;background:#1a3a6e;color:#fff;border:none;padding:2px 9px;font-size:9px;font-weight:700;border-radius:4px;cursor:pointer;vertical-align:middle;">
+                      📋 Details
+                    </button>` : '';
+                  if(!isMF) return detailsBtn;
                   const savedSrc = fi.aGRISource || 'custom';
                   return `
                     <div style="display:inline-flex;margin-left:10px;gap:0;border:1px solid #cbd5e1;border-radius:4px;overflow:hidden;vertical-align:middle;" id="aGRISourceToggle">
@@ -10726,6 +10736,7 @@ function renderFinancialTab(d){
                         Custom
                       </button>
                     </div>
+                    ${detailsBtn}
                     <div id="aGRIUnitMixNote" style="display:${savedSrc==='unitMix'?'block':'none'};font-size:9px;color:#2e7d32;font-weight:normal;margin-top:2px;">
                       Auto from occupied units on Property Details
                     </div>`;
@@ -21957,7 +21968,7 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
-// v113.79: AI auto-fill ALL property details + financial analysis fields
+// v113.80: AI auto-fill ALL property details + financial analysis fields
 // using the ai-parse-deal-v2 edge function (v9). Modal lists every
 // FIELD_SPEC entry grouped by category, with four row states (value /
 // AI proposes N/A / already N/A / no info). Apply merges accepted N/A
@@ -48912,6 +48923,79 @@ function toggleExpMode(){
   if(itemizedWrap) itemizedWrap.style.opacity = isRatio ? '0.35' : '1';
   expenseCalc();
 }
+
+// v113.80: open a modal showing the rent roll (MF) or tenant mix
+// (industrial) so users can update those details without leaving the
+// Financial Analysis tab. Saves via masterSave (rent roll) or live
+// against ace_tenants (tenant mix), then refreshes the GRI summary.
+window._openRentRollModal = function(propertyId, kind){
+  if(!currentDeal || currentDeal.id !== propertyId) return;
+  const d = currentDeal;
+  const title = (kind === 'mf') ? '📋 Rent Roll' : '🏪 Tenant Mix';
+  // Build modal shell
+  const modal = document.createElement('div');
+  modal.id = 'rentRollModal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px;';
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;width:100%;max-width:1100px;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 25px 60px rgba(0,0,0,0.25);overflow:hidden;">
+      <div style="padding:14px 18px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <div style="font-size:15px;font-weight:700;color:#0f172a;">${title}</div>
+          <div style="font-size:11px;color:#64748b;margin-top:2px;">${d['Address']||''}</div>
+        </div>
+        <button onclick="_closeRentRollModal()" style="background:none;border:none;color:#94a3b8;font-size:22px;cursor:pointer;padding:4px 8px;">×</button>
+      </div>
+      <div id="rentRollModalBody" style="padding:14px 18px;overflow-y:auto;flex:1;"></div>
+      <div style="padding:12px 18px;border-top:1px solid #e2e8f0;display:flex;justify-content:flex-end;gap:8px;">
+        <button onclick="_closeRentRollModal()" style="background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;">Close</button>
+        ${kind === 'mf' ? `<button onclick="_saveRentRollModal()" style="background:#1a3a6e;color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:12px;font-weight:700;cursor:pointer;">✓ Save & Apply</button>` : ''}
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  const body = modal.querySelector('#rentRollModalBody');
+  if(kind === 'mf'){
+    // Render the existing unit-mix section inside the modal. The same
+    // input ids are used, so masterSave's collector picks them up
+    // unchanged. Re-init _mfRentUnits state from the deal's stored JSON.
+    body.innerHTML = (typeof _renderUnitMixSection === 'function') ? _renderUnitMixSection(d) : '<em>Unit-mix renderer not loaded.</em>';
+    try {
+      const _mfRd = _mfRentLoad(d['MF Unit Rent Data']||'');
+      _mfRentUnits = _mfRd.units || [];
+      // Re-render the byUnit table if we landed in byUnit mode
+      if(_mfRd.mode === 'byUnit' && typeof _renderMFUnitRows === 'function'){
+        setTimeout(_renderMFUnitRows, 30);
+      }
+      setTimeout(()=>{ if(typeof mfRentCalcTotal === 'function') mfRentCalcTotal(); }, 60);
+    } catch(_) { /* ignore */ }
+  } else {
+    // Industrial: drop in the Tenant Mix tab content + kick off its async
+    // loader. Tenant edits save themselves directly through the tm* APIs,
+    // so the modal just needs Close.
+    body.innerHTML = (typeof renderTenantMixTab === 'function') ? renderTenantMixTab(d) : '<em>Tenant-mix renderer not loaded.</em>';
+    setTimeout(() => {
+      if(typeof loadTenantMixTab === 'function' && d.id) loadTenantMixTab(d.id);
+    }, 30);
+  }
+};
+
+window._closeRentRollModal = function(){
+  const m = document.getElementById('rentRollModal');
+  if(m) m.remove();
+};
+
+window._saveRentRollModal = async function(){
+  // masterSave collects every input in the page (the modal inputs are
+  // included). After save, recompute the financial-tab GRI from the
+  // unit mix so the user sees their changes reflected.
+  try {
+    if(typeof masterSave === 'function') await masterSave({ silent: true });
+    if(typeof _refreshFinGRIFromUnitMix === 'function') _refreshFinGRIFromUnitMix();
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('✓ Rent roll saved');
+    _closeRentRollModal();
+  } catch(e) {
+    alert('Save failed: ' + (e?.message || e));
+  }
+};
 
 // v113.76: when the seller only gave a top-line NOI, the user enters it
 // in fin_aNOICustom and we put (Gross − NOI) into the Maintenance & Repair

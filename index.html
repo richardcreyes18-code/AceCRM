@@ -1923,6 +1923,9 @@ const SB_PROP_MAP = {
   num_tenants:'Num Tenants', office_sf:'Office SF', warehouse_sf:'Warehouse SF',
   office_sf_pct:'Office SF Pct', num_loading_docks:'Num Loading Docks',
   num_drive_ins:'Num Drive Ins', ceiling_height_ft:'Ceiling Height Ft',
+  // v113.76: NOI override
+  noi_actual_yr:'NOI Actual Yr', noi_proforma_yr:'NOI Proforma Yr',
+  noi_override_active:'NOI Override Active',
   import_source:'Import Source',
   // v102.28: portfolio grouping — nullable FK, zero default means "standalone".
   // portfolio_sort_order controls display order within a portfolio's detail view.
@@ -5567,54 +5570,25 @@ const _NA_INPUT_MAP = {
   'ind_loadingDocks':'num_loading_docks', 'ind_driveIns':'num_drive_ins',
   'ind_ceilingHeight':'ceiling_height_ft',
   'name:indOwnerOcc':'owner_occupied',
-  // Financial Analysis
-  'fin_askPrice':'asking_price', 'fin_offerPrice':'offer_price',
-  'fin_a_renovation':'renovation_expense', 'fin_renovation':'renovation_expense',
-  'fin_a_downPct':'down_payment_pct', 'fin_p_downPct':'down_payment_pct',
-  'name:aDP':'down_payment_type', 'name:pDP':'down_payment_type',
-  'fin_aGrossRent_mo':'gross_rental_income_monthly',
-  'fin_aGrossRent_yr':'gross_revenue_yearly',
-  'fin_pGrossRent_mo':'proforma_gross_rent_monthly',
-  'fin_pGrossRent_yr':'pro_forma_gross_revenue_yearly',
-  'fin_aVacancy':'vacancy_rate_pct', 'fin_pVacancy':'proforma_vacancy_rate_pct',
-  'fin_aOI_mo':'other_income_monthly', 'fin_aOI_yr':'other_income_monthly',
-  'fin_pOI_mo':'proforma_other_income_monthly', 'fin_pOI_yr':'proforma_other_income_monthly',
-  'fin_aRUBS_mo':'rubs_cam_income_monthly', 'fin_aRUBS_yr':'rubs_cam_income_monthly',
-  'fin_pRUBS_mo':'proforma_rubs_cam_monthly', 'fin_pRUBS_yr':'proforma_rubs_cam_monthly',
-  'fin_aCapRes_mo':'capital_reserve_monthly', 'fin_aCapRes_yr':'capital_reserve_monthly',
-  'fin_simple_gri_mo':'gross_rental_income_monthly', 'fin_simple_gri_yr':'gross_revenue_yearly',
-  'fin_simple_exp_mo':'expenses_yearly', 'fin_simple_exp_yr':'expenses_yearly',
-  'fin_mort1_bal':'mortgage1_principal', 'fin_mort1_amort':'mortgage1_amortization_yrs',
-  'fin_mort1_rate':'mortgage1_interest_rate_pct',
-  'fin_mort1_assumable':'mortgage1_assumable', 'fin_mort1_yrsrem':'mortgage1_years_remaining',
-  'fin_mort2_bal':'mortgage2_principal', 'fin_mort2_amort':'mortgage2_amortization_yrs',
-  'fin_mort2_rate':'mortgage2_interest_rate_pct',
-  'fin_mort2_assumable':'mortgage2_assumable', 'fin_mort2_yrsrem':'mortgage2_years_remaining',
-};
-
-// Itemized expense lines use dynamic IDs like fin_a_<key>_mo. Map the
-// short code to the FIELD_SPEC column.
-const _NA_EXPENSE_KEY_TO_COL = {
-  taxes:'property_tax_monthly', insurance:'insurance_monthly',
-  electric:'electric_monthly', gas:'gas_monthly',
-  water:'water_sewer_monthly', sewer:'water_sewer_monthly', trash:'trash_monthly',
-  janitorial:'janitorial_monthly', landscaping:'landscaping_monthly',
-  repairs:'maintenance_repair_monthly', maintenance:'maintenance_repair_monthly',
-  maintsalary:'maintenance_salary_monthly', pool:'pool_monthly',
-  supplies:'supplies_monthly', misc:'misc_expenses_monthly',
-  pmFee:'property_mgmt_fee_monthly', mgmt:'property_mgmt_fee_monthly',
-  capRes:'capital_reserve_monthly', admin:'admin_expenses_monthly',
-  accounting:'accounting_monthly', legal:'legal_monthly',
-  liability:'liability_insurance_monthly',
+  // v113.76: Financial Analysis fields are NOT in this map. The wrap-and-
+  // sibling decoration breaks the financial tab's "$ <input>" inline layout
+  // (the wrapper takes 100% width and pushes the $ glyph to a new line),
+  // and inconsistent coverage between income (matched the regex) and
+  // expense lines (didn't) was confusing. For numeric financial fields
+  // empty already means "not set" — the inline N/A affordance adds no
+  // semantic value. Mark a financial field N/A from the AI Auto-Fill modal
+  // instead.
 };
 
 function _naColForElement(el){
   if(el.dataset && el.dataset.naCol) return el.dataset.naCol;
+  // v113.76: skip every financial-tab input (id starts with "fin_"). The
+  // wrap-and-sibling decoration breaks layouts that prefix the input with
+  // a $ glyph, and the financial fields don't really benefit from N/A
+  // — empty already means "not set".
+  if(el.id && el.id.indexOf('fin_') === 0) return null;
   if(el.id && _NA_INPUT_MAP[el.id]) return _NA_INPUT_MAP[el.id];
   if(el.name && _NA_INPUT_MAP['name:'+el.name]) return _NA_INPUT_MAP['name:'+el.name];
-  // Dynamic expense-line pattern: fin_(a|p)_<key>_(mo|yr)
-  const m = el.id && el.id.match(/^fin_[ap]_([a-zA-Z]+)_(?:mo|yr)$/);
-  if(m && _NA_EXPENSE_KEY_TO_COL[m[1]]) return _NA_EXPENSE_KEY_TO_COL[m[1]];
   return null;
 }
 
@@ -10456,6 +10430,41 @@ function renderFinancialTab(d){
          has been entered. The stamp still renders over the Results Summary table,
          where the missing data is actually relevant. -->
 
+    <!-- v113.76: Custom NOI Override — for deals where the seller only
+         gave a top-line NOI without an itemized expense breakdown. When
+         the toggle is on, the displayed NOI uses the entered numbers
+         instead of computing EGI − expenses. The "Derive Expenses" button
+         is a one-shot helper that puts (Gross − NOI) into the Maintenance
+         & Repair Costs line so the math reconciles even without a real
+         breakdown. -->
+    <div class="info-box" style="background:#fef3c7;border:1px solid #fde68a;margin-bottom:12px;">
+      <div class="info-box-title" style="display:flex;justify-content:space-between;align-items:center;color:#92400e;">
+        <span>📐 Custom NOI Override</span>
+        <label style="font-size:11px;font-weight:500;display:flex;align-items:center;gap:5px;cursor:pointer;color:#78350f;">
+          <input type="checkbox" id="fin_noiOverride" ${d['NOI Override Active']?'checked':''} onchange="markDirty()"/>
+          Use Custom NOI (skip expense breakdown)
+        </label>
+      </div>
+      <div style="font-size:11px;color:#78350f;margin-bottom:8px;line-height:1.5;">
+        When the seller only gave a top-line NOI without an itemized expense breakdown, enter it here and check "Use Custom NOI" — the displayed NOI uses your number instead of EGI − Expenses. If the seller also gave you Gross Rent, click <strong>Derive Expenses → M&amp;R</strong> to put (Gross − NOI) into the Maintenance &amp; Repair Costs line so the totals balance.
+      </div>
+      <div style="display:flex;gap:18px;align-items:center;flex-wrap:wrap;">
+        <label style="font-size:12px;display:flex;align-items:center;gap:6px;color:#78350f;">
+          <strong>Actual NOI:</strong>
+          <span style="color:#666;">$</span>
+          <input id="fin_aNOICustom" type="text" inputmode="numeric" class="form-input num-input" value="${_fmtNum(d['NOI Actual Yr']||'')}" placeholder="—" oninput="markDirty()" style="width:130px;text-align:right;"/>
+          <span style="font-size:11px;color:#666;">/yr</span>
+        </label>
+        <label style="font-size:12px;display:flex;align-items:center;gap:6px;color:#78350f;">
+          <strong>Proforma NOI:</strong>
+          <span style="color:#666;">$</span>
+          <input id="fin_pNOICustom" type="text" inputmode="numeric" class="form-input num-input" value="${_fmtNum(d['NOI Proforma Yr']||'')}" placeholder="—" oninput="markDirty()" style="width:130px;text-align:right;"/>
+          <span style="font-size:11px;color:#666;">/yr</span>
+        </label>
+        <button onclick="_finDeriveExpensesFromNOI()" style="background:#1a3a6e;color:#fff;border:none;padding:5px 12px;font-size:11px;font-weight:700;border-radius:5px;cursor:pointer;">📐 Derive Expenses → M&amp;R</button>
+      </div>
+    </div>
+
     <!-- PURCHASE PRICE & DOWN PAYMENT ───────────────────────── -->
     <div class="info-box">
       <div class="info-box-title">Purchase Price &amp; Down Payment</div>
@@ -11127,16 +11136,18 @@ function renderFinancialTab(d){
               <input id="fin_aExpRatio" type="number" min="0" max="100" step="0.5" placeholder="—"
                 value="${d['Actual Expense Ratio %']!=null?d['Actual Expense Ratio %']:''}"
                 class="form-input" style="width:70px;text-align:center;"
-                oninput="expenseCalc()"/>
+                oninput="expenseCalc(); _expRatioPreview()"/>
               <span>% of EGI</span>
+              <span id="fin_aExpRatio_preview" style="font-size:11px;color:#92400e;font-weight:600;margin-left:4px;"></span>
             </label>
             <label style="font-size:12px;display:flex;align-items:center;gap:6px;">
               Proforma Expense Ratio:
               <input id="fin_pExpRatio" type="number" min="0" max="100" step="0.5" placeholder="—"
                 value="${d['Pro Forma Expense Ratio %']!=null?d['Pro Forma Expense Ratio %']:''}"
                 class="form-input" style="width:70px;text-align:center;"
-                oninput="expenseCalc()"/>
+                oninput="expenseCalc(); _expRatioPreview()"/>
               <span>% of EGI</span>
+              <span id="fin_pExpRatio_preview" style="font-size:11px;color:#92400e;font-weight:600;margin-left:4px;"></span>
             </label>
           </div>
         </div>
@@ -11243,8 +11254,13 @@ function renderFinancialTab(d){
       ${(()=>{
         const aTotalOpEx_mo = window._aTotalOpEx_mo||0;
         const pTotalOpEx_mo = window._pTotalOpEx_mo||0;
-        const aNOI_yr = egi - aTotalOpEx_mo*12;
-        const pNOI_yr = pegi - pTotalOpEx_mo*12;
+        // v113.76: Custom NOI Override — when active and a yearly value is
+        // entered, use it directly instead of computing EGI − expenses.
+        const noiOverride = !!d['NOI Override Active'];
+        const aNOIOverride = Number(d['NOI Actual Yr'])||0;
+        const pNOIOverride = Number(d['NOI Proforma Yr'])||0;
+        const aNOI_yr = (noiOverride && aNOIOverride > 0) ? aNOIOverride : (egi - aTotalOpEx_mo*12);
+        const pNOI_yr = (noiOverride && pNOIOverride > 0) ? pNOIOverride : (pegi - pTotalOpEx_mo*12);
         const aNOI_mo = aNOI_yr/12;
         const pNOI_mo = pNOI_yr/12;
 
@@ -21942,7 +21958,7 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
-// v113.75: AI auto-fill ALL property details + financial analysis fields
+// v113.76: AI auto-fill ALL property details + financial analysis fields
 // using the ai-parse-deal-v2 edge function (v9). Modal lists every
 // FIELD_SPEC entry grouped by category, with four row states (value /
 // AI proposes N/A / already N/A / no info). Apply merges accepted N/A
@@ -48898,10 +48914,80 @@ function toggleExpMode(){
   expenseCalc();
 }
 
+// v113.76: when the seller only gave a top-line NOI, the user enters it
+// in fin_aNOICustom and we put (Gross − NOI) into the Maintenance & Repair
+// Costs line so the rest of the financial summary balances. Operates on
+// monthly inputs (which is what the per-line expense row uses).
+window._finDeriveExpensesFromNOI = function(){
+  const stripCommas = s => Number(String(s||'').replace(/,/g,'')) || 0;
+  // Prefer yearly inputs if filled; fall back to monthly × 12.
+  const grossYr = stripCommas(document.getElementById('fin_aGrossRent_yr')?.value)
+                || stripCommas(document.getElementById('fin_aGrossRent_mo')?.value) * 12;
+  const noiYr   = stripCommas(document.getElementById('fin_aNOICustom')?.value);
+  if(!grossYr || !noiYr){
+    alert('Need both Gross Rent (yearly) and Custom Actual NOI to derive expenses.');
+    return;
+  }
+  if(noiYr >= grossYr){
+    alert('Custom NOI must be less than Gross Rent for the derive to make sense.');
+    return;
+  }
+  const expensesYr = grossYr - noiYr;
+  const expensesMo = expensesYr / 12;
+  const moEl = document.getElementById('fin_a_rm_maint_mo');
+  const yrEl = document.getElementById('fin_a_rm_maint_yr');
+  if(moEl){
+    moEl.value = expensesMo.toLocaleString('en-US', { maximumFractionDigits: 2 });
+    moEl.dataset.authoritative = '1';
+  }
+  if(yrEl){
+    yrEl.value = expensesYr.toLocaleString('en-US', { maximumFractionDigits: 0 });
+  }
+  // Force the financial recalc so all dependent totals update.
+  if(typeof expenseCalc === 'function') expenseCalc();
+  if(typeof showSaveConfirm === 'function') showSaveConfirm(`✓ Filled M&R Costs with $${expensesYr.toLocaleString('en-US')}/yr`);
+};
+
+// v113.76: when in % Ratio mode, show the resulting $ amount next to each
+// ratio input so the user can sanity-check what 35% of EGI actually is.
+function _expRatioPreview(){
+  const fmt = n => '$' + Math.round(n).toLocaleString('en-US');
+  const v = id => Number(String(document.getElementById(id)?.value||'').replace(/,/g,'')) || 0;
+  // Actual EGI = (gross rent − vacancy) + other income + RUBS, monthly
+  const aGRI_mo  = v('fin_aGrossRent_mo');
+  const aOI_mo   = v('fin_aOI_mo');
+  const aRUBS_mo = v('fin_aRUBS_mo');
+  const aVac_pct = v('fin_aVacancy') / 100;
+  const aEGI_mo  = aGRI_mo * (1 - aVac_pct) + aOI_mo + aRUBS_mo;
+  const aEGI_yr  = aEGI_mo * 12;
+  const pGRI_mo  = v('fin_pGrossRent_mo');
+  const pOI_mo   = v('fin_pOI_mo');
+  const pRUBS_mo = v('fin_pRUBS_mo');
+  const pVac_pct = v('fin_pVacancy') / 100;
+  const pEGI_mo  = pGRI_mo * (1 - pVac_pct) + pOI_mo + pRUBS_mo;
+  const pEGI_yr  = pEGI_mo * 12;
+  const aRatio = v('fin_aExpRatio') / 100;
+  const pRatio = v('fin_pExpRatio') / 100;
+  const aPrev = document.getElementById('fin_aExpRatio_preview');
+  const pPrev = document.getElementById('fin_pExpRatio_preview');
+  if(aPrev){
+    aPrev.textContent = (aRatio > 0 && aEGI_yr > 0)
+      ? `→ ${fmt(aEGI_yr * aRatio)}/yr · ${fmt(aEGI_mo * aRatio)}/mo`
+      : '';
+  }
+  if(pPrev){
+    pPrev.textContent = (pRatio > 0 && pEGI_yr > 0)
+      ? `→ ${fmt(pEGI_yr * pRatio)}/yr · ${fmt(pEGI_mo * pRatio)}/mo`
+      : '';
+  }
+}
+
 function expenseCalc(){
   markDirty();
   // Update category totals INSTANTLY from live DOM — no debounce
   updateExpenseTotals();
+  // v113.76: refresh the ratio→$ preview spans
+  if(typeof _expRatioPreview === 'function') _expRatioPreview();
   // Then trigger full recalc (NOI, metrics) with debounce
   debouncedRecalc();
 }
@@ -49826,6 +49912,15 @@ function saveFinInputs(dealId){
   if(modeEl){
     fields['Expense Mode'] = modeEl.checked ? 'ratio' : 'itemized';
   }
+
+  // v113.76: Custom NOI override fields. Always written so clearing
+  // actually clears (was bitten by this on Property Details fields).
+  const _noiOverEl = document.getElementById('fin_noiOverride');
+  if(_noiOverEl) fields['NOI Override Active'] = !!_noiOverEl.checked;
+  const _aNOIVal = get('fin_aNOICustom');
+  fields['NOI Actual Yr'] = _aNOIVal || null;
+  const _pNOIVal = get('fin_pNOICustom');
+  fields['NOI Proforma Yr'] = _pNOIVal || null;
 
   // v102.4: Pro forma expenses — save as a JSONB blob keyed by short item ID.
   // Keeps the schema clean (1 column vs 23) since pro forma values aren't

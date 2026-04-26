@@ -20895,20 +20895,23 @@ window._fubLinkTemplates = async function(opts){
   )) return;
 
   console.log('[fub-link] fetching FUB templates from', folders);
-  // Use _sbGet (proxy / service-role) — direct PostgREST hits with the anon
-  // key get blocked by RLS on ace_email_templates. Folder names have no
-  // commas so plain comma-separated values work in the proxy's `in.()` parser.
-  const folderList = folders.join(',');
-  let templates;
-  try {
-    templates = await _sbGet('ace_email_templates',
-      `select=id,name,subject,body_plain,body_html,folder,fub_template_id&deleted_at=is.null&folder=in.(${encodeURIComponent(folderList)})&order=folder.asc,name.asc`);
-  } catch(e){
-    console.error('[fub-link] failed to fetch templates:', e.message);
-    return;
+  // One eq.<folder> per folder (proxy's in.() parser was returning nothing
+  // for these specific values — falling back to per-folder fetch is simple
+  // and dependable).
+  let templates = [];
+  for(const f of folders){
+    try {
+      const rows = await _sbGet('ace_email_templates',
+        `select=id,name,subject,body_plain,body_html,folder,fub_template_id&deleted_at=is.null&folder=eq.${encodeURIComponent(f)}&order=name.asc`);
+      if(Array.isArray(rows)){
+        templates.push(...rows);
+        console.log(`[fub-link]   ${f}: ${rows.length}`);
+      }
+    } catch(e){
+      console.warn(`[fub-link] folder fetch failed for "${f}":`, e.message);
+    }
   }
-  if(!Array.isArray(templates)) templates = [];
-  console.log(`[fub-link] fetched ${templates.length} FUB templates`);
+  console.log(`[fub-link] fetched ${templates.length} FUB templates total`);
 
   // Build property index — first-occurrence wins per normalized key.
   const propByKey = new Map();

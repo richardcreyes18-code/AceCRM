@@ -1919,6 +1919,10 @@ const SB_PROP_MAP = {
   ai_clarifying_notes:'AI Clarifying Notes',
   ai_parsed_at:'AI Parsed At',
   na_fields:'NA Fields',
+  // v113.70: Industrial-specific columns
+  num_tenants:'Num Tenants', office_sf:'Office SF', warehouse_sf:'Warehouse SF',
+  office_sf_pct:'Office SF Pct', num_loading_docks:'Num Loading Docks',
+  num_drive_ins:'Num Drive Ins', ceiling_height_ft:'Ceiling Height Ft',
   import_source:'Import Source',
   // v102.28: portfolio grouping — nullable FK, zero default means "standalone".
   // portfolio_sort_order controls display order within a portfolio's detail view.
@@ -5556,6 +5560,12 @@ const _NA_INPUT_MAP = {
   'um_3br':'units_3br', 'um_3br_v':'units_3br_vacant',
   'um_4br':'units_4br', 'um_4br_v':'units_4br_vacant',
   'um_other':'units_other', 'um_other_v':'units_other_vacant',
+  // Industrial details
+  'ind_numTenants':'num_tenants',
+  'ind_officeSF':'office_sf', 'ind_warehouseSF':'warehouse_sf', 'ind_officePct':'office_sf_pct',
+  'ind_loadingDocks':'num_loading_docks', 'ind_driveIns':'num_drive_ins',
+  'ind_ceilingHeight':'ceiling_height_ft',
+  'name:indOwnerOcc':'owner_occupied',
   // Financial Analysis
   'fin_askPrice':'asking_price', 'fin_offerPrice':'offer_price',
   'fin_a_renovation':'renovation_expense', 'fin_renovation':'renovation_expense',
@@ -6346,6 +6356,18 @@ function collectAllDealFields(){
   s(fields,'Units 4 Bedroom Vacant', getNum('um_4br_v'));
   s(fields,'Units Other',            getNum('um_other'));
   s(fields,'Units Other Vacant',     getNum('um_other_v'));
+
+  // ── INDUSTRIAL DETAILS ──────────────────────────────────────
+  s(fields,'Num Tenants',        getNum('ind_numTenants'));
+  s(fields,'Office SF',          getNum('ind_officeSF'));
+  s(fields,'Warehouse SF',       getNum('ind_warehouseSF'));
+  s(fields,'Office SF Pct',      getNum('ind_officePct'));
+  s(fields,'Num Loading Docks',  getNum('ind_loadingDocks'));
+  s(fields,'Num Drive Ins',      getNum('ind_driveIns'));
+  s(fields,'Ceiling Height Ft',  getNum('ind_ceilingHeight'));
+  // Industrial reuses the global owner_occupied column via its own radio
+  const indOcc = getRadio('indOwnerOcc');
+  if(indOcc) fields['Owner Occupied'] = (indOcc === 'yes');
 
   // ── FINANCIAL ANALYSIS ────────────────────────────────────────
   const aGRI = getNum('fin_aGrossRent_mo');
@@ -7287,7 +7309,9 @@ function _finSimpleSync(source){
 function renderPropertyTab(d){
   const _propMode = _summaryGetMode(d, 'property');
   const _assetTypeStr = (d['CRM Asset Classification']||d['Simple Text Property Type']||'').toLowerCase();
-  const _showUnitMix = _assetTypeStr.includes('multifamily') || _assetTypeStr.includes('mixed use');
+  const _showUnitMix    = _assetTypeStr.includes('multifamily') || _assetTypeStr.includes('mixed use');
+  const _showIndustrial = _assetTypeStr.includes('industrial')  || _assetTypeStr.includes('warehouse')
+                       || _assetTypeStr.includes('flex');
   return `
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;flex-wrap:wrap;">
       <div class="section-hdr" style="margin-bottom:0;"><span class="icon">🏢</span> Property Details</div>
@@ -7444,6 +7468,7 @@ function renderPropertyTab(d){
     </div>
 
     ${_showUnitMix ? _renderUnitMixSection(d) : ''}
+    ${_showIndustrial ? _renderIndustrialSection(d) : ''}
 
     <!-- PROPERTY USE + CONSTRUCTION STATUS — side by side as grid fields -->
     <div class="info-box">
@@ -7879,6 +7904,117 @@ function _mfRentLoad(raw){
   if(!raw) return {mode:'byType',byType:{},units:[]};
   try{ return JSON.parse(raw); }catch(e){ return {mode:'byType',byType:{},units:[]}; }
 }
+
+// v113.70: Industrial-only section, mirrors _renderUnitMixSection. Shows
+// when crm_asset_classification or simple_text_property_type contains
+// "industrial". Includes # of tenants, owner-occupied flag, office/
+// warehouse SF split, loading docks, drive-ins, ceiling height, and a
+// shortcut to the Tenant Mix tab.
+function _renderIndustrialSection(d){
+  const totalSF = Number(String(d['Total Building SF']||'').replace(/,/g,''))||0;
+  const officeSF = Number(d['Office SF']||0);
+  const warehouseSF = Number(d['Warehouse SF']||0);
+  const officePct = (totalSF > 0 && officeSF > 0) ? ((officeSF / totalSF) * 100).toFixed(1) : (Number(d['Office SF Pct']||0) || '');
+  const ownerOcc = !!d['Owner Occupied'];
+  return `    <!-- INDUSTRIAL DETAILS -->
+    <div class="info-box">
+      <div class="info-box-title" style="display:flex;justify-content:space-between;align-items:center;">
+        <span>Industrial Details</span>
+        <button onclick="switchTab('tenantmix', document.querySelector('.tab-btn[onclick*=tenantmix]'))" style="background:linear-gradient(135deg,#2a7a2a,#1a5a1a);color:#fff;border:none;padding:4px 12px;font-size:11px;font-weight:600;border-radius:5px;cursor:pointer;">🏪 Open Tenant Mix →</button>
+      </div>
+      <div class="pd-field-grid" style="grid-template-columns:repeat(4,1fr);">
+        <div class="pd-field">
+          <label class="pd-lbl"># of Tenants</label>
+          <input id="ind_numTenants" type="number" min="0" step="1" class="form-input" value="${d['Num Tenants']||''}" placeholder="e.g. 1" oninput="markDirty()"/>
+        </div>
+        <div class="pd-field">
+          <label class="pd-lbl">Owner Occupied</label>
+          <div class="pd-radio-row">
+            <label><input type="radio" name="indOwnerOcc" value="yes" ${ownerOcc?'checked':''} onchange="markDirty()"/> Yes</label>
+            <label><input type="radio" name="indOwnerOcc" value="no" ${ownerOcc?'':'checked'} onchange="markDirty()"/> No</label>
+          </div>
+        </div>
+        <div class="pd-field">
+          <label class="pd-lbl">Loading Docks</label>
+          <input id="ind_loadingDocks" type="number" min="0" step="1" class="form-input" value="${d['Num Loading Docks']||''}" placeholder="e.g. 8" oninput="markDirty()"/>
+        </div>
+        <div class="pd-field">
+          <label class="pd-lbl">Drive-Ins</label>
+          <input id="ind_driveIns" type="number" min="0" step="1" class="form-input" value="${d['Num Drive Ins']||''}" placeholder="e.g. 2" oninput="markDirty()"/>
+        </div>
+      </div>
+      <div class="pd-field-grid" style="grid-template-columns:repeat(4,1fr);">
+        <div class="pd-field">
+          <label class="pd-lbl">Office SF</label>
+          <div class="pd-row">
+            <input id="ind_officeSF" class="form-input num-input" type="text" inputmode="numeric" value="${_fmtNum(d['Office SF']||'')}" placeholder="e.g. 10,000" oninput="_indSyncOfficePct();markDirty()"/>
+            <span class="pd-unit">SF</span>
+          </div>
+        </div>
+        <div class="pd-field">
+          <label class="pd-lbl">Warehouse SF</label>
+          <div class="pd-row">
+            <input id="ind_warehouseSF" class="form-input num-input" type="text" inputmode="numeric" value="${_fmtNum(d['Warehouse SF']||'')}" placeholder="e.g. 90,000" oninput="markDirty()"/>
+            <span class="pd-unit">SF</span>
+          </div>
+        </div>
+        <div class="pd-field">
+          <label class="pd-lbl">Office %</label>
+          <div class="pd-row">
+            <input id="ind_officePct" class="form-input" type="number" min="0" max="100" step="0.1" value="${officePct||''}" placeholder="e.g. 10" oninput="_indSyncOfficeSF();markDirty()"/>
+            <span class="pd-unit">%</span>
+          </div>
+        </div>
+        <div class="pd-field">
+          <label class="pd-lbl">Ceiling Height</label>
+          <div class="pd-row">
+            <input id="ind_ceilingHeight" type="number" min="0" step="0.5" class="form-input" value="${d['Ceiling Height Ft']||''}" placeholder="e.g. 24" oninput="markDirty()"/>
+            <span class="pd-unit">ft</span>
+          </div>
+        </div>
+      </div>
+      <div style="text-align:right;margin-top:6px;">
+        <button class="save-btn" onclick="masterSave().catch(e=>console.warn('manual save error:',e))">Save</button>
+      </div>
+    </div>
+`;
+}
+
+// When user types Office SF, recompute Office % from Total Building SF.
+window._indSyncOfficePct = function(){
+  const totalEl = document.getElementById('prop_totalBuildingSF');
+  const offEl   = document.getElementById('ind_officeSF');
+  const pctEl   = document.getElementById('ind_officePct');
+  const whEl    = document.getElementById('ind_warehouseSF');
+  if(!offEl || !pctEl) return;
+  const total = Number(String(totalEl?.value||'').replace(/,/g,''))||0;
+  const off   = Number(String(offEl.value||'').replace(/,/g,''))||0;
+  if(total > 0 && off > 0){ pctEl.value = ((off/total)*100).toFixed(1); }
+  else if(off === 0){ pctEl.value = ''; }
+  // Auto-fill warehouse SF as the complement when total is set
+  if(whEl && !whEl.dataset.userEdited && total > 0){
+    const wh = Math.max(0, total - off);
+    whEl.value = wh ? wh.toLocaleString('en-US') : '';
+  }
+};
+
+// When user types Office %, recompute Office SF from Total Building SF.
+window._indSyncOfficeSF = function(){
+  const totalEl = document.getElementById('prop_totalBuildingSF');
+  const offEl   = document.getElementById('ind_officeSF');
+  const pctEl   = document.getElementById('ind_officePct');
+  const whEl    = document.getElementById('ind_warehouseSF');
+  if(!offEl || !pctEl) return;
+  const total = Number(String(totalEl?.value||'').replace(/,/g,''))||0;
+  const pct   = Number(pctEl.value||0);
+  if(total > 0 && pct > 0){
+    const off = Math.round(total * pct / 100);
+    offEl.value = off.toLocaleString('en-US');
+    if(whEl && !whEl.dataset.userEdited){
+      whEl.value = (total - off).toLocaleString('en-US');
+    }
+  }
+};
 
 function mfRentSwitchMode(mode){
   document.getElementById('umSection_byType').style.display = mode==='byType'?'':'none';
@@ -21793,7 +21929,7 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
-// v113.69: AI auto-fill ALL property details + financial analysis fields
+// v113.70: AI auto-fill ALL property details + financial analysis fields
 // using the ai-parse-deal-v2 edge function (v9). Modal lists every
 // FIELD_SPEC entry grouped by category, with four row states (value /
 // AI proposes N/A / already N/A / no info). Apply merges accepted N/A

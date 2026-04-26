@@ -743,30 +743,36 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   border-bottom: 1px solid #e2e8f0;
 }
 
-/* v113.62: inline N/A affordance (Phase 2). Empty fields get a tiny
-   "✕ N/A" link that appears on hover. N/A fields render as a purple
-   badge with a revert icon. The host span stays inline so cell
-   layouts (esp. financial-analysis tables) don't reflow. */
-.na-host { position: relative; display: inline-flex; align-items: center; gap: 4px; }
-.na-host > .na-mark-btn {
+/* v113.63: inline N/A affordance (Phase 2). Empty fields show a faint
+   "✕ N/A" link that brightens on hover. Filled fields show no chrome.
+   N/A fields render as a purple badge with a revert icon. The button
+   is a sibling of the input — no wrapper, so layouts don't reflow. */
+.na-mark-btn {
   display: none;
   font-size: 9px; font-weight: 600;
   color: #94a3b8; cursor: pointer;
   text-decoration: none; user-select: none;
   white-space: nowrap;
-  transition: color 0.12s;
+  margin-left: 4px;
+  opacity: 0.5;
+  transition: opacity 0.12s, color 0.12s;
+  vertical-align: middle;
 }
-.na-host:hover > .na-mark-btn,
-.na-host > [data-na-col]:focus ~ .na-mark-btn { display: inline; }
-.na-host > [data-na-col]:not(:placeholder-shown) ~ .na-mark-btn { display: none !important; }
-.na-host > select[data-na-col]:not([data-empty="true"]) ~ .na-mark-btn { display: none !important; }
-.na-host > .na-mark-btn:hover { color: #b45309; }
+input[data-na-col]:placeholder-shown ~ .na-mark-btn,
+textarea[data-na-col]:placeholder-shown ~ .na-mark-btn,
+select[data-na-col][data-na-empty="true"] ~ .na-mark-btn {
+  display: inline;
+}
+.na-mark-btn:hover { opacity: 1; color: #b45309; }
+.na-mark-btn.na-radio { display: inline; opacity: 0.4; }
+.na-mark-btn.na-radio:hover { opacity: 1; color: #b45309; }
 .na-badge {
   display: inline-flex; align-items: center; gap: 4px;
   font-style: italic; font-weight: 600; font-size: 11px;
   color: #7c3aed; background: #f5f3ff;
   border: 1px solid #ddd6fe; border-radius: 4px;
   padding: 2px 8px; user-select: none;
+  vertical-align: middle;
 }
 .na-badge .na-revert-btn {
   font-style: normal; cursor: pointer; opacity: 0.55;
@@ -5623,24 +5629,22 @@ window._naClear = async function(col){
 
 // Decorate every recognized input inside `root` (defaults to mainArea):
 //   • already-NA   → swap input out for badge with ↺ revert
-//   • empty/filled → wrap in .na-host so the hover "✕ N/A" link lives
-//                     beside the input
+//   • empty input  → faint "✕ N/A" link appears beside it (sibling)
+//   • filled input → no chrome
 // Recognition: `data-na-col` attribute OR known id/name in _NA_INPUT_MAP
 // OR matches the fin_(a|p)_<key>_(mo|yr) pattern.
 function _naDecorate(root){
   root = root || document.getElementById('mainArea');
   if(!root) return;
   const naSet = new Set(_naList(currentDeal));
-  // Walk every input/select/textarea once; figure out the column from the map.
   const candidates = root.querySelectorAll('input, select, textarea');
   candidates.forEach(el => {
     if(el.hasAttribute('data-na-decorated')) return;
-    // Skip radio-group members other than the first occurrence so we wrap
-    // each group only once (decorate the whole label/group block).
-    if(el.type === 'radio' || el.type === 'checkbox') return; // handled separately below
+    if(el.type === 'radio' || el.type === 'checkbox') return; // handled below
     const col = _naColForElement(el);
     if(!col) return;
     el.setAttribute('data-na-decorated','1');
+    el.setAttribute('data-na-col', col); // CSS sibling selectors need the attribute
 
     if(naSet.has(col)){
       const badge = document.createElement('span');
@@ -5651,27 +5655,21 @@ function _naDecorate(root){
       return;
     }
 
-    if(!(el.parentElement && el.parentElement.classList.contains('na-host'))){
-      const host = document.createElement('span');
-      host.className = 'na-host';
-      host.style.width = '100%';
-      el.parentNode.insertBefore(host, el);
-      host.appendChild(el);
-    }
     if(el.tagName === 'INPUT' && !el.placeholder){ el.placeholder = '—'; }
+    if(el.tagName === 'TEXTAREA' && !el.placeholder){ el.placeholder = '—'; }
     if(el.tagName === 'SELECT'){
-      const sync = () => el.setAttribute('data-empty', (el.value === '' || el.value == null) ? 'true' : 'false');
+      const sync = () => el.setAttribute('data-na-empty', (el.value === '' || el.value == null) ? 'true' : 'false');
       sync();
       el.addEventListener('change', sync);
     }
-    if(!el.parentElement.querySelector(':scope > .na-mark-btn')){
-      const btn = document.createElement('a');
-      btn.className = 'na-mark-btn';
-      btn.textContent = '✕ N/A';
-      btn.title = 'Mark this field as Not Applicable';
-      btn.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); _naMark(col); };
-      el.parentElement.appendChild(btn);
-    }
+
+    // Append the mark-N/A button as a sibling immediately after the input.
+    const btn = document.createElement('a');
+    btn.className = 'na-mark-btn';
+    btn.textContent = '✕ N/A';
+    btn.title = 'Mark this field as Not Applicable';
+    btn.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); _naMark(col); };
+    el.parentNode.insertBefore(btn, el.nextSibling);
   });
 
   // Radio groups: decorate the wrapper of each named group once.
@@ -5681,7 +5679,6 @@ function _naDecorate(root){
     seenRadioNames.add(r.name);
     const col = _NA_INPUT_MAP['name:'+r.name];
     if(!col) return;
-    // Find the closest enclosing layout cell (.pd-radio-row or its parent).
     const wrap = r.closest('.pd-radio-row') || r.closest('.pd-field') || r.parentElement;
     if(!wrap || wrap.hasAttribute('data-na-decorated')) return;
     wrap.setAttribute('data-na-decorated','1');
@@ -5689,22 +5686,15 @@ function _naDecorate(root){
       const badge = document.createElement('span');
       badge.className = 'na-badge';
       badge.innerHTML = `N/A <span class="na-revert-btn" title="Restore field" onclick="_naClear('${col.replace(/'/g,"\\'")}')">↺</span>`;
-      // Hide the radios visually but keep them in DOM (so save handlers don't break).
       [...wrap.querySelectorAll('label, input')].forEach(n => { n.style.display = 'none'; });
       wrap.appendChild(badge);
       return;
     }
     const btn = document.createElement('a');
-    btn.className = 'na-mark-btn';
-    btn.style.display = 'inline'; // always-visible on radios since CSS placeholder rules don't apply
-    btn.style.marginLeft = '8px';
-    btn.style.fontSize = '9px';
-    btn.style.color = '#cbd5e1';
+    btn.className = 'na-mark-btn na-radio';
     btn.textContent = '✕ N/A';
     btn.title = 'Mark this field as Not Applicable';
     btn.onclick = (ev) => { ev.preventDefault(); ev.stopPropagation(); _naMark(col); };
-    btn.addEventListener('mouseover', () => btn.style.color = '#b45309');
-    btn.addEventListener('mouseout', () => btn.style.color = '#cbd5e1');
     wrap.appendChild(btn);
   });
 }
@@ -21662,7 +21652,7 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
-// v113.62: AI auto-fill ALL property details + financial analysis fields
+// v113.63: AI auto-fill ALL property details + financial analysis fields
 // using the ai-parse-deal-v2 edge function (v9). Modal lists every
 // FIELD_SPEC entry grouped by category, with four row states (value /
 // AI proposes N/A / already N/A / no info). Apply merges accepted N/A

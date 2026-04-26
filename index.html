@@ -5536,7 +5536,7 @@ const _NA_INPUT_MAP = {
   'prop_yearBuilt':'year_built', 'prop_yearRenov':'year_renovated',
   'noStories':'no_of_stories', 'prop_hvac':'hvac',
   'prop_totalBuildingSF':'total_building_sf', 'prop_netRentableSF':'net_rentable_sf',
-  'prop_lotSize':'total_lot_size', 'name:lotUnit':'lot_size_unit',
+  'prop_lotSize':'total_lot_size', 'lotUnit':'lot_size_unit',
   'prop_numBuildings':'no_of_buildings',
   'prop_parkingType':'parking_type', 'prop_parkingSpaces':'no_of_parking_spaces',
   'prop_parkingRatio':'parking_ratio',
@@ -6330,9 +6330,8 @@ function collectAllDealFields(){
   // v102.8: Total Lot Size was previously wired with oninput="markDirty()"
   // but never collected here — values typed silently vanished. Now collected.
   s(fields,'Total Lot Size',        getNum('prop_lotSize'));
-  // v102.8: Lot size unit (sf vs acres) — the radio toggle persists now too
-  const lotUnit = getRadio('lotUnit');
-  if(lotUnit) fields['Lot Size Unit'] = lotUnit;
+  // v113.75: lot unit is now a <select id="lotUnit"> (was radio name).
+  s(fields,'Lot Size Unit', getVal('lotUnit'));
   s(fields,'Roof Type',   getVal('roofType'));
   s(fields,'Foundation',  getVal('foundationType'));
   s(fields,'Exterior',    getVal('exteriorType'));
@@ -7348,19 +7347,28 @@ function renderPropertyTab(d){
         <tr>
           <td colspan="2" style="padding-top:14px;">
             <style>
-              .pd-field-grid { display:grid; grid-template-columns:repeat(4,1fr); gap:14px 18px; margin-bottom:14px; }
+              /* v113.75: unified 5-col grid for the entire Property
+                 Information block. Every row gets the same column count so
+                 fields line up vertically across rows. Section dividers
+                 (.pd-subhdr) split the rows into logical groups. */
+              .pd-field-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:12px 16px; margin-bottom:12px; }
               .pd-field-grid .pd-field label.pd-lbl { display:block; font-size:10px; font-weight:700; color:#334155; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px; }
               .pd-field-grid .pd-field .form-input,
-              .pd-field-grid .pd-field .form-select { width:100%; box-sizing:border-box; }
-              .pd-field-grid .pd-field .pd-row { display:flex; align-items:center; gap:8px; }
-              .pd-field-grid .pd-field .pd-row .pd-unit { font-size:11px; font-weight:600; color:#64748b; }
-              .pd-field-grid .pd-field .pd-radio-row { display:flex; gap:14px; align-items:center; padding-top:6px; font-size:11px; color:#334155; }
-              .pd-field-grid .pd-field .pd-radio-row label { display:inline-flex; align-items:center; gap:4px; cursor:pointer; }
-              .pd-hl-section { margin-top:4px; }
+              .pd-field-grid .pd-field .form-select { width:100%; box-sizing:border-box; height:32px; }
+              .pd-field-grid .pd-field .pd-row { display:flex; align-items:center; gap:6px; }
+              .pd-field-grid .pd-field .pd-row .pd-unit { font-size:11px; font-weight:600; color:#64748b; flex-shrink:0; }
+              .pd-field-grid .pd-field .pd-row .form-input,
+              .pd-field-grid .pd-field .pd-row .form-select { min-width:0; }
+              .pd-subhdr { font-size:10px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:.06em; margin:14px 0 6px; padding-bottom:4px; border-bottom:1px solid #e2e8f0; }
+              .pd-subhdr:first-of-type { margin-top:6px; }
+              .pd-hl-section { margin-top:14px; }
               .pd-hl-section .pd-lbl { display:block; font-size:10px; font-weight:700; color:#334155; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; }
-              @media (max-width:1100px){ .pd-field-grid { grid-template-columns:repeat(2,1fr); } }
+              @media (max-width:1300px){ .pd-field-grid { grid-template-columns:repeat(3,1fr); } }
+              @media (max-width:900px){  .pd-field-grid { grid-template-columns:repeat(2,1fr); } }
             </style>
 
+            <!-- v113.75: Building Basics — first row of 5 -->
+            <div class="pd-subhdr">Building Basics</div>
             <div class="pd-field-grid">
               <div class="pd-field">
                 <label class="pd-lbl">Year Built</label>
@@ -7375,16 +7383,23 @@ function renderPropertyTab(d){
                 <input id="noStories" type="number" min="1" max="200" step="1" class="form-input" value="${d['No. of Stories']||''}" placeholder="—" oninput="markDirty()"/>
               </div>
               <div class="pd-field">
+                <label class="pd-lbl">No. of Buildings</label>
+                <input id="prop_numBuildings" type="number" min="1" step="1" class="form-input" value="${d['No. of Buildings']||''}" placeholder="—" oninput="markDirty()"/>
+              </div>
+              <div class="pd-field">
                 <label class="pd-lbl">HVAC</label>
                 <select id="prop_hvac" class="form-select" onchange="markDirty()">
-                  ${['Central','Window Units','Split System','Radiant Heat','Forced Air','None','Other'].map(v=>`<option${(d['HVAC']||'Central')===v?' selected':''}>${v}</option>`).join('')}
+                  <option value="">—</option>
+                  ${['Central','Window Units','Split System','Radiant Heat','Forced Air','None','Other'].map(v=>`<option${d['HVAC']===v?' selected':''}>${v}</option>`).join('')}
                 </select>
               </div>
             </div>
 
+            <!-- v113.75: Size & Parking -->
+            <div class="pd-subhdr">Size & Parking</div>
             <div class="pd-field-grid">
               <div class="pd-field">
-                <label class="pd-lbl">Total Building Size</label>
+                <label class="pd-lbl">Total Building SF</label>
                 <div class="pd-row">
                   <input id="prop_totalBuildingSF" class="form-input num-input" type="text" inputmode="numeric" value="${_fmtNum(d['Total Building SF']||'')}" placeholder="—" oninput="markDirty()"/>
                   <span class="pd-unit">SF</span>
@@ -7400,23 +7415,33 @@ function renderPropertyTab(d){
               <div class="pd-field">
                 <label class="pd-lbl">Total Lot Size</label>
                 <div class="pd-row">
-                  <input id="prop_lotSize" class="form-input" value="${d['Total Lot Size']||''}" placeholder="—" oninput="markDirty()"/>
-                  <label style="font-size:11px;color:#334155;display:inline-flex;align-items:center;gap:3px;white-space:nowrap;"><input type="radio" name="lotUnit" id="prop_lotSF" value="sf" ${d['Lot Size Unit']==='sf'?'checked':''} onchange="markDirty()"/>SF</label>
-                  <label style="font-size:11px;color:#334155;display:inline-flex;align-items:center;gap:3px;white-space:nowrap;"><input type="radio" name="lotUnit" id="prop_lotAcres" value="acres" ${d['Lot Size Unit']!=='sf'?'checked':''} onchange="markDirty()"/>Ac</label>
+                  <input id="prop_lotSize" class="form-input" value="${d['Total Lot Size']||''}" placeholder="—" oninput="markDirty()" style="flex:1;"/>
+                  <select id="lotUnit" class="form-select" onchange="markDirty()" style="width:80px;flex-shrink:0;">
+                    <option value="acres"${(d['Lot Size Unit']||'acres')==='acres'?' selected':''}>Ac</option>
+                    <option value="sf"${d['Lot Size Unit']==='sf'?' selected':''}>SF</option>
+                  </select>
                 </div>
               </div>
               <div class="pd-field">
-                <label class="pd-lbl">No. of Buildings</label>
-                <input id="prop_numBuildings" class="form-input" value="${d['No. of Buildings']||''}" placeholder="—" oninput="markDirty()"/>
+                <label class="pd-lbl">Parking Type</label>
+                <select id="prop_parkingType" class="form-select" onchange="markDirty()">
+                  <option value="">—</option>
+                  ${['Uncovered','Covered','Garage','Street','Underground','None'].map(v=>`<option${d['Parking Type']===v?' selected':''}>${v}</option>`).join('')}
+                </select>
+              </div>
+              <div class="pd-field">
+                <label class="pd-lbl">Spaces · Ratio</label>
+                <div class="pd-row">
+                  <input id="prop_parkingSpaces" type="number" min="0" step="1" class="form-input" value="${d['No. of Parking Spaces']||''}" placeholder="—" oninput="markDirty()" style="flex:1.4;"/>
+                  <input id="prop_parkingRatio" class="form-input" value="${d['Parking Ratio']||''}" placeholder="—" oninput="markDirty()" style="flex:1;"/>
+                </div>
               </div>
             </div>
 
             ${_propMode === 'simple' ? '' : `
-            <!-- v113.74: Property Use & Status — compact dropdowns, moved up
-                 from the standalone section below. Each select includes a
-                 blank "—" option so unset reads as truly empty. Boolean
-                 fields render as Yes/No selects (no more radio rows). -->
-            <div class="pd-field-grid" style="grid-template-columns:repeat(5,1fr);">
+            <!-- v113.75: Property Use & Status — 5-col grid -->
+            <div class="pd-subhdr">Property Use &amp; Status</div>
+            <div class="pd-field-grid">
               <div class="pd-field">
                 <label class="pd-lbl">Property Use</label>
                 <select id="propUse" class="form-select" onchange="markDirty()">
@@ -7459,8 +7484,9 @@ function renderPropertyTab(d){
               </div>
             </div>
 
-            <!-- v113.74: Asset Class — moved up from standalone section. -->
-            <div class="pd-field-grid" style="grid-template-columns:repeat(5,1fr);">
+            <!-- v113.75: Asset Class — 5-col grid -->
+            <div class="pd-subhdr">Asset Class</div>
+            <div class="pd-field-grid">
               <div class="pd-field">
                 <label class="pd-lbl">Property Class</label>
                 <select id="propClass" class="form-select" onchange="markDirty()">
@@ -7498,30 +7524,13 @@ function renderPropertyTab(d){
               </div>
             </div>
 
-            <div class="pd-field-grid">
-              <div class="pd-field">
-                <label class="pd-lbl">Parking Type</label>
-                <select id="prop_parkingType" class="form-select" onchange="markDirty()">
-                  <option value="">—</option>
-                  ${['Uncovered','Covered','Garage','Street','Underground','None'].map(v=>`<option${d['Parking Type']===v?' selected':''}>${v}</option>`).join('')}
-                </select>
-              </div>
-              <div class="pd-field">
-                <label class="pd-lbl">Parking Spaces · Ratio</label>
-                <div class="pd-row">
-                  <input id="prop_parkingSpaces" class="form-input" value="${d['No. of Parking Spaces']||''}" placeholder="—" oninput="markDirty()" style="width:60%;"/>
-                  <input id="prop_parkingRatio" class="form-input" value="${d['Parking Ratio']||''}" placeholder="—" oninput="markDirty()" style="width:40%;"/>
-                </div>
-              </div>
-            </div>
-
-            <!-- v113.74: Highlights default to 2 rows; user can add more -->
+            <!-- v113.75: Highlights default to 2 rows; user can add more -->
             <div class="pd-hl-section">
-              <label class="pd-lbl">🔦 Property Highlights</label>
+              <div class="pd-subhdr" style="margin-top:0;">🔦 Property Highlights</div>
               <div id="highlightsContainer">
                 <div style="display:flex;flex-direction:column;gap:5px;" id="highlightsList">
-                  <div style="display:flex;gap:6px;align-items:center;"><input class="form-input" style="flex:1;" placeholder="—"/><button class="save-btn" style="padding:2px 7px;" onclick="removeHighlight(this)">✕</button></div>
-                  <div style="display:flex;gap:6px;align-items:center;"><input class="form-input" style="flex:1;" placeholder="—"/><button class="save-btn" style="padding:2px 7px;" onclick="removeHighlight(this)">✕</button></div>
+                  <div style="display:flex;gap:6px;align-items:center;"><input class="form-input" style="flex:1;height:32px;" placeholder="—"/><button class="save-btn" style="padding:2px 7px;" onclick="removeHighlight(this)">✕</button></div>
+                  <div style="display:flex;gap:6px;align-items:center;"><input class="form-input" style="flex:1;height:32px;" placeholder="—"/><button class="save-btn" style="padding:2px 7px;" onclick="removeHighlight(this)">✕</button></div>
                 </div>
                 <button class="save-btn" style="margin-top:8px;" onclick="addHighlight()">+ Add Highlight</button>
               </div>
@@ -21933,7 +21942,7 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
-// v113.74: AI auto-fill ALL property details + financial analysis fields
+// v113.75: AI auto-fill ALL property details + financial analysis fields
 // using the ai-parse-deal-v2 edge function (v9). Modal lists every
 // FIELD_SPEC entry grouped by category, with four row states (value /
 // AI proposes N/A / already N/A / no info). Apply merges accepted N/A

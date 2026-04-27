@@ -46325,11 +46325,38 @@ function _taskLinkRowHtml(kind){
     // v180: when a deal is linked but no contact is set, surface the deal's
     // owner contact as a one-click suggestion. Just a hint — user can ignore
     // and add a buyer or other contact instead.
+    // v181: many deals have owner_contact_id set but no denormalized
+    // 'Owner Name' field; fall back to _sellerName / _sellerContactId
+    // (set by loadSellerContact when the deal is open) and to allContacts.
     let ownerSuggestion = '';
-    if(_taskModalDealId && typeof allDeals !== 'undefined'){
-      const d = allDeals.find(x => x.id === _taskModalDealId);
-      const ownerId   = d && Array.isArray(d['Owner']) && d['Owner'][0];
-      const ownerName = d && (d['Owner Name'] || '');
+    if(_taskModalDealId){
+      const d = (typeof allDeals !== 'undefined') ? allDeals.find(x => x.id === _taskModalDealId) : null;
+      let ownerId = '';
+      let ownerName = '';
+      if(d){
+        ownerId = (Array.isArray(d['Owner']) && d['Owner'][0]) || d._sellerContactId || '';
+        ownerName = d['Owner Name'] || d._ownerName || d._sellerName || '';
+      }
+      if(ownerId && !ownerName && typeof allContacts !== 'undefined' && Array.isArray(allContacts)){
+        const c = allContacts.find(x => x.id === ownerId);
+        ownerName = (c && c.fields && c.fields.Name) || '';
+      }
+      if(ownerId && !ownerName){
+        // Async fallback: fetch the contact name and re-render the row when ready.
+        (async () => {
+          try {
+            const rows = await _sbGet(SB_TABLES.contacts, `id=eq.${ownerId}&select=id,name&limit=1`);
+            const nm = Array.isArray(rows) && rows[0] && rows[0].name;
+            if(nm && d){
+              d._ownerName = nm;
+              if(_taskModalDealId === (d && d.id) && !_taskModalContactId){
+                if(typeof _taskRefreshLinkRows === 'function') _taskRefreshLinkRows();
+              }
+            }
+          } catch(_e){}
+        })();
+        ownerName = '(deal owner)';
+      }
       if(ownerId && ownerName){
         const safeName = String(ownerName).replace(/'/g,"\\'").replace(/"/g,'&quot;');
         const escName  = String(ownerName).replace(/</g,'&lt;');

@@ -22373,6 +22373,17 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v142: extend no-link folders + broaden auto-link scan.
+//   Added "FUB Import (no folder)" to _EMAIL_TPL_NO_LINK_FOLDERS — all
+//   the (FUB IMPORT) templates without a folder label are marketing /
+//   generic outreach (Text Vm, About Us, Are you there?, Curious What
+//   Your Property Is Worth Today?, Triple Net Retail Portfolio, Another
+//   1031 buyer, etc.) and don't describe a specific property. They
+//   leave the Unlinked bucket and land in 📎 No Link Needed.
+//   Auto-link now scans ALL unlinked templates including those in
+//   no-link folders, so any that happen to contain a real street
+//   address still get caught before being filed away as marketing.
+//   File: index.html:32443-32464 (no-link folder set)
 // v141: Email Templates — declutter Unlinked + auto-link from text.
 //   (a) Templates from admin / marketing folders ("Follow Up Boss",
 //       "Sale Inquiry", "On Boarding", "2025 Cold Reach Out") no
@@ -32301,9 +32312,13 @@ window._emailTplsLinkSearchInput = function(q){
 // the property has no other official template yet.
 window._emailTplsAutoLinkUnlinked = async function(){
   const btn = document.getElementById('emailTplsAutoLinkBtn');
-  const candidates = (_emailTplsLibState.rows || []).filter(r => !r.property_id && !_emailTplIsNoLinkNeeded(r));
+  // v142: scan ALL unlinked templates — including ones in no-link folders —
+  // so any that happen to mention a real street address still get caught
+  // before being filed away as marketing. The classifier is the fallback,
+  // not a hard exclusion.
+  const candidates = (_emailTplsLibState.rows || []).filter(r => !r.property_id);
   if(!candidates.length){ alert('No unlinked templates to auto-link.'); return; }
-  if(!confirm(`Scan ${candidates.length} unlinked template${candidates.length===1?'':'s'} for an address and auto-link to the matching property?\n\n• Templates whose body or subject contains a uniquely-matching property address get linked.\n• Ambiguous matches (multiple candidates) are skipped — left unlinked for manual review.\n• Admin / marketing folders are excluded.\n• Linked templates auto-set as official if the property has no official yet.`)) return;
+  if(!confirm(`Scan ${candidates.length} unlinked template${candidates.length===1?'':'s'} for an address and auto-link to the matching property?\n\n• Templates whose body or subject contains a uniquely-matching property address get linked.\n• Ambiguous matches (multiple candidates) are skipped — left unlinked for manual review.\n• Linked templates auto-set as official if the property has no official yet.`)) return;
 
   if(btn){ btn.disabled = true; btn.textContent = 'Scanning…'; }
   // Build a normalized address index from allDeals. Key = stripped address
@@ -32440,6 +32455,14 @@ const _EMAIL_TPL_NO_LINK_FOLDERS = new Set([
   'Sale Inquiry',
   'On Boarding',
   '2025 Cold Reach Out',
+  // v142: FUB templates that came in without a folder label fall into the
+  // "FUB Import (no folder)" bucket — these are all marketing / generic
+  // outreach (Text Vm, About Us, Are you there?, Check in, Decision math
+  // in 10, Curious What Your Property Is Worth Today?, Triple Net Retail
+  // Portfolio, Another 1031 buyer, Attention Required - Investment
+  // Property Inquiry, etc.). None of them describe a specific property —
+  // they're recipient-targeted, not property-targeted. Marked no-link.
+  'FUB Import (no folder)',
 ]);
 
 function _emailTplIsNoLinkNeeded(row){

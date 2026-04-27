@@ -17051,11 +17051,6 @@ function _comboCreate(opts){
     onPick:      opts.onPick      || (() => {}),
     onUnpick:    opts.onUnpick    || (() => {}),
     onCustom:    opts.onCustom    || null,
-    // v158.6: optional value→display translator. When provided, dropdown
-    // rows + chip text use the label while the underlying option strings
-    // stay as stable keys. Keeps filter state portable (DB enum keys)
-    // while letting the UI show pretty labels.
-    labelOf:     opts.labelOf     || null,
     kbCursor: -1,
   };
   return opts.id;
@@ -17089,11 +17084,9 @@ function _comboPaintTags(id){
   sel.forEach(v => {
     const tag = document.createElement('span');
     tag.className = 'loc-tag';
-    const safeKey = String(v).replace(/"/g,'&quot;').replace(/</g,'&lt;');
-    const display = (typeof inst.labelOf === 'function') ? inst.labelOf(v) : v;
-    const safeDisplay = String(display).replace(/"/g,'&quot;').replace(/</g,'&lt;');
-    tag.innerHTML = '<span class="loc-tag-text">'+safeDisplay+'</span>'
-      + '<span class="loc-tag-x" data-combo="'+id+'" data-val="'+safeKey+'">&times;</span>';
+    const safe = String(v).replace(/"/g,'&quot;').replace(/</g,'&lt;');
+    tag.innerHTML = '<span class="loc-tag-text">'+safe+'</span>'
+      + '<span class="loc-tag-x" data-combo="'+id+'" data-val="'+safe+'">&times;</span>';
     ti.insertBefore(tag, inp);
   });
   inp.placeholder = sel.length ? '' : inst.placeholder;
@@ -17107,11 +17100,7 @@ function _comboBuildDD(id, query){
   const all = inst.getOptions() || [];
   const sel = new Set(inst.getSelected() || []);
   const q = (query || '').toLowerCase();
-  // v158.6: filter against the displayed label when labelOf is provided
-  // so typing "deal" matches "✓ Deal Reviewed" even when the underlying
-  // value is the key "deal_reviewed".
-  const labelFor = (v) => (typeof inst.labelOf === 'function') ? String(inst.labelOf(v)) : String(v);
-  const matches = all.filter(v => labelFor(v).toLowerCase().includes(q) || String(v).toLowerCase().includes(q));
+  const matches = all.filter(v => String(v).toLowerCase().includes(q));
   inst.kbCursor = -1;
   if(!matches.length){
     const customHint = inst.onCustom && q
@@ -17122,10 +17111,9 @@ function _comboBuildDD(id, query){
   }
   dd.innerHTML = matches.map(v => {
     const isSel = sel.has(v);
-    const safeKey = String(v).replace(/"/g,'&quot;').replace(/</g,'&lt;');
-    const safeDisplay = labelFor(v).replace(/"/g,'&quot;').replace(/</g,'&lt;');
-    return '<div class="loc-opt '+(isSel?'sel':'')+'" data-combo="'+id+'" data-val="'+safeKey+'">'
-      + '<span>'+safeDisplay+'</span>'
+    const safe = String(v).replace(/"/g,'&quot;').replace(/</g,'&lt;');
+    return '<div class="loc-opt '+(isSel?'sel':'')+'" data-combo="'+id+'" data-val="'+safe+'">'
+      + '<span>'+safe+'</span>'
       + '<span class="loc-ck">&#x2713;</span>'
       + '</div>';
   }).join('');
@@ -17292,7 +17280,6 @@ function _filterComboHTML(ctx){
       ctx.setSelected(cur.filter(v => v !== val));
     },
     onCustom: ctx.onCustom || null,
-    labelOf: ctx.labelOf || null,
   });
   const sub = ctx.subLabel ? `<span style="font-weight:500;color:#94a3b8;">${ctx.subLabel}</span>` : '';
   return `
@@ -51609,69 +51596,61 @@ function _buildPipelineFilterPanelHTML(){
       ${reviewCount > 0 ? `<div style="font-size:10px;color:#94a3b8;margin-top:4px;">${reviewCount} deals have bad, missing, or mismatched county data.</div>` : ''}
     </div>`;
 
-  // v132 / v158.6: Hide deals tagged — converted to multi-select combobox.
-  const _excludeTagOptionKeys = REVIEW_TAGS.map(t => t.key);
-  const excludeReviewHTML = _filterComboHTML({
-    id: 'pf_excludeReviewTags',
-    label: 'Hide deals tagged',
-    options: () => _excludeTagOptionKeys.slice(),
-    getSelected: () => f.excludeReviewTags || [],
-    setSelected: (vals) => updateMulti('excludeReviewTags', vals),
-    labelOf: (key) => {
-      const meta = (typeof _reviewTagMeta === 'function') ? _reviewTagMeta(key) : null;
-      return '🚫 ' + ((meta && meta.label) || key);
-    },
-    placeholder: 'Search review tag…',
-  });
+  // v132: Do Not Include — exclude deals tagged Deal Reviewed / Agent Reviewed
+  const excl = Array.isArray(f.excludeReviewTags) ? f.excludeReviewTags : [];
+  const exclTagPill = (key, label, color, bg, border) => {
+    const on = excl.includes(key);
+    return `<span onclick="togglePipelineExcludeReviewTag('${key}')" style="display:inline-block;padding:6px 12px;border-radius:99px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${on?color:border};background:${on?color:bg};color:${on?'#fff':color};margin-right:6px;margin-bottom:5px;">
+      ${on?'✕ ':''}${label}
+    </span>`;
+  };
+  // v156: render exclude pills from REVIEW_TAGS so adding a new tag
+  // automatically populates this section without editing markup.
+  const excludeReviewHTML = `
+    <div style="margin-bottom:6px;">
+      <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Hide deals tagged</div>
+      ${REVIEW_TAGS.map(t => exclTagPill(t.key, t.label, t.color, t.bg, t.border)).join('')}
+      <div style="font-size:10px;color:#94a3b8;margin-top:4px;">Click a pill to hide deals carrying that review tag.</div>
+    </div>`;
 
-  // v158.6: include Review Tag filter — converted from pills to a multi-
-  // select combobox so it matches the typeahead pattern used by every
-  // other filter. Stable keys ('deal_reviewed' etc.) live in state;
-  // human-readable labels render via labelOf.
-  const _reviewTagLabel = (key) => {
-    if(key === 'untagged') return '○ Untagged';
-    const meta = (typeof _reviewTagMeta === 'function') ? _reviewTagMeta(key) : null;
-    return (meta && meta.label) || key;
+  // v153: positive Review Tag include filter — counterpart to "Do Not Include".
+  // Lives inside the Pipeline & Status card so the user can narrow to ONLY
+  // deals that carry a chosen tag (or are untagged) without leaving that section.
+  const incl = Array.isArray(f.includeReviewTags) ? f.includeReviewTags : [];
+  const inclTagPill = (key, label, color, bg, border) => {
+    const on = incl.includes(key);
+    return `<span onclick="togglePipelineIncludeReviewTag('${key}')" style="display:inline-block;padding:6px 12px;border-radius:99px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${on?color:border};background:${on?color:bg};color:${on?'#fff':color};margin-right:6px;margin-bottom:5px;">
+      ${on?'✓ ':''}${label}
+    </span>`;
   };
-  const _reviewTagOptionKeys = REVIEW_TAGS.map(t => t.key).concat(['untagged']);
-  const includeReviewHTML = _filterComboHTML({
-    id: 'pf_includeReviewTags',
-    label: 'Review Tag',
-    options: () => _reviewTagOptionKeys.slice(),
-    getSelected: () => f.includeReviewTags || [],
-    setSelected: (vals) => updateMulti('includeReviewTags', vals),
-    labelOf: _reviewTagLabel,
-    placeholder: 'Search review tag…',
-  });
+  // v156: render include pills from REVIEW_TAGS + the synthetic 'untagged'
+  // option (which matches deals with no review_tag set).
+  const includeReviewHTML = `
+    <div style="margin-bottom:14px;">
+      <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Review tag</div>
+      ${REVIEW_TAGS.map(t => inclTagPill(t.key, t.label, t.color, t.bg, t.border)).join('')}
+      ${inclTagPill('untagged', '○ Untagged', '#475569', '#f1f5f9', '#cbd5e1')}
+      <div style="font-size:10px;color:#94a3b8;margin-top:4px;">Show only deals with these tags. Leave empty for all.</div>
+    </div>`;
 
-  // v158.6: email-template-link filter — converted to multi-select combobox.
-  // The state stays as a single 'any' | 'linked' | 'unlinked' string for
-  // backward compatibility, but the picker treats it as a 0-or-2-element
-  // set: empty = any, ['linked'] only, ['unlinked'] only, both = any.
-  const _tplLinkLabel = (key) => key === 'linked' ? '📧 Has email template' : '📭 No email template';
-  const _tplLinkOptions = ['linked', 'unlinked'];
-  const _tplLinkSelected = () => {
-    const v = f.templateLink || 'any';
-    if(v === 'linked')   return ['linked'];
-    if(v === 'unlinked') return ['unlinked'];
-    return [];
+  // v155: email-template-link filter — three radio-style pills.
+  // Selecting "Any" clears the filter; "Linked" shows only deals with at
+  // least one ace_user_email_templates row; "Unlinked" shows only deals
+  // with none. Uses the same _propertyTemplateMap loaded at sync time.
+  const tplLink = f.templateLink || 'any';
+  const tplLinkPill = (key, label) => {
+    const on = tplLink === key;
+    return `<span onclick="setPipelineTemplateLink('${key}')" style="display:inline-block;padding:6px 12px;border-radius:99px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${on?'#7c3aed':'#cbd5e1'};background:${on?'#7c3aed':'#fff'};color:${on?'#fff':'#475569'};margin-right:6px;margin-bottom:5px;">
+      ${label}
+    </span>`;
   };
-  const _tplLinkSetSelected = (vals) => {
-    if(!vals || vals.length === 0)             f.templateLink = 'any';
-    else if(vals.length === 1)                 f.templateLink = vals[0];
-    else                                       f.templateLink = 'any'; // both = any
-    savePipelineFilters();
-    showPipelineView();
-  };
-  const templateLinkHTML = _filterComboHTML({
-    id: 'pf_templateLink',
-    label: 'Email Template',
-    options: () => _tplLinkOptions.slice(),
-    getSelected: _tplLinkSelected,
-    setSelected: _tplLinkSetSelected,
-    labelOf: _tplLinkLabel,
-    placeholder: 'Search…',
-  });
+  const templateLinkHTML = `
+    <div style="margin-bottom:14px;">
+      <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Email template</div>
+      ${tplLinkPill('any',      'Any')}
+      ${tplLinkPill('linked',   '📧 Linked')}
+      ${tplLinkPill('unlinked', '📭 Not linked')}
+    </div>`;
 
   // v132: count helper for per-card "N filters" badges so each section
   // surfaces its own active count (mirrors the mockup).
@@ -51734,9 +51713,7 @@ function _buildPipelineFilterPanelHTML(){
 function _pipelineMountFilterCombos(){
   if(typeof _comboWire !== 'function') return;
   if(!document.getElementById('pipelineFilterPanel')) return;
-  // v158.6: includes review-tag include/exclude + email-template combos
-  ['pf_stages','pf_assetTypes','pf_regions','pf_states','pf_counties','pf_cities','pf_agents',
-   'pf_includeReviewTags','pf_excludeReviewTags','pf_templateLink'].forEach(id => {
+  ['pf_stages','pf_assetTypes','pf_regions','pf_states','pf_counties','pf_cities','pf_agents'].forEach(id => {
     if(document.getElementById('combo-si-' + id)) _comboWire(id);
   });
 }

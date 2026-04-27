@@ -46322,10 +46322,31 @@ function _taskLinkRowHtml(kind){
         <button onclick="_taskLinkClearContact()" style="background:none;border:none;color:inherit;cursor:pointer;font-size:14px;padding:0 2px;line-height:1;">✕</button>
       </div>`;
     }
+    // v180: when a deal is linked but no contact is set, surface the deal's
+    // owner contact as a one-click suggestion. Just a hint — user can ignore
+    // and add a buyer or other contact instead.
+    let ownerSuggestion = '';
+    if(_taskModalDealId && typeof allDeals !== 'undefined'){
+      const d = allDeals.find(x => x.id === _taskModalDealId);
+      const ownerId   = d && Array.isArray(d['Owner']) && d['Owner'][0];
+      const ownerName = d && (d['Owner Name'] || '');
+      if(ownerId && ownerName){
+        const safeName = String(ownerName).replace(/'/g,"\\'").replace(/"/g,'&quot;');
+        const escName  = String(ownerName).replace(/</g,'&lt;');
+        ownerSuggestion = `<button type="button"
+            onclick="_taskLinkSetContact('${ownerId}','${safeName}')"
+            title="Use the deal's owner as the contact for this task"
+            style="margin-top:6px;display:inline-flex;align-items:center;gap:6px;background:#fffbeb;color:#92400e;border:1px dashed #fde68a;border-radius:99px;padding:4px 10px;font-size:11px;font-weight:500;cursor:pointer;"
+            onmouseover="this.style.background='#fef3c7';this.style.borderStyle='solid'"
+            onmouseout="this.style.background='#fffbeb';this.style.borderStyle='dashed'">
+          💡 <span>Suggested: <strong>${escName}</strong> (deal owner)</span>
+        </button>`;
+      }
+    }
     return `<div style="position:relative;">
       <input id="ctask_contactSearch" oninput="_taskLinkSearch('contact', this.value)" class="form-input" placeholder="Search contacts by name..." style="width:100%;font-size:12px;"/>
       <div id="ctask_contactResults" style="display:none;position:absolute;left:0;right:0;top:100%;background:var(--surface);border:1px solid var(--border);border-radius:5px;box-shadow:0 8px 24px rgba(0,0,0,0.12);max-height:200px;overflow-y:auto;z-index:10;margin-top:2px;"></div>
-    </div>`;
+    </div>${ownerSuggestion}`;
   }
   // buyer
   if(_taskModalBuyerCritId){

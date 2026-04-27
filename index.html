@@ -32445,8 +32445,26 @@ let allBuyerContacts = {};  // contactId → contact fields cache
 let _bcSort = {col:'date', dir:'desc'}; // default: newest first
 let _bcVipFilter = false; // show only VIP buyers
 
-// Persistent filter state — survives Back navigation
-let _bcState = { search:'', type:'', county:'', vip:false, units:'' };
+// v163: BC filter state migrated to Pipeline-style multi-select arrays.
+// Old single-string fields (type / county / units) are kept on the object
+// so external callers that still read them aren't broken — but the page
+// now reads/writes the new arrays + range fields.
+let _bcState = {
+  search: '',
+  vip: false,
+  panelOpen: false,
+  // Multi-select arrays (Pipeline-style)
+  assetTypes: [],
+  states: [],
+  regions: [],   // chip ids from PIPELINE_REGION_CHIPS (kind:'region')
+  counties: [],
+  cities: [],
+  // Ranges
+  sfMin:    null, sfMax:    null,
+  unitsMin: null, unitsMax: null,
+  // Legacy single-value fields (preserved for compatibility — unused by filter UI)
+  type:'', county:'', units:'',
+};
 
 // ═══════════════════════════════════════════════════════════════
 // COMPANY PAGE — Directory, Schedule, Documents, Training, SOPs
@@ -35786,50 +35804,37 @@ async function _reportsForceSync(){
 }
 
 async function showBuyerCriteriaPage(){
-  const assetTypes = [...new Set(
-    (allBuyerCriteria||[]).flatMap(r=>{
-      const s=(r.fields['Simple Text Desired Property Type']||'').replace(/[🔴🟠🟡🟢🔵🟣]/g,'').trim();
-      return s.split(',').map(t=>t.trim()).filter(Boolean);
-    })
-  )].sort();
-
-  // Build unique counties from all buyer area preferences
-  const bcCounties = ['Atlantic','Bergen','Burlington','Camden','Cape May','Cumberland','Essex','Gloucester','Hudson','Hunterdon','Mercer','Middlesex','Monmouth','Morris','Ocean','Passaic','Salem','Somerset','Sussex','Union','Warren'];
-
-  const isMFType = _bcState.type.toLowerCase().includes('multi') || _bcState.type.toLowerCase().includes('family');
+  // v163: asset-type / county / city option lists are now collected inside
+  // _bcBuildFilterPanelHTML() since the combos read them at panel-render
+  // time. No need to compute them here anymore.
+  const filterCount = _bcCountActiveFilters();
 
   document.getElementById('mainArea').innerHTML = `
     <div style="padding:0;height:100%;display:flex;flex-direction:column;">
-      <!-- HEADER BAR -->
+      <!-- v163: HEADER BAR — Pipeline-style filters. Removed Batch Review AI,
+           Auto-Configure (AI), and Filter:All buttons per request. The
+           type/county/units single-selects are replaced with a 🔍 Filters
+           toggle that opens a grouped-card panel (Location + Asset). -->
       <div style="background:linear-gradient(180deg,#1a3a6e,#0e2244);padding:10px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
         <div style="color:#fff;font-size:15px;font-weight:bold;margin-right:8px;">🎯 Buyer Criteria</div>
-        <input id="bcSearch" value="${_bcState.search.replace(/"/g,'&quot;')}" placeholder="Search buyer name, phone, asset type, county..." oninput="_bcSaveState();renderBuyerCriteriaTable(allBuyerCriteria)"
-          style="width:220px;font-size:11px;border:1px solid #aaa;border-radius:2px;padding:4px 8px;background:#fff;"/>
-        <select id="bcTypeFilter" onchange="_bcSaveState();_bcUpdateUnitsFilter();renderBuyerCriteriaTable(allBuyerCriteria)"
-          style="font-size:11px;width:150px;border:1px solid #aaa;border-radius:2px;padding:4px 8px;">
-          <option value="">All Asset Types</option>
-          ${assetTypes.map(t=>`<option value="${t.toLowerCase()}"${_bcState.type===t.toLowerCase()?' selected':''}>${t}</option>`).join('')}
-        </select>
-        <select id="bcCountyFilter" onchange="_bcSaveState();renderBuyerCriteriaTable(allBuyerCriteria)"
-          style="font-size:11px;width:150px;border:1px solid #aaa;border-radius:2px;padding:4px 8px;">
-          <option value="">All Counties</option>
-          ${bcCounties.map(c=>`<option value="${c.toLowerCase()}"${_bcState.county===c.toLowerCase()?' selected':''}>${c}</option>`).join('')}
-        </select>
+        <input id="bcSearch" value="${_bcState.search.replace(/"/g,'&quot;')}" placeholder="Search buyer name, phone, asset type, county..."
+          oninput="_bcState.search=this.value;renderBuyerCriteriaTable(allBuyerCriteria);_bcRefreshFilterChips()"
+          style="flex:1;min-width:240px;max-width:480px;font-size:12px;border:1px solid #aaa;border-radius:6px;padding:7px 12px;background:#fff;"/>
+        <button id="bcFilterToggleBtn" onclick="_bcToggleFilterPanel()"
+          style="background:${filterCount>0?'#1e3a8a':'rgba(255,255,255,0.12)'};color:#fff;border:1px solid ${filterCount>0?'#1e3a8a':'rgba(255,255,255,0.3)'};padding:6px 14px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;white-space:nowrap;">
+          🔍 Filters<span id="bcFilterCountBadge">${filterCount>0?` (${filterCount})`:''}</span>
+          <span id="bcFilterCaret" style="font-size:9px;margin-left:4px;">${_bcState.panelOpen?'▲':'▼'}</span>
+        </button>
         <span id="bcSourceFilterWrap"></span>
-        <!-- Units filter — only shown when MF selected -->
-        <div id="bcUnitsFilterWrap" style="display:${isMFType?'flex':'none'};align-items:center;gap:5px;">
-          <span style="color:#aad4ff;font-size:11px;white-space:nowrap;"># Units:</span>
-          <input id="bcUnitsFilter" value="${_bcState.units}" type="number" placeholder="—"
-            oninput="_bcSaveState();renderBuyerCriteriaTable(allBuyerCriteria)"
-            style="width:70px;font-size:11px;border:1px solid #aaa;border-radius:2px;padding:4px 6px;background:#fff;"/>
-          <span style="color:#aad4ff;font-size:10px;white-space:nowrap;">fits range</span>
-        </div>
-        <button id="bcVipBtn" onclick="_bcToggleVip()" style="${_bcState.vip?'background:#fbbf24;color:#000;':'background:rgba(255,255,255,0.12);color:#fbbf24;'}border:1px solid #fbbf24;padding:4px 12px;font-size:11px;font-weight:700;border-radius:3px;cursor:pointer;">⭐ ${_bcState.vip?'VIP ✓':'VIP Only'}</button>
-        <button onclick="bcStartBatchReview()" style="background:linear-gradient(180deg,#7c3aed,#5b21b6);color:#fff;border:1px solid #4c1d95;padding:4px 14px;font-size:11px;font-weight:700;border-radius:3px;cursor:pointer;" title="Step through every buyer with AI suggestions, one at a time">🤖 Batch Review AI Suggestions</button>
-        <button onclick="bcRunAutoExtract()" style="background:linear-gradient(180deg,#0ea5e9,#0369a1);color:#fff;border:1px solid #0c4a6e;padding:4px 14px;font-size:11px;font-weight:700;border-radius:3px;cursor:pointer;" title="Run Claude Haiku 4.5 to auto-configure buy boxes for all pending buyers">✨ Auto-Configure (AI)</button>
-        <button onclick="bcCycleReviewFilter()" id="bcReviewFilterBtn" style="background:#fff;color:#475569;border:1px solid #cbd5e1;padding:4px 14px;font-size:11px;font-weight:600;border-radius:3px;cursor:pointer;" title="Cycle filter: All → AI Applied → Needs Review → All">🔍 Filter: All</button>
+        <button id="bcVipBtn" onclick="_bcToggleVip()" style="${_bcState.vip?'background:#fbbf24;color:#000;':'background:rgba(255,255,255,0.12);color:#fbbf24;'}border:1px solid #fbbf24;padding:6px 14px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;">⭐ ${_bcState.vip?'VIP ✓':'VIP Only'}</button>
         <span id="bc_count" style="color:#aad4ff;font-size:11px;margin-left:4px;"></span>
-        <button onclick="_bcLastLoadMs=0;showBuyerCriteriaPage()" style="margin-left:auto;background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.3);padding:4px 12px;font-size:11px;border-radius:3px;cursor:pointer;">↻ Refresh</button>
+        <button onclick="_bcLastLoadMs=0;showBuyerCriteriaPage()" style="margin-left:auto;background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.3);padding:6px 12px;font-size:12px;border-radius:6px;cursor:pointer;">↻ Refresh</button>
+      </div>
+
+      <!-- v163: Filter chip strip + collapsible panel -->
+      <div id="bcFilterChips" style="display:${filterCount>0?'flex':'none'};gap:6px;flex-wrap:wrap;padding:${filterCount>0?'10px 16px':'0'};background:#f8fafc;border-bottom:${filterCount>0?'1px solid #e2e8f0':'0'};">${_bcBuildFilterChipsHTML()}</div>
+      <div id="bcFilterPanel" style="display:${_bcState.panelOpen?'block':'none'};background:#f8fafc;border-bottom:1px solid #e2e8f0;">
+        ${_bcBuildFilterPanelHTML()}
       </div>
       <!-- TABLE -->
       <div style="flex:1;overflow:auto;">
@@ -35867,6 +35872,10 @@ async function showBuyerCriteriaPage(){
   const cfg = getConfig();
   if(!cfg.key && !isSupabase()){ document.getElementById('bcTableWrap').innerHTML=`<tr><td colspan="11" style="padding:20px;color:#c00;">Connect your database first (Settings)</td></tr>`; return; }
 
+  // v163: wire the filter-panel combos that we just dropped into the DOM.
+  // Idempotent — safe to call again on cached-load and post-fetch paths.
+  _bcMountFilterCombos();
+
   // v63 perf: if we loaded the buyer criteria list in the last 120 seconds, skip
   // the refetch entirely and just re-render from the cached allBuyerCriteria.
   // Tab-switching away and back becomes instant instead of 2-5 seconds.
@@ -35876,6 +35885,9 @@ async function showBuyerCriteriaPage(){
      && Array.isArray(allBuyerCriteria) && allBuyerCriteria.length > 0){
     if(typeof renderBuyerCriteriaTable === 'function'){
       _populateBcSourceFilter();
+      // v163: refresh panel HTML so combos see cached options on warm-load.
+      const panelEl = document.getElementById('bcFilterPanel');
+      if(panelEl){ panelEl.innerHTML = _bcBuildFilterPanelHTML(); _bcMountFilterCombos(); }
       renderBuyerCriteriaTable(allBuyerCriteria);
     }
     return;
@@ -35947,16 +35959,12 @@ async function showBuyerCriteriaPage(){
     _bcVipFilter = _bcState.vip;
     _populateBcSourceFilter();
 
-    // Rebuild asset type dropdown
-    const bcTypeEl = document.getElementById('bcTypeFilter');
-    if(bcTypeEl){
-      const loadedTypes = [...new Set(records.flatMap(r=>{
-        const s=(r.fields['Simple Text Desired Property Type']||'').replace(/[🔴🟠🟡🟢🔵🟣]/g,'').trim();
-        return s.split(',').map(t=>t.trim()).filter(Boolean);
-      }))].sort();
-      const currentVal = bcTypeEl.value;
-      bcTypeEl.innerHTML = `<option value="">All Asset Types</option>` +
-        loadedTypes.map(t=>`<option value="${t.toLowerCase()}"${currentVal===t.toLowerCase()?' selected':''}>${t}</option>`).join('');
+    // v163: refresh the filter panel after data loads so combos see the
+    // newly-loaded asset types / counties / cities. Wires combo events too.
+    const panelEl = document.getElementById('bcFilterPanel');
+    if(panelEl){
+      panelEl.innerHTML = _bcBuildFilterPanelHTML();
+      _bcMountFilterCombos();
     }
 
     renderBuyerCriteriaTable(records);
@@ -35971,21 +35979,275 @@ function _bcSortBy(col){
   renderBuyerCriteriaTable(allBuyerCriteria);
 }
 
+// v163: the old single-select header stayed on _bcState via DOM read-back.
+// New filter UI mutates _bcState directly. _bcSaveState is kept as a
+// no-op shim because some legacy callers might still invoke it (e.g.
+// the BC Refresh button) — it just resyncs search from the input.
 function _bcSaveState(){
-  _bcState.search = document.getElementById('bcSearch')?.value||'';
-  _bcState.type   = document.getElementById('bcTypeFilter')?.value||'';
-  _bcState.county = document.getElementById('bcCountyFilter')?.value||'';
-  _bcState.units  = document.getElementById('bcUnitsFilter')?.value||'';
+  const s = document.getElementById('bcSearch');
+  if(s) _bcState.search = s.value || '';
 }
 
-function _bcUpdateUnitsFilter(){
-  const type = document.getElementById('bcTypeFilter')?.value||'';
-  const wrap = document.getElementById('bcUnitsFilterWrap');
-  if(wrap) wrap.style.display = (type.includes('multi')||type.includes('family')) ? 'flex' : 'none';
-  if(wrap && !(type.includes('multi')||type.includes('family'))){
-    const inp = document.getElementById('bcUnitsFilter');
-    if(inp){ inp.value=''; _bcState.units=''; }
+// ═══════════════════════════════════════════════════════════════════
+// v163: Buyer Criteria — Pipeline-style filter helpers
+// ═══════════════════════════════════════════════════════════════════
+
+// Count active filters — drives the badge on the 🔍 Filters button +
+// determines whether the chip strip is rendered at all.
+function _bcCountActiveFilters(){
+  let n = 0;
+  if((_bcState.assetTypes||[]).length) n++;
+  if((_bcState.states    ||[]).length) n++;
+  if((_bcState.regions   ||[]).length) n++;
+  if((_bcState.counties  ||[]).length) n++;
+  if((_bcState.cities    ||[]).length) n++;
+  if(_bcState.sfMin != null || _bcState.sfMax != null) n++;
+  if(_bcState.unitsMin != null || _bcState.unitsMax != null) n++;
+  return n;
+}
+
+// Toggle the panel open/closed. State persists in _bcState across
+// re-renders within the page (and survives Back navigation since
+// _bcState is module-level).
+function _bcToggleFilterPanel(){
+  _bcState.panelOpen = !_bcState.panelOpen;
+  const panel  = document.getElementById('bcFilterPanel');
+  const caret  = document.getElementById('bcFilterCaret');
+  if(panel) panel.style.display = _bcState.panelOpen ? 'block' : 'none';
+  if(caret) caret.textContent  = _bcState.panelOpen ? '▲' : '▼';
+}
+
+// Refresh the chips strip + the count badge after a filter mutation.
+// Keeps the table re-render fast — we avoid blowing away the panel so
+// the user's open combo dropdowns stay focused.
+function _bcRefreshFilterChips(){
+  const chipsEl = document.getElementById('bcFilterChips');
+  const count   = _bcCountActiveFilters();
+  if(chipsEl){
+    chipsEl.innerHTML = _bcBuildFilterChipsHTML();
+    chipsEl.style.display = count > 0 ? 'flex' : 'none';
+    chipsEl.style.padding = count > 0 ? '10px 16px' : '0';
+    chipsEl.style.borderBottom = count > 0 ? '1px solid #e2e8f0' : '0';
   }
+  const badge = document.getElementById('bcFilterCountBadge');
+  if(badge) badge.textContent = count > 0 ? ` (${count})` : '';
+  const btn = document.getElementById('bcFilterToggleBtn');
+  if(btn){
+    btn.style.background    = count > 0 ? '#1e3a8a' : 'rgba(255,255,255,0.12)';
+    btn.style.borderColor   = count > 0 ? '#1e3a8a' : 'rgba(255,255,255,0.3)';
+  }
+}
+
+// Clear all active filters in one shot. Re-renders the panel + chips +
+// table since multi-state changes invalidate the open combos anyway.
+function _bcClearAllFilters(){
+  _bcState.assetTypes = [];
+  _bcState.states     = [];
+  _bcState.regions    = [];
+  _bcState.counties   = [];
+  _bcState.cities     = [];
+  _bcState.sfMin = null;    _bcState.sfMax = null;
+  _bcState.unitsMin = null; _bcState.unitsMax = null;
+  const panel = document.getElementById('bcFilterPanel');
+  if(panel) panel.innerHTML = _bcBuildFilterPanelHTML();
+  _bcMountFilterCombos();
+  _bcRefreshFilterChips();
+  renderBuyerCriteriaTable(allBuyerCriteria);
+}
+
+// Remove a single filter chip. Mirrors removePipelineFilterChip's
+// dispatch pattern — 'type' is the bucket key and 'val' is the value
+// to drop (or '' for ranges).
+function removeBcFilterChip(type, val){
+  switch(type){
+    case 'search':     _bcState.search = ''; { const s=document.getElementById('bcSearch'); if(s) s.value=''; } break;
+    case 'assetTypes': _bcState.assetTypes = (_bcState.assetTypes||[]).filter(v=>v!==val); break;
+    case 'states':     _bcState.states     = (_bcState.states    ||[]).filter(v=>v!==val); break;
+    case 'regions':    _bcState.regions    = (_bcState.regions   ||[]).filter(v=>v!==val); break;
+    case 'counties':   _bcState.counties   = (_bcState.counties  ||[]).filter(v=>v!==val); break;
+    case 'cities':     _bcState.cities     = (_bcState.cities    ||[]).filter(v=>v!==val); break;
+    case 'sfRange':    _bcState.sfMin    = null; _bcState.sfMax    = null; break;
+    case 'unitsRange': _bcState.unitsMin = null; _bcState.unitsMax = null; break;
+  }
+  // Range chips need the panel rebuilt so the input boxes clear; combo
+  // selections don't (the combo paints its own tags from getSelected).
+  if(type === 'sfRange' || type === 'unitsRange' || type === 'search'){
+    const panel = document.getElementById('bcFilterPanel');
+    if(panel) panel.innerHTML = _bcBuildFilterPanelHTML();
+    _bcMountFilterCombos();
+  } else {
+    if(typeof _comboRefresh === 'function') _comboRefresh('bcf_' + type);
+  }
+  _bcRefreshFilterChips();
+  renderBuyerCriteriaTable(allBuyerCriteria);
+}
+
+// Range input handler — comma-formatted text inputs with cursor
+// preservation. Same pattern as _pipelineRangeOnInput.
+window._bcRangeOnInput = function(ev, minKey, maxKey, which){
+  const el = ev.target;
+  const raw = String(el.value || '');
+  const cursorBefore = el.selectionStart || 0;
+  const digitsLeftOfCursor = (raw.slice(0, cursorBefore).match(/[0-9]/g) || []).length;
+  const digitsOnly = raw.replace(/[^0-9.\-]/g, '');
+  let formatted = '';
+  if(digitsOnly === '' || digitsOnly === '-' || digitsOnly === '.') {
+    formatted = digitsOnly;
+  } else {
+    const n = Number(digitsOnly);
+    formatted = isNaN(n) ? digitsOnly : n.toLocaleString('en-US', { maximumFractionDigits: 6 });
+  }
+  el.value = formatted;
+  let pos = 0, digitsSeen = 0;
+  for(; pos < formatted.length; pos++){
+    if(/[0-9]/.test(formatted[pos])) digitsSeen++;
+    if(digitsSeen >= digitsLeftOfCursor) { pos++; break; }
+  }
+  try { el.setSelectionRange(pos, pos); } catch(_e){}
+  const cleaned = digitsOnly.replace(/,/g,'').trim();
+  const num = cleaned === '' ? null : Number(cleaned);
+  if(which === 'min') _bcState[minKey] = isNaN(num) ? null : num;
+  else                _bcState[maxKey] = isNaN(num) ? null : num;
+  _bcRefreshFilterChips();
+  renderBuyerCriteriaTable(allBuyerCriteria);
+};
+
+// Build the active-filter chips HTML.
+function _bcBuildFilterChipsHTML(){
+  const chips = [];
+  const chip = (type, val, label) => {
+    const safeVal = JSON.stringify(val);
+    return `<span style="display:inline-flex;align-items:center;gap:4px;background:#1e3a8a;color:#fff;padding:3px 4px 3px 10px;border-radius:99px;font-size:11px;font-weight:600;">${label}<button onclick="removeBcFilterChip('${type}',${safeVal})" style="background:rgba(255,255,255,0.25);border:none;color:#fff;width:16px;height:16px;border-radius:50%;cursor:pointer;font-size:10px;line-height:1;padding:0;display:flex;align-items:center;justify-content:center;">✕</button></span>`;
+  };
+  (_bcState.assetTypes||[]).forEach(s => chips.push(chip('assetTypes', s, '🏷️ '+s)));
+  (_bcState.states    ||[]).forEach(s => chips.push(chip('states',    s, '🗺 '+s)));
+  (_bcState.regions   ||[]).forEach(id => {
+    const c = PIPELINE_REGION_CHIPS.find(x => x.id === id);
+    chips.push(chip('regions', id, '📍 '+(c?c.label:id)));
+  });
+  (_bcState.counties  ||[]).forEach(s => chips.push(chip('counties',  s, s)));
+  (_bcState.cities    ||[]).forEach(s => chips.push(chip('cities',    s, s)));
+  if(_bcState.sfMin != null || _bcState.sfMax != null){
+    const lo = _bcState.sfMin != null ? Number(_bcState.sfMin).toLocaleString() : '—';
+    const hi = _bcState.sfMax != null ? Number(_bcState.sfMax).toLocaleString() : '—';
+    chips.push(chip('sfRange','',`SF ${lo}–${hi}`));
+  }
+  if(_bcState.unitsMin != null || _bcState.unitsMax != null){
+    chips.push(chip('unitsRange','',`Units ${_bcState.unitsMin??'—'}–${_bcState.unitsMax??'—'}`));
+  }
+  return chips.join(' ');
+}
+
+// Build the grouped-card filter panel HTML. Mirrors the Pipeline panel
+// structure so the buyer page feels consistent with the deal pages.
+function _bcBuildFilterPanelHTML(){
+  // Collect distinct asset types / counties / cities / states from loaded
+  // buyer records so the combo options reflect actual data.
+  const recs = allBuyerCriteria || [];
+  const assetTypes = [...new Set(recs.flatMap(r => {
+    const s = (r.fields['Simple Text Desired Property Type']||'').replace(/[🔴🟠🟡🟢🔵🟣]/g,'').trim();
+    return s.split(',').map(t=>t.trim()).filter(Boolean);
+  }))].sort();
+  const counties = [...new Set(recs.flatMap(r =>
+    String(r.fields['Preferred Counties']||'').split(/[,;|]/).map(s=>s.trim()).filter(Boolean)
+  ))].sort();
+  const cities = [...new Set(recs.flatMap(r =>
+    String(r.fields['Preferred Cities']||'').split(/[,;|]/).map(s=>s.trim()).filter(Boolean)
+  ))].sort();
+  const states = [...new Set(recs.flatMap(r =>
+    String(r.fields['Preferred States']||'').split(/[,;|]/).map(s=>s.trim()).filter(Boolean)
+  ))].sort((a,b) => a==='NJ'?-1:b==='NJ'?1:a.localeCompare(b));
+
+  const fmtNumWithCommas = (n) => {
+    if(n == null || n === '') return '';
+    const num = Number(String(n).replace(/,/g,''));
+    return isNaN(num) ? '' : num.toLocaleString('en-US', { maximumFractionDigits: 6 });
+  };
+  const rangeInput = (title, minKey, maxKey, placeholder, suffix) => `
+    <div style="margin-bottom:14px;">
+      <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">${title}</div>
+      <div style="display:flex;gap:6px;align-items:center;">
+        <input type="text" inputmode="decimal" placeholder="Min ${placeholder||''}" value="${fmtNumWithCommas(_bcState[minKey])}"
+          oninput="_bcRangeOnInput(event,'${minKey}','${maxKey}','min')"
+          style="flex:1;padding:6px 10px;border:1px solid #cbd5e1;border-radius:5px;font-size:11px;"/>
+        <span style="color:#94a3b8;font-size:11px;">to</span>
+        <input type="text" inputmode="decimal" placeholder="Max ${placeholder||''}" value="${fmtNumWithCommas(_bcState[maxKey])}"
+          oninput="_bcRangeOnInput(event,'${minKey}','${maxKey}','max')"
+          style="flex:1;padding:6px 10px;border:1px solid #cbd5e1;border-radius:5px;font-size:11px;"/>
+        ${suffix?`<span style="font-size:11px;color:#64748b;">${suffix}</span>`:''}
+      </div>
+    </div>`;
+
+  // Combos — generic _filterComboHTML w/ closures over _bcState.
+  const combo = (id, label, opts, key, subLabel) => _filterComboHTML({
+    id: 'bcf_' + id,
+    label,
+    subLabel: subLabel || '',
+    options: () => opts,
+    getSelected: () => _bcState[key] || [],
+    setSelected: vals => {
+      _bcState[key] = Array.isArray(vals) ? vals : [];
+      _bcRefreshFilterChips();
+      renderBuyerCriteriaTable(allBuyerCriteria);
+    },
+  });
+
+  // Region combo — translates between chip.label (combo) and chip.id (state).
+  const regionCombo = _filterComboHTML({
+    id: 'bcf_regions',
+    label: 'Region',
+    options: () => PIPELINE_REGION_CHIPS.map(c => c.label),
+    getSelected: () => (_bcState.regions || []).map(id => {
+      const c = PIPELINE_REGION_CHIPS.find(x => x.id === id);
+      return c ? c.label : id;
+    }),
+    setSelected: labels => {
+      _bcState.regions = labels.map(l => {
+        const c = PIPELINE_REGION_CHIPS.find(x => x.label === l);
+        return c ? c.id : l;
+      });
+      _bcRefreshFilterChips();
+      renderBuyerCriteriaTable(allBuyerCriteria);
+    },
+  });
+
+  const card = (accent, title, body) => `
+    <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;display:flex;flex-direction:column;min-width:0;">
+      <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
+        <span style="display:inline-block;width:4px;height:18px;border-radius:2px;background:${accent};"></span>
+        <span style="font-size:13px;font-weight:700;color:#0f172a;">${title}</span>
+      </div>
+      <div>${body}</div>
+    </div>`;
+
+  return `
+    <div style="display:flex;justify-content:flex-end;padding:10px 20px 0;">
+      ${_bcCountActiveFilters() > 0
+        ? `<button onclick="_bcClearAllFilters()" style="background:#fef2f2;color:#b91c1c;border:1px solid #fca5a5;padding:6px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">✕ Clear Filters</button>`
+        : ''}
+    </div>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(280px, 1fr));gap:14px;padding:12px 20px 16px;align-items:start;">
+      ${card('#3b82f6', 'Location',
+        regionCombo
+        + combo('states',   'State',  states,   'states')
+        + combo('counties', 'County', counties, 'counties', counties.length?`(${counties.length} total)`:'')
+        + combo('cities',   'City',   cities,   'cities',   cities.length?`(${cities.length} total)`:'')
+      )}
+      ${card('#22c55e', 'Asset',
+        combo('assetTypes', 'Asset Type', assetTypes, 'assetTypes', assetTypes.length?`(${assetTypes.length} total)`:'')
+        + rangeInput('Square Footage', 'sfMin', 'sfMax', 'SF', 'SF')
+        + rangeInput('Units (MF)',     'unitsMin', 'unitsMax', '#', 'units')
+      )}
+    </div>`;
+}
+
+// Wire all the BC combos after the panel HTML is in DOM. Idempotent.
+function _bcMountFilterCombos(){
+  if(typeof _comboWire !== 'function') return;
+  if(!document.getElementById('bcFilterPanel')) return;
+  ['bcf_assetTypes','bcf_states','bcf_regions','bcf_counties','bcf_cities'].forEach(id => {
+    if(document.getElementById('combo-si-' + id)) _comboWire(id);
+  });
 }
 
 function _bcToggleVip(){
@@ -36046,12 +36308,21 @@ function getBcTypeBadge(typeStr){
 function renderBuyerCriteriaTable(records){
   const wrap = document.getElementById('bcTableWrap');
   if(!wrap) return;
-  const q      = (document.getElementById('bcSearch')?.value||'').toLowerCase();
-  const type   = (document.getElementById('bcTypeFilter')?.value||'').toLowerCase();
-  const county = (document.getElementById('bcCountyFilter')?.value||'').toLowerCase();
-  const unitsQ = document.getElementById('bcUnitsFilter')?.value?.trim();
-  const unitsNum = unitsQ ? parseInt(unitsQ, 10) : null;
+  // v163: read filters from _bcState (multi-select arrays + ranges).
+  const q          = (_bcState.search||'').toLowerCase();
+  const selTypes   = (_bcState.assetTypes||[]).map(s=>String(s).toLowerCase());
+  const selStates  = (_bcState.states||[]).slice();
+  const selRegions = (_bcState.regions||[]).slice(); // chip ids
+  const selCounties= (_bcState.counties||[]).map(s=>String(s).toLowerCase());
+  const selCities  = (_bcState.cities||[]).map(s=>String(s).toLowerCase());
+  const sfMin = _bcState.sfMin, sfMax = _bcState.sfMax;
+  const unitsMin = _bcState.unitsMin, unitsMax = _bcState.unitsMax;
   const selSources = _msGetSelected('bcs');
+
+  // Resolve selected region chip IDs to their {kind,value} entries up-front.
+  const selRegionChips = selRegions
+    .map(id => PIPELINE_REGION_CHIPS.find(c => c.id === id))
+    .filter(Boolean);
 
   let filtered = (records||[]).filter(r=>{
     const f = r.fields;
@@ -36060,10 +36331,6 @@ function renderBuyerCriteriaTable(records){
     const areas  = (f['Simple Area Preference']||'').toLowerCase();
     const notes  = (f['Other Requirements ']||'').toLowerCase();
     const cities = (f['Preferred Cities']||'').toLowerCase();
-    // v102.44: also search the LINKED CONTACT's name/phone/company. The
-    // BC's own Name field is often blank or just the asset type. Searching
-    // by buyer name (e.g. "Joseph Haim") needs to look at the contact
-    // record this BC is linked to.
     const cid = (f['Buyer']||[])[0];
     const linkedContact = cid ? (allBuyerContacts[cid] || {}) : {};
     const contactName    = (linkedContact.Name           || '').toLowerCase();
@@ -36075,27 +36342,93 @@ function renderBuyerCriteriaTable(records){
       || notes.includes(q) || cities.includes(q)
       || contactName.includes(q) || contactPhone.includes(q)
       || contactCompany.includes(q) || contactEmail.includes(q);
-    const matchT = !type || assets.includes(type);
-    const matchC = !county || areas.includes(county);
-    // Units range filter: if set, buyer must have MF type AND the number falls within their min–max range
-    let matchU = true;
-    if(unitsNum !== null && !isNaN(unitsNum)){
-      const isMFBuyer = assets.includes('multi') || assets.includes('family');
-      if(!isMFBuyer){ matchU = false; }
-      else {
-        const minU = Number(f['Minimum # of Units MF'])||0;
-        const maxU = Number(f['Max # of Units MF'])||Infinity;
-        // Include buyer if they have no range set, or if the unit count falls within range
-        const hasRange = !!(f['Minimum # of Units MF'] || f['Max # of Units MF']);
-        matchU = !hasRange || (unitsNum >= minU && unitsNum <= maxU);
+
+    // Asset type — buyer's "Simple Text Desired Property Type" is a comma
+    // list; match if ANY of selected types appears as a substring.
+    const matchT = !selTypes.length || selTypes.some(t => assets.includes(t));
+
+    // States — buyer's "Preferred States" is comma/semi-colon delimited.
+    const buyerStates = String(f['Preferred States']||'')
+      .split(/[,;|]/).map(s=>s.trim()).filter(Boolean);
+    const matchSt = !selStates.length
+      || buyerStates.some(s => selStates.includes(s));
+
+    // Counties — match if ANY selected county is in Preferred Counties or
+    // Simple Area Preference (legacy text). Buyer's preferred_counties is
+    // a comma list of county names.
+    const buyerCounties = String(f['Preferred Counties']||'')
+      .split(/[,;|]/).map(s=>s.trim().toLowerCase()).filter(Boolean);
+    const matchC = !selCounties.length
+      || selCounties.some(c => buyerCounties.includes(c) || areas.includes(c));
+
+    // Cities — exact preferred-cities OR substring of preferred_cities text.
+    const buyerCities = String(f['Preferred Cities']||'')
+      .split(/[,;|]/).map(s=>s.trim().toLowerCase()).filter(Boolean);
+    const matchCity = !selCities.length
+      || selCities.some(c => buyerCities.includes(c));
+
+    // Region chips — translate each chip to a state/region check against the
+    // buyer's preferred counties + states. A buyer matches a region chip
+    // when any of their preferred counties falls in that region's NJ
+    // grouping, or any of their preferred states matches.
+    const matchR = !selRegionChips.length || selRegionChips.some(chip => {
+      if(chip.kind === 'state'){
+        return buyerStates.includes(chip.value);
       }
+      if(chip.kind === 'states'){
+        const arr = Array.isArray(chip.value) ? chip.value : [chip.value];
+        return buyerStates.some(s => arr.includes(s));
+      }
+      if(chip.kind === 'region'){
+        // Region (e.g. "North NJ"). Match buyer if any of their preferred
+        // counties resolves to that NJ region via _countyRegions.
+        return buyerCounties.some(c => {
+          const bare = c.replace(/\s+county$/i,'');
+          // _countyRegions takes original-case county; match case-insensitively
+          // by Title-casing the bare name.
+          const titled = bare.replace(/\b\w/g, ch => ch.toUpperCase());
+          return _countyRegions(titled).includes(chip.value);
+        });
+      }
+      return false;
+    });
+
+    // Square footage (Warehouse Min/Max SF on the buyer)
+    let matchSF = true;
+    if(sfMin != null || sfMax != null){
+      const bMinSF = Number(f['Warehouse Min Square Footage'])||null;
+      const bMaxSF = Number(f['Warehouse Max Square Footage'])||null;
+      // Buyer matches if their range OVERLAPS the user-selected range.
+      const bLo = bMinSF != null ? bMinSF : 0;
+      const bHi = bMaxSF != null ? bMaxSF : Infinity;
+      const fLo = sfMin != null ? sfMin : 0;
+      const fHi = sfMax != null ? sfMax : Infinity;
+      matchSF = (bLo <= fHi) && (bHi >= fLo);
+      // If buyer has neither min nor max, we can't claim a match — exclude
+      // them when the user has narrowed by SF.
+      if(bMinSF == null && bMaxSF == null) matchSF = false;
     }
+
+    // Units (MF Min/Max Units)
+    let matchU = true;
+    if(unitsMin != null || unitsMax != null){
+      const bMinU = Number(f['Minimum # of Units MF'])||null;
+      const bMaxU = Number(f['Max # of Units MF'])||null;
+      const bLo = bMinU != null ? bMinU : 0;
+      const bHi = bMaxU != null ? bMaxU : Infinity;
+      const fLo = unitsMin != null ? unitsMin : 0;
+      const fHi = unitsMax != null ? unitsMax : Infinity;
+      matchU = (bLo <= fHi) && (bHi >= fLo);
+      if(bMinU == null && bMaxU == null) matchU = false;
+    }
+
     const matchV = !_bcVipFilter || !!f['Is VIP Buyer'];
     const matchS = !selSources || selSources.includes(f['Import Source'] || '(none)');
-    let matchR = true;
-    if(_bcReviewFilter === 'review')  matchR = f['_reviewStatus'] === 'needs_human_review';
-    if(_bcReviewFilter === 'applied') matchR = f['_reviewStatus'] === 'ai_suggestions_applied';
-    return matchQ && matchT && matchC && matchU && matchV && matchS && matchR;
+    let matchRev = true;
+    if(_bcReviewFilter === 'review')  matchRev = f['_reviewStatus'] === 'needs_human_review';
+    if(_bcReviewFilter === 'applied') matchRev = f['_reviewStatus'] === 'ai_suggestions_applied';
+    return matchQ && matchT && matchSt && matchC && matchCity && matchR
+        && matchSF && matchU && matchV && matchS && matchRev;
   });
 
   ['name','company','phone','assets','areas','cap','price','units','sf','interests','date','notes'].forEach(c=>{

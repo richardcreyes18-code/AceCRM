@@ -29085,15 +29085,227 @@ async function _showMyPipelineBoard(){
 // HTML table with optional group-by buckets. Click a row to open the deal
 // / portfolio snapshot. Portfolio rows are styled with an amber accent.
 // Columns: Stage · Address/Name · Price · Asset · Agent · County · Added.
-const MY_PIPELINE_TABLE_COLS = [
-  {key:'stage',     label:'Stage',    align:'left',  sortable:true},
-  {key:'address',   label:'Name',     align:'left',  sortable:true},
-  {key:'price',     label:'Price',    align:'right', sortable:true},
-  {key:'assetType', label:'Asset',    align:'left',  sortable:true},
-  {key:'agent',     label:'Agent',    align:'left',  sortable:true},
-  {key:'county',    label:'County',   align:'left',  sortable:true},
-  {key:'dateAdded', label:'Added',    align:'left',  sortable:true},
+// v182: column registry — each entry has a sort `value()` and a cell HTML
+// `render()`. Lets the user pick + reorder which columns show via a popover.
+// Portfolios return '—' for deal-only metrics (cap, $/SF, units, CoC).
+function _myPipelineDealNum(o, ...keys){
+  for(const k of keys){
+    const n = Number(o?.[k]);
+    if(isFinite(n) && n) return n;
+  }
+  return 0;
+}
+function _myPipelineCashOnCash(o, proForma){
+  const ask = _myPipelineDealNum(o, 'Asking Price', 'Pitch Out Price');
+  if(ask <= 0) return null;
+  const noi = proForma
+    ? (Number(o['Pro Forma NOI']) || (Number(o['Pro Forma Gross Revenue Yearly']||0) - Number(o['Pro Forma Expenses Yearly']||0)))
+    : Number(o['NOI']) || 0;
+  if(!noi) return null;
+  const debt = Number(o['Annual Debt Service']) || 0;
+  const dpPct = proForma
+    ? Number(o['Proforma Down Payment (%)'] || o['Down Payment (%)'] || 25)
+    : Number(o['Down Payment (%)'] || 25);
+  const dpAmt = ask * (dpPct/100);
+  const reno = Number(o['Renovation Expense']) || 0;
+  const cash = dpAmt + reno;
+  if(cash <= 0) return null;
+  return ((noi - debt) / cash) * 100;
+}
+const MY_PIPELINE_COLS_REGISTRY = [
+  // ── Core (7 default columns) ───────────────────────────────
+  {key:'stage', label:'Stage', align:'left', sortable:true,
+    value: r => r.stage ? String(r.stage.label||'') : '',
+    render: r => {
+      const lab = r.stage ? String(r.stage.label||'—') : '—';
+      const col = r.stage ? (r.stage.color||'#6b7280') : '#6b7280';
+      return `<span style="display:inline-block;padding:2px 10px;border-radius:99px;background:${col};color:#fff;font-size:10px;font-weight:700;white-space:nowrap;">${_esc(lab)}</span>`;
+    }
+  },
+  {key:'address', label:'Name', align:'left', sortable:true,
+    value: r => r.kind==='portfolio' ? String(r.obj['Name']||'') : String(r.obj['Address']||''),
+    render: r => {
+      const isP = r.kind === 'portfolio';
+      const name = isP ? String(r.obj['Name']||'Untitled portfolio') : String(r.obj['Address']||'Unnamed');
+      const badge = isP ? '<span style="display:inline-block;margin-right:6px;padding:1px 7px;background:#fef3c7;color:#b45309;border:1px solid #fde68a;border-radius:99px;font-size:9px;font-weight:700;letter-spacing:0.3px;vertical-align:middle;">📁 PORTFOLIO</span>' : '';
+      return `<span style="font-weight:600;color:#0f172a;">${badge}${_esc(name)}</span>`;
+    }
+  },
+  {key:'price', label:'Price', align:'right', sortable:true,
+    value: r => Number(r.kind==='portfolio' ? r.obj['Package Price'] : r.obj['Asking Price']) || 0,
+    render: r => {
+      const v = Number(r.kind==='portfolio' ? r.obj['Package Price'] : r.obj['Asking Price']) || 0;
+      return v > 0 ? `<span style="color:#b91c1c;font-weight:700;white-space:nowrap;">${fmtMoney(v)}</span>` : '<span style="color:#94a3b8;">—</span>';
+    }
+  },
+  {key:'assetType', label:'Asset', align:'left', sortable:true,
+    value: r => _myPipelineRowValue(r,'assetType'),
+    render: r => `<span style="color:#334155;">${_esc(_myPipelineRowValue(r,'assetType')||'—')}</span>`
+  },
+  {key:'agent', label:'Agent', align:'left', sortable:true,
+    value: r => _myPipelineRowValue(r,'agent'),
+    render: r => `<span style="color:#334155;">${_esc(_myPipelineRowValue(r,'agent')||'—')}</span>`
+  },
+  {key:'county', label:'County', align:'left', sortable:true,
+    value: r => _myPipelineRowValue(r,'county'),
+    render: r => `<span style="color:#334155;">${_esc(_myPipelineRowValue(r,'county')||'—')}</span>`
+  },
+  {key:'dateAdded', label:'Added', align:'left', sortable:true,
+    value: r => _myPipelineRowValue(r,'dateAdded'),
+    render: r => {
+      const s = _myPipelineRowValue(r,'dateAdded');
+      if(!s) return '<span style="color:#94a3b8;">—</span>';
+      const d = new Date(s);
+      const t = isNaN(d.getTime()) ? String(s).slice(0,10) : d.toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'});
+      return `<span style="color:#334155;white-space:nowrap;">${t}</span>`;
+    }
+  },
+  // ── v182 financial metrics (deals only; '—' for portfolios) ──
+  {key:'capActual', label:'Cap (Actual)', align:'right', sortable:true,
+    value: r => r.kind==='portfolio' ? -1 : ((typeof _dealCapRate==='function' ? _dealCapRate(r.obj) : null) ?? -1),
+    render: r => {
+      if(r.kind==='portfolio') return '<span style="color:#94a3b8;">—</span>';
+      const v = (typeof _dealCapRate==='function') ? _dealCapRate(r.obj) : null;
+      return v != null ? `<span style="color:#1a3a6e;font-weight:600;">${v.toFixed(2)}%</span>` : '<span style="color:#94a3b8;">—</span>';
+    }
+  },
+  {key:'capProForma', label:'Cap (Pro Forma)', align:'right', sortable:true,
+    value: r => {
+      if(r.kind==='portfolio') return -1;
+      const v = Number(r.obj['Cap Rate Proforma (CRM)']);
+      return isFinite(v) && v > 0 ? v*100 : -1;
+    },
+    render: r => {
+      if(r.kind==='portfolio') return '<span style="color:#94a3b8;">—</span>';
+      const v = Number(r.obj['Cap Rate Proforma (CRM)']);
+      return (isFinite(v) && v > 0) ? `<span style="color:#1a3a6e;font-weight:600;">${(v*100).toFixed(2)}%</span>` : '<span style="color:#94a3b8;">—</span>';
+    }
+  },
+  {key:'pricePerSF', label:'$ / SF', align:'right', sortable:true,
+    value: r => {
+      if(r.kind==='portfolio') return -1;
+      const ask = _myPipelineDealNum(r.obj, 'Asking Price', 'Pitch Out Price');
+      const sf  = _myPipelineDealNum(r.obj, 'Square Footage', 'Total Building SF');
+      return (ask>0 && sf>0) ? ask/sf : -1;
+    },
+    render: r => {
+      if(r.kind==='portfolio') return '<span style="color:#94a3b8;">—</span>';
+      const ask = _myPipelineDealNum(r.obj, 'Asking Price', 'Pitch Out Price');
+      const sf  = _myPipelineDealNum(r.obj, 'Square Footage', 'Total Building SF');
+      return (ask>0 && sf>0) ? `<span style="color:#334155;">$${(ask/sf).toFixed(2)}</span>` : '<span style="color:#94a3b8;">—</span>';
+    }
+  },
+  {key:'units', label:'# Units', align:'right', sortable:true,
+    value: r => r.kind==='portfolio' ? -1 : _myPipelineDealNum(r.obj, 'No. of Units', 'Number of Units'),
+    render: r => {
+      if(r.kind==='portfolio') return '<span style="color:#94a3b8;">—</span>';
+      const u = _myPipelineDealNum(r.obj, 'No. of Units', 'Number of Units');
+      return u > 0 ? `<span style="color:#334155;">${u.toLocaleString()}</span>` : '<span style="color:#94a3b8;">—</span>';
+    }
+  },
+  {key:'cocActual', label:'CoC (Actual)', align:'right', sortable:true,
+    value: r => r.kind==='portfolio' ? -999 : (_myPipelineCashOnCash(r.obj, false) ?? -999),
+    render: r => {
+      if(r.kind==='portfolio') return '<span style="color:#94a3b8;">—</span>';
+      const v = _myPipelineCashOnCash(r.obj, false);
+      if(v == null) return '<span style="color:#94a3b8;">—</span>';
+      const col = v >= 8 ? '#1a6a1a' : v > 0 ? '#c07000' : '#94a3b8';
+      return `<span style="color:${col};font-weight:600;">${v.toFixed(2)}%</span>`;
+    }
+  },
+  {key:'cocProForma', label:'CoC (Pro Forma)', align:'right', sortable:true,
+    value: r => r.kind==='portfolio' ? -999 : (_myPipelineCashOnCash(r.obj, true) ?? -999),
+    render: r => {
+      if(r.kind==='portfolio') return '<span style="color:#94a3b8;">—</span>';
+      const v = _myPipelineCashOnCash(r.obj, true);
+      if(v == null) return '<span style="color:#94a3b8;">—</span>';
+      const col = v >= 8 ? '#1a6a1a' : v > 0 ? '#c07000' : '#94a3b8';
+      return `<span style="color:${col};font-weight:600;">${v.toFixed(2)}%</span>`;
+    }
+  },
 ];
+// Default column set = the original 7 columns (preserves existing UX for first-time users)
+const MY_PIPELINE_COLS_DEFAULT = ['stage','address','price','assetType','agent','county','dateAdded'];
+const MY_PIPELINE_COLS_LS_KEY = 'acePipelineCols_personal_v1';
+let _myPipelineColsActive = (function(){
+  try {
+    const raw = localStorage.getItem(MY_PIPELINE_COLS_LS_KEY);
+    if(raw){
+      const parsed = JSON.parse(raw);
+      if(Array.isArray(parsed) && parsed.length){
+        const allowed = new Set(MY_PIPELINE_COLS_REGISTRY.map(c=>c.key));
+        return parsed.filter(k => allowed.has(k));
+      }
+    }
+  } catch(_e){}
+  return MY_PIPELINE_COLS_DEFAULT.slice();
+})();
+let _myPipelineColsPickerOpen = false;
+function _myPipelineColsSave(){
+  try { localStorage.setItem(MY_PIPELINE_COLS_LS_KEY, JSON.stringify(_myPipelineColsActive)); } catch(_e){}
+}
+window._myPipelineColsToggle = function(key){
+  const i = _myPipelineColsActive.indexOf(key);
+  if(i >= 0) _myPipelineColsActive.splice(i, 1);
+  else _myPipelineColsActive.push(key);
+  // Guard: never let the user end up with zero columns
+  if(_myPipelineColsActive.length === 0) _myPipelineColsActive = MY_PIPELINE_COLS_DEFAULT.slice();
+  // If the active sort column was removed, reset it
+  if(!_myPipelineColsActive.includes(_myPipelineTableSort.col)) _myPipelineTableSort.col = '';
+  _myPipelineColsSave();
+  if(typeof _myPipelineRerenderIfVisible === 'function') _myPipelineRerenderIfVisible(); else if(typeof _showMyPipelineBoard === 'function') _showMyPipelineBoard();
+};
+window._myPipelineColsMove = function(key, delta){
+  const i = _myPipelineColsActive.indexOf(key);
+  if(i < 0) return;
+  const j = i + delta;
+  if(j < 0 || j >= _myPipelineColsActive.length) return;
+  const tmp = _myPipelineColsActive[i];
+  _myPipelineColsActive[i] = _myPipelineColsActive[j];
+  _myPipelineColsActive[j] = tmp;
+  _myPipelineColsSave();
+  if(typeof _myPipelineRerenderIfVisible === 'function') _myPipelineRerenderIfVisible(); else if(typeof _showMyPipelineBoard === 'function') _showMyPipelineBoard();
+};
+window._myPipelineColsTogglePicker = function(){
+  _myPipelineColsPickerOpen = !_myPipelineColsPickerOpen;
+  if(typeof _myPipelineRerenderIfVisible === 'function') _myPipelineRerenderIfVisible(); else if(typeof _showMyPipelineBoard === 'function') _showMyPipelineBoard();
+};
+window._myPipelineColsResetDefault = function(){
+  _myPipelineColsActive = MY_PIPELINE_COLS_DEFAULT.slice();
+  _myPipelineColsSave();
+  if(typeof _myPipelineRerenderIfVisible === 'function') _myPipelineRerenderIfVisible(); else if(typeof _showMyPipelineBoard === 'function') _showMyPipelineBoard();
+};
+function _myPipelineColsPickerHTML(){
+  if(!_myPipelineColsPickerOpen) return '';
+  const activeSet = new Set(_myPipelineColsActive);
+  const inactive = MY_PIPELINE_COLS_REGISTRY.filter(c => !activeSet.has(c.key));
+  const item = (col, isActive, idx, total) => `
+    <div style="display:flex;align-items:center;gap:6px;padding:5px 8px;border-radius:4px;background:${isActive?'#eff6ff':'#fff'};border:1px solid ${isActive?'#bfdbfe':'#e2e8f0'};margin-bottom:3px;">
+      <span style="flex:1;font-size:12px;color:${isActive?'#1e40af':'#475569'};">${_esc(col.label)}</span>
+      ${isActive ? `
+        <button onclick="_myPipelineColsMove('${col.key}',-1)" ${idx===0?'disabled':''} title="Move up" style="background:none;border:none;color:${idx===0?'#cbd5e1':'#1e40af'};cursor:${idx===0?'not-allowed':'pointer'};padding:0 4px;font-size:14px;line-height:1;">↑</button>
+        <button onclick="_myPipelineColsMove('${col.key}',1)" ${idx===total-1?'disabled':''} title="Move down" style="background:none;border:none;color:${idx===total-1?'#cbd5e1':'#1e40af'};cursor:${idx===total-1?'not-allowed':'pointer'};padding:0 4px;font-size:14px;line-height:1;">↓</button>
+        <button onclick="_myPipelineColsToggle('${col.key}')" title="Remove from table" style="background:none;border:none;color:#dc2626;cursor:pointer;padding:0 4px;font-size:14px;line-height:1;">✕</button>
+      ` : `
+        <button onclick="_myPipelineColsToggle('${col.key}')" title="Add to table" style="background:#1e3a8a;color:#fff;border:none;border-radius:4px;padding:2px 10px;font-size:10px;font-weight:600;cursor:pointer;">+ Add</button>
+      `}
+    </div>`;
+  return `
+    <div onclick="event.stopPropagation()" style="position:absolute;top:100%;right:0;margin-top:6px;width:300px;max-height:520px;overflow-y:auto;background:#fff;border:1px solid #cbd5e1;border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,0.15);padding:12px;z-index:50;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <div style="font-size:13px;font-weight:700;color:#0f172a;">Columns</div>
+        <button onclick="_myPipelineColsResetDefault()" title="Reset to default" style="background:none;border:1px solid #cbd5e1;color:#475569;border-radius:4px;padding:3px 8px;font-size:10px;font-weight:600;cursor:pointer;">Reset</button>
+      </div>
+      <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Showing (in order)</div>
+      ${_myPipelineColsActive.map((k,i) => {
+        const col = MY_PIPELINE_COLS_REGISTRY.find(c => c.key === k);
+        return col ? item(col, true, i, _myPipelineColsActive.length) : '';
+      }).join('')}
+      ${inactive.length ? `<div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:12px 0 6px;">Available</div>${inactive.map(c => item(c, false, -1, 0)).join('')}` : ''}
+    </div>`;
+}
+// Legacy alias kept for any old callsites that referenced the array shape.
+const MY_PIPELINE_TABLE_COLS = MY_PIPELINE_COLS_REGISTRY;
 
 function _myPipelineRowValue(row, key){
   const o = row.obj;
@@ -29121,9 +29333,12 @@ function _sortMyPipelineRows(rows){
   if(!_myPipelineTableSort.col) return rows;
   const key = _myPipelineTableSort.col;
   const dir = _myPipelineTableSort.dir === 'asc' ? 1 : -1;
+  // v182: prefer the registry's value() so new financial-metric cols sort correctly.
+  const col = (typeof MY_PIPELINE_COLS_REGISTRY !== 'undefined') ? MY_PIPELINE_COLS_REGISTRY.find(c => c.key === key) : null;
+  const valueFn = (col && typeof col.value === 'function') ? col.value : (r => _myPipelineRowValue(r, key));
   return [...rows].sort((a, b) => {
-    const va = _myPipelineRowValue(a, key);
-    const vb = _myPipelineRowValue(b, key);
+    const va = valueFn(a);
+    const vb = valueFn(b);
     if(typeof va === 'number' && typeof vb === 'number') return (va - vb) * dir;
     const sa = String(va||'').toLowerCase();
     const sb = String(vb||'').toLowerCase();
@@ -29177,20 +29392,31 @@ function _buildMyPipelineTableHTML(byStage, stages){
     entries.forEach(e => rows.push({ kind: e.kind, obj: e.obj, stage }));
   });
 
-  // Group-by controls — mirrors the company pipeline table
+  // v182: build the active column list from the user's saved selection.
+  const activeCols = _myPipelineColsActive
+    .map(k => MY_PIPELINE_COLS_REGISTRY.find(c => c.key === k))
+    .filter(Boolean);
+
+  // Group-by + Columns popover trigger
+  const groupBtns = [
+    {k:'none',      label:'None (1 table)'},
+    {k:'stage',     label:'Stage'},
+    {k:'agent',     label:'Agent'},
+    {k:'assetType', label:'Asset'},
+    {k:'county',    label:'County'},
+  ].map(o => {
+    const active = _myPipelineTableGroupBy === o.k;
+    return '<button onclick="setMyPipelineTableGroupBy(\'' + o.k + '\')" style="background:' + (active?'#1e3a8a':'#fff') + ';color:' + (active?'#fff':'#475569') + ';border:1px solid ' + (active?'#1e3a8a':'#cbd5e1') + ';padding:5px 12px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;">' + o.label + '</button>';
+  }).join('');
   const groupControls = ''
     + '<div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap;">'
     +   '<span style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;">Group by:</span>'
-    + [
-        {k:'none',      label:'None (1 table)'},
-        {k:'stage',     label:'Stage'},
-        {k:'agent',     label:'Agent'},
-        {k:'assetType', label:'Asset'},
-        {k:'county',    label:'County'},
-      ].map(o => {
-        const active = _myPipelineTableGroupBy === o.k;
-        return '<button onclick="setMyPipelineTableGroupBy(\'' + o.k + '\')" style="background:' + (active?'#1e3a8a':'#fff') + ';color:' + (active?'#fff':'#475569') + ';border:1px solid ' + (active?'#1e3a8a':'#cbd5e1') + ';padding:5px 12px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;">' + o.label + '</button>';
-      }).join('')
+    +   groupBtns
+    +   '<div style="flex:1;"></div>'
+    +   '<div style="position:relative;">'
+    +     '<button onclick="_myPipelineColsTogglePicker()" style="background:#fff;color:#1e3a8a;border:1px solid #1e3a8a;padding:5px 12px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;">⚙ Columns (' + _myPipelineColsActive.length + ')</button>'
+    +     _myPipelineColsPickerHTML()
+    +   '</div>'
     + '</div>';
 
   if(!rows.length){
@@ -29199,8 +29425,8 @@ function _buildMyPipelineTableHTML(byStage, stages){
 
   const groups = _groupMyPipelineRows(rows, stages);
 
-  // Header cells with sort indicators
-  const headerCellsHTML = MY_PIPELINE_TABLE_COLS.map(c => {
+  // Header cells with sort indicators (filtered to active columns)
+  const headerCellsHTML = activeCols.map(c => {
     const isSort = _myPipelineTableSort.col === c.key;
     const arrow = isSort ? (_myPipelineTableSort.dir === 'desc' ? ' ↓' : ' ↑') : '';
     const cursor = c.sortable ? 'cursor:pointer;' : 'cursor:default;';
@@ -29210,40 +29436,15 @@ function _buildMyPipelineTableHTML(byStage, stages){
     return '<th ' + click + ' ' + hover + ' style="padding:10px;text-align:' + c.align + ';font-size:10px;text-transform:uppercase;letter-spacing:.05em;color:' + color + ';font-weight:700;' + cursor + 'background:#f8fafc;border-bottom:2px solid #cbd5e1;user-select:none;white-space:nowrap;">' + c.label + arrow + '</th>';
   }).join('');
 
-  const fmtDate = (s) => {
-    if(!s) return '—';
-    const d = new Date(s);
-    if(isNaN(d.getTime())) return String(s).slice(0,10);
-    return d.toLocaleDateString('en-US', { month:'short', day:'numeric', year:'numeric' });
-  };
-
   const renderRow = (r) => {
-    const o = r.obj;
     const isPortfolio = r.kind === 'portfolio';
-    const stage = r.stage;
-    const stageLabel = stage ? String(stage.label || '—') : '—';
-    const stageColor = stage ? (stage.color || '#6b7280') : '#6b7280';
-    const name = isPortfolio ? String(o['Name'] || 'Untitled portfolio') : String(o['Address'] || 'Unnamed');
-    const priceNum = isPortfolio ? Number(o['Package Price']||0) : Number(o['Asking Price']||0);
-    const priceStr = priceNum > 0 ? fmtMoney(priceNum) : '—';
-    const assetStr = _myPipelineRowValue(r, 'assetType') || '—';
-    const agentStr = _myPipelineRowValue(r, 'agent') || '—';
-    const countyStr = _myPipelineRowValue(r, 'county') || '—';
-    const dateStr = fmtDate(_myPipelineRowValue(r, 'dateAdded'));
-    const onclick = isPortfolio ? ('openPortfolioDetail(\'' + o.id + '\')') : ('openDealSnapshot(\'' + o.id + '\')');
-    const badge = isPortfolio
-      ? '<span style="display:inline-block;margin-right:6px;padding:1px 7px;background:#fef3c7;color:#b45309;border:1px solid #fde68a;border-radius:99px;font-size:9px;font-weight:700;letter-spacing:0.3px;vertical-align:middle;">📁 PORTFOLIO</span>'
-      : '';
+    const onclick = isPortfolio ? ('openPortfolioDetail(\'' + r.obj.id + '\')') : ('openDealSnapshot(\'' + r.obj.id + '\')');
     const rowBg = isPortfolio ? 'background:#fffbeb;' : '';
-    return '<tr onclick="' + onclick + '" style="cursor:pointer;border-bottom:1px solid #e2e8f0;' + rowBg + '" onmouseenter="this.style.background=\'#f1f5f9\'" onmouseleave="this.style.background=\'' + (isPortfolio?'#fffbeb':'') + '\'">'
-      + '<td style="padding:8px 10px;"><span style="display:inline-block;padding:2px 10px;border-radius:99px;background:' + stageColor + ';color:#fff;font-size:10px;font-weight:700;white-space:nowrap;">' + _esc(stageLabel) + '</span></td>'
-      + '<td style="padding:8px 10px;font-weight:600;color:#0f172a;max-width:320px;">' + badge + _esc(name) + '</td>'
-      + '<td style="padding:8px 10px;color:#b91c1c;font-weight:700;white-space:nowrap;text-align:right;">' + priceStr + '</td>'
-      + '<td style="padding:8px 10px;color:#334155;">' + _esc(assetStr) + '</td>'
-      + '<td style="padding:8px 10px;color:#334155;">' + _esc(agentStr) + '</td>'
-      + '<td style="padding:8px 10px;color:#334155;">' + _esc(countyStr) + '</td>'
-      + '<td style="padding:8px 10px;color:#334155;white-space:nowrap;">' + _esc(dateStr) + '</td>'
-      + '</tr>';
+    const cells = activeCols.map(c => {
+      const inner = (typeof c.render === 'function') ? c.render(r) : '';
+      return '<td style="padding:8px 10px;text-align:' + c.align + ';">' + inner + '</td>';
+    }).join('');
+    return '<tr onclick="' + onclick + '" style="cursor:pointer;border-bottom:1px solid #e2e8f0;' + rowBg + '" onmouseenter="this.style.background=\'#f1f5f9\'" onmouseleave="this.style.background=\'' + (isPortfolio?'#fffbeb':'') + '\'">' + cells + '</tr>';
   };
 
   const tablesHTML = groups.map(g => {
@@ -53536,20 +53737,234 @@ function _refreshPipelineBody(){
 }
 
 // ─── PIPELINE TABLE VIEW ─────────────────────────────────────────
+// v182: Full Pipeline column registry. Each col has a getter() (for sort)
+// and a render() (for cell HTML). The table renderer iterates through the
+// active list filtered by user selection (persisted to localStorage).
+function _fpDealNum(d, ...keys){
+  for(const k of keys){
+    const n = Number(d?.[k]);
+    if(isFinite(n) && n) return n;
+  }
+  return 0;
+}
+function _fpCashOnCash(d, proForma){
+  const ask = _fpDealNum(d, 'Asking Price', 'Pitch Out Price');
+  if(ask <= 0) return null;
+  const noi = proForma
+    ? (Number(d['Pro Forma NOI']) || (Number(d['Pro Forma Gross Revenue Yearly']||0) - Number(d['Pro Forma Expenses Yearly']||0)))
+    : Number(d['NOI']) || 0;
+  if(!noi) return null;
+  const debt = Number(d['Annual Debt Service']) || 0;
+  const dpPct = proForma
+    ? Number(d['Proforma Down Payment (%)'] || d['Down Payment (%)'] || 25)
+    : Number(d['Down Payment (%)'] || 25);
+  const dpAmt = ask * (dpPct/100);
+  const reno = Number(d['Renovation Expense']) || 0;
+  const cash = dpAmt + reno;
+  if(cash <= 0) return null;
+  return ((noi - debt) / cash) * 100;
+}
 const TABLE_COLS = [
-  {key:'address',   label:'Address',    align:'left',  sortable:false, getter:d => d['Address']||'Unnamed'},
-  {key:'tpl',       label:'Email',      align:'center',sortable:true,  getter:d => _dealTemplateCount(d.id)},
-  {key:'stage',     label:'Stage',      align:'left',  sortable:true,  getter:d => getStage(d)},
-  {key:'price',     label:'Price',      align:'left',  sortable:true,  getter:d => Number(d['Asking Price'])||0},
-  {key:'assetType', label:'Asset Type', align:'left',  sortable:true,  getter:d => _dealAssetType(d)||''},
-  {key:'owner',     label:'Owner',      align:'left',  sortable:true,  getter:d => d['_sellerName']||d['_ownerName']||''},
-  {key:'agent',     label:'Agent',      align:'left',  sortable:true,  getter:d => d['Assigned Agent']||''},
-  {key:'county',    label:'County',     align:'left',  sortable:true,  getter:d => d['Simple County']||''},
-  {key:'units',     label:'Units',      align:'right', sortable:true,  getter:d => Number(d['Number of Units']||d['No. of Units'])||0},
-  {key:'sf',        label:'SF',         align:'right', sortable:true,  getter:d => Number(d['Square Footage'])||0},
-  {key:'cap',       label:'Cap',        align:'right', sortable:true,  getter:d => _dealCapRate(d) ?? -1},
-  {key:'comm',      label:'Comm',       align:'right', sortable:true,  getter:d => _dealCommissionAmt(d) ?? -1},
+  {key:'address', label:'Address', align:'left', sortable:false,
+    getter: d => d['Address']||'Unnamed',
+    render: d => `<span style="font-weight:600;color:#0f172a;max-width:260px;display:inline-block;overflow:hidden;text-overflow:ellipsis;">${_esc(d['Address']||'Unnamed')}</span>`
+  },
+  {key:'tpl', label:'Email', align:'center', sortable:true,
+    getter: d => _dealTemplateCount(d.id),
+    render: d => {
+      const c = _dealTemplateCount(d.id);
+      return c > 0
+        ? `<span title="${c} linked email template${c===1?'':'s'}" style="display:inline-block;background:#dcfce7;color:#15803d;border:1px solid #86efac;padding:1px 7px;border-radius:99px;font-size:10px;font-weight:700;">📧 ${c}</span>`
+        : `<span title="No email template linked" style="display:inline-block;color:#cbd5e1;font-size:13px;">📭</span>`;
+    }
+  },
+  {key:'stage', label:'Stage', align:'left', sortable:true,
+    getter: d => getStage(d),
+    render: d => {
+      const s = getStage(d);
+      const c = (typeof NEW_PIPELINE_COLORS !== 'undefined' && NEW_PIPELINE_COLORS[s]) || '#6b7280';
+      return `<span style="display:inline-block;padding:2px 10px;border-radius:99px;background:${c};color:#fff;font-size:10px;font-weight:700;white-space:nowrap;">${_esc(s)}</span>`;
+    }
+  },
+  {key:'price', label:'Price', align:'left', sortable:true,
+    getter: d => Number(d['Asking Price'])||0,
+    render: d => `<span style="color:#b91c1c;font-weight:700;white-space:nowrap;">${fmtMoney(d['Asking Price'])}</span>`
+  },
+  {key:'assetType', label:'Asset Type', align:'left', sortable:true,
+    getter: d => _dealAssetType(d)||'',
+    render: d => `<span style="color:#334155;">${_esc(_dealAssetType(d)||'—')}</span>`
+  },
+  {key:'owner', label:'Owner', align:'left', sortable:true,
+    getter: d => d['_sellerName']||d['_ownerName']||'',
+    render: d => `<span style="color:#334155;">${_esc(d['_sellerName']||d['_ownerName']||'—')}</span>`
+  },
+  {key:'agent', label:'Agent', align:'left', sortable:true,
+    getter: d => d['Assigned Agent']||'',
+    render: d => `<span style="color:#334155;">${_esc(d['Assigned Agent']||'—')}</span>`
+  },
+  {key:'county', label:'County', align:'left', sortable:true,
+    getter: d => d['Simple County']||'',
+    render: d => `<span style="color:#334155;">${_esc(d['Simple County']||'—')}</span>`
+  },
+  {key:'units', label:'Units', align:'right', sortable:true,
+    getter: d => Number(d['Number of Units']||d['No. of Units'])||0,
+    render: d => {
+      const u = Number(d['Number of Units']||d['No. of Units'])||0;
+      return u > 0 ? `<span style="color:#334155;">${u.toLocaleString()}</span>` : '<span style="color:#94a3b8;">—</span>';
+    }
+  },
+  {key:'sf', label:'SF', align:'right', sortable:true,
+    getter: d => Number(d['Square Footage'])||0,
+    render: d => {
+      const sf = Number(d['Square Footage'])||0;
+      return sf > 0 ? `<span style="color:#334155;">${sf.toLocaleString()}</span>` : '<span style="color:#94a3b8;">—</span>';
+    }
+  },
+  {key:'cap', label:'Cap (Actual)', align:'right', sortable:true,
+    getter: d => _dealCapRate(d) ?? -1,
+    render: d => {
+      const v = _dealCapRate(d);
+      return v != null ? `<span style="color:#1a3a6e;font-weight:600;">${v.toFixed(2)}%</span>` : '<span style="color:#94a3b8;">—</span>';
+    }
+  },
+  {key:'comm', label:'Comm', align:'right', sortable:true,
+    getter: d => _dealCommissionAmt(d) ?? -1,
+    render: d => {
+      const v = _dealCommissionAmt(d);
+      return v != null ? `<span style="color:#334155;white-space:nowrap;">${fmtMoney(v)}</span>` : '<span style="color:#94a3b8;">—</span>';
+    }
+  },
+  // v182 financial metrics
+  {key:'capProForma', label:'Cap (Pro Forma)', align:'right', sortable:true,
+    getter: d => {
+      const v = Number(d['Cap Rate Proforma (CRM)']);
+      return isFinite(v) && v > 0 ? v*100 : -1;
+    },
+    render: d => {
+      const v = Number(d['Cap Rate Proforma (CRM)']);
+      return (isFinite(v) && v > 0) ? `<span style="color:#1a3a6e;font-weight:600;">${(v*100).toFixed(2)}%</span>` : '<span style="color:#94a3b8;">—</span>';
+    }
+  },
+  {key:'pricePerSF', label:'$ / SF', align:'right', sortable:true,
+    getter: d => {
+      const ask = _fpDealNum(d, 'Asking Price', 'Pitch Out Price');
+      const sf  = _fpDealNum(d, 'Square Footage', 'Total Building SF');
+      return (ask>0 && sf>0) ? ask/sf : -1;
+    },
+    render: d => {
+      const ask = _fpDealNum(d, 'Asking Price', 'Pitch Out Price');
+      const sf  = _fpDealNum(d, 'Square Footage', 'Total Building SF');
+      return (ask>0 && sf>0) ? `<span style="color:#334155;">$${(ask/sf).toFixed(2)}</span>` : '<span style="color:#94a3b8;">—</span>';
+    }
+  },
+  {key:'pricePerUnit', label:'$ / Unit', align:'right', sortable:true,
+    getter: d => {
+      const ask = _fpDealNum(d, 'Asking Price', 'Pitch Out Price');
+      const u   = _fpDealNum(d, 'Number of Units', 'No. of Units');
+      return (ask>0 && u>0) ? ask/u : -1;
+    },
+    render: d => {
+      const ask = _fpDealNum(d, 'Asking Price', 'Pitch Out Price');
+      const u   = _fpDealNum(d, 'Number of Units', 'No. of Units');
+      return (ask>0 && u>0) ? `<span style="color:#334155;">$${Math.round(ask/u).toLocaleString()}</span>` : '<span style="color:#94a3b8;">—</span>';
+    }
+  },
+  {key:'cocActual', label:'CoC (Actual)', align:'right', sortable:true,
+    getter: d => _fpCashOnCash(d, false) ?? -999,
+    render: d => {
+      const v = _fpCashOnCash(d, false);
+      if(v == null) return '<span style="color:#94a3b8;">—</span>';
+      const c = v >= 8 ? '#1a6a1a' : v > 0 ? '#c07000' : '#94a3b8';
+      return `<span style="color:${c};font-weight:600;">${v.toFixed(2)}%</span>`;
+    }
+  },
+  {key:'cocProForma', label:'CoC (Pro Forma)', align:'right', sortable:true,
+    getter: d => _fpCashOnCash(d, true) ?? -999,
+    render: d => {
+      const v = _fpCashOnCash(d, true);
+      if(v == null) return '<span style="color:#94a3b8;">—</span>';
+      const c = v >= 8 ? '#1a6a1a' : v > 0 ? '#c07000' : '#94a3b8';
+      return `<span style="color:${c};font-weight:600;">${v.toFixed(2)}%</span>`;
+    }
+  },
 ];
+const FP_COLS_DEFAULT = ['address','tpl','stage','price','assetType','owner','agent','county','units','sf','cap','comm'];
+const FP_COLS_LS_KEY = 'acePipelineCols_full_v1';
+let _fpColsActive = (function(){
+  try {
+    const raw = localStorage.getItem(FP_COLS_LS_KEY);
+    if(raw){
+      const parsed = JSON.parse(raw);
+      if(Array.isArray(parsed) && parsed.length){
+        const allowed = new Set(TABLE_COLS.map(c=>c.key));
+        return parsed.filter(k => allowed.has(k));
+      }
+    }
+  } catch(_e){}
+  return FP_COLS_DEFAULT.slice();
+})();
+let _fpColsPickerOpen = false;
+function _fpColsSave(){
+  try { localStorage.setItem(FP_COLS_LS_KEY, JSON.stringify(_fpColsActive)); } catch(_e){}
+}
+window._fpColsToggle = function(key){
+  const i = _fpColsActive.indexOf(key);
+  if(i >= 0) _fpColsActive.splice(i, 1);
+  else _fpColsActive.push(key);
+  if(_fpColsActive.length === 0) _fpColsActive = FP_COLS_DEFAULT.slice();
+  if(!_fpColsActive.includes(_pipelineSort.col)) _pipelineSort.col = '';
+  _fpColsSave();
+  if(typeof _refreshPipelineBody === 'function') _refreshPipelineBody();
+};
+window._fpColsMove = function(key, delta){
+  const i = _fpColsActive.indexOf(key);
+  if(i < 0) return;
+  const j = i + delta;
+  if(j < 0 || j >= _fpColsActive.length) return;
+  const tmp = _fpColsActive[i];
+  _fpColsActive[i] = _fpColsActive[j];
+  _fpColsActive[j] = tmp;
+  _fpColsSave();
+  if(typeof _refreshPipelineBody === 'function') _refreshPipelineBody();
+};
+window._fpColsTogglePicker = function(){
+  _fpColsPickerOpen = !_fpColsPickerOpen;
+  if(typeof _refreshPipelineBody === 'function') _refreshPipelineBody();
+};
+window._fpColsResetDefault = function(){
+  _fpColsActive = FP_COLS_DEFAULT.slice();
+  _fpColsSave();
+  if(typeof _refreshPipelineBody === 'function') _refreshPipelineBody();
+};
+function _fpColsPickerHTML(){
+  if(!_fpColsPickerOpen) return '';
+  const activeSet = new Set(_fpColsActive);
+  const inactive = TABLE_COLS.filter(c => !activeSet.has(c.key));
+  const item = (col, isActive, idx, total) => `
+    <div style="display:flex;align-items:center;gap:6px;padding:5px 8px;border-radius:4px;background:${isActive?'#eff6ff':'#fff'};border:1px solid ${isActive?'#bfdbfe':'#e2e8f0'};margin-bottom:3px;">
+      <span style="flex:1;font-size:12px;color:${isActive?'#1e40af':'#475569'};">${_esc(col.label)}</span>
+      ${isActive ? `
+        <button onclick="_fpColsMove('${col.key}',-1)" ${idx===0?'disabled':''} title="Move up" style="background:none;border:none;color:${idx===0?'#cbd5e1':'#1e40af'};cursor:${idx===0?'not-allowed':'pointer'};padding:0 4px;font-size:14px;line-height:1;">↑</button>
+        <button onclick="_fpColsMove('${col.key}',1)" ${idx===total-1?'disabled':''} title="Move down" style="background:none;border:none;color:${idx===total-1?'#cbd5e1':'#1e40af'};cursor:${idx===total-1?'not-allowed':'pointer'};padding:0 4px;font-size:14px;line-height:1;">↓</button>
+        <button onclick="_fpColsToggle('${col.key}')" title="Remove from table" style="background:none;border:none;color:#dc2626;cursor:pointer;padding:0 4px;font-size:14px;line-height:1;">✕</button>
+      ` : `
+        <button onclick="_fpColsToggle('${col.key}')" title="Add to table" style="background:#1e3a8a;color:#fff;border:none;border-radius:4px;padding:2px 10px;font-size:10px;font-weight:600;cursor:pointer;">+ Add</button>
+      `}
+    </div>`;
+  return `
+    <div onclick="event.stopPropagation()" style="position:absolute;top:100%;right:0;margin-top:6px;width:300px;max-height:520px;overflow-y:auto;background:#fff;border:1px solid #cbd5e1;border-radius:8px;box-shadow:0 12px 32px rgba(0,0,0,0.15);padding:12px;z-index:50;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;">
+        <div style="font-size:13px;font-weight:700;color:#0f172a;">Columns</div>
+        <button onclick="_fpColsResetDefault()" title="Reset to default" style="background:none;border:1px solid #cbd5e1;color:#475569;border-radius:4px;padding:3px 8px;font-size:10px;font-weight:600;cursor:pointer;">Reset</button>
+      </div>
+      <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Showing (in order)</div>
+      ${_fpColsActive.map((k,i) => {
+        const col = TABLE_COLS.find(c => c.key === k);
+        return col ? item(col, true, i, _fpColsActive.length) : '';
+      }).join('')}
+      ${inactive.length ? `<div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:12px 0 6px;">Available</div>${inactive.map(c => item(c, false, -1, 0)).join('')}` : ''}
+    </div>`;
+}
 
 function sortPipelineTable(colKey){
   if(_pipelineSort.col === colKey){
@@ -53639,20 +54054,31 @@ function _buildPipelineTableHTML(deals){
     return `<div style="padding:40px 20px;color:#94a3b8;font-size:13px;font-style:italic;text-align:center;">No deals match your filters.</div>`;
   }
 
-  // Group controls (above the tables)
+  // v182: build active column list from user's saved selection
+  const activeCols = _fpColsActive
+    .map(k => TABLE_COLS.find(c => c.key === k))
+    .filter(Boolean);
+
+  // Group controls + Columns picker trigger
+  const groupBtns = [
+    {k:'none',      label:'None (1 table)'},
+    {k:'stage',     label:'Pipeline Stage'},
+    {k:'agent',     label:'Agent'},
+    {k:'assetType', label:'Asset Type'},
+    {k:'county',    label:'County'},
+  ].map(o => {
+    const active = _pipelineGroupBy === o.k;
+    return `<button onclick="setPipelineGroupBy('${o.k}')" style="background:${active?'#1e3a8a':'#fff'};color:${active?'#fff':'#475569'};border:1px solid ${active?'#1e3a8a':'#cbd5e1'};padding:5px 12px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;">${o.label}</button>`;
+  }).join('');
   const groupControls = `
     <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;flex-wrap:wrap;">
       <span style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;">Group by:</span>
-      ${[
-        {k:'none',      label:'None (1 table)'},
-        {k:'stage',     label:'Pipeline Stage'},
-        {k:'agent',     label:'Agent'},
-        {k:'assetType', label:'Asset Type'},
-        {k:'county',    label:'County'},
-      ].map(o => {
-        const active = _pipelineGroupBy === o.k;
-        return `<button onclick="setPipelineGroupBy('${o.k}')" style="background:${active?'#1e3a8a':'#fff'};color:${active?'#fff':'#475569'};border:1px solid ${active?'#1e3a8a':'#cbd5e1'};padding:5px 12px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;">${o.label}</button>`;
-      }).join('')}
+      ${groupBtns}
+      <div style="flex:1;"></div>
+      <div style="position:relative;">
+        <button onclick="_fpColsTogglePicker()" style="background:#fff;color:#1e3a8a;border:1px solid #1e3a8a;padding:5px 12px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;">⚙ Columns (${_fpColsActive.length})</button>
+        ${_fpColsPickerHTML()}
+      </div>
     </div>`;
 
   const groups = _groupDeals(deals);
@@ -53667,8 +54093,8 @@ function _buildPipelineTableHTML(deals){
         <span style="font-size:11px;font-weight:500;opacity:${g.color?0.9:0.7};">${g.deals.length} deals${totalLabel?' · '+totalLabel:''}</span>
       </div>`;
 
-    // Header cells with sort indicators
-    const headerCells = TABLE_COLS.map(c => {
+    // Header cells with sort indicators (filtered to active columns)
+    const headerCells = activeCols.map(c => {
       const isSort = _pipelineSort.col === c.key;
       const arrow = isSort ? (_pipelineSort.dir === 'desc' ? ' ↓' : ' ↑') : '';
       const cursor = c.sortable ? 'cursor:pointer;' : 'cursor:default;';
@@ -53679,34 +54105,11 @@ function _buildPipelineTableHTML(deals){
     }).join('');
 
     const rows = sorted.map(d => {
-      const stage = getStage(d);
-      const stageColor = NEW_PIPELINE_COLORS[stage] || '#6b7280';
-      const owner = d['_sellerName']||d['_ownerName']||'—';
-      const agent = d['Assigned Agent']||'—';
-      const assetType = _dealAssetType(d) || '—';
-      const county = d['Simple County']||'—';
-      const units = d['Number of Units'] || d['No. of Units'] || '—';
-      const sf = d['Square Footage'] ? Number(d['Square Footage']).toLocaleString() : '—';
-      const cap = _dealCapRate(d);
-      const comm = _dealCommissionAmt(d);
-      const tplCount = _dealTemplateCount(d.id);
-      const tplCell = tplCount > 0
-        ? `<span title="${tplCount} linked email template${tplCount===1?'':'s'}" style="display:inline-block;background:#dcfce7;color:#15803d;border:1px solid #86efac;padding:1px 7px;border-radius:99px;font-size:10px;font-weight:700;">📧 ${tplCount}</span>`
-        : `<span title="No email template linked" style="display:inline-block;color:#cbd5e1;font-size:13px;">📭</span>`;
-      return `<tr onclick="openDealSnapshot('${d.id}')" style="cursor:pointer;border-bottom:1px solid #e2e8f0;" onmouseenter="this.style.background='#f1f5f9'" onmouseleave="this.style.background=''">
-        <td style="padding:8px 10px;font-weight:600;color:#0f172a;max-width:260px;">${d['Address']||'Unnamed'}</td>
-        <td style="padding:8px 10px;text-align:center;">${tplCell}</td>
-        <td style="padding:8px 10px;"><span style="display:inline-block;padding:2px 10px;border-radius:99px;background:${stageColor};color:#fff;font-size:10px;font-weight:700;white-space:nowrap;">${stage}</span></td>
-        <td style="padding:8px 10px;color:#b91c1c;font-weight:700;white-space:nowrap;">${fmtMoney(d['Asking Price'])}</td>
-        <td style="padding:8px 10px;color:#334155;">${assetType}</td>
-        <td style="padding:8px 10px;color:#334155;">${owner}</td>
-        <td style="padding:8px 10px;color:#334155;">${agent}</td>
-        <td style="padding:8px 10px;color:#334155;">${county}</td>
-        <td style="padding:8px 10px;color:#334155;text-align:right;">${units}</td>
-        <td style="padding:8px 10px;color:#334155;text-align:right;">${sf}</td>
-        <td style="padding:8px 10px;color:#334155;text-align:right;">${cap != null ? cap.toFixed(2)+'%' : '—'}</td>
-        <td style="padding:8px 10px;color:#334155;text-align:right;white-space:nowrap;">${comm != null ? fmtMoney(comm) : '—'}</td>
-      </tr>`;
+      const cells = activeCols.map(c => {
+        const inner = (typeof c.render === 'function') ? c.render(d) : '';
+        return `<td style="padding:8px 10px;text-align:${c.align};">${inner}</td>`;
+      }).join('');
+      return `<tr onclick="openDealSnapshot('${d.id}')" style="cursor:pointer;border-bottom:1px solid #e2e8f0;" onmouseenter="this.style.background='#f1f5f9'" onmouseleave="this.style.background=''">${cells}</tr>`;
     }).join('');
 
     const radius = _pipelineGroupBy === 'none' ? '8px' : '0 0 8px 8px';

@@ -7120,7 +7120,17 @@ function switchTab(name, btn){
 
   if(name==='calendar') initCalendar();
   if(name==='documents' && currentDeal?.id) loadPropertyDocs(currentDeal.id);
-  if(name==='property' && currentDeal?.id) loadSellerContact(currentDeal.id);
+  if(name==='property' && currentDeal?.id){
+    loadSellerContact(currentDeal.id);
+    // v170.1: re-run unit-mix derive + total calc so the rent-roll subtotal
+    // (Monthly + Yearly) and auto-derived counts populate on tab entry.
+    setTimeout(()=>{
+      if(document.getElementById('umr_grandTotal')){
+        if(typeof _mfRentDeriveAvgs === 'function') _mfRentDeriveAvgs();
+        if(typeof mfRentCalcTotal === 'function') mfRentCalcTotal();
+      }
+    }, 30);
+  }
   if(name==='contacts' && currentDeal?.id){ loadSellerContact(currentDeal.id); loadBuyerPitches(currentDeal.id); loadDealPitches(currentDeal.id); }
   if(name==='aicomm' && currentDeal?.id) loadAICommTab(currentDeal.id);
   if(name==='buyermatch' && currentDeal?.id) loadBuyerMatchTab(currentDeal.id);
@@ -8233,6 +8243,9 @@ function _renderUnitMixSection(d){
       '3 Bedroom':'3br','4 Bedroom':'4br','Other':'oth'
     })[t] || 'oth';
     const _derivedAvgs = {};
+    const _derivedCounts = {};
+    const _derivedVacCounts = {};
+    let _derivedOccupied = 0;
     if(_hasUnitRents){
       const groups = {};
       _unitsArr.forEach(u => {
@@ -8247,10 +8260,23 @@ function _renderUnitMixSection(d){
         _derivedAvgs[k] = Math.round(arr.reduce((s,v)=>s+v,0) / arr.length);
       });
     }
+    // v170.1: count units / vacant per bedroom type at template time so the
+    // initial render shows the right values even before _mfRentDeriveAvgs runs.
+    if(_unitsArr.length > 0){
+      _unitsArr.forEach(u => {
+        const k = _typeKeyForUnit(u.type);
+        _derivedCounts[k] = (_derivedCounts[k]||0) + 1;
+        if(u.status === 'Vacant') _derivedVacCounts[k] = (_derivedVacCounts[k]||0) + 1;
+        if(u.status === 'Occupied' || u.status === 'Section 8') _derivedOccupied++;
+      });
+    }
 
     // Stat tile values
-    const totalUnits = Number(d['No. of Units'])||0;
-    const occupancyPct = Number(d['Occupancy (%)'])||0;
+    const _hasUnits = _unitsArr.length > 0;
+    const totalUnits = _hasUnits ? _unitsArr.length : (Number(d['No. of Units'])||0);
+    const occupancyPct = _hasUnits
+      ? Math.round((_derivedOccupied / _unitsArr.length) * 100)
+      : (Number(d['Occupancy (%)'])||0);
     let totalGRI = 0;
     if(_hasUnitRents){
       totalGRI = _unitsArr.reduce((s,u)=>s+(Number(u.rent)||0),0);
@@ -8263,17 +8289,20 @@ function _renderUnitMixSection(d){
     }
 
     const byTypeRows = types.map(t=>{
-      const cnt  = Number(d[t.countF]||0);
-      const vac  = Number(d[t.vacF]||0);
+      const cnt  = _hasUnits ? (_derivedCounts[t.key] || 0) : (Number(d[t.countF]||0));
+      const vac  = _hasUnits ? (_derivedVacCounts[t.key] || 0) : (Number(d[t.vacF]||0));
       const stored = (rentData.byType&&rentData.byType[t.key])||0;
       const avg  = _hasUnitRents ? (_derivedAvgs[t.key] || 0) : stored;
       const tot  = cnt * avg;
       const derivedStyle = _hasUnitRents ? 'background:#f1f5f9;color:#64748b;' : '';
       const derivedTitle = _hasUnitRents ? 'Auto-averaged from individual units below' : '';
+      const cntStyle = _hasUnits ? 'background:#f8fafc;color:#475569;' : '';
+      const cntTitle = _hasUnits ? 'Auto-counted from individual units below' : '';
+      const vacTitle = _hasUnits ? 'Auto-counted from individual units below (status = Vacant)' : '';
       return `<tr style="border-bottom:1px solid #f1f5f9;">
         <td style="padding:8px 8px;font-weight:600;color:#1e293b;font-size:12px;">${t.label}</td>
-        <td style="padding:6px 8px;text-align:center;"><input class="form-input" id="um_${umId[t.key]}" value="${d[t.countF]||''}" style="width:96px;text-align:center;" placeholder="0" oninput="mfRentCalcTotal();_umRefreshStats();_umMarkDirty()"/></td>
-        <td style="padding:6px 8px;text-align:center;"><input class="form-input" id="um_${umId[t.key]}_v" value="${d[t.vacF]||''}" style="width:96px;text-align:center;" placeholder="0" oninput="_umRefreshStats();_umMarkDirty()"/></td>
+        <td style="padding:6px 8px;text-align:center;"><input class="form-input" id="um_${umId[t.key]}" value="${cnt||''}" style="width:96px;text-align:center;${cntStyle}" placeholder="0" title="${cntTitle}" oninput="mfRentCalcTotal();_umRefreshStats();_umMarkDirty()"/></td>
+        <td style="padding:6px 8px;text-align:center;"><input class="form-input" id="um_${umId[t.key]}_v" value="${vac||''}" style="width:96px;text-align:center;${cntStyle}" placeholder="0" title="${vacTitle}" oninput="_umRefreshStats();_umMarkDirty()"/></td>
         <td style="padding:6px 8px;text-align:right;position:relative;">
           <span style="position:absolute;right:106px;top:50%;transform:translateY(-50%);color:#94a3b8;font-size:11px;pointer-events:none;">$</span>
           <input class="form-input num-input" id="umr_${t.key}" type="text" inputmode="numeric" value="${_fmtNum(avg||'')}" style="width:120px;text-align:right;padding-left:14px;${derivedStyle}" placeholder="0" title="${derivedTitle}" oninput="mfRentCalcTotal();_umRefreshStats();_umMarkDirty()"/>
@@ -8336,13 +8365,13 @@ function _renderUnitMixSection(d){
         <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start;">
           <div style="min-width:160px;">
             <label class="pd-lbl" style="display:block;margin-bottom:4px;">No. of Units</label>
-            <input class="form-input" id="um_totalUnits" value="${d['No. of Units']||''}" style="width:140px;" placeholder="—" oninput="_umRefreshStats();_umMarkDirty()"/>
-            <div style="font-size:10px;color:#94a3b8;margin-top:4px;">Total doors at the property.</div>
+            <input class="form-input" id="um_totalUnits" value="${totalUnits||''}" style="width:140px;${_hasUnits?'background:#f8fafc;color:#475569;':''}" placeholder="—" title="${_hasUnits?'Auto-counted from individual units below':''}" oninput="_umRefreshStats();_umMarkDirty()"/>
+            <div style="font-size:10px;color:#94a3b8;margin-top:4px;">${_hasUnits?'Auto-counted from rent roll.':'Total doors at the property.'}</div>
           </div>
           <div style="min-width:160px;">
             <label class="pd-lbl" style="display:block;margin-bottom:4px;">Occupancy</label>
             <div style="display:flex;align-items:center;gap:6px;">
-              <input class="form-input" id="um_occupancy" value="${d['Occupancy (%)']||''}" style="width:100px;" placeholder="—" oninput="_umRefreshStats();_umMarkDirty()"/>
+              <input class="form-input" id="um_occupancy" value="${occupancyPct||''}" style="width:100px;${_hasUnits?'background:#f8fafc;color:#475569;':''}" placeholder="—" title="${_hasUnits?'Auto-calc from rent roll occupancy (Occupied + Section 8)':''}" oninput="_umRefreshStats();_umMarkDirty()"/>
               <span style="color:#64748b;font-size:12px;">%</span>
             </div>
             <div style="font-size:10px;color:#94a3b8;margin-top:4px;">Auto-calc from rent roll when units are filled.</div>

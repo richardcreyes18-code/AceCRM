@@ -6988,6 +6988,15 @@ function switchTab(name, btn){
   if(_dealDirty && currentDeal?.id){
     masterSave({ silent: true }).catch(() => { /* pending preserved */ });
   }
+  // v167: also flush any pending unit-mix autosave so individual unit
+  // rents typed on Property Details aren't lost when the user navigates
+  // to Financial Analysis. The function is async but we fire-and-forget
+  // — _mfRentUnits stays in memory until the PATCH lands so the
+  // Financial Analysis tab can still derive GRI even before the network
+  // round-trip completes.
+  if(typeof _umFlushIfDirty === 'function'){
+    _umFlushIfDirty().catch(() => {});
+  }
 
   currentTab=name;
   document.querySelectorAll('.tab-btn').forEach(b=>b.classList.remove('active'));
@@ -8721,20 +8730,46 @@ function mfRentCalcTotal(){
 // Live state for individual units (for byUnit mode)
 let _mfRentUnits = [];
 
+// v167: unit-mix autosave plumbing. _mfRentUnits lives only in memory
+// and is reseeded from currentDeal on tab re-render — so without an
+// autosave trigger, typing a rent then clicking Financial Analysis
+// loses the data. We debounce a saveUnitMix() call as the user edits,
+// and switchTab flushes synchronously via _umFlushIfDirty().
+let _umDirty = false;
+let _umAutoSaveTimer = null;
+const UM_AUTO_SAVE_DELAY = 1200;
+function _umMarkDirty(){
+  if(!currentDeal?.id) return;
+  _umDirty = true;
+  clearTimeout(_umAutoSaveTimer);
+  _umAutoSaveTimer = setTimeout(() => {
+    if(!_umDirty) return;
+    saveUnitMix().catch(e => console.warn('[unit-mix autosave] failed:', e && e.message));
+  }, UM_AUTO_SAVE_DELAY);
+}
+async function _umFlushIfDirty(){
+  if(!_umDirty) return;
+  clearTimeout(_umAutoSaveTimer);
+  try { await saveUnitMix(); } catch(e){ console.warn('[unit-mix flush] failed:', e && e.message); }
+}
+
 function mfRentAddUnit(){
   _mfRentUnits.push({label:'',type:'1 Bedroom',rent:0,status:'Occupied'});
   _renderMFUnitRows();
   mfRentCalcTotal();
+  _umMarkDirty();
 }
 
 function mfRentRemoveUnit(i){
   _mfRentUnits.splice(i,1);
   _renderMFUnitRows();
   mfRentCalcTotal();
+  _umMarkDirty();
 }
 
 function mfRentSetUnit(i,field,val){
   if(_mfRentUnits[i]) _mfRentUnits[i][field]= field==='rent'?(Number(String(val||'').replace(/,/g,''))||0):val;
+  _umMarkDirty();
 }
 
 function _renderMFUnitRows(){
@@ -12598,6 +12633,9 @@ async function saveUnitMix(){
     const res = await airtableUpdate(currentDeal.id, fields);
     if(res){
       Object.assign(currentDeal, fields);
+      // v167: clear the unit-mix dirty flag now that the values are persisted
+      // and the in-memory deal carries them.
+      _umDirty = false;
       const msg = document.getElementById('umSaveMsg');
       if(msg){ msg.textContent = '✓ Saved!'; msg.style.display='inline'; setTimeout(()=>msg.style.display='none', 2500); }
       const gri = fields['Gross Rental Income (Monthly)'];

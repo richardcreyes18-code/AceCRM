@@ -28790,8 +28790,8 @@ async function _showMyPipelineBoard(){
     +   '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;gap:10px;flex-wrap:wrap;">'
     +     '<div style="font-size:17px;font-weight:bold;color:#1a3a6e;">' + _esc(headline) + '</div>'
     +     '<div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">'
-    +       viewToggleHTML
     +       scopeToggleHTML
+    +       viewToggleHTML
     +       '<button onclick="_myPipelineRefresh()" title="Refresh from server" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:7px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">↻ Refresh</button>'
     +     '</div>'
     +   '</div>'
@@ -53857,10 +53857,6 @@ function showPipelineView(){
         <div style="display:flex;gap:8px;align-items:center;">
           ${scopeToggle}
           ${viewToggle}
-          <button onclick="openConfig();setTimeout(()=>document.getElementById('pipelineCardFieldsSection')?.scrollIntoView({behavior:'smooth',block:'start'}),200)"
-            style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:7px 14px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">
-            ⚙ Card Fields
-          </button>
         </div>
       </div>
 

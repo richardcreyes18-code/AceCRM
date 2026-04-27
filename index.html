@@ -9308,39 +9308,67 @@ function addAmenityCategory(){
 function renderQuickCalcTab(d){
   if(!d) return '<div style="padding:30px;color:#94a3b8;text-align:center;">No deal loaded.</div>';
   const dealId = d.id;
-  // ── Pull saved values (no live recalc — Financial Analysis owns that) ──
+  // ── Pull saved values + intelligent fallbacks ──────────────────
+  // v169.1: NOI / SF / Units now use the same fallback chain the
+  // Financial Analysis tab uses, so the calculator sees data even
+  // when the canonical column is empty (NOI gets computed from gross
+  // rental income − expenses, SF falls back to Net Rentable, etc.).
   const ask       = Number(d['Asking Price']) || 0;
   const offer     = Number(d['Offer Price']) || 0;
-  const noi       = Number(d['NOI']) || 0;
-  const capStored = Number(d['Cap Rate (CRM)']) || 0; // decimal e.g. 0.065
-  const sf        = Number(d['Net Rentable SF'] || d['Square Footage'] || d['Total Building SF']) || 0;
-  const totalSF   = Number(d['Square Footage'] || d['Total Building SF']) || 0;
+  const noiStored = Number(d['NOI']) || 0;
+  const grossYr   = (Number(d['Gross Rental Income (Monthly)']) || 0) * 12
+                    || Number(d['Gross Revenue Yearly']) || 0;
+  const expensesYr= Number(d['Expenses Yearly'])
+                    || (Number(d['Expenses Monthly']) || 0) * 12
+                    || 0;
+  const aNOI = noiStored || ((grossYr > 0 || expensesYr > 0) ? Math.max(grossYr - expensesYr, 0) : 0);
+  // Pro Forma NOI: same fallback chain, with the proforma column set
+  const pNoiStored  = Number(d['Pro Forma NOI']) || 0;
+  const pGrossYr    = Number(d['Pro Forma Gross Revenue Yearly'])
+                      || (Number(d['Pro Forma Gross Revenue Monthly']) || 0) * 12
+                      || 0;
+  const pExpensesYr = Number(d['Pro Forma Expenses Yearly'])
+                      || (Number(d['Pro Forma Expenses Monthly']) || 0) * 12
+                      || 0;
+  const pNOI = pNoiStored || ((pGrossYr > 0 || pExpensesYr > 0) ? Math.max(pGrossYr - pExpensesYr, 0) : 0);
+  const totalSF   = Number(d['Square Footage'])
+                    || Number(d['Total Building SF'])
+                    || Number(d['Net Rentable SF']) || 0;
+  const sf        = totalSF;
   const units     = Number(d['No. of Units'] || d['Number of Units']) || 0;
   const occupancy = Number(d['Occupancy (%)']) || 0;
   const debt      = Number(d['Annual Debt Service']) || 0;
-  const grossYr   = (Number(d['Gross Rental Income (Monthly)']) || 0) * 12;
-  const expensesYr= Number(d['Expenses Yearly']) || (Number(d['Expenses Monthly']) || 0) * 12;
-  const cashFlow  = noi - debt;
+  const cashFlow  = aNOI - debt;
   const ppu       = (ask && units) ? ask / units : 0;
   const ppf       = (ask && totalSF) ? ask / totalSF : 0;
-  const askDisplay   = _dealAskingDisplay(d);
+  const askDisplay = _dealAskingDisplay(d);
   const dol = v => v ? '$' + Math.round(v).toLocaleString() : '—';
   const pct = v => v ? (v * 100).toFixed(2) + '%' : '—';
 
-  // ── Quick Offer Calculator: pre-fill targets with sensible defaults ──
-  // Cap-based default: 7%; PSF/PPU default to current implied values
-  // (so the calculator opens with the SAME number you already have, then
-  // the user nudges from there).
+  // ── Defaults: open the calc with sensible numbers — current implied
+  // PSF/PPU and a 7-cap baseline. User nudges from there.
   const defaultCap = 7;
   const defaultPPU = ppu || 0;
   const defaultPPF = ppf || 0;
-  const calcResults = (capPct, psf, ppu) => {
-    const fromCap = (noi && capPct > 0) ? noi / (capPct/100) : 0;
-    const fromPSF = (totalSF && psf > 0) ? totalSF * psf : 0;
-    const fromPPU = (units && ppu > 0)   ? units * ppu    : 0;
-    return { fromCap, fromPSF, fromPPU };
-  };
-  const initial = calcResults(defaultCap, defaultPPF, defaultPPU);
+  // Pick a starting NOI mode based on which value exists. Prefer Pro
+  // Forma when actual NOI is zero AND proforma is positive.
+  const startMode = (!aNOI && pNOI > 0) ? 'proforma' : 'actual';
+  const startNOI  = startMode === 'proforma' ? pNOI : aNOI;
+  const initialFromCap = (startNOI > 0) ? startNOI / (defaultCap / 100) : 0;
+  const initialFromPSF = (totalSF && defaultPPF > 0) ? totalSF * defaultPPF : 0;
+  const initialFromPPU = (units && defaultPPU > 0) ? units * defaultPPU : 0;
+
+  // Disabled-row helper: when a required field is missing, show a faded
+  // version of the calc row with a small inline hint instead of a
+  // separate warning chip — keeps the layout stable and shows the user
+  // exactly which control needs data.
+  const disabledHint = (label, missingHint, why) => `
+    <div style="display:grid;grid-template-columns:1.2fr 1fr 1fr auto;gap:10px;align-items:center;padding:10px 12px;background:#fff;border:1px dashed #fbbf24;border-radius:8px;opacity:0.75;">
+      <div><strong style="color:#0f172a;">${label}</strong> <span style="color:#92400e;font-weight:500;font-size:10px;">⚠ ${why}</span></div>
+      <div style="color:#94a3b8;text-align:center;">—</div>
+      <div style="color:#94a3b8;text-align:right;font-size:18px;font-weight:800;">—</div>
+      <div style="color:#94a3b8;font-size:10px;white-space:nowrap;">${missingHint}</div>
+    </div>`;
 
   return `
     <div style="padding:4px 0 20px;">
@@ -9351,41 +9379,52 @@ function renderQuickCalcTab(d){
           <span style="font-size:10px;color:#64748b;font-weight:500;">From saved deal data — change values to model offers.</span>
         </div>
         <div style="display:grid;grid-template-columns:1fr;gap:10px;font-size:12px;">
-          <!-- Inputs strip showing the current data the calc draws from -->
-          <div style="display:flex;flex-wrap:wrap;gap:14px;padding:10px 12px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;font-size:11px;">
-            <div><strong style="color:#64748b;">NOI:</strong> <span id="qcNoi" style="font-weight:700;color:#0f172a;">${dol(noi)}</span></div>
+          <!-- Data + NOI mode toggle -->
+          <div style="display:flex;flex-wrap:wrap;gap:14px;padding:10px 12px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;font-size:11px;align-items:center;">
+            <div><strong style="color:#64748b;">NOI:</strong> <span id="qcNoi" style="font-weight:700;color:#0f172a;">${dol(startNOI)}</span></div>
+            <div style="display:inline-flex;border:1px solid #cbd5e1;border-radius:99px;overflow:hidden;font-size:10px;">
+              <button id="qcNoiModeActual"   onclick="_qcSetNoiMode('actual')"
+                style="padding:3px 11px;background:${startMode==='actual'?'#1e3a8a':'#fff'};color:${startMode==='actual'?'#fff':'#475569'};border:none;cursor:pointer;font-weight:600;">Actual ${aNOI ? `(${dol(aNOI)})` : '(—)'}</button>
+              <button id="qcNoiModeProforma" onclick="_qcSetNoiMode('proforma')"
+                style="padding:3px 11px;background:${startMode==='proforma'?'#1e3a8a':'#fff'};color:${startMode==='proforma'?'#fff':'#475569'};border:none;cursor:pointer;border-left:1px solid #cbd5e1;font-weight:600;">Pro Forma ${pNOI ? `(${dol(pNOI)})` : '(—)'}</button>
+            </div>
+            <input type="hidden" id="qcNoiActual" value="${aNOI}"/>
+            <input type="hidden" id="qcNoiProforma" value="${pNOI}"/>
+            <input type="hidden" id="qcNoiActiveMode" value="${startMode}"/>
             <div><strong style="color:#64748b;">Square Footage:</strong> <span id="qcSF" style="font-weight:700;color:#0f172a;">${totalSF ? totalSF.toLocaleString() + ' SF' : '—'}</span></div>
             <div><strong style="color:#64748b;">Units:</strong> <span id="qcUnits" style="font-weight:700;color:#0f172a;">${units || '—'}</span></div>
             <div style="margin-left:auto;"><strong style="color:#64748b;">Current Asking:</strong> <span style="font-weight:700;color:#1e3a8a;">${askDisplay}</span></div>
           </div>
 
-          <!-- Three calc rows: Cap Rate, $/SF, $/Unit -->
-          ${noi > 0 ? `
+          <!-- Cap-rate row (always shown; disabled state when no NOI) -->
+          ${(aNOI > 0 || pNOI > 0) ? `
             <div style="display:grid;grid-template-columns:1.2fr 1fr 1fr auto;gap:10px;align-items:center;padding:10px 12px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;">
               <div><strong style="color:#0f172a;">Target CAP Rate</strong> <span style="color:#64748b;font-weight:400;">→ price = NOI ÷ cap</span></div>
               <div style="display:flex;align-items:center;gap:5px;"><input id="qcCap" type="number" step="0.05" value="${defaultCap}" oninput="_qcRecalc()" style="width:80px;padding:6px 8px;font-size:13px;border:1px solid #cbd5e1;border-radius:6px;text-align:right;"/><span style="color:#64748b;">%</span></div>
-              <div id="qcOutCap" style="font-size:18px;font-weight:800;color:#15803d;text-align:right;">${dol(initial.fromCap)}</div>
+              <div id="qcOutCap" style="font-size:18px;font-weight:800;color:#15803d;text-align:right;">${dol(initialFromCap)}</div>
               <button onclick="_qcUseAsOffer('cap')" title="Set this as Offer Price" style="background:#1e3a8a;color:#fff;border:none;padding:6px 12px;font-size:11px;font-weight:700;border-radius:6px;cursor:pointer;white-space:nowrap;">Use as Offer →</button>
             </div>
-          ` : `<div style="padding:10px 12px;background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;color:#92400e;font-size:11px;">⚠ Add an NOI in Financial Analysis to enable the cap-rate calculator.</div>`}
+          ` : disabledHint('Target CAP Rate', 'add NOI in Financial Analysis', 'no NOI on file')}
 
+          <!-- $/SF row -->
           ${totalSF > 0 ? `
             <div style="display:grid;grid-template-columns:1.2fr 1fr 1fr auto;gap:10px;align-items:center;padding:10px 12px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;">
               <div><strong style="color:#0f172a;">Target Price / SF</strong> <span style="color:#64748b;font-weight:400;">→ price = SF × $/SF</span></div>
               <div style="display:flex;align-items:center;gap:5px;"><span style="color:#64748b;">$</span><input id="qcPSF" type="number" step="1" value="${defaultPPF.toFixed(0)}" oninput="_qcRecalc()" style="width:90px;padding:6px 8px;font-size:13px;border:1px solid #cbd5e1;border-radius:6px;text-align:right;"/><span style="color:#64748b;">/sf</span></div>
-              <div id="qcOutPSF" style="font-size:18px;font-weight:800;color:#15803d;text-align:right;">${dol(initial.fromPSF)}</div>
+              <div id="qcOutPSF" style="font-size:18px;font-weight:800;color:#15803d;text-align:right;">${dol(initialFromPSF)}</div>
               <button onclick="_qcUseAsOffer('psf')" title="Set this as Offer Price" style="background:#1e3a8a;color:#fff;border:none;padding:6px 12px;font-size:11px;font-weight:700;border-radius:6px;cursor:pointer;white-space:nowrap;">Use as Offer →</button>
             </div>
-          ` : `<div style="padding:10px 12px;background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;color:#92400e;font-size:11px;">⚠ Add Square Footage in Property Details to enable the PSF calculator.</div>`}
+          ` : disabledHint('Target Price / SF', 'add Square Footage in Property Details', 'no SF on file')}
 
+          <!-- $/Unit row -->
           ${units > 0 ? `
             <div style="display:grid;grid-template-columns:1.2fr 1fr 1fr auto;gap:10px;align-items:center;padding:10px 12px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;">
               <div><strong style="color:#0f172a;">Target Price / Unit</strong> <span style="color:#64748b;font-weight:400;">→ price = Units × $/unit</span></div>
               <div style="display:flex;align-items:center;gap:5px;"><span style="color:#64748b;">$</span><input id="qcPPU" type="number" step="1000" value="${defaultPPU.toFixed(0)}" oninput="_qcRecalc()" style="width:110px;padding:6px 8px;font-size:13px;border:1px solid #cbd5e1;border-radius:6px;text-align:right;"/><span style="color:#64748b;">/unit</span></div>
-              <div id="qcOutPPU" style="font-size:18px;font-weight:800;color:#15803d;text-align:right;">${dol(initial.fromPPU)}</div>
+              <div id="qcOutPPU" style="font-size:18px;font-weight:800;color:#15803d;text-align:right;">${dol(initialFromPPU)}</div>
               <button onclick="_qcUseAsOffer('ppu')" title="Set this as Offer Price" style="background:#1e3a8a;color:#fff;border:none;padding:6px 12px;font-size:11px;font-weight:700;border-radius:6px;cursor:pointer;white-space:nowrap;">Use as Offer →</button>
             </div>
-          ` : `<div style="padding:10px 12px;background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;color:#92400e;font-size:11px;">⚠ Add # of Units in Property Details to enable the per-unit calculator.</div>`}
+          ` : disabledHint('Target Price / Unit', 'add # of Units in Property Details', 'no units on file')}
         </div>
       </div>
 
@@ -9475,11 +9514,29 @@ function renderQuickCalcTab(d){
 
 // v169: live recalc handler for the Quick Offer Calculator. Reads the
 // three input fields and updates the corresponding output cells.
+// v169.1: cap-rate calc now uses whichever NOI mode is active
+// (Actual or Pro Forma) — the active value is mirrored into the
+// hidden #qcNoiActual / #qcNoiProforma inputs at render time.
+function _qcActiveNOI(){
+  const mode = (document.getElementById('qcNoiActiveMode')?.value || 'actual').toLowerCase();
+  const actualEl   = document.getElementById('qcNoiActual');
+  const proformaEl = document.getElementById('qcNoiProforma');
+  if(mode === 'proforma') return Number(proformaEl?.value) || 0;
+  return Number(actualEl?.value) || 0;
+}
+function _qcSF(){
+  const d = currentDeal || {};
+  return Number(d['Square Footage']) || Number(d['Total Building SF']) || Number(d['Net Rentable SF']) || 0;
+}
+function _qcUnits(){
+  const d = currentDeal || {};
+  return Number(d['No. of Units'] || d['Number of Units']) || 0;
+}
+
 window._qcRecalc = function(){
-  if(!currentDeal) return;
-  const noi   = Number(currentDeal['NOI']) || 0;
-  const sf    = Number(currentDeal['Square Footage'] || currentDeal['Total Building SF']) || 0;
-  const units = Number(currentDeal['No. of Units'] || currentDeal['Number of Units']) || 0;
+  const noi   = _qcActiveNOI();
+  const sf    = _qcSF();
+  const units = _qcUnits();
   const dol = v => v ? '$' + Math.round(v).toLocaleString() : '—';
   const cap = Number(document.getElementById('qcCap')?.value) || 0;
   const psf = Number(document.getElementById('qcPSF')?.value) || 0;
@@ -9490,14 +9547,37 @@ window._qcRecalc = function(){
   if(outCap) outCap.textContent = dol((noi && cap > 0) ? noi / (cap / 100) : 0);
   if(outPSF) outPSF.textContent = dol((sf && psf > 0)  ? sf * psf : 0);
   if(outPPU) outPPU.textContent = dol((units && ppu > 0) ? units * ppu : 0);
+  // Update the headline NOI value in the data strip too.
+  const noiCell = document.getElementById('qcNoi');
+  if(noiCell) noiCell.textContent = dol(noi);
+};
+
+// v169.1: switch between Actual NOI and Pro Forma NOI for the cap-rate
+// calc. Persists in a hidden input so subsequent _qcRecalc / _qcUseAsOffer
+// calls read the right mode.
+window._qcSetNoiMode = function(mode){
+  const hidden = document.getElementById('qcNoiActiveMode');
+  if(hidden) hidden.value = mode;
+  // Repaint pill highlight
+  const a = document.getElementById('qcNoiModeActual');
+  const p = document.getElementById('qcNoiModeProforma');
+  if(a){
+    a.style.background = mode === 'actual' ? '#1e3a8a' : '#fff';
+    a.style.color      = mode === 'actual' ? '#fff'    : '#475569';
+  }
+  if(p){
+    p.style.background = mode === 'proforma' ? '#1e3a8a' : '#fff';
+    p.style.color      = mode === 'proforma' ? '#fff'    : '#475569';
+  }
+  _qcRecalc();
 };
 
 // v169: persist the calculator's current row as Offer Price on the deal.
 window._qcUseAsOffer = async function(which){
   if(!currentDeal) return;
-  const noi   = Number(currentDeal['NOI']) || 0;
-  const sf    = Number(currentDeal['Square Footage'] || currentDeal['Total Building SF']) || 0;
-  const units = Number(currentDeal['No. of Units'] || currentDeal['Number of Units']) || 0;
+  const noi   = _qcActiveNOI();
+  const sf    = _qcSF();
+  const units = _qcUnits();
   let price = 0;
   if(which === 'cap'){
     const cap = Number(document.getElementById('qcCap')?.value) || 0;
@@ -9511,7 +9591,7 @@ window._qcUseAsOffer = async function(which){
   }
   if(!price){ alert('Enter a target value first.'); return; }
   price = Math.round(price);
-  if(!confirm(`Set Offer Price to $${price.toLocaleString()}?\n\nThis updates the deal's Offer Price and Ace Starter Offer.`)) return;
+  if(!confirm(`Set Offer Price to $${price.toLocaleString()}?\n\nThis updates the deal's Offer Price.`)) return;
   try {
     await _sbPatch(SB_TABLES.properties, currentDeal.id, { offer_price: price });
     currentDeal['Offer Price'] = price;

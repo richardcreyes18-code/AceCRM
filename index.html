@@ -13950,35 +13950,35 @@ function renderAICommTab(d){
 //   get   — getter against currentDeal (AT-style field names)
 const EMAIL_TPL_FIELDS = [
   // ── Basic Info ────────────────────────────────────────────────────────────
-  { k:'address',       group:'Basic Info',   label:'Address',               get:d=>d['Address'] },
-  { k:'propType',      group:'Basic Info',   label:'Property Type',         get:d=>d['Simple Text Property Type']||d['CRM Asset Classification'] },
-  { k:'askingPrice',   group:'Basic Info',   label:'Asking Price',          get:d=>{ const v=d['Pitch Out Price']||d['Asking Price']; return v?'$'+Number(v).toLocaleString():''; } },
-  { k:'pipeline',      group:'Basic Info',   label:'Pipeline Stage',        get:d=>d['Pipeline Stage'] },
+  { k:'address',       group:'Basic Info',   label:'Address',               token:'{property address}', get:d=>d['Address'] },
+  { k:'propType',      group:'Basic Info',   label:'Property Type',         token:'{property type}',    get:d=>d['Simple Text Property Type']||d['CRM Asset Classification'] },
+  { k:'askingPrice',   group:'Basic Info',   label:'Asking Price',          token:'{asking price}',     get:d=>{ const v=d['Pitch Out Price']||d['Asking Price']; return v?'$'+Number(v).toLocaleString():''; } },
+  { k:'pipeline',      group:'Basic Info',   label:'Pipeline Stage',        token:'{pipeline stage}',   get:d=>d['Pipeline Stage'] },
 
   // ── Property Description (own section per user request) ───────────────────
-  { k:'propDesc',      group:'Property Description', label:'Property Description', get:d=>d['Property Description'] },
+  { k:'propDesc',      group:'Property Description', label:'Property Description', token:'{property description}', get:d=>d['Property Description'] },
 
   // ── Physical Details ──────────────────────────────────────────────────────
-  { k:'sqft',          group:'Physical',     label:'Building SF',           get:d=>{ const v=d['Square Footage']||d['Total Building SF']; return v?Number(v).toLocaleString()+' SF':''; } },
-  { k:'netRentableSF', group:'Physical',     label:'Net Rentable SF',       get:d=>{ const v=d['Net Rentable SF']; return v?Number(v).toLocaleString()+' SF':''; } },
-  { k:'lotSize',       group:'Physical',     label:'Lot Size',              get:d=>{ const v=d['Total Lot Size']; return v?Number(v).toLocaleString()+' acres':''; } },
-  { k:'units',         group:'Physical',     label:'# of Units',            get:d=>d['No. of Units']||d['Number of Units'] },  // v113.18: Unit Mix UI writes to 'No. of Units'; prefer it over the legacy 'Number of Units' column
-  { k:'noOfBuildings', group:'Physical',     label:'# of Buildings',        get:d=>d['No. of Buildings'] },
-  { k:'unitMix',       group:'Physical',     label:'Unit Mix',              get:d=>d['Unit Mix'] },
-  { k:'yearBuilt',     group:'Physical',     label:'Year Built',            get:d=>d['Year Built'] },
-  { k:'yearRenovated', group:'Physical',     label:'Year Renovated',        get:d=>d['Year Renovated'] },
-  { k:'occupancy',     group:'Physical',     label:'Occupancy %',           get:d=>{ const v=d['Occupancy (%)']; return (v!=null&&v!=='')? v+'%':''; } },
-  { k:'ownerOcc',      group:'Physical',     label:'Owner Occupied?',       get:d=>{ const v=d['Owner Occupied']; if(v===true)return'Yes'; if(v===false)return'No'; return v||''; } },
-  { k:'propClass',     group:'Physical',     label:'Property Class',        get:d=>d['Property Class'] },
-  { k:'propCondition', group:'Physical',     label:'Property Condition',    get:d=>d['Property Condition'] },
-  { k:'noOfStories',   group:'Physical',     label:'# of Stories',          get:d=>d['No. of Stories'] },
-  { k:'parking',       group:'Physical',     label:'Parking Spaces',        get:d=>d['No. of Parking Spaces'] },
+  { k:'sqft',          group:'Physical',     label:'Building SF',           token:'{building sf}',      get:d=>{ const v=d['Square Footage']||d['Total Building SF']; return v?Number(v).toLocaleString()+' SF':''; } },
+  { k:'netRentableSF', group:'Physical',     label:'Net Rentable SF',       token:'{net rentable sf}',  get:d=>{ const v=d['Net Rentable SF']; return v?Number(v).toLocaleString()+' SF':''; } },
+  { k:'lotSize',       group:'Physical',     label:'Lot Size',              token:'{lot size}',         get:d=>{ const v=d['Total Lot Size']; return v?Number(v).toLocaleString()+' acres':''; } },
+  { k:'units',         group:'Physical',     label:'# of Units',            token:'{units}',            get:d=>d['No. of Units']||d['Number of Units'] },  // v113.18: Unit Mix UI writes to 'No. of Units'; prefer it over the legacy 'Number of Units' column
+  { k:'noOfBuildings', group:'Physical',     label:'# of Buildings',        token:'{buildings}',        get:d=>d['No. of Buildings'] },
+  { k:'unitMix',       group:'Physical',     label:'Unit Mix',              token:'{unit mix}',         get:d=>d['Unit Mix'] },
+  { k:'yearBuilt',     group:'Physical',     label:'Year Built',            token:'{year built}',       get:d=>d['Year Built'] },
+  { k:'yearRenovated', group:'Physical',     label:'Year Renovated',        token:'{year renovated}',   get:d=>d['Year Renovated'] },
+  { k:'occupancy',     group:'Physical',     label:'Occupancy %',           token:'{occupancy}',        get:d=>{ const v=d['Occupancy (%)']; return (v!=null&&v!=='')? v+'%':''; } },
+  { k:'ownerOcc',      group:'Physical',     label:'Owner Occupied?',       token:'{owner occupied}',   get:d=>{ const v=d['Owner Occupied']; if(v===true)return'Yes'; if(v===false)return'No'; return v||''; } },
+  { k:'propClass',     group:'Physical',     label:'Property Class',        token:'{property class}',   get:d=>d['Property Class'] },
+  { k:'propCondition', group:'Physical',     label:'Property Condition',    token:'{property condition}', get:d=>d['Property Condition'] },
+  { k:'noOfStories',   group:'Physical',     label:'# of Stories',          token:'{stories}',          get:d=>d['No. of Stories'] },
+  { k:'parking',       group:'Physical',     label:'Parking Spaces',        token:'{parking}',          get:d=>d['No. of Parking Spaces'] },
 
   // ── Financials (Actual) ───────────────────────────────────────────────────
-  { k:'griMonthly',    group:'Financials',   label:'GRI (Monthly)',         get:d=>{ const v=d['Gross Rental Income (Monthly)']; return v?'$'+Number(v).toLocaleString()+'/mo':''; } },
-  { k:'grossRevYearly',group:'Financials',   label:'Gross Revenue (yr)',    get:d=>{ const gri=d['Gross Revenue Yearly']; const mo=d['Gross Rental Income (Monthly)']; const v=gri||(mo?Number(mo)*12:null); return v?'$'+Number(v).toLocaleString():''; } },
-  { k:'expensesYearly',group:'Financials',   label:'Expenses (yr)',         get:d=>{ const v=d['Expenses Yearly']||(d['Expenses Monthly']?Number(d['Expenses Monthly'])*12:null); return v?'$'+Number(v).toLocaleString():''; } },
-  { k:'noi',           group:'Financials',   label:'NOI (yearly)',          get:d=>{
+  { k:'griMonthly',    group:'Financials',   label:'GRI (Monthly)',         token:'{gri monthly}',      get:d=>{ const v=d['Gross Rental Income (Monthly)']; return v?'$'+Number(v).toLocaleString()+'/mo':''; } },
+  { k:'grossRevYearly',group:'Financials',   label:'Gross Revenue (yr)',    token:'{gross revenue}',    get:d=>{ const gri=d['Gross Revenue Yearly']; const mo=d['Gross Rental Income (Monthly)']; const v=gri||(mo?Number(mo)*12:null); return v?'$'+Number(v).toLocaleString():''; } },
+  { k:'expensesYearly',group:'Financials',   label:'Expenses (yr)',         token:'{expenses}',         get:d=>{ const v=d['Expenses Yearly']||(d['Expenses Monthly']?Number(d['Expenses Monthly'])*12:null); return v?'$'+Number(v).toLocaleString():''; } },
+  { k:'noi',           group:'Financials',   label:'NOI (yearly)',          token:'{noi}', get:d=>{
       // v113.18: compute NOI when the column is empty. NOI = Gross Revenue - Expenses.
       const stored = Number(d['NOI']);
       if(stored) return '$'+stored.toLocaleString();
@@ -13987,26 +13987,26 @@ const EMAIL_TPL_FIELDS = [
       const noi = gri - exp;
       return (gri && exp && noi>0) ? '$'+Math.round(noi).toLocaleString() : '';
   } },
-  { k:'capRate',       group:'Financials',   label:'Cap Rate',              get:d=>{ const v=d['Cap Rate (CRM)']; return (v!=null&&v!=='')? (Number(v)*100).toFixed(2)+'%':''; } },
-  { k:'expenseRatio',  group:'Financials',   label:'Expense Ratio',         get:d=>{ const v=d['Actual Expense Ratio %']; return (v!=null&&v!=='')? Number(v).toFixed(1)+'%':''; } },
-  { k:'pricePerSF',    group:'Financials',   label:'Price / SF',            get:d=>{ const ask=Number(d['Asking Price']||d['Pitch Out Price']||0); const sf=Number(d['Square Footage']||d['Total Building SF']||0); return (ask&&sf)?'$'+(ask/sf).toFixed(2)+'/SF':''; } },
-  { k:'pricePerUnit',  group:'Financials',   label:'Price / Unit',          get:d=>{ const ask=Number(d['Asking Price']||d['Pitch Out Price']||0); const u=Number(d['Number of Units']||d['No. of Units']||0); return (ask&&u)?'$'+Math.round(ask/u).toLocaleString()+'/unit':''; } },
-  { k:'vacancyRate',   group:'Financials',   label:'Vacancy Rate',          get:d=>{ const v=d['Vacancy Rate (%)']; return (v!=null&&v!=='')? v+'%':''; } },
-  { k:'annualDebtSvc', group:'Financials',   label:'Annual Debt Service',   get:d=>{ const v=d['Annual Debt Service']; return v?'$'+Number(v).toLocaleString():''; } },
-  { k:'dscr',          group:'Financials',   label:'DSCR',                  get:d=>d['DSCR (Manual)'] },
+  { k:'capRate',       group:'Financials',   label:'Cap Rate',              token:'{cap rate}',         get:d=>{ const v=d['Cap Rate (CRM)']; return (v!=null&&v!=='')? (Number(v)*100).toFixed(2)+'%':''; } },
+  { k:'expenseRatio',  group:'Financials',   label:'Expense Ratio',         token:'{expense ratio}',    get:d=>{ const v=d['Actual Expense Ratio %']; return (v!=null&&v!=='')? Number(v).toFixed(1)+'%':''; } },
+  { k:'pricePerSF',    group:'Financials',   label:'Price / SF',            token:'{price per sf}',     get:d=>{ const ask=Number(d['Asking Price']||d['Pitch Out Price']||0); const sf=Number(d['Square Footage']||d['Total Building SF']||0); return (ask&&sf)?'$'+(ask/sf).toFixed(2)+'/SF':''; } },
+  { k:'pricePerUnit',  group:'Financials',   label:'Price / Unit',          token:'{price per unit}',   get:d=>{ const ask=Number(d['Asking Price']||d['Pitch Out Price']||0); const u=Number(d['Number of Units']||d['No. of Units']||0); return (ask&&u)?'$'+Math.round(ask/u).toLocaleString()+'/unit':''; } },
+  { k:'vacancyRate',   group:'Financials',   label:'Vacancy Rate',          token:'{vacancy rate}',     get:d=>{ const v=d['Vacancy Rate (%)']; return (v!=null&&v!=='')? v+'%':''; } },
+  { k:'annualDebtSvc', group:'Financials',   label:'Annual Debt Service',   token:'{annual debt service}', get:d=>{ const v=d['Annual Debt Service']; return v?'$'+Number(v).toLocaleString():''; } },
+  { k:'dscr',          group:'Financials',   label:'DSCR',                  token:'{dscr}',             get:d=>d['DSCR (Manual)'] },
 
   // ── Pro Forma ─────────────────────────────────────────────────────────────
-  { k:'pfGRIYearly',   group:'Pro Forma',    label:'Pro Forma GRI (yr)',    get:d=>{ const v=d['Pro Forma Gross Revenue Yearly']||(d['Pro Forma Gross Revenue Monthly']?Number(d['Pro Forma Gross Revenue Monthly'])*12:null); return v?'$'+Number(v).toLocaleString():''; } },
-  { k:'pfExpYearly',   group:'Pro Forma',    label:'Pro Forma Expenses (yr)',get:d=>{ const v=d['Pro Forma Expenses Yearly']||(d['Pro Forma Expenses Monthly']?Number(d['Pro Forma Expenses Monthly'])*12:null); return v?'$'+Number(v).toLocaleString():''; } },
-  { k:'pfNOI',         group:'Pro Forma',    label:'Pro Forma NOI',         get:d=>{ const gri=Number(d['Pro Forma Gross Revenue Yearly']||(d['Pro Forma Gross Revenue Monthly']?Number(d['Pro Forma Gross Revenue Monthly'])*12:0)||0); const exp=Number(d['Pro Forma Expenses Yearly']||(d['Pro Forma Expenses Monthly']?Number(d['Pro Forma Expenses Monthly'])*12:0)||0); return (gri&&exp)?'$'+(gri-exp).toLocaleString():''; } },
-  { k:'pfCapRate',     group:'Pro Forma',    label:'Pro Forma Cap Rate',    get:d=>{ const v=d['Cap Rate Proforma (CRM)']; return (v!=null&&v!=='')? (Number(v)*100).toFixed(2)+'%':''; } },
-  { k:'pfExpRatio',    group:'Pro Forma',    label:'Pro Forma Expense Ratio',get:d=>{ const v=d['Pro Forma Expense Ratio %']; return (v!=null&&v!=='')? Number(v).toFixed(1)+'%':''; } },
+  { k:'pfGRIYearly',   group:'Pro Forma',    label:'Pro Forma GRI (yr)',    token:'{pro forma gri}',    get:d=>{ const v=d['Pro Forma Gross Revenue Yearly']||(d['Pro Forma Gross Revenue Monthly']?Number(d['Pro Forma Gross Revenue Monthly'])*12:null); return v?'$'+Number(v).toLocaleString():''; } },
+  { k:'pfExpYearly',   group:'Pro Forma',    label:'Pro Forma Expenses (yr)', token:'{pro forma expenses}', get:d=>{ const v=d['Pro Forma Expenses Yearly']||(d['Pro Forma Expenses Monthly']?Number(d['Pro Forma Expenses Monthly'])*12:null); return v?'$'+Number(v).toLocaleString():''; } },
+  { k:'pfNOI',         group:'Pro Forma',    label:'Pro Forma NOI',         token:'{pro forma noi}',    get:d=>{ const gri=Number(d['Pro Forma Gross Revenue Yearly']||(d['Pro Forma Gross Revenue Monthly']?Number(d['Pro Forma Gross Revenue Monthly'])*12:0)||0); const exp=Number(d['Pro Forma Expenses Yearly']||(d['Pro Forma Expenses Monthly']?Number(d['Pro Forma Expenses Monthly'])*12:0)||0); return (gri&&exp)?'$'+(gri-exp).toLocaleString():''; } },
+  { k:'pfCapRate',     group:'Pro Forma',    label:'Pro Forma Cap Rate',    token:'{pro forma cap rate}', get:d=>{ const v=d['Cap Rate Proforma (CRM)']; return (v!=null&&v!=='')? (Number(v)*100).toFixed(2)+'%':''; } },
+  { k:'pfExpRatio',    group:'Pro Forma',    label:'Pro Forma Expense Ratio', token:'{pro forma expense ratio}', get:d=>{ const v=d['Pro Forma Expense Ratio %']; return (v!=null&&v!=='')? Number(v).toFixed(1)+'%':''; } },
 
   // ── Notes & Deal Details ──────────────────────────────────────────────────
-  { k:'genNotes',      group:'Notes',        label:'General Property Notes',get:d=>d['General Property Notes'] },
-  { k:'finNotes',      group:'Notes',        label:'Financial Notes',       get:d=>d['Financial Property Notes'] },
-  { k:'whySelling',    group:'Notes',        label:'Why Selling',           get:d=>d['Why Selling'] },
-  { k:'sellerMotiv',   group:'Notes',        label:'Seller Motivation',     get:d=>d['Seller Motivation Level'] },
+  { k:'genNotes',      group:'Notes',        label:'General Property Notes', token:'{general notes}',   get:d=>d['General Property Notes'] },
+  { k:'finNotes',      group:'Notes',        label:'Financial Notes',        token:'{financial notes}', get:d=>d['Financial Property Notes'] },
+  { k:'whySelling',    group:'Notes',        label:'Why Selling',            token:'{why selling}',     get:d=>d['Why Selling'] },
+  { k:'sellerMotiv',   group:'Notes',        label:'Seller Motivation',      token:'{seller motivation}', get:d=>d['Seller Motivation Level'] },
 ];
 
 // Defaults — pre-checked fields for a typical outbound marketing email.
@@ -14155,11 +14155,38 @@ const EMAIL_TPL_PLACEHOLDERS = [
   { token:'{agent first name}',   label:'Agent First Name',   resolve:()=>{ const n=_currentUser?.fub_name||_currentUser?.name||''; return String(n).trim().split(/\s+/)[0]||''; } },
   { token:'{agent email}',        label:'Agent Email',        resolve:()=>String(_currentUser?.email||'').trim() },
   { token:'{agent phone}',        label:'Agent Phone',        resolve:()=>{ const me=(_currentUser?.fub_name||_currentUser?.name||'').trim().toLowerCase(); const dir=(typeof _companyDirectory!=='undefined'&&Array.isArray(_companyDirectory))?_companyDirectory:[]; const hit=dir.find(a=>String(a.name||'').trim().toLowerCase()===me); return String(hit?.phone||'').trim(); } },
-  // Property (pulled from currentDeal)
+  // Property tokens are auto-extended below from EMAIL_TPL_FIELDS so any
+  // field added there with a `token` is automatically resolvable at send
+  // time. The three legacy property entries below stay as canonical
+  // resolvers (the auto-extender skips tokens already present).
   { token:'{property address}',   label:'Property Address',   resolve:()=>String(currentDeal?.['Address']||'').trim() },
   { token:'{property type}',      label:'Property Type',      resolve:()=>String(currentDeal?.['Simple Text Property Type']||currentDeal?.['CRM Asset Classification']||'').trim() },
   { token:'{asking price}',       label:'Asking Price',       resolve:()=>{ const v=currentDeal?.['Pitch Out Price']||currentDeal?.['Asking Price']; return v?'$'+Number(v).toLocaleString():''; } },
 ];
+
+// v177: auto-derive deal-field placeholders from EMAIL_TPL_FIELDS so the AI
+// can emit tokens for any field, and the resolver auto-handles substitution.
+// EMAIL_TPL_FIELDS is the source of truth — adding a `token` to a field
+// makes it instantly tokenizable in emails.
+(function _emailExtendPlaceholdersFromFields(){
+  if(typeof EMAIL_TPL_FIELDS === 'undefined' || !Array.isArray(EMAIL_TPL_FIELDS)) return;
+  const have = new Set(EMAIL_TPL_PLACEHOLDERS.map(p => p.token.toLowerCase()));
+  EMAIL_TPL_FIELDS.forEach(f => {
+    if(!f.token) return;
+    if(have.has(f.token.toLowerCase())) return;
+    EMAIL_TPL_PLACEHOLDERS.push({
+      token: f.token,
+      label: f.label,
+      resolve: () => {
+        try {
+          const v = f.get(currentDeal || {});
+          return (v == null || v === '') ? '' : String(v).trim();
+        } catch(_e){ return ''; }
+      }
+    });
+    have.add(f.token.toLowerCase());
+  });
+})();
 
 // Replace every known placeholder in `text` with its resolved value.
 // Case-insensitive, whitespace inside braces is tolerated ({ agent name } also matches).
@@ -14881,14 +14908,22 @@ async function runEmailAgent(){
     } catch(_e) { /* non-fatal; use in-memory copy */ }
   }
 
-  // Resolve each enabled field against the current deal. Empty values fall
-  // through so the edge function strips them out ("don't mention missing info").
+  // Resolve each enabled field against the current deal. v177: send the
+  // PLACEHOLDER TOKEN as the field's value (e.g. "Asking Price: {asking price}")
+  // and pass the actual values in a separate context block. The AI will
+  // emit the tokens verbatim into the email body, so when the deal data
+  // changes later the email auto-updates without re-running the agent.
   const fields = {};
+  const tokenContext = []; // for the AI prompt — tells it what each token currently resolves to
   EMAIL_TPL_FIELDS.forEach(f => {
     if(prefs.enabled[f.k] === false) return;
     try {
       const v = f.get(currentDeal);
-      if(v !== null && v !== undefined && String(v).trim() !== '') {
+      if(v == null || String(v).trim() === '') return;
+      if(f.token){
+        fields[f.label] = f.token;
+        tokenContext.push(`  ${f.token} = ${String(v).trim()}`);
+      } else {
         fields[f.label] = v;
       }
     } catch(_e) { /* skip field */ }
@@ -14925,11 +14960,28 @@ async function runEmailAgent(){
     short_direct:      'Subject should be short and direct — 5 words or less, no fluff.',
   };
   const subjectStyle = subjectStyleHints[mkg.default_subject_template] || '';
+
+  // v177: tell the AI the field values are placeholder tokens — emit them
+  // verbatim (don't replace with literal values). The CRM resolves them at
+  // send time, so the email auto-updates when deal data changes.
+  const placeholderInstr = tokenContext.length ? [
+    'PLACEHOLDER MODE — IMPORTANT:',
+    'The field values you see above are PLACEHOLDER TOKENS in curly braces (e.g. {asking price}, {cap rate}, {address}).',
+    '- When you mention any of these fields in the email body OR subject line, you MUST emit the TOKEN VERBATIM, character-for-character — do NOT replace the token with its literal value, do NOT add quotes, do NOT modify casing or spacing.',
+    '- The CRM will substitute live deal values for these tokens at send time, so the email always reflects the most recent data without needing to re-run the agent.',
+    '',
+    'For NARRATIVE CONTEXT ONLY — to help you write phrasing that matches deal size and significance — the tokens currently resolve to:',
+    ...tokenContext,
+    '',
+    'Use the values above ONLY to inform your tone (e.g. "this is an 8-figure deal, lead with prestige" vs "this is a small bread-and-butter rental, lead with cash flow"). Never copy the literal values into the email — always emit the tokens.'
+  ].join('\n') : '';
+
   const mergedExtra = [
     mkg.default_prompt || '',
     mkg.style_guide ? ('STYLE GUIDE:\n' + mkg.style_guide) : '',
     subjectStyle,
     prefs.extra || '',
+    placeholderInstr,
     subjectInstr,
   ].filter(Boolean).join('\n\n');
 

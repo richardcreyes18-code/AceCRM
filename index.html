@@ -50420,6 +50420,12 @@ function removePipelineFilterChip(type, val){
     if(i >= 0) list.splice(i, 1);
     f.excludeReviewTags = list;
   }
+  else if(type === 'includeReviewTag'){
+    const list = Array.isArray(f.includeReviewTags) ? f.includeReviewTags : [];
+    const i = list.indexOf(val);
+    if(i >= 0) list.splice(i, 1);
+    f.includeReviewTags = list;
+  }
   else if(Array.isArray(f[type])){
     const idx = f[type].indexOf(val);
     if(idx >= 0) f[type].splice(idx, 1);
@@ -50769,6 +50775,18 @@ function _buildPipelineFilterChipsHTML(){
     f.excludeReviewTags.forEach(tag => {
       const label = tag === 'deal_reviewed' ? 'Deal Reviewed' : tag === 'agent_reviewed' ? 'Agent Reviewed' : tag;
       chips.push(chip('excludeReviewTag', tag, '🚫 ' + label));
+    });
+  }
+  // v153: review-tag inclusions surface as positive chips up top so
+  // the user can both see and remove them without scrolling to the
+  // Pipeline & Status card.
+  if(Array.isArray(f.includeReviewTags)){
+    f.includeReviewTags.forEach(tag => {
+      const label = tag === 'deal_reviewed' ? '✓ Deal Reviewed'
+                  : tag === 'agent_reviewed' ? '✓ Agent Reviewed'
+                  : tag === 'untagged' ? '○ Untagged'
+                  : tag;
+      chips.push(chip('includeReviewTag', tag, label));
     });
   }
   return chips.join(' ');

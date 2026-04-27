@@ -13764,13 +13764,20 @@ async function loadAICommTab(recordId){
     if(typeof _emailBindFocus === 'function') _emailBindFocus();
     if(typeof _loadUserTemplatesList === 'function'){
       await _loadUserTemplatesList();
-      // v113.16: Do NOT auto-load the official template into the deal. The
-      // template picker dropdown shows the user which templates are available;
-      // selecting one fills the UI but requires an explicit Save to persist
-      // to the deal. This prevents the same template body leaking into every
-      // deal that has no draft yet.
-      _currentTemplateId = null;
-      if(typeof _renderTemplatePicker === 'function') _renderTemplatePicker();
+      // v139: auto-select the OFFICIAL template if one exists for this deal,
+      // otherwise default to "(new / unsaved)". Picking a template here only
+      // fills the form via loadSavedTemplate — it does NOT auto-save to the
+      // deal, so the v113.16 leakage concern doesn't apply: nothing persists
+      // to the DB until the user explicitly clicks Save / Send. The body
+      // appearing pre-filled with the official just makes the common path
+      // (open deal → send official email) one click instead of two.
+      const _official = (_emailTemplates || []).find(t => t.is_official);
+      if(_official && typeof loadSavedTemplate === 'function'){
+        await loadSavedTemplate(_official.id);
+      } else {
+        _currentTemplateId = null;
+        if(typeof _renderTemplatePicker === 'function') _renderTemplatePicker();
+      }
     }
   }catch(e){}
 }
@@ -22363,6 +22370,16 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v139: AI Communication tab — auto-load the OFFICIAL email template on
+//   open instead of defaulting to "(new / unsaved)" (blank). Previously
+//   v113.16 explicitly cleared _currentTemplateId on init to prevent
+//   template-body leakage across deals, but that concern doesn't apply
+//   here: loadSavedTemplate only fills the form fields, no DB write
+//   happens until the user clicks Save / Send. Now: open a deal's AI
+//   Communication tab → official template body + subject auto-populate
+//   → one click to send. If no official exists, falls back to the old
+//   blank state.
+//   File: index.html:13755-13776 (init in deal change hook)
 // v138: Three AI Auto-Fill modal fixes.
 //   (1) mf_unit_rent_data row now shows a readable summary in the proposed
 //       cell — "7 units · Eff $700 · 1BR avg $1,250 · 2BR avg $1,600 ·

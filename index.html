@@ -44872,7 +44872,7 @@ async function submitCreateTask(){
       if(!res.ok) throw new Error(await res.text());
     }
     closeTaskModal(); showSaveConfirm('☑ Task created: '+name);
-    if(_taskModalSrc==='deal'&&document.getElementById('dealTasksContent')) _loadAndRenderDealTasks(_taskModalDealId,_taskModalDealAddr);
+    if(_taskModalSrc==='deal' && _taskModalDealId && document.getElementById('dealTasksContent')) _loadAndRenderDealTasks(_taskModalDealId,_taskModalDealAddr);
     else if(_taskModalSrc==='contact' && _taskModalContactId) _contactLoadLinkedTasks(_taskModalContactId);
     else if(_taskModalSrc==='global') showTasksPage();
   }catch(e){
@@ -44921,7 +44921,16 @@ function renderTasksTab(d){
 async function _loadAndRenderDealTasks(dealId, address){
   const el = document.getElementById('dealTasksContent');
   if(!el) return;
-  if(!isSupabase() || dealId?.startsWith('demo')){
+  // v158.3: guard against null/undefined dealId — used to send
+  // "property_id=eq.null" to PostgREST which rejected with
+  // "invalid input syntax for type uuid: 'null'". Also guard against
+  // any non-UUID string for the same reason.
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if(!dealId || typeof dealId !== 'string' || !UUID_RE.test(dealId)){
+    el.innerHTML = `<div style="text-align:center;padding:24px;color:var(--text3);font-size:12px;">Open a saved deal to view its tasks.</div>`;
+    return;
+  }
+  if(!isSupabase() || dealId.startsWith('demo')){
     el.innerHTML = `<div style="text-align:center;padding:24px;color:var(--text3);font-size:12px;">Connect your database to view tasks.</div>`;
     return;
   }
@@ -45284,7 +45293,43 @@ async function toggleTaskDone(taskId, currentStatus, source){
 }
 
 async function deleteTaskRecord(taskId, source){
-  if(!confirm('Delete this task? This cannot be undone.')) return;
+  // v158.3: warn before deleting if the task is shared. Deleting from
+  // ace_tasks cascades through ON DELETE CASCADE on ace_task_assignees,
+  // so removing a shared task removes it from every assignee's queue.
+  // Pull assignees + creator info to build a context-aware message.
+  let extraNames = [];
+  let isCreator = true;
+  try {
+    const me = (_currentUser && _currentUser.id) || null;
+    const [taskRows, junctionRows] = await Promise.all([
+      _sbGet(SB_TABLES.tasks, `id=eq.${taskId}&select=created_by_user_id,assigned_by_user_id,task&limit=1`),
+      _sbGet(SB_TABLES.taskAssignees, `task_id=eq.${taskId}&select=user_id`),
+    ]);
+    const trow = Array.isArray(taskRows) && taskRows[0];
+    if(trow && me){
+      isCreator = !trow.created_by_user_id || trow.created_by_user_id === me;
+    }
+    const ids = (Array.isArray(junctionRows) ? junctionRows : [])
+      .map(r => r.user_id)
+      .filter(uid => uid && uid !== me);
+    extraNames = ids.map(id => {
+      const u = (_usersCache || []).find(x => x.id === id);
+      return ((u && (u.name || u.email)) || 'Agent').toString().trim() || 'Agent';
+    });
+  } catch(_e){ /* fall through to plain confirm */ }
+
+  let msg;
+  if(extraNames.length > 0){
+    msg = '⚠ This task is shared with ' + extraNames.length + ' other agent'
+        + (extraNames.length===1?'':'s') + ':\n\n  • ' + extraNames.join('\n  • ')
+        + '\n\nDeleting it removes the task from THEIR queue as well — '
+        + 'they\u2019ll lose access to it. This cannot be undone.\n\nDelete anyway?';
+  } else if(!isCreator){
+    msg = '⚠ This task was assigned to you by another agent. Deleting it removes it for everyone, including the original assigner. This cannot be undone.\n\nDelete anyway?';
+  } else {
+    msg = 'Delete this task? This cannot be undone.';
+  }
+  if(!confirm(msg)) return;
   const cfg=getConfig();
   try{
     if(isSupabase()){

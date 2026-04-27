@@ -21201,6 +21201,13 @@ async function deleteDeal(dealId, addr){
 // field-level resolution + FK repointing + soft-delete with 30-day-undo).
 let _dealDedupeState = { groups: [], fuzzyGroups: [], modalOpen: false, search: '' };
 
+// v147: Manual Merge state — for properties the auto-scan didn't pair up.
+// User opens a panel inside the dedupe modal, types to search, checks
+// 2+ properties, picks one as the survivor, and merges via the same
+// edge function. `selected` is a Set of property ids; `survivorId` is
+// the radio-selected winner (defaults to the first selection).
+let _ddManualMerge = { open: false, search: '', selected: new Set(), survivorId: null };
+
 // Edit-distance ≤ 1 check (early-exit). Returns true only when a !== b and the
 // two strings differ by exactly one insertion, deletion, or substitution.
 function _ddLev1Match(a, b){
@@ -21869,6 +21876,9 @@ function _ddRenderModal(){
             : 'Type an address to narrow results'}
         </div>
       </div>` : ''}
+      <div id="ddManualMergePanel" style="padding:10px 20px;border-bottom:1px solid #e2e8f0;background:#fafaff;">
+        ${_ddRenderManualMergePanel()}
+      </div>
       <div style="padding:16px 20px;overflow-y:auto;flex:1;background:#f8fafc;">
         ${body}
       </div>
@@ -21958,6 +21968,203 @@ function _ddRenderGroup(g, idx, fuzzy){
       </table>
     </div>`;
 }
+
+// v147: Manual Merge panel — for cases where the auto-scan didn't pair
+// up duplicates the user knows are duplicates. Search any property, check
+// 2+, pick a survivor, merge. Uses the same edge function + memory-purge
+// path as the auto-detected groups.
+function _ddRenderManualMergePanel(){
+  const open = !!_ddManualMerge.open;
+  if(!open){
+    return `
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;">
+        <div style="font-size:11px;color:#475569;">
+          🛠 <strong>Manual Merge</strong> — duplicates the auto-scan missed? Search and pick which properties to combine.
+        </div>
+        <button onclick="_ddManualMergeToggle()" style="background:#1a3a6e;color:#fff;border:none;border-radius:6px;padding:6px 12px;font-size:11px;font-weight:700;cursor:pointer;">+ Open Manual Merge</button>
+      </div>`;
+  }
+  const sel = Array.from(_ddManualMerge.selected);
+  const q = _ddManualMerge.search || '';
+  const ql = q.trim().toLowerCase();
+  const qlNorm = ql ? _normalizeAddr(ql) : '';
+  // Search candidates: only un-archived properties, exclude already-selected
+  // from the result list (they show in the Selected panel below).
+  const all = (allDeals||[]).filter(d => d?.id && !d['Is Archived']);
+  let results = [];
+  if(ql){
+    for(const d of all){
+      const addr = (d['Address']||'').toLowerCase();
+      if(addr.includes(ql) || (qlNorm && _normalizeAddr(d['Address']||'').indexOf(qlNorm) !== -1)){
+        if(!_ddManualMerge.selected.has(d.id)) results.push(d);
+        if(results.length >= 30) break;
+      }
+    }
+  }
+  const resultRows = results.map(d => {
+    const lead = (d.id||'').substring(0,8).toUpperCase();
+    const stage = (typeof getStage === 'function' ? getStage(d) : (d['Pipeline Stage']||'')) || '—';
+    return `
+      <div style="display:flex;align-items:center;gap:8px;padding:6px 10px;border-bottom:1px solid #f1f5f9;cursor:pointer;font-size:12px;" onclick="_ddManualMergeAdd('${d.id}')" onmouseenter="this.style.background='#f1f5f9'" onmouseleave="this.style.background=''">
+        <span style="color:#1a3a6e;font-weight:700;font-size:14px;line-height:1;">+</span>
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${_ddEsc(d['Address']||'(no address)')}</div>
+          <div style="font-size:10px;color:#64748b;margin-top:1px;font-family:ui-monospace,Menlo,monospace;">${lead} · ${_ddEsc(stage)}</div>
+        </div>
+      </div>`;
+  }).join('') || (ql ? '<div style="padding:14px;text-align:center;font-size:11px;color:#94a3b8;">No properties match.</div>' : '');
+
+  // Selected panel — radios pick the survivor, ✕ removes from selection.
+  const survId = _ddManualMerge.survivorId;
+  const selRows = sel.map(id => {
+    const d = (allDeals||[]).find(x => x.id === id);
+    if(!d) return '';
+    const isSurv = id === survId;
+    const lead = (id||'').substring(0,8).toUpperCase();
+    return `
+      <tr style="border-top:1px solid #e2e8f0;${isSurv?'background:#ecfdf5;':''}">
+        <td style="padding:7px 10px;text-align:center;">
+          <input type="radio" name="ddManualSurvivor" ${isSurv?'checked':''} onchange="_ddManualMergeSetSurvivor('${id}')" style="cursor:pointer;" />
+        </td>
+        <td style="padding:7px 10px;font-family:ui-monospace,Menlo,monospace;font-size:10px;color:${isSurv?'#059669':'#64748b'};font-weight:${isSurv?'700':'500'};">${lead}${isSurv?' ★':''}</td>
+        <td style="padding:7px 10px;font-size:12px;color:#0f172a;max-width:340px;">
+          <div style="font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${_ddEsc(d['Address']||'')}">${_ddEsc(d['Address']||'(no address)')}</div>
+        </td>
+        <td style="padding:7px 10px;text-align:center;">
+          <button onclick="_ddManualMergeRemove('${id}')" title="Remove from selection" style="background:#fff;color:#b91c1c;border:1px solid #fecaca;border-radius:5px;padding:2px 8px;font-size:10px;font-weight:600;cursor:pointer;">✕</button>
+        </td>
+      </tr>`;
+  }).join('');
+
+  const canMerge = sel.length >= 2 && !!survId && sel.includes(survId);
+  const losersCount = Math.max(0, sel.length - 1);
+
+  return `
+    <div style="display:flex;align-items:center;justify-content:space-between;gap:10px;margin-bottom:10px;">
+      <div style="font-size:12px;font-weight:700;color:#0f172a;">🛠 Manual Merge</div>
+      <button onclick="_ddManualMergeToggle()" style="background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:5px;padding:4px 10px;font-size:10px;font-weight:600;cursor:pointer;">Hide</button>
+    </div>
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
+        <div style="padding:8px 10px;border-bottom:1px solid #e2e8f0;background:#f8fafc;font-size:11px;color:#64748b;font-weight:600;">Search any property</div>
+        <div style="padding:8px 10px;">
+          <input id="ddManualSearchInput" type="text" value="${_ddEsc(q)}" placeholder="Address, street, zip — fuzzy match…" oninput="_ddManualMergeSetSearch(this.value)" autofocus style="width:100%;padding:7px 10px;font-size:12px;border:1px solid #cbd5e1;border-radius:5px;outline:none;box-sizing:border-box;" onfocus="this.style.borderColor='#1a3a6e'" onblur="this.style.borderColor='#cbd5e1'"/>
+        </div>
+        <div style="max-height:240px;overflow-y:auto;">${resultRows}</div>
+      </div>
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;display:flex;flex-direction:column;">
+        <div style="padding:8px 10px;border-bottom:1px solid #e2e8f0;background:#f8fafc;font-size:11px;color:#64748b;font-weight:600;display:flex;justify-content:space-between;align-items:center;">
+          <span>Selected (${sel.length}) — pick the survivor ★</span>
+          ${sel.length > 0 ? `<button onclick="_ddManualMergeClear()" style="background:none;color:#64748b;border:none;font-size:10px;cursor:pointer;text-decoration:underline;">Clear</button>` : ''}
+        </div>
+        ${sel.length === 0
+          ? `<div style="padding:24px 12px;text-align:center;font-size:11px;color:#94a3b8;flex:1;">Click a property on the left to add it. Pick at least 2 properties to merge.</div>`
+          : `<table style="width:100%;border-collapse:collapse;"><tbody>${selRows}</tbody></table>`}
+        ${sel.length >= 2 ? `
+          <div style="padding:10px;border-top:1px solid #e2e8f0;background:#f8fafc;">
+            <button ${canMerge?'':'disabled'} onclick="_ddManualMergeRun()" style="width:100%;background:${canMerge?'#1a3a6e':'#cbd5e1'};color:#fff;border:none;border-radius:6px;padding:8px 14px;font-size:12px;font-weight:700;cursor:${canMerge?'pointer':'not-allowed'};">
+              ${canMerge ? `Merge ${losersCount} into survivor ★` : 'Pick a survivor (★) to enable merge'}
+            </button>
+          </div>` : ''}
+      </div>
+    </div>`;
+}
+
+window._ddManualMergeToggle = function(){
+  _ddManualMerge.open = !_ddManualMerge.open;
+  const el = document.getElementById('ddManualMergePanel');
+  if(el) el.innerHTML = _ddRenderManualMergePanel();
+  if(_ddManualMerge.open) requestAnimationFrame(() => document.getElementById('ddManualSearchInput')?.focus());
+};
+
+let _ddManualSearchTimer = null;
+window._ddManualMergeSetSearch = function(v){
+  _ddManualMerge.search = String(v||'');
+  if(_ddManualSearchTimer) clearTimeout(_ddManualSearchTimer);
+  _ddManualSearchTimer = setTimeout(() => {
+    _ddManualSearchTimer = null;
+    const el = document.getElementById('ddManualMergePanel');
+    if(el) el.innerHTML = _ddRenderManualMergePanel();
+    requestAnimationFrame(() => {
+      const s = document.getElementById('ddManualSearchInput');
+      if(s){ s.focus(); const n = s.value.length; try { s.setSelectionRange(n,n); } catch(_){} }
+    });
+  }, 120);
+};
+
+window._ddManualMergeAdd = function(id){
+  if(!id) return;
+  _ddManualMerge.selected.add(id);
+  if(!_ddManualMerge.survivorId) _ddManualMerge.survivorId = id;
+  const el = document.getElementById('ddManualMergePanel');
+  if(el) el.innerHTML = _ddRenderManualMergePanel();
+};
+
+window._ddManualMergeRemove = function(id){
+  _ddManualMerge.selected.delete(id);
+  if(_ddManualMerge.survivorId === id){
+    _ddManualMerge.survivorId = _ddManualMerge.selected.values().next().value || null;
+  }
+  const el = document.getElementById('ddManualMergePanel');
+  if(el) el.innerHTML = _ddRenderManualMergePanel();
+};
+
+window._ddManualMergeSetSurvivor = function(id){
+  if(_ddManualMerge.selected.has(id)) _ddManualMerge.survivorId = id;
+  const el = document.getElementById('ddManualMergePanel');
+  if(el) el.innerHTML = _ddRenderManualMergePanel();
+};
+
+window._ddManualMergeClear = function(){
+  _ddManualMerge.selected.clear();
+  _ddManualMerge.survivorId = null;
+  const el = document.getElementById('ddManualMergePanel');
+  if(el) el.innerHTML = _ddRenderManualMergePanel();
+};
+
+window._ddManualMergeRun = async function(){
+  const sel = Array.from(_ddManualMerge.selected);
+  const survId = _ddManualMerge.survivorId;
+  if(sel.length < 2 || !survId || !sel.includes(survId)) return;
+  const survivor = (allDeals||[]).find(d => d.id === survId);
+  const losers = sel.filter(id => id !== survId).map(id => (allDeals||[]).find(d => d.id === id)).filter(Boolean);
+  if(!survivor || losers.length === 0) return;
+  if(!confirm(
+    `⚠ MANUAL MERGE — these properties were not auto-detected as duplicates. Confirm they're the same building before merging.\n\n` +
+    `Merge ${losers.length} duplicate${losers.length>1?'s':''} into:\n\n` +
+    `  ${survivor['Address']||'(no address)'}\n` +
+    `  Lead ${(survivor.id||'').substring(0,8).toUpperCase()}\n\n` +
+    `• Note fields get appended to the survivor.\n` +
+    `• Numeric / categorical fields auto-resolve.\n` +
+    `• FK references on losers (offers, pitches, tasks, comps) repoint to the survivor.\n` +
+    `• Losers soft-delete with a 30-day-recoverable snapshot.\n\n` +
+    `Continue?`
+  )) return;
+  const panel = document.getElementById('ddManualMergePanel');
+  const btn = panel?.querySelector('button[onclick="_ddManualMergeRun()"]');
+  if(btn){ btn.disabled = true; btn.textContent = 'Merging…'; }
+  try {
+    await _ddPrePromoteBestAddress(survivor, [survivor, ...losers]);
+    await _ddPrePromoteNotesToGPN(survivor, losers);
+    await _ddCallMergeEdgeFn(survivor.id, losers.map(l => l.id));
+    losers.forEach(l => { l['Is Archived'] = true; });
+    _purgeMergedFromMemory(losers.map(l => l.id));
+    await _ddRefreshDealInMemory(survivor.id);
+    showSaveConfirm(`✓ Merged ${losers.length} duplicate${losers.length>1?'s':''}`);
+    _ddManualMerge.selected.clear();
+    _ddManualMerge.survivorId = null;
+    _ddManualMerge.search = '';
+    // Re-scan auto-groups in case the merge invalidated any.
+    _dealDedupeState.groups = _ddScanDealDuplicates();
+    _dealDedupeState.fuzzyGroups = _ddScanFuzzyDuplicates();
+    _ddRenderModal();
+    if(typeof buildSidebar === 'function') buildSidebar();
+    if(typeof renderDealBoard === 'function' && document.getElementById('dealBoardTbody')) renderDealBoard();
+  } catch(e){
+    alert('Merge failed: ' + (e?.message || e));
+    if(btn){ btn.disabled = false; btn.textContent = `Merge ${losers.length} into survivor ★`; }
+  }
+};
 
 function _ddSetSurvivor(groupIdx, dealId, fuzzy){
   const list = fuzzy ? _dealDedupeState.fuzzyGroups : _dealDedupeState.groups;
@@ -32286,12 +32493,16 @@ window._emailTplsOpenEditor = function(templateId){
             ${created ? `Created ${created}` : ''}
             ${updated ? ` · Updated ${updated}` : ''}
           </div>
-          <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
+          <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
             ${prop
-              ? `<span onclick="openDeal(allDeals.find(d=>d.id==='${prop.id}'))" style="display:inline-block;background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;cursor:pointer;">🏢 ${_ddEsc((prop['Address']||'').slice(0,60))}</span>`
+              ? `<span onclick="openDeal(allDeals.find(d=>d.id==='${prop.id}'))" style="display:inline-block;background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;cursor:pointer;">🏢 ${_ddEsc((prop['Address']||'').slice(0,60))}</span>
+                 <button onclick="_emailTplsUnlink('${t.id}')" title="Unlink from this property — pick a different one or leave unlinked" style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;cursor:pointer;">✕ Unlink</button>
+                 <button onclick="_emailTplsLinkPicker('${t.id}'); this.closest('#emailTplsEditorModal').remove();" title="Replace the linked property" style="background:#e0e7ff;color:#3730a3;border:1px solid #c7d2fe;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;cursor:pointer;">🔗 Change link</button>`
               : (_emailTplIsNoLinkNeeded(t)
-                  ? `<span ${t.no_link_needed ? `onclick="_emailTplsToggleNoLink('${t.id}', false); this.closest('#emailTplsEditorModal').remove();" title="Click to mark as needing a property link" style="cursor:pointer;"` : 'style=""'} style="display:inline-block;background:#f1f5f9;color:#475569;border:1px solid #e2e8f0;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;${t.no_link_needed ? 'cursor:pointer;' : ''}">📎 No link needed</span>`
-                  : `<span onclick="_emailTplsToggleNoLink('${t.id}', true); this.closest('#emailTplsEditorModal').remove();" title="Remove this template from Unlinked — mark as no-link-needed" style="display:inline-block;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;cursor:pointer;">🔗 Unlinked</span>`)}
+                  ? `<span ${t.no_link_needed ? `onclick="_emailTplsToggleNoLink('${t.id}', false); this.closest('#emailTplsEditorModal').remove();" title="Click to mark as needing a property link" style="cursor:pointer;"` : 'style=""'} style="display:inline-block;background:#f1f5f9;color:#475569;border:1px solid #e2e8f0;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;${t.no_link_needed ? 'cursor:pointer;' : ''}">📎 No link needed</span>
+                     <button onclick="_emailTplsLinkPicker('${t.id}'); this.closest('#emailTplsEditorModal').remove();" title="Link this template to a property" style="background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;cursor:pointer;">🔗 Link to property</button>`
+                  : `<span onclick="_emailTplsToggleNoLink('${t.id}', true); this.closest('#emailTplsEditorModal').remove();" title="Remove this template from Unlinked — mark as no-link-needed" style="display:inline-block;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;cursor:pointer;">🔗 Unlinked</span>
+                     <button onclick="_emailTplsLinkPicker('${t.id}'); this.closest('#emailTplsEditorModal').remove();" title="Link this template to a property" style="background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;cursor:pointer;">🔗 Link to property</button>`)}
             ${owner ? `<span onclick="openContactModal('${owner.id}')" style="display:inline-block;background:#dcfce7;color:#15803d;border:1px solid #86efac;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;cursor:pointer;">👤 ${_ddEsc(owner['Name']||'')}</span>` : ''}
             ${prop && prop['Assigned Agent'] ? (typeof _agentList === 'function' ? _agentList(prop['Assigned Agent']) : String(prop['Assigned Agent']).split('|').map(s=>s.trim()).filter(Boolean)).map(a => `<span style="display:inline-block;background:#ede9fe;color:#5b21b6;border:1px solid #ddd6fe;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;" title="${_ddEsc(a)}">🤵 ${_ddEsc(typeof _agentDisplayName==='function'?_agentDisplayName(a):a)}</span>`).join('') : ''}
             ${/^\(FUB IMPORT/.test(t.name||'') ? '<span style="display:inline-block;background:#f1f5f9;color:#475569;border:1px solid #e2e8f0;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;">📥 FUB Import</span>' : ''}
@@ -32614,6 +32825,30 @@ window._emailTplsAutoLinkUnlinked = async function(){
     failures.length ? `✗ ${failures.length} failed` : '',
   ].filter(Boolean);
   alert('Auto-link complete:\n\n' + lines.join('\n') + (failures.length ? '\n\nFirst failure: ' + failures[0].error : ''));
+};
+
+// v147: unlink an email template from its property. Sets property_id=null
+// and clears is_official (no longer the official template for that prop).
+// User can then click "Link to property" to pick a new one, or leave it
+// unlinked / mark "no link needed".
+window._emailTplsUnlink = async function(tplId){
+  const r = (_emailTplsLibState.rows || []).find(x => x.id === tplId);
+  if(!r) return;
+  if(!confirm('Unlink this template from its property?\n\n' +
+              'It will appear in the Unlinked folder until you link it again or mark it as "no link needed".'))
+    return;
+  try {
+    await _sbPatch('ace_user_email_templates', tplId, { property_id: null, is_official: false });
+    r.property_id = null;
+    r.is_official = false;
+    document.getElementById('emailTplsEditorModal')?.remove();
+    if(typeof _emailTplsLibPaint === 'function') _emailTplsLibPaint();
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('✓ Unlinked');
+    // Re-open the editor so the user can immediately pick a new link.
+    setTimeout(() => { if(typeof window._emailTplsOpenEditor === 'function') window._emailTplsOpenEditor(tplId); }, 50);
+  } catch(e){
+    alert('Unlink failed: ' + (e?.message || e));
+  }
 };
 
 window._emailTplsConfirmLink = async function(tplId, propertyId){

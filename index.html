@@ -15542,6 +15542,16 @@ async function _backfillCoordsPriorityStages(){
             upd.simple_county = c;
           }
           await _sbPatch(SB_TABLES.properties, d.id, upd);
+          // v165.1: also update the in-memory allDeals entry so the map
+          // picks up the new coords without a page reload.
+          if(typeof allDeals !== 'undefined' && Array.isArray(allDeals)){
+            const entry = allDeals.find(x => x && x.id === d.id);
+            if(entry){
+              entry['Latitude']  = geo.lat;
+              entry['Longitude'] = geo.lng;
+              if(upd.simple_county) entry['Simple County'] = upd.simple_county;
+            }
+          }
           ok++;
         } else {
           fail++;
@@ -15551,8 +15561,10 @@ async function _backfillCoordsPriorityStages(){
         log.innerHTML = `Geocoding… ${i+1}/${deals.length} <span style="color:#16a34a;">(${ok} ok</span>, <span style="color:#b91c1c;">${fail} failed</span>, <span style="color:#94a3b8;">${skip} skipped)</span>`;
       }
     }
-    if(log) log.innerHTML = `<span style="color:#16a34a;">✓ Done.</span> ${ok} updated, ${fail} failed, ${skip} skipped (missing address).`;
+    if(log) log.innerHTML = `<span style="color:#16a34a;">✓ Done.</span> ${ok} updated, ${fail} failed, ${skip} skipped (missing address). <i>Map already updated.</i>`;
     showSaveConfirm(`✓ Coords backfilled for ${ok} deals`);
+    // v165.1: refresh the Deal Board map (no-op if it isn't currently mounted)
+    if(typeof dbRefreshMapPins === 'function') dbRefreshMapPins();
   } catch(e){
     if(log) log.innerHTML = `<span style="color:#b91c1c;">Error: ${e.message||e}</span>`;
   } finally {
@@ -21429,8 +21441,18 @@ async function initDealMap(){
   }
 
   if(countEl){
+    // v165.1: also surface the total deals-with-coords count so the user
+    // can sanity check that everything they expect is loaded — separate
+    // from the filtered pin count.
+    const totalWithCoords = (allDeals || []).filter(x => {
+      if(!x || x['Is Archived']) return false;
+      const la = Number(x['Latitude']), lo = Number(x['Longitude']);
+      return la && lo && !isNaN(la) && !isNaN(lo);
+    }).length;
+    const filtersActive = placed !== totalWithCoords;
     countEl.textContent = placed + ' pin' + (placed===1?'':'s') +
-      (missing ? ' · ' + missing + ' missing coords' : '');
+      (filtersActive ? ' (of ' + totalWithCoords + ' with coords)' : '') +
+      (missing ? ' · ' + missing + ' filtered deal' + (missing===1?'':'s') + ' missing coords' : '');
   }
   _dbLeafletMap.invalidateSize();
   dbUpdateMapLegend();

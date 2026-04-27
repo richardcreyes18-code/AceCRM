@@ -16907,7 +16907,7 @@ let _workbenchNotesSaveTimer = null;
 // v102.39: contact-side state (independent positions, separate selection)
 let _workbenchContacts = []; // [{id, contact_id, position, notes, contact: <hydrated row>}]
 let _workbenchSelectedContactId = null;
-let _workbenchActiveTab = 'properties'; // 'properties' | 'contacts'
+let _workbenchActiveTab = 'properties'; // 'properties' | 'contacts' | 'meeting'
 
 // Session cache of contact_ids currently on this user's Workbench, with their
 // positions. Lets us render the "+ Add to Workbench" button in its
@@ -17157,7 +17157,7 @@ async function showWorkbenchPage(){
   }
   main.innerHTML = '<div style="padding:60px;text-align:center;color:#94a3b8;font-size:13px;">Loading your Workbench…</div>';
   try{
-    await Promise.all([_wbLoadItems(), _wbLoadContacts()]);
+    await Promise.all([_wbLoadItems(), _wbLoadContacts(), _wbEnsureMeetingData()]);
   }catch(e){
     console.error('Workbench load failed:', e);
     main.innerHTML = '<div style="padding:60px;text-align:center;color:#dc2626;font-size:13px;">Workbench load failed: ' + (e.message||'unknown') + '</div>';
@@ -17180,16 +17180,31 @@ function _wbRenderShell(){
   const tabActive = 'background:transparent;border:none;border-bottom:3px solid #1e3a8a;padding:12px 18px;font-size:13px;font-weight:700;color:#1e3a8a;cursor:pointer;margin-bottom:-1px;';
   const propCount = _workbenchItems.length;
   const contactCount = _workbenchContacts.length;
+  const meetingCounts = (typeof _wbCountMeetingItems === 'function') ? _wbCountMeetingItems() : {leads:0, buyers:0};
+  const meetingCount = meetingCounts.leads + meetingCounts.buyers;
   const onProps = (_workbenchActiveTab === 'properties');
-  const totalCount = onProps ? propCount : contactCount;
-  const noun = onProps ? ('deal' + (propCount===1?'':'s')) : ('contact' + (contactCount===1?'':'s'));
+  const onContacts = (_workbenchActiveTab === 'contacts');
+  const onMeeting = (_workbenchActiveTab === 'meeting');
+  const totalCount = onProps ? propCount : onContacts ? contactCount : meetingCount;
+  const noun = onProps ? ('deal' + (propCount===1?'':'s'))
+              : onContacts ? ('contact' + (contactCount===1?'':'s'))
+              : ('new today');
+  // v173: Meeting tab uses a single-column full-width layout (no detail pane).
+  const bodyHTML = onMeeting
+    ? `<div style="flex:1;min-height:0;overflow-y:auto;background:#f8fafc;">
+         <div id="wbMeetingBody" style="max-width:1200px;margin:0 auto;padding:18px 24px;"></div>
+       </div>`
+    : `<div style="flex:1;display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:0;min-height:0;">
+         <div id="wbList" style="overflow-y:auto;border-right:1px solid #e2e8f0;padding:12px;background:#f8fafc;"></div>
+         <div id="wbDetail" style="overflow-y:auto;background:#fff;padding:22px 24px;"></div>
+       </div>`;
   main.innerHTML = `
     <div style="display:flex;flex-direction:column;height:100%;background:#f8fafc;font-family:'Inter',system-ui,sans-serif;">
       <div style="padding:18px 24px 0;background:#fff;border-bottom:1px solid #e2e8f0;">
         <div style="display:flex;align-items:flex-start;gap:14px;margin-bottom:10px;">
           <div>
             <div style="font-size:18px;font-weight:700;color:#0f172a;">My Workbench</div>
-            <div style="font-size:12px;color:#64748b;margin-top:2px;">Your private triage queue. Drag rows or type a position number to reorder.</div>
+            <div style="font-size:12px;color:#64748b;margin-top:2px;">${onMeeting ? "Today's new seller leads and buyer criteria — for your meeting." : 'Your private triage queue. Drag rows or type a position number to reorder.'}</div>
           </div>
           <div style="flex:1;"></div>
           <div id="wbCount" style="font-size:12px;color:#64748b;padding-top:4px;">${totalCount} ${noun}</div>
@@ -17198,27 +17213,226 @@ function _wbRenderShell(){
           <button onclick="_wbSwitchTab('properties')" style="${onProps ? tabActive : tabBase}">
             Properties <span style="background:${onProps?'#dbeafe':'#f1f5f9'};color:${onProps?'#1e40af':'#64748b'};font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:600;">${propCount}</span>
           </button>
-          <button onclick="_wbSwitchTab('contacts')" style="${!onProps ? tabActive : tabBase}">
-            Buyers <span style="background:${!onProps?'#dbeafe':'#f1f5f9'};color:${!onProps?'#1e40af':'#64748b'};font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:600;">${contactCount}</span>
+          <button onclick="_wbSwitchTab('contacts')" style="${onContacts ? tabActive : tabBase}">
+            Buyers <span style="background:${onContacts?'#dbeafe':'#f1f5f9'};color:${onContacts?'#1e40af':'#64748b'};font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:600;">${contactCount}</span>
+          </button>
+          <button onclick="_wbSwitchTab('meeting')" style="${onMeeting ? tabActive : tabBase}">
+            📅 Meeting <span style="background:${onMeeting?'#dbeafe':'#f1f5f9'};color:${onMeeting?'#1e40af':'#64748b'};font-size:11px;padding:2px 8px;border-radius:10px;margin-left:6px;font-weight:600;">${meetingCount}</span>
           </button>
         </div>
       </div>
-      <div style="flex:1;display:grid;grid-template-columns:minmax(0,1.4fr) minmax(0,1fr);gap:0;min-height:0;">
-        <div id="wbList" style="overflow-y:auto;border-right:1px solid #e2e8f0;padding:12px;background:#f8fafc;"></div>
-        <div id="wbDetail" style="overflow-y:auto;background:#fff;padding:22px 24px;"></div>
-      </div>
+      ${bodyHTML}
     </div>`;
-  _wbRenderList();
-  _wbRenderDetail();
+  if(onMeeting){
+    _wbRenderMeeting();
+  } else {
+    _wbRenderList();
+    _wbRenderDetail();
+  }
 }
 
 function _wbSwitchTab(which){
-  if(which !== 'properties' && which !== 'contacts') return;
+  if(which !== 'properties' && which !== 'contacts' && which !== 'meeting') return;
   if(_workbenchActiveTab === which) return;
   // Flush any pending notes save before switching
   if(_workbenchNotesSaveTimer){ clearTimeout(_workbenchNotesSaveTimer); _workbenchNotesSaveTimer = null; _wbSaveNotes(true); }
   _workbenchActiveTab = which;
   _wbRenderShell();
+}
+
+// v173: Meeting tab — list new seller leads + new buyer criteria from today.
+// Reads from in-memory allDeals + allBuyerCriteria (already loaded by app
+// startup), filtered to whichever rows have a Date Added of today.
+function _wbTodayStr(){
+  const d = new Date();
+  return d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0') + '-' + String(d.getDate()).padStart(2,'0');
+}
+function _wbCountMeetingItems(){
+  const today = _wbTodayStr();
+  const leads = (typeof allDeals !== 'undefined' && Array.isArray(allDeals))
+    ? allDeals.filter(d => String(d['Date Added']||'').slice(0,10) === today).length : 0;
+  const buyers = (typeof allBuyerCriteria !== 'undefined' && Array.isArray(allBuyerCriteria))
+    ? allBuyerCriteria.filter(r => String((r.fields&&r.fields['Date Added Buyer'])||'').slice(0,10) === today).length : 0;
+  return {leads, buyers};
+}
+function _wbGetTodaysLeads(){
+  const today = _wbTodayStr();
+  if(typeof allDeals === 'undefined' || !Array.isArray(allDeals)) return [];
+  return allDeals.filter(d => String(d['Date Added']||'').slice(0,10) === today);
+}
+function _wbGetTodaysBuyers(){
+  const today = _wbTodayStr();
+  if(typeof allBuyerCriteria === 'undefined' || !Array.isArray(allBuyerCriteria)) return [];
+  return allBuyerCriteria.filter(r => String((r.fields&&r.fields['Date Added Buyer'])||'').slice(0,10) === today);
+}
+// v173: lazy-fetch just today's buyer criteria (and their contacts) so the
+// Meeting tab works without first visiting the full Buyer Criteria page.
+// Cheap query — date_added=eq.<today> typically returns < 50 rows.
+async function _wbEnsureMeetingData(){
+  if(typeof allBuyerCriteria === 'undefined' || !Array.isArray(allBuyerCriteria)) return;
+  if(typeof SB_BC_MAP === 'undefined' || typeof isSupabase !== 'function' || !isSupabase()) return;
+  // If today's rows are already in memory, nothing to do.
+  const today = _wbTodayStr();
+  const haveAny = allBuyerCriteria.some(r => String((r.fields&&r.fields['Date Added Buyer'])||'').slice(0,10) === today);
+  if(haveAny) return;
+  try{
+    const rows = await _sbGet(SB_TABLES.buyerCriteria, `date_added=eq.${today}&select=*&order=created_at.desc&limit=200`);
+    if(!rows || !rows.length) return;
+    const newRecs = rows.map(row => {
+      const fields = {};
+      for(const [snake, atLabel] of Object.entries(SB_BC_MAP)){
+        if(snake === 'id') continue;
+        const v = row[snake];
+        fields[atLabel] = (v === null || v === undefined) ? '' : v;
+      }
+      fields['Import Source'] = row.import_source || '';
+      fields['Buyer'] = row.contact_id ? [row.contact_id] : [];
+      fields['_contactId'] = row.contact_id;
+      return { id: row.id, fields };
+    });
+    const existingIds = new Set(allBuyerCriteria.map(r => r.id));
+    for(const rec of newRecs){
+      if(!existingIds.has(rec.id)) allBuyerCriteria.push(rec);
+    }
+    // Hydrate their contacts so name / phone / email show up in the meeting card.
+    const contactIds = [...new Set(newRecs.map(r => r.fields._contactId).filter(Boolean))];
+    const missing = contactIds.filter(id => !(typeof allBuyerContacts !== 'undefined' && allBuyerContacts[id]));
+    if(missing.length){
+      const BATCH = 40;
+      for(let i=0; i<missing.length; i+=BATCH){
+        const chunk = missing.slice(i, i+BATCH);
+        const rows2 = await _sbGet(SB_TABLES.contacts, `id=in.(${chunk.join(',')})&select=id,name,phone_number,email,company,fub_contact_id`);
+        (rows2||[]).forEach(r => {
+          allBuyerContacts[r.id] = {
+            Name: r.name, 'Phone Number': r.phone_number, Email: r.email,
+            Company: r.company, '_fubContactId': r.fub_contact_id || null
+          };
+        });
+      }
+    }
+  }catch(e){
+    console.warn('[meeting] buyer data load failed:', e && e.message);
+  }
+}
+
+function _wbRenderMeeting(){
+  const root = document.getElementById('wbMeetingBody');
+  if(!root) return;
+  const leads = _wbGetTodaysLeads();
+  const buyers = _wbGetTodaysBuyers();
+
+  const fmtPrice = v => {
+    const n = Number(String(v||'').replace(/[^\d.\-]/g,''))||0;
+    return n ? '$' + n.toLocaleString() : '—';
+  };
+  const esc = s => String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+
+  // ── Seller Leads section ─────────────────────────────────────
+  const leadsBody = leads.length === 0
+    ? '<div style="padding:24px;text-align:center;color:#94a3b8;font-size:12px;font-style:italic;">No new seller leads added today.</div>'
+    : leads.map(d => {
+        const addr = esc(d['Address'] || '(no address)');
+        const owner = esc(d['Owner Name'] || d['Contact Name'] || '—');
+        const type = esc(d['CRM Asset Classification'] || d['Simple Text Property Type'] || '—');
+        const stage = esc(d['Pipeline Stage'] || '—');
+        const ask = fmtPrice(d['Asking Price']);
+        const agent = esc(d['Assigned Agent'] || d['Agent'] || '');
+        const county = esc(d['Simple County'] || '');
+        const subline = [type, owner, county, agent ? '@'+agent : ''].filter(Boolean).join(' · ');
+        return `
+          <div onclick="openDealSnapshot('${d.id}')"
+               style="display:flex;align-items:center;gap:14px;padding:12px 14px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:8px;cursor:pointer;transition:all 0.15s;"
+               onmouseenter="this.style.borderColor='#1e3a8a';this.style.background='#eef2fb'"
+               onmouseleave="this.style.borderColor='#e2e8f0';this.style.background='#fff'">
+            <div style="flex:1;min-width:0;">
+              <div style="font-size:14px;font-weight:600;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${addr}</div>
+              <div style="font-size:11px;color:#64748b;margin-top:2px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${subline}</div>
+            </div>
+            <div style="text-align:right;flex-shrink:0;">
+              <div style="font-size:14px;font-weight:600;color:#0f172a;">${ask}</div>
+              <div style="font-size:10px;color:#475569;margin-top:2px;">${stage}</div>
+            </div>
+            <div style="color:#94a3b8;font-size:14px;flex-shrink:0;">→</div>
+          </div>`;
+      }).join('');
+
+  // ── Buyer Criteria section (richer) ──────────────────────────
+  const buyersBody = buyers.length === 0
+    ? '<div style="padding:24px;text-align:center;color:#94a3b8;font-size:12px;font-style:italic;">No new buyer criteria added today.</div>'
+    : buyers.map(r => {
+        const f = r.fields || {};
+        const contactId = (f['Buyer']||[])[0];
+        const contact = (typeof allBuyerContacts !== 'undefined' && contactId) ? allBuyerContacts[contactId] : null;
+        const name = esc(contact?.Name || f['Name']?.split(' - ')[0] || f['Buyer Name'] || '(unnamed buyer)');
+        const company = esc(contact?.Company || '');
+        const phone = esc(contact?.['Phone Number'] || '');
+        const email = esc(contact?.Email || '');
+        const isVip = !!f['Is VIP Buyer'];
+        const assetTypes = esc((f['Simple Text Desired Property Type']||'').replace(/[🔴🟠🟡🟢🔵🟣]/g,'').trim() || '—');
+        const areas = esc(f['Simple Area Preference'] || f['Location Preferences'] || f['Preferred Counties'] || f['Preferred Cities'] || '—');
+        const cap = f['Minumum Cap Rate'] ? f['Minumum Cap Rate']+'%' : '—';
+        const minPr = f['Min Purchase Price'], maxPr = f['Max Purchase Price'];
+        const priceRange = (minPr||maxPr)
+          ? `$${minPr?(Number(minPr)/1e6).toFixed(1)+'M':'?'} – $${maxPr?(Number(maxPr)/1e6).toFixed(1)+'M':'∞'}`
+          : '—';
+        const minU = f['Minimum # of Units MF'], maxU = f['Max # of Units MF'];
+        const units = (minU||maxU) ? `${minU||'?'}–${maxU||'∞'} units` : '';
+        const minSF = f['Warehouse Min Square Footage'], maxSF = f['Warehouse Max Square Footage'];
+        const warehouseSF = (minSF||maxSF) ? `${minSF?Number(minSF).toLocaleString():'?'}–${maxSF?Number(maxSF).toLocaleString():'∞'} SF (warehouse)` : '';
+        const officeMin = f['Office Min SF'], officeMax = f['Office Max SF'];
+        const officeSF = (officeMin||officeMax) ? `${officeMin?Number(officeMin).toLocaleString():'?'}–${officeMax?Number(officeMax).toLocaleString():'∞'} SF (office)` : '';
+        const retailMin = f['Retail Min SF'], retailMax = f['Retail Max SF'];
+        const retailSF = (retailMin||retailMax) ? `${retailMin?Number(retailMin).toLocaleString():'?'}–${retailMax?Number(retailMax).toLocaleString():'∞'} SF (retail)` : '';
+        const landAcres = (f['Land Min Acreage']||f['Land Max Acreage']) ? `${f['Land Min Acreage']||'?'}–${f['Land Max Acreage']||'∞'} acres` : '';
+        const financing = esc(f['Financing Type'] || '');
+        const otherReq = esc(f['Other Requirements '] || '');
+        const specifics = [units, warehouseSF, officeSF, retailSF, landAcres].filter(Boolean).join(' · ');
+        const contactLine = [phone, email].filter(Boolean).join(' · ');
+
+        return `
+          <div onclick="bcOpenExpanded('${r.id}')"
+               style="background:#fff;border:1px solid ${isVip?'#fbbf24':'#e2e8f0'};border-radius:8px;padding:14px 16px;margin-bottom:10px;cursor:pointer;transition:all 0.15s;"
+               onmouseenter="this.style.borderColor='#1e3a8a';this.style.boxShadow='0 2px 6px rgba(30,58,138,0.08)'"
+               onmouseleave="this.style.borderColor='${isVip?'#fbbf24':'#e2e8f0'}';this.style.boxShadow='none'">
+            <div style="display:flex;align-items:flex-start;gap:12px;">
+              <div style="flex:1;min-width:0;">
+                <div style="display:flex;align-items:center;gap:8px;margin-bottom:4px;flex-wrap:wrap;">
+                  <span style="font-size:15px;font-weight:700;color:#0f172a;">${name}</span>
+                  ${isVip?'<span style="background:#fbbf24;color:#0f172a;font-size:10px;font-weight:700;padding:2px 8px;border-radius:99px;">⭐ VIP</span>':''}
+                  ${company?`<span style="font-size:11px;color:#64748b;">· ${company}</span>`:''}
+                </div>
+                ${contactLine?`<div style="font-size:11px;color:#475569;margin-bottom:8px;">${contactLine}</div>`:''}
+                <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:8px 14px;font-size:11px;color:#334155;">
+                  <div><span style="color:#64748b;font-weight:600;">Asset:</span> ${assetTypes}</div>
+                  <div><span style="color:#64748b;font-weight:600;">Areas:</span> ${areas}</div>
+                  <div><span style="color:#64748b;font-weight:600;">Price:</span> ${priceRange}</div>
+                  <div><span style="color:#64748b;font-weight:600;">Min Cap:</span> ${cap}</div>
+                  ${financing?`<div><span style="color:#64748b;font-weight:600;">Financing:</span> ${financing}</div>`:''}
+                </div>
+                ${specifics?`<div style="font-size:11px;color:#334155;margin-top:6px;"><span style="color:#64748b;font-weight:600;">Specifics:</span> ${esc(specifics)}</div>`:''}
+                ${otherReq?`<div style="font-size:11px;color:#475569;margin-top:6px;font-style:italic;">"${otherReq.length>200?otherReq.slice(0,200)+'…':otherReq}"</div>`:''}
+              </div>
+              <div style="color:#94a3b8;font-size:14px;flex-shrink:0;align-self:center;">→</div>
+            </div>
+          </div>`;
+      }).join('');
+
+  root.innerHTML = `
+    <div style="margin-bottom:24px;">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+        <div style="font-size:14px;font-weight:700;color:#0f172a;">🏠 New Seller Leads</div>
+        <span style="background:#dbeafe;color:#1e40af;font-size:11px;font-weight:700;padding:2px 10px;border-radius:99px;">${leads.length} today</span>
+      </div>
+      ${leadsBody}
+    </div>
+    <div>
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+        <div style="font-size:14px;font-weight:700;color:#0f172a;">🎯 New Buyer Criteria</div>
+        <span style="background:#dbeafe;color:#1e40af;font-size:11px;font-weight:700;padding:2px 10px;border-radius:99px;">${buyers.length} today</span>
+      </div>
+      ${buyersBody}
+    </div>
+  `;
 }
 
 function _wbRenderList(){

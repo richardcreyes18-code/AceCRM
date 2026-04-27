@@ -14241,20 +14241,48 @@ function _dbAdvRange(key, label, prefix, suffix){
   const hint = (prefix ? prefix : '') + (suffix ? suffix : '');
   return `
     <div>
-      <label style="display:block;font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.04em;margin-bottom:3px;">
-        ${label}${hint ? ` <span style="color:#94a3b8;font-weight:400;">(${hint.trim()})</span>` : ''}
+      <label class="db-card-lbl" style="display:block;">
+        ${label}${hint ? ` <span style="color:#94a3b8;font-weight:400;text-transform:none;letter-spacing:0;">(${hint.trim()})</span>` : ''}
       </label>
       <div style="display:flex;gap:4px;align-items:center;">
-        <input id="db_${key}_min" type="number" placeholder="min" min="0" step="any"
-          oninput="_dbAdvOnChange()"
+        <input id="db_${key}_min" type="text" inputmode="decimal" placeholder="min"
+          oninput="_dbAdvRangeOnInput(event)"
           style="flex:1;width:0;padding:6px 8px;font-size:12px;border:1px solid #cbd5e1;border-radius:5px;outline:none;" />
         <span style="color:#94a3b8;font-size:11px;">–</span>
-        <input id="db_${key}_max" type="number" placeholder="max" min="0" step="any"
-          oninput="_dbAdvOnChange()"
+        <input id="db_${key}_max" type="text" inputmode="decimal" placeholder="max"
+          oninput="_dbAdvRangeOnInput(event)"
           style="flex:1;width:0;padding:6px 8px;font-size:12px;border:1px solid #cbd5e1;border-radius:5px;outline:none;" />
       </div>
     </div>`;
 }
+
+// v161: oninput handler for the Deal Board advanced range inputs. Strips
+// non-digit characters, reformats the value with thousand separators, and
+// restores the caret position by counting digits left of the original
+// cursor — same pattern as _pipelineRangeOnInput so the user keeps typing
+// smoothly without the input stealing focus or jumping.
+window._dbAdvRangeOnInput = function(ev){
+  const el = ev.target;
+  const raw = String(el.value || '');
+  const cursorBefore = el.selectionStart || 0;
+  const digitsLeftOfCursor = (raw.slice(0, cursorBefore).match(/[0-9]/g) || []).length;
+  const digitsOnly = raw.replace(/[^0-9.\-]/g, '');
+  let formatted = '';
+  if(digitsOnly === '' || digitsOnly === '-' || digitsOnly === '.') {
+    formatted = digitsOnly;
+  } else {
+    const n = Number(digitsOnly);
+    formatted = isNaN(n) ? digitsOnly : n.toLocaleString('en-US', { maximumFractionDigits: 6 });
+  }
+  el.value = formatted;
+  let pos = 0, digitsSeen = 0;
+  for(; pos < formatted.length; pos++){
+    if(/[0-9]/.test(formatted[pos])) digitsSeen++;
+    if(digitsSeen >= digitsLeftOfCursor) { pos++; break; }
+  }
+  try { el.setSelectionRange(pos, pos); } catch(_e){}
+  _dbAdvOnChange();
+};
 
 // Toggle the advanced filter panel open/closed.
 function _dbToggleAdvFilters(){
@@ -14272,9 +14300,14 @@ function _dbToggleAdvFilters(){
 // converted to decimal (0.065) for comparison since the column stores
 // fractions.
 function _dbReadAdvFilters(){
+  // v161: inputs are now comma-formatted text; strip commas before parsing.
   const num = id => {
     const v = document.getElementById(id)?.value;
-    return v === '' || v == null ? null : Number(v);
+    if(v === '' || v == null) return null;
+    const cleaned = String(v).replace(/,/g, '').trim();
+    if(cleaned === '') return null;
+    const n = Number(cleaned);
+    return isNaN(n) ? null : n;
   };
   return {
     price:    { min: num('db_price_min'),    max: num('db_price_max') },
@@ -16782,6 +16815,23 @@ function _locInjectCSS(){
     .loc-opt.sel .loc-ck{opacity:1;}
     .loc-no-res{padding:8px 11px;font-size:11px;color:#94a3b8;}
     .loc-divider{width:1px;height:22px;background:#cbd5e1;margin:0 2px;}
+    /* v161: block-style modifier for grouped-card filter layout — the field
+       fills its container's width and stacks above any external label. */
+    .loc-field.loc-block{display:block;width:100%;}
+    .loc-field.loc-block .loc-ti{max-width:none;width:100%;}
+    .loc-field.loc-block .loc-dd{width:100%;min-width:0;}
+    /* v161: Deal Board grouped-card filter layout — small uppercase
+       label above each field, responsive 4→2→1 column grid. */
+    .db-card-lbl{
+      font-size:10px;font-weight:700;color:#64748b;
+      text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;
+    }
+    @media (max-width:1100px){
+      .db-card-grid{grid-template-columns:repeat(2, minmax(0, 1fr)) !important;}
+    }
+    @media (max-width:640px){
+      .db-card-grid{grid-template-columns:1fr !important;}
+    }
   `;
   document.head.appendChild(style);
 }
@@ -17006,12 +17056,19 @@ function _locClearAll(){
 // same markup, CSS, and event wiring. Returns HTML ready to drop into
 // innerHTML; caller must still invoke _locWireField(key) and _locRenderTags(key)
 // after the HTML lands in the DOM.
-function _locRenderSingleField(key, label){
+function _locRenderSingleField(key, label, opts){
   _locInjectCSS();
   const placeholder = _LOC_PLACEHOLDER[key] || 'Search...';
+  // v161: skip the inline .loc-label entirely when caller passes empty
+  // string. Lets the Deal Board grouped-card layout render its own label
+  // above the field without showing a duplicate inline label.
+  const labelHTML = label ? `<span class="loc-label">${label}</span>` : '';
+  // v161: when opts.block is true, the field fills its container and lays
+  // out as a stacked input (used by the grouped-card filter layout).
+  const blockCls = opts && opts.block ? ' loc-block' : '';
   return `
-    <div class="loc-field loc-single" id="loc-field-${key}">
-      <span class="loc-label">${label}</span>
+    <div class="loc-field loc-single${blockCls}" id="loc-field-${key}">
+      ${labelHTML}
       <div class="loc-ti" id="loc-ti-${key}">
         <input class="loc-si" id="loc-si-${key}" placeholder="${placeholder}" autocomplete="off"/>
       </div>
@@ -19798,18 +19855,13 @@ function showDealBoard(){
           </button>
         </div>
 
-        <!-- v160: GROUPED-CARDS FILTER LAYOUT (Deal Board only).
-             Mirrors the Pipeline filter mockup: Location / Asset / Financial /
-             Pipeline & Status. Each card has a colored accent strip on the
-             left + a per-card filter count in the top-right. Underlying
-             handlers (LOC-001, _dbStageComboHTML, _dbAdvRange, etc.) are
-             unchanged — this is purely a layout reshuffle. -->
+        <!-- v161: GROUPED-CARDS FILTER LAYOUT (Deal Board only).
+             Four cards laid out in a fixed 4-column grid (collapses to 2
+             on narrow screens, 1 on mobile). All filters visible at once
+             — no "More Filters" toggle. Outer label above each field is
+             the only label (the LOC fields are rendered with empty inline
+             labels via opts.block=true). -->
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-          <button onclick="_dbToggleAdvFilters()" id="db_advToggle"
-            style="background:#fff;color:#334155;border:1px solid #cbd5e1;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;"
-            title="Open the rare numeric filters (NOI, lot size, year built, occupancy)">
-            ▾ More Filters <span id="db_advCount" style="margin-left:4px;font-size:10px;color:#94a3b8;"></span>
-          </button>
           <div style="flex:1;"></div>
           ${_dbColsMenuHTML()}
           <button onclick="dbClearAllFilters()" class="db-fbar-clear">
@@ -19817,64 +19869,57 @@ function showDealBoard(){
           </button>
         </div>
 
-        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(280px, 1fr));gap:14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:14px;align-items:start;">
+        <div class="db-card-grid" style="display:grid;grid-template-columns:repeat(4, minmax(0, 1fr));gap:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;align-items:stretch;">
           <!-- Location card -->
-          <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-              <div style="display:flex;align-items:center;gap:8px;">
-                <span style="display:inline-block;width:4px;height:18px;border-radius:2px;background:#3b82f6;"></span>
-                <span style="font-size:13px;font-weight:700;color:#0f172a;">Location</span>
-              </div>
+          <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+              <span style="display:inline-block;width:4px;height:18px;border-radius:2px;background:#3b82f6;"></span>
+              <span style="font-size:13px;font-weight:700;color:#0f172a;">Location</span>
             </div>
             <div style="display:flex;flex-direction:column;gap:8px;">
               <div>
-                <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">State</div>
-                ${_locRenderSingleField('state', 'State')}
+                <div class="db-card-lbl">State</div>
+                ${_locRenderSingleField('state', '', { block:true })}
               </div>
               <div>
-                <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Region</div>
-                ${_locRenderSingleField('region', 'Region')}
+                <div class="db-card-lbl">Region</div>
+                ${_locRenderSingleField('region', '', { block:true })}
               </div>
               <div>
-                <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">County</div>
-                ${_locRenderSingleField('county', 'County')}
+                <div class="db-card-lbl">County</div>
+                ${_locRenderSingleField('county', '', { block:true })}
               </div>
               <div>
-                <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">City</div>
-                ${_locRenderSingleField('city', 'City')}
+                <div class="db-card-lbl">City</div>
+                ${_locRenderSingleField('city', '', { block:true })}
               </div>
             </div>
           </div>
 
           <!-- Asset card -->
-          <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-              <div style="display:flex;align-items:center;gap:8px;">
-                <span style="display:inline-block;width:4px;height:18px;border-radius:2px;background:#22c55e;"></span>
-                <span style="font-size:13px;font-weight:700;color:#0f172a;">Asset</span>
-              </div>
+          <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+              <span style="display:inline-block;width:4px;height:18px;border-radius:2px;background:#22c55e;"></span>
+              <span style="font-size:13px;font-weight:700;color:#0f172a;">Asset</span>
             </div>
             <div style="display:flex;flex-direction:column;gap:8px;">
               <div>
-                <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Asset Type</div>
-                ${_locRenderSingleField('type', 'Asset Type')}
+                <div class="db-card-lbl">Asset Type</div>
+                ${_locRenderSingleField('type', '', { block:true })}
               </div>
-              <div>
-                ${_dbAdvRange('sqft',  'Square Footage', '', ' SF')}
-              </div>
-              <div>
-                ${_dbAdvRange('units', '# Units',        '', '')}
-              </div>
+              ${_dbAdvRange('sqft',      'Square Footage', '', ' SF')}
+              ${_dbAdvRange('units',     '# Units',        '', '')}
+              ${_dbAdvRange('lotsize',   'Lot Size',       '', ' ac')}
+              ${_dbAdvRange('yearbuilt', 'Year Built',     '', '')}
+              ${_dbAdvRange('occupancy', 'Occupancy %',    '', '%')}
             </div>
           </div>
 
           <!-- Financial card -->
-          <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-              <div style="display:flex;align-items:center;gap:8px;">
-                <span style="display:inline-block;width:4px;height:18px;border-radius:2px;background:#7c3aed;"></span>
-                <span style="font-size:13px;font-weight:700;color:#0f172a;">Financial</span>
-              </div>
+          <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+              <span style="display:inline-block;width:4px;height:18px;border-radius:2px;background:#7c3aed;"></span>
+              <span style="font-size:13px;font-weight:700;color:#0f172a;">Financial</span>
             </div>
             <div style="display:flex;flex-direction:column;gap:8px;">
               ${_dbAdvRange('price',   'Asking Price', '$', '')}
@@ -19884,20 +19929,18 @@ function showDealBoard(){
           </div>
 
           <!-- Pipeline & Status card -->
-          <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;">
-            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
-              <div style="display:flex;align-items:center;gap:8px;">
-                <span style="display:inline-block;width:4px;height:18px;border-radius:2px;background:#f59e0b;"></span>
-                <span style="font-size:13px;font-weight:700;color:#0f172a;">Pipeline &amp; Status</span>
-              </div>
+          <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;">
+            <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">
+              <span style="display:inline-block;width:4px;height:18px;border-radius:2px;background:#f59e0b;"></span>
+              <span style="font-size:13px;font-weight:700;color:#0f172a;">Pipeline &amp; Status</span>
             </div>
             <div style="display:flex;flex-direction:column;gap:8px;">
               <div>
-                <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Stage</div>
+                <div class="db-card-lbl">Stage</div>
                 ${_dbStageComboHTML(stages)}
               </div>
               <div>
-                <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Source</div>
+                <div class="db-card-lbl">Source</div>
                 ${_dbSourceComboHTML(sources)}
               </div>
               <label class="db-fbar-check" style="margin-top:4px;">
@@ -19905,17 +19948,6 @@ function showDealBoard(){
                 &#9733; Priority Only
               </label>
             </div>
-          </div>
-        </div>
-
-        <!-- v113.55: ADVANCED FILTERS PANEL — extra numeric ranges that
-             didn't make the four cards above (year built, lot size,
-             occupancy). Collapsed by default. -->
-        <div id="db_advPanel" style="display:none;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-top:6px;">
-          <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px 16px;font-size:11px;color:#334155;">
-            ${_dbAdvRange('lotsize',   'Lot Size',     '',  ' ac')}
-            ${_dbAdvRange('yearbuilt', 'Year Built',   '',  '')}
-            ${_dbAdvRange('occupancy', 'Occupancy %',  '',  '%')}
           </div>
         </div>
 
@@ -50987,7 +51019,11 @@ function _collectFilterOptions(){
   const cities = new Set();
   const agents = new Set();
   allDeals.forEach(d => {
-    const at = _dealAssetType(d);
+    // v161: use the FULL asset type ("Industrial: Warehouse"), not the
+    // top-level only — matches Deal Board's filter behavior so subtypes
+    // are pickable. _dealAssetTypeMatches already handles parent-only
+    // selections (e.g. picking "Industrial" matches all Industrial:* deals).
+    const at = _dealAssetTypeFull(d);
     if(at) assetTypes.add(at);
     const region = d['Region for County'];
     if(region) regions.add(region);

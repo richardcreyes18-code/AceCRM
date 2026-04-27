@@ -1813,6 +1813,9 @@ const SB_PROP_MAP = {
   date_added:'Date Added', snooze_until_date:'Snooze Until Date',
   is_snoozed:'Is Snoozed',
   asking_price:'Asking Price', asking_price_explanation:'Asking Price Explanation',
+  // v169: 'priced' (default) | 'no_asking' | 'make_offer' — when seller
+  // doesn't post a number, UI shows the chosen label instead of "$—".
+  asking_price_status:'Asking Price Status',
   offer_price:'Offer Price', pitch_out_price:'Pitch Out Price',
   // v111.8: per-card description fields on the Offers tab. `asking_price_explanation`
   // is reused for the "Seller Original Asking" card (same field the seller-lead
@@ -5092,6 +5095,17 @@ function fmtMoney(v){
   if(n>=1000) return '$'+(n/1000).toFixed(0)+'K';
   return '$'+n.toLocaleString();
 }
+
+// v169: render the asking-price field respecting the 3-state status
+// (priced | no_asking | make_offer). When status is set to one of the
+// non-priced options, the saved Asking Price number is ignored.
+function _dealAskingDisplay(d){
+  if(!d) return '—';
+  const status = d['Asking Price Status'] || '';
+  if(status === 'no_asking') return 'No Asking Price';
+  if(status === 'make_offer') return 'Make Me an Offer';
+  return fmtMoney(d['Asking Price']);
+}
 function fmtPct(v){
   if(v===null||v===undefined||v==='') return '—';
   if(typeof v==='object') return '—';
@@ -6222,7 +6236,7 @@ function renderDealPage(){
         </div>
         <div style="flex:1;min-width:120px;padding:7px 14px;border-right:1px solid var(--border);">
           <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px;">Asking Price</div>
-          <div style="font-size:14px;font-weight:700;color:var(--text);">${fmtMoney(d['Asking Price'])}</div>
+          <div style="font-size:14px;font-weight:700;color:var(--text);">${_dealAskingDisplay(d)}</div>
         </div>
         <div style="flex:1;min-width:120px;padding:7px 14px;border-right:1px solid var(--border);">
           <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px;">Offer Price</div>
@@ -6974,17 +6988,21 @@ function _equalizeTextareaGroup(groupName){
 // v168: track which sub-tab is active inside Financial Analysis. Persists
 // across deal switches within a session so the user can lock the page on
 // e.g. Offers and have it stay there as they nav between deals.
-let _finSubTab = 'financial'; // 'financial' | 'offers' | 'tenantmix' | 'comps'
+let _finSubTab = 'financial'; // 'financial' | 'offers' | 'tenantmix' | 'comps' | 'quickcalc'
 
 function _finSubTabBarHTML(){
   // v168.1: same tab-btn underline style as the parent tab row, so the
   // sub-bar visually attaches to the main bar. Tinted background +
   // slightly indented so the user can still tell it's a sub-level.
+  // v169: Quick Calc sub-tab — Results Summary + Key Metrics + Cash Flow
+  // & NOI alongside a target-cap / target-PSF / target-PPU offer
+  // calculator.
   const subs = [
     ['financial', '📊 Financial Analysis'],
     ['offers',    '💰 Offers'],
     ['tenantmix', '🏪 Tenant Mix'],
     ['comps',     '🏘 Comps'],
+    ['quickcalc', '🧮 Quick Calculations'],
   ];
   return `<div class="tabs-row fin-subtabs" style="border-bottom:1px solid #e2e8f0;margin:-18px -18px 16px;padding:0 18px;background:#f8fafc;">
     ${subs.map(([k, label]) => {
@@ -6999,7 +7017,8 @@ function switchTab(name, btn){
   // v168: Offers / Tenant Mix / Comps are sub-tabs of Financial Analysis.
   // Translate the old top-level names so existing call sites keep working,
   // and update _finSubTab so the sub-tab bar renders the right content.
-  const FIN_SUB_NAMES = ['financial','offers','tenantmix','comps'];
+  // v169: + 'quickcalc'.
+  const FIN_SUB_NAMES = ['financial','offers','tenantmix','comps','quickcalc'];
   if(FIN_SUB_NAMES.includes(name)){
     _finSubTab = name;
     name = 'financial';
@@ -7047,6 +7066,7 @@ function switchTab(name, btn){
     offers:    renderOffersTab,
     tenantmix: renderTenantMixTab,
     comps:     renderCompsTab,
+    quickcalc: renderQuickCalcTab,
   };
   const _finRender = _finSubRenderers[_finSubTab] || renderFinancialTab;
   const content={
@@ -9277,6 +9297,232 @@ function addAmenityCategory(){
   document.getElementById('amenityExtraCategories').appendChild(wrap);
 }
 
+// ═══════════════════════════════════════════════════════════════
+// v169: QUICK CALCULATIONS sub-tab — same Results Summary + Key Metrics
+// + Cash Flow & NOI as Financial Analysis (rendered statically from
+// saved deal columns), plus a Quick Offer Calculator that derives a
+// price from a target cap rate, target $/SF, or target $/Unit. Lets
+// the user explore what a fair offer looks like at different
+// assumptions without leaving the deal card.
+// ═══════════════════════════════════════════════════════════════
+function renderQuickCalcTab(d){
+  if(!d) return '<div style="padding:30px;color:#94a3b8;text-align:center;">No deal loaded.</div>';
+  const dealId = d.id;
+  // ── Pull saved values (no live recalc — Financial Analysis owns that) ──
+  const ask       = Number(d['Asking Price']) || 0;
+  const offer     = Number(d['Offer Price']) || 0;
+  const noi       = Number(d['NOI']) || 0;
+  const capStored = Number(d['Cap Rate (CRM)']) || 0; // decimal e.g. 0.065
+  const sf        = Number(d['Net Rentable SF'] || d['Square Footage'] || d['Total Building SF']) || 0;
+  const totalSF   = Number(d['Square Footage'] || d['Total Building SF']) || 0;
+  const units     = Number(d['No. of Units'] || d['Number of Units']) || 0;
+  const occupancy = Number(d['Occupancy (%)']) || 0;
+  const debt      = Number(d['Annual Debt Service']) || 0;
+  const grossYr   = (Number(d['Gross Rental Income (Monthly)']) || 0) * 12;
+  const expensesYr= Number(d['Expenses Yearly']) || (Number(d['Expenses Monthly']) || 0) * 12;
+  const cashFlow  = noi - debt;
+  const ppu       = (ask && units) ? ask / units : 0;
+  const ppf       = (ask && totalSF) ? ask / totalSF : 0;
+  const askDisplay   = _dealAskingDisplay(d);
+  const dol = v => v ? '$' + Math.round(v).toLocaleString() : '—';
+  const pct = v => v ? (v * 100).toFixed(2) + '%' : '—';
+
+  // ── Quick Offer Calculator: pre-fill targets with sensible defaults ──
+  // Cap-based default: 7%; PSF/PPU default to current implied values
+  // (so the calculator opens with the SAME number you already have, then
+  // the user nudges from there).
+  const defaultCap = 7;
+  const defaultPPU = ppu || 0;
+  const defaultPPF = ppf || 0;
+  const calcResults = (capPct, psf, ppu) => {
+    const fromCap = (noi && capPct > 0) ? noi / (capPct/100) : 0;
+    const fromPSF = (totalSF && psf > 0) ? totalSF * psf : 0;
+    const fromPPU = (units && ppu > 0)   ? units * ppu    : 0;
+    return { fromCap, fromPSF, fromPPU };
+  };
+  const initial = calcResults(defaultCap, defaultPPF, defaultPPU);
+
+  return `
+    <div style="padding:4px 0 20px;">
+      <!-- ── Quick Offer Calculator (top of tab) ───────────────── -->
+      <div class="info-box" style="background:#f8fafc;border:1px solid #c7d2fe;">
+        <div class="info-box-title" style="display:flex;align-items:center;gap:8px;justify-content:space-between;flex-wrap:wrap;">
+          <span>🧮 Quick Offer Calculator</span>
+          <span style="font-size:10px;color:#64748b;font-weight:500;">From saved deal data — change values to model offers.</span>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr;gap:10px;font-size:12px;">
+          <!-- Inputs strip showing the current data the calc draws from -->
+          <div style="display:flex;flex-wrap:wrap;gap:14px;padding:10px 12px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;font-size:11px;">
+            <div><strong style="color:#64748b;">NOI:</strong> <span id="qcNoi" style="font-weight:700;color:#0f172a;">${dol(noi)}</span></div>
+            <div><strong style="color:#64748b;">Square Footage:</strong> <span id="qcSF" style="font-weight:700;color:#0f172a;">${totalSF ? totalSF.toLocaleString() + ' SF' : '—'}</span></div>
+            <div><strong style="color:#64748b;">Units:</strong> <span id="qcUnits" style="font-weight:700;color:#0f172a;">${units || '—'}</span></div>
+            <div style="margin-left:auto;"><strong style="color:#64748b;">Current Asking:</strong> <span style="font-weight:700;color:#1e3a8a;">${askDisplay}</span></div>
+          </div>
+
+          <!-- Three calc rows: Cap Rate, $/SF, $/Unit -->
+          ${noi > 0 ? `
+            <div style="display:grid;grid-template-columns:1.2fr 1fr 1fr auto;gap:10px;align-items:center;padding:10px 12px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;">
+              <div><strong style="color:#0f172a;">Target CAP Rate</strong> <span style="color:#64748b;font-weight:400;">→ price = NOI ÷ cap</span></div>
+              <div style="display:flex;align-items:center;gap:5px;"><input id="qcCap" type="number" step="0.05" value="${defaultCap}" oninput="_qcRecalc()" style="width:80px;padding:6px 8px;font-size:13px;border:1px solid #cbd5e1;border-radius:6px;text-align:right;"/><span style="color:#64748b;">%</span></div>
+              <div id="qcOutCap" style="font-size:18px;font-weight:800;color:#15803d;text-align:right;">${dol(initial.fromCap)}</div>
+              <button onclick="_qcUseAsOffer('cap')" title="Set this as Offer Price" style="background:#1e3a8a;color:#fff;border:none;padding:6px 12px;font-size:11px;font-weight:700;border-radius:6px;cursor:pointer;white-space:nowrap;">Use as Offer →</button>
+            </div>
+          ` : `<div style="padding:10px 12px;background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;color:#92400e;font-size:11px;">⚠ Add an NOI in Financial Analysis to enable the cap-rate calculator.</div>`}
+
+          ${totalSF > 0 ? `
+            <div style="display:grid;grid-template-columns:1.2fr 1fr 1fr auto;gap:10px;align-items:center;padding:10px 12px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;">
+              <div><strong style="color:#0f172a;">Target Price / SF</strong> <span style="color:#64748b;font-weight:400;">→ price = SF × $/SF</span></div>
+              <div style="display:flex;align-items:center;gap:5px;"><span style="color:#64748b;">$</span><input id="qcPSF" type="number" step="1" value="${defaultPPF.toFixed(0)}" oninput="_qcRecalc()" style="width:90px;padding:6px 8px;font-size:13px;border:1px solid #cbd5e1;border-radius:6px;text-align:right;"/><span style="color:#64748b;">/sf</span></div>
+              <div id="qcOutPSF" style="font-size:18px;font-weight:800;color:#15803d;text-align:right;">${dol(initial.fromPSF)}</div>
+              <button onclick="_qcUseAsOffer('psf')" title="Set this as Offer Price" style="background:#1e3a8a;color:#fff;border:none;padding:6px 12px;font-size:11px;font-weight:700;border-radius:6px;cursor:pointer;white-space:nowrap;">Use as Offer →</button>
+            </div>
+          ` : `<div style="padding:10px 12px;background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;color:#92400e;font-size:11px;">⚠ Add Square Footage in Property Details to enable the PSF calculator.</div>`}
+
+          ${units > 0 ? `
+            <div style="display:grid;grid-template-columns:1.2fr 1fr 1fr auto;gap:10px;align-items:center;padding:10px 12px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;">
+              <div><strong style="color:#0f172a;">Target Price / Unit</strong> <span style="color:#64748b;font-weight:400;">→ price = Units × $/unit</span></div>
+              <div style="display:flex;align-items:center;gap:5px;"><span style="color:#64748b;">$</span><input id="qcPPU" type="number" step="1000" value="${defaultPPU.toFixed(0)}" oninput="_qcRecalc()" style="width:110px;padding:6px 8px;font-size:13px;border:1px solid #cbd5e1;border-radius:6px;text-align:right;"/><span style="color:#64748b;">/unit</span></div>
+              <div id="qcOutPPU" style="font-size:18px;font-weight:800;color:#15803d;text-align:right;">${dol(initial.fromPPU)}</div>
+              <button onclick="_qcUseAsOffer('ppu')" title="Set this as Offer Price" style="background:#1e3a8a;color:#fff;border:none;padding:6px 12px;font-size:11px;font-weight:700;border-radius:6px;cursor:pointer;white-space:nowrap;">Use as Offer →</button>
+            </div>
+          ` : `<div style="padding:10px 12px;background:#fef3c7;border:1px solid #fbbf24;border-radius:8px;color:#92400e;font-size:11px;">⚠ Add # of Units in Property Details to enable the per-unit calculator.</div>`}
+        </div>
+      </div>
+
+      <!-- ── Results Summary (static — reflects saved deal data) ── -->
+      <div class="info-box">
+        <div class="info-box-title">📋 Results Summary</div>
+        <table class="fin-results-table">
+          <tr>
+            <td class="row-label">Property</td>
+            <td>Type: <strong>${d['Simple Text Property Type']||'—'}</strong></td>
+            <td>Class: <strong>${d['Property Class']||'—'}</strong></td>
+            <td>Condition: <strong>${d['Property Condition']||'—'}</strong></td>
+          </tr>
+          <tr>
+            <td class="row-label">Location</td>
+            <td>Type: <strong>${d['Location Type']||'—'}</strong></td>
+            <td>Class: <strong>${d['Location Class']||'—'}</strong></td>
+            <td>Trending: <strong>${d['Location Trending']||'—'}</strong></td>
+          </tr>
+          <tr>
+            <td class="row-label">Price</td>
+            <td>Offer: <strong style="color:#080;">${dol(offer)}</strong></td>
+            <td>Asking: <strong style="color:#c00;">${askDisplay}</strong></td>
+            <td>Representation: <strong>${
+              d['Is Property Listed']==='broker' ? 'Broker Listed' :
+              d['Is Property Listed']==='fsbo' ? 'For Sale By Owner' :
+              'Not Listed'
+            }</strong></td>
+          </tr>
+          <tr>
+            <td class="row-label">Size</td>
+            <td>Net Rentable: <strong>${sf?sf.toLocaleString()+' sf':'—'}</strong></td>
+            <td>Total Size: <strong>${totalSF?totalSF.toLocaleString()+' sf':'—'}</strong></td>
+            <td>Occupancy: <strong>${occupancy?occupancy+'%':'—'}</strong></td>
+          </tr>
+          <tr>
+            <td class="row-label">Units</td>
+            <td>No. of Units: <strong>${units||'—'}</strong></td>
+            <td>No. Vacant: <strong>${units&&occupancy ? Math.round(units*(1-occupancy/100)) : '—'}</strong></td>
+            <td>Price Per Unit: <strong style="color:#c00;">${ppu?'$'+Math.round(ppu).toLocaleString():'—'}</strong></td>
+          </tr>
+        </table>
+      </div>
+
+      <!-- ── Key Metrics (static) ───────────────────────────────── -->
+      <div class="info-box">
+        <div class="info-box-title">📈 Key Metrics</div>
+        <table class="fin-metrics-table">
+          <thead><tr><th style="text-align:left;">Metric</th><th>Actual (current)</th></tr></thead>
+          <tbody>
+            <tr><td class="metric-label">CAP Rate</td>
+              <td>${(noi && ask) ? pct(noi/ask) : (capStored ? pct(capStored) : '—')}</td></tr>
+            <tr><td class="metric-label">Gross Rent Multiplier</td>
+              <td>${(grossYr && ask) ? (ask / grossYr).toFixed(2) : '—'}</td></tr>
+            <tr><td class="metric-label">Expense Ratio</td>
+              <td>${(expensesYr && grossYr) ? pct(expensesYr/grossYr) : '—'}</td></tr>
+            <tr><td class="metric-label">Price Per Foot</td>
+              <td>${ppf ? '$' + ppf.toFixed(2) : '—'}</td></tr>
+            <tr><td class="metric-label">Price Per Unit</td>
+              <td>${ppu ? '$' + Math.round(ppu).toLocaleString() : '—'}</td></tr>
+          </tbody>
+        </table>
+      </div>
+
+      <!-- ── Cash Flow & NOI (static) ───────────────────────────── -->
+      <div class="info-box">
+        <div class="info-box-title">💵 Cash Flow &amp; NOI</div>
+        <table class="fin-cf-table">
+          <thead>
+            <tr><th style="text-align:left;width:180px;">Item</th><th>Monthly</th><th>Yearly</th><th>Yearly PSF</th></tr>
+          </thead>
+          <tbody>
+            <tr><td class="cf-label">Cash Flow</td>
+              <td>${cashFlow?dol(cashFlow/12):'—'}</td>
+              <td>${cashFlow?dol(cashFlow):'—'}</td>
+              <td>${(cashFlow && totalSF)?'$'+(cashFlow/totalSF).toFixed(2):'—'}</td></tr>
+            <tr><td class="cf-label">Net Operating Income</td>
+              <td>${noi?dol(noi/12):'—'}</td>
+              <td>${noi?dol(noi):'—'}</td>
+              <td>${(noi && totalSF)?'$'+(noi/totalSF).toFixed(2):'—'}</td></tr>
+          </tbody>
+        </table>
+      </div>
+    </div>
+  `;
+}
+
+// v169: live recalc handler for the Quick Offer Calculator. Reads the
+// three input fields and updates the corresponding output cells.
+window._qcRecalc = function(){
+  if(!currentDeal) return;
+  const noi   = Number(currentDeal['NOI']) || 0;
+  const sf    = Number(currentDeal['Square Footage'] || currentDeal['Total Building SF']) || 0;
+  const units = Number(currentDeal['No. of Units'] || currentDeal['Number of Units']) || 0;
+  const dol = v => v ? '$' + Math.round(v).toLocaleString() : '—';
+  const cap = Number(document.getElementById('qcCap')?.value) || 0;
+  const psf = Number(document.getElementById('qcPSF')?.value) || 0;
+  const ppu = Number(document.getElementById('qcPPU')?.value) || 0;
+  const outCap = document.getElementById('qcOutCap');
+  const outPSF = document.getElementById('qcOutPSF');
+  const outPPU = document.getElementById('qcOutPPU');
+  if(outCap) outCap.textContent = dol((noi && cap > 0) ? noi / (cap / 100) : 0);
+  if(outPSF) outPSF.textContent = dol((sf && psf > 0)  ? sf * psf : 0);
+  if(outPPU) outPPU.textContent = dol((units && ppu > 0) ? units * ppu : 0);
+};
+
+// v169: persist the calculator's current row as Offer Price on the deal.
+window._qcUseAsOffer = async function(which){
+  if(!currentDeal) return;
+  const noi   = Number(currentDeal['NOI']) || 0;
+  const sf    = Number(currentDeal['Square Footage'] || currentDeal['Total Building SF']) || 0;
+  const units = Number(currentDeal['No. of Units'] || currentDeal['Number of Units']) || 0;
+  let price = 0;
+  if(which === 'cap'){
+    const cap = Number(document.getElementById('qcCap')?.value) || 0;
+    price = (noi && cap > 0) ? noi / (cap/100) : 0;
+  } else if(which === 'psf'){
+    const psf = Number(document.getElementById('qcPSF')?.value) || 0;
+    price = (sf && psf > 0) ? sf * psf : 0;
+  } else if(which === 'ppu'){
+    const ppu = Number(document.getElementById('qcPPU')?.value) || 0;
+    price = (units && ppu > 0) ? units * ppu : 0;
+  }
+  if(!price){ alert('Enter a target value first.'); return; }
+  price = Math.round(price);
+  if(!confirm(`Set Offer Price to $${price.toLocaleString()}?\n\nThis updates the deal's Offer Price and Ace Starter Offer.`)) return;
+  try {
+    await _sbPatch(SB_TABLES.properties, currentDeal.id, { offer_price: price });
+    currentDeal['Offer Price'] = price;
+    const dealInList = (allDeals || []).find(x => x.id === currentDeal.id);
+    if(dealInList) dealInList['Offer Price'] = price;
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('✓ Offer Price set to ' + '$' + price.toLocaleString());
+  } catch(e){
+    alert('Failed to save: ' + (e.message || 'unknown'));
+  }
+};
+
 // ─── TAB: FINANCIAL ANALYSIS ──────────────────────────────────
 // ═══════════════════════════════════════════════════════════════
 // OFFERS TAB (v74) — read-only view of ace_deal_offers for the current deal.
@@ -9299,10 +9545,27 @@ function renderOffersTab(d){
       <div id="offersSummary" class="pd-field-grid" style="grid-template-columns:repeat(4,1fr);margin-bottom:14px;">
         <div class="pd-field" style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px;">
           <label class="pd-lbl" style="color:#64748b;">Seller Original Asking</label>
-          <div style="position:relative;margin-top:2px;">
-            <span style="position:absolute;left:0;top:3px;font-size:17px;font-weight:700;color:#0f172a;pointer-events:none;">$</span>
-            <input id="offerInAsking" type="text" inputmode="numeric" class="num-input" data-offer-type="asking" data-deal-id="${dealId}" onblur="_offerInlineSave(this)" onkeydown="if(event.key==='Enter')this.blur()" style="width:100%;padding-left:12px;border:none;border-bottom:1px dashed #cbd5e1;background:transparent;font-size:17px;font-weight:700;color:#0f172a;padding-top:3px;padding-bottom:3px;outline:none;box-sizing:border-box;" placeholder="—"/>
-          </div>
+          ${(()=>{
+            // v169: 3-state status pill row + price input. When status is
+            // 'no_asking' or 'make_offer' the price input is hidden and a
+            // status badge replaces "$—".
+            const status = d['Asking Price Status'] || 'priced';
+            const pill = (key, label, accent) => {
+              const on = status === key;
+              return `<button onclick="_offerSetAskingStatus('${dealId}','${key}')" type="button" style="padding:4px 10px;border-radius:99px;font-size:10px;font-weight:600;cursor:pointer;border:1px solid ${on?accent:'#cbd5e1'};background:${on?accent:'#fff'};color:${on?'#fff':'#475569'};">${label}</button>`;
+            };
+            const pillRow = `<div style="display:flex;gap:5px;flex-wrap:wrap;margin:4px 0 6px;">
+              ${pill('priced',     '$ Priced',          '#1e3a8a')}
+              ${pill('no_asking',  '📭 No Asking',      '#b45309')}
+              ${pill('make_offer', '💬 Make Me Offer',  '#7c3aed')}
+            </div>`;
+            const priceInput = `<div id="offerAskingPriceWrap" style="position:relative;margin-top:2px;display:${status==='priced'?'block':'none'};">
+              <span style="position:absolute;left:0;top:3px;font-size:17px;font-weight:700;color:#0f172a;pointer-events:none;">$</span>
+              <input id="offerInAsking" type="text" inputmode="numeric" class="num-input" data-offer-type="asking" data-deal-id="${dealId}" onblur="_offerInlineSave(this)" onkeydown="if(event.key==='Enter')this.blur()" style="width:100%;padding-left:12px;border:none;border-bottom:1px dashed #cbd5e1;background:transparent;font-size:17px;font-weight:700;color:#0f172a;padding-top:3px;padding-bottom:3px;outline:none;box-sizing:border-box;" placeholder="—"/>
+            </div>`;
+            const statusBadge = `<div id="offerAskingStatusBadge" style="display:${status==='priced'?'none':'inline-block'};margin-top:4px;padding:6px 12px;border-radius:6px;font-size:13px;font-weight:700;background:${status==='make_offer'?'#ede9fe':'#fef3c7'};color:${status==='make_offer'?'#5b21b6':'#92400e'};border:1px solid ${status==='make_offer'?'#c4b5fd':'#fde68a'};">${status==='make_offer'?'💬 Make Me an Offer':'📭 No Asking Price'}</div>`;
+            return pillRow + priceInput + statusBadge;
+          })()}
           <textarea id="offerNoteAsking" data-note-field="asking_price_explanation" data-deal-id="${dealId}" onblur="_offerNoteSave(this)" rows="2" placeholder='Why this asking? e.g. "Seller wants $1.5M, firm. Open to seller financing."' style="width:100%;margin-top:8px;padding:6px 8px;border:1px solid #e2e8f0;border-radius:6px;font-size:11px;color:#0f172a;resize:vertical;box-sizing:border-box;font-family:inherit;outline:none;"></textarea>
         </div>
         <div class="pd-field" style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:12px;">
@@ -9980,6 +10243,39 @@ async function _pitchOutApplyFromToggle(){
     loadOffersTab(currentDeal.id);
   } catch(e) {
     console.warn('pitch out apply failed:', e.message);
+  }
+}
+
+// v169: 3-state asking-price status setter. 'priced' shows the input,
+// 'no_asking' / 'make_offer' replace it with a labeled badge. Persists
+// to ace_properties.asking_price_status so the value survives reloads
+// and shows in the header KPI bar via _dealAskingDisplay().
+async function _offerSetAskingStatus(dealId, status){
+  if(!dealId || !status) return;
+  if(!['priced','no_asking','make_offer'].includes(status)) return;
+  try {
+    await _sbPatch(SB_TABLES.properties, dealId, { asking_price_status: status });
+    if(currentDeal && currentDeal.id === dealId){
+      currentDeal['Asking Price Status'] = status;
+      const dealInList = (allDeals || []).find(x => x.id === dealId);
+      if(dealInList) dealInList['Asking Price Status'] = status;
+    }
+    // Re-render the Offers card so the pill highlight + price/badge swap.
+    if(typeof renderOffersTab === 'function' && currentDeal && currentDeal.id === dealId){
+      const tc = document.getElementById('tabContent');
+      if(tc && currentTab === 'financial' && _finSubTab === 'offers'){
+        _rendering = true;
+        tc.innerHTML = _finSubTabBarHTML() + renderOffersTab(currentDeal);
+        _rendering = false;
+        if(typeof _naDecorate === 'function') _naDecorate(tc);
+        if(typeof loadOffersTab === 'function') loadOffersTab(dealId);
+      }
+    }
+    // Refresh the deal-card header KPI strip so the Asking Price cell updates.
+    const headerStat = document.querySelector('#mainArea .deal-stats') || null;
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('✓ Asking status updated');
+  } catch(e){
+    alert('Failed to update status: ' + (e.message || 'unknown'));
   }
 }
 

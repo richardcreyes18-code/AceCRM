@@ -45078,19 +45078,21 @@ function _dealTasksRenderRow(t, sectionKey){
   const sharedBadge = set.size > 1
     ? `<span title="Shared with ${set.size} agents" style="background:#f5f3ff;color:#5b21b6;border:1px solid #ddd6fe;padding:1px 7px;border-radius:99px;font-size:10px;font-weight:700;">👥 ${set.size}</span>`
     : '';
-  // Show short assignee chips. Limit to 2 + "+N" overflow.
+  // v158.2: show full names of assignees (not just initials) so the
+  // user sees who the task is shared with at a glance. Cap at 3 visible
+  // chips + a "+N more" overflow to keep the row from wrapping wildly.
   const assigneeChips = (() => {
     if(!set.size) return '';
     const ids = [...set];
-    const names = ids.slice(0,2).map(id => {
-      const u = (_usersCache||[]).find(x => x.id === id);
-      const nm = (u && (u.name || u.email || '')).trim() || 'Agent';
-      const initials = nm.split(/\s+/).map(s => s[0]||'').join('').slice(0,2).toUpperCase();
+    const chipFor = (id) => {
+      const u = (_usersCache || []).find(x => x.id === id);
+      const nm = ((u && (u.name || u.email)) || 'Agent').toString().trim() || 'Agent';
       const isMe = id === me;
-      return `<span title="${nm.replace(/[<>]/g,'')}" style="background:${isMe?'#1a3a6e':'#e2e8f0'};color:${isMe?'#fff':'#475569'};font-size:9px;font-weight:700;padding:2px 6px;border-radius:99px;">${initials}</span>`;
-    }).join('');
-    const overflow = ids.length > 2 ? `<span style="font-size:10px;color:#64748b;">+${ids.length-2}</span>` : '';
-    return names + overflow;
+      return `<span title="${nm.replace(/[<>"]/g,'')}" style="background:${isMe?'#1a3a6e':'#e2e8f0'};color:${isMe?'#fff':'#475569'};font-size:10px;font-weight:600;padding:2px 8px;border-radius:99px;white-space:nowrap;">${isMe ? 'You' : nm.replace(/[<>]/g,'')}</span>`;
+    };
+    const visible = ids.slice(0, 3).map(chipFor).join('');
+    const overflow = ids.length > 3 ? `<span style="font-size:10px;color:#64748b;font-weight:600;">+${ids.length-3} more</span>` : '';
+    return visible + overflow;
   })();
   const safeTask  = (t['Task']  || '').replace(/'/g, "\\'");
   const safePrio  = prio.replace(/'/g, "\\'");
@@ -45829,7 +45831,8 @@ function _tasksPaintTabBar(countsByTab){
     { k:'buyer',               label:'Buyer',         icon:'💼' },
     { k:'contact',             label:'Contact',       icon:'👤' },
     { k:'admin',               label:'Admin',         icon:'⚙' },
-    { k:'assigned_to_others',  label:'Assigned to Others', icon:'➜' },
+    { k:'assigned_to_others',  label:'Assigned to Others',   icon:'➜' },
+    { k:'assigned_from_others',label:'Assigned from Others', icon:'⬅' },
   ];
   bar.innerHTML = TABS.map(t => {
     const active = t.k === _taskTabFilter;
@@ -45892,22 +45895,31 @@ async function _renderGlobalTasks(){
     const my  = Array.isArray(myRows)  ? myRows  : [];
     const out = Array.isArray(outRows) ? outRows : [];
 
+    // v158.2: "Assigned FROM Others" = tasks in my queue that someone else
+    // assigned to me (assigned_by_user_id is set AND not me). Counterpart
+    // to the existing "Assigned to Others" tab.
+    const fromOthers = my.filter(r => r.assigned_by_user_id && r.assigned_by_user_id !== userId);
+
     // Per-tab counts in a single in-memory pass.
     const counts = {
-      all:                 my.length,
-      deal:                my.filter(r => (r.task_type||'admin')==='deal').length,
-      buyer:               my.filter(r => (r.task_type||'admin')==='buyer').length,
-      contact:             my.filter(r => (r.task_type||'admin')==='contact').length,
-      admin:               my.filter(r => !r.task_type || r.task_type==='admin').length,
-      assigned_to_others:  out.length,
+      all:                   my.length,
+      deal:                  my.filter(r => (r.task_type||'admin')==='deal').length,
+      buyer:                 my.filter(r => (r.task_type||'admin')==='buyer').length,
+      contact:               my.filter(r => (r.task_type||'admin')==='contact').length,
+      admin:                 my.filter(r => !r.task_type || r.task_type==='admin').length,
+      assigned_to_others:    out.length,
+      assigned_from_others:  fromOthers.length,
     };
     _tasksPaintTabBar(counts);
 
     // Pick the visible row set for the active tab.
     let raw;
-    const isAssignedToOthersTab = (_taskTabFilter === 'assigned_to_others');
+    const isAssignedToOthersTab   = (_taskTabFilter === 'assigned_to_others');
+    const isAssignedFromOthersTab = (_taskTabFilter === 'assigned_from_others');
     if(isAssignedToOthersTab){
       raw = out;
+    } else if(isAssignedFromOthersTab){
+      raw = fromOthers;
     } else if(_taskTabFilter === 'all'){
       raw = my;
     } else {

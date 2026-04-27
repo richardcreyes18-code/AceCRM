@@ -32878,14 +32878,10 @@ let _companySubTab = 'directory';
 // SETTINGS PAGE (v68) — admin-only, full-page, replaces modal
 // ═══════════════════════════════════════════════════════════════
 function showSettingsPage(){
-  // Guard: only admins
-  if(!_currentUser || _currentUser.role !== 'admin'){
-    const mainArea = document.getElementById('mainArea');
-    if(mainArea){
-      mainArea.innerHTML = '<div style="padding:40px;text-align:center;color:#c00;font-size:14px;">⛔ Settings are restricted to administrators.</div>';
-    }
-    return;
-  }
+  // v166: agents (non-admins) get a restricted Settings view that only
+  // exposes the Email Templates tab. Everything else stays admin-only —
+  // tab filtering + section display:none does the locking.
+  const _isAdmin = !!(_currentUser && _currentUser.role === 'admin');
 
   const c = getConfig();
   const sbKey      = _store.get('sb_key') || '';
@@ -32914,9 +32910,9 @@ function showSettingsPage(){
       <div style="background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 100%);color:#fff;padding:18px 24px;display:flex;align-items:center;justify-content:space-between;">
         <div>
           <div style="font-size:22px;font-weight:700;letter-spacing:0.5px;">⚙ Settings</div>
-          <div style="font-size:12px;color:#93c5fd;margin-top:4px;">Administrator panel · all changes persist locally</div>
+          <div style="font-size:12px;color:#93c5fd;margin-top:4px;">${_isAdmin ? 'Administrator panel · all changes persist locally' : 'Email Templates · manage your personal templates'}</div>
         </div>
-        <button onclick="saveSettingsPage()" style="background:linear-gradient(180deg,#22c55e,#16a34a);color:#fff;border:none;padding:10px 22px;font-size:13px;font-weight:700;border-radius:6px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,0.2);">✓ Save All Settings</button>
+        ${_isAdmin ? `<button onclick="saveSettingsPage()" style="background:linear-gradient(180deg,#22c55e,#16a34a);color:#fff;border:none;padding:10px 22px;font-size:13px;font-weight:700;border-radius:6px;cursor:pointer;box-shadow:0 2px 6px rgba(0,0,0,0.2);">✓ Save All Settings</button>` : ''}
       </div>
       <div style="max-width:900px;margin:0 auto;padding:0 22px 60px;">
         <!-- v111.12: Settings tab navigation -->
@@ -33394,9 +33390,11 @@ function showSettingsPage(){
   }, 100);
 
   // v111.12: Render tab bar + activate persisted tab
+  // v166: agents only see the Email Templates tab; force-switch them to
+  // it regardless of the persisted choice from a prior session.
   _settingsRenderTabBar();
   const saved = (()=>{ try{ return localStorage.getItem('settings_tab') || 'sync'; }catch(e){ return 'sync'; } })();
-  _settingsSwitchTab(saved);
+  _settingsSwitchTab(_isAdmin ? saved : 'email_tpls');
 }
 
 // v111.12: Settings tab navigation
@@ -33415,12 +33413,19 @@ const _SETTINGS_TABS = [
 function _settingsRenderTabBar(){
   const bar = document.getElementById('settingsTabBar');
   if(!bar) return;
-  bar.innerHTML = _SETTINGS_TABS.map(t =>
+  // v166: non-admins only see the Email Templates tab.
+  const isAdmin = !!(_currentUser && _currentUser.role === 'admin');
+  const tabs = isAdmin ? _SETTINGS_TABS : _SETTINGS_TABS.filter(t => t.id === 'email_tpls');
+  bar.innerHTML = tabs.map(t =>
     `<button type="button" data-settings-tabnav="${t.id}" onclick="_settingsSwitchTab('${t.id}')" style="padding:10px 16px;background:none;border:none;border-bottom:2px solid transparent;font-size:13px;font-weight:600;color:#64748b;cursor:pointer;transition:color .12s,border-color .12s;">${t.label}</button>`
   ).join('');
 }
 
 function _settingsSwitchTab(name){
+  // v166: non-admins are clamped to the Email Templates tab even if a
+  // stale persisted value or a programmatic call passes something else.
+  const isAdmin = !!(_currentUser && _currentUser.role === 'admin');
+  if(!isAdmin) name = 'email_tpls';
   // Toggle section visibility
   document.querySelectorAll('[data-settings-tab]').forEach(el => {
     el.style.display = (el.getAttribute('data-settings-tab') === name) ? '' : 'none';
@@ -33471,10 +33476,16 @@ const _propertyTemplateMap = new Map();
 let _propertyTemplateMapLoaded = false;
 
 async function _loadPropertyTemplateMap(){
-  if(!isSupabase() || !_currentUser?.email) return;
+  // v166: drop the user_email filter — the map should reflect ANY agent's
+  // template link, not just the current user's. Otherwise the "📧 Linked"
+  // filter on the pipeline panel returns 0 deals when an agent is viewing
+  // another agent's deals (because their personal templates obviously
+  // don't cover those properties). The cache is just count-by-property,
+  // no template content, so cross-user visibility is fine.
+  if(!isSupabase()) return;
   try {
     const rows = await _sbGet('ace_user_email_templates',
-      `select=property_id&user_email=eq.${encodeURIComponent(_currentUser.email)}&property_id=not.is.null&limit=5000`);
+      `select=property_id&property_id=not.is.null&limit=10000`);
     _propertyTemplateMap.clear();
     if(Array.isArray(rows)){
       for(const r of rows){
@@ -59391,9 +59402,11 @@ function _applyUserToUI(user){
   // Admins see All Deals by default, agents see My Deals
   _viewMode = (user.role==='admin') ? 'all' : 'my';
   _updateViewToggle();
-  // Settings tab is admin-only
+  // v166: Settings is now visible to everyone — non-admins land on a
+  // restricted view that only exposes the Email Templates tab. Admins
+  // see the full settings panel as before.
   const settingsBtn = document.getElementById('navSettingsBtn');
-  if(settingsBtn) settingsBtn.style.display = (user.role==='admin') ? 'inline-block' : 'none';
+  if(settingsBtn) settingsBtn.style.display = 'inline-block';
 }
 
 async function setViewMode(mode){

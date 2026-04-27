@@ -46297,10 +46297,15 @@ function _taskLinkClearBuyerCrit() { _taskLinkSetBuyerCrit(null, ''); }
 
 // Render the chip-or-input row for one picker.
 function _taskLinkRowHtml(kind){
+  // v178: linked-item chips now have an "Open →" button that closes the
+  // task modal and opens the linked record (deal snapshot / contact card /
+  // buyer criteria expanded view).
+  const openBtn = (onclick, title) => `<button onclick="${onclick}" title="${title}" style="background:rgba(255,255,255,0.6);border:1px solid currentColor;color:inherit;cursor:pointer;font-size:11px;font-weight:600;padding:1px 8px;border-radius:99px;line-height:1.4;">Open →</button>`;
   if(kind === 'deal'){
     if(_taskModalDealId){
       return `<div style="display:flex;align-items:center;gap:6px;background:var(--primary-light);color:var(--primary);border:1px solid var(--primary);border-radius:5px;padding:5px 8px;font-size:12px;">
         <span>📍</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${(_taskModalDealAddr||'Deal').replace(/</g,'&lt;')}</span>
+        ${openBtn("_taskOpenLinked('deal')", 'Open this deal')}
         <button onclick="_taskLinkClearDeal()" style="background:none;border:none;color:inherit;cursor:pointer;font-size:14px;padding:0 2px;line-height:1;">✕</button>
       </div>`;
     }
@@ -46313,6 +46318,7 @@ function _taskLinkRowHtml(kind){
     if(_taskModalContactId){
       return `<div style="display:flex;align-items:center;gap:6px;background:#fef3c7;color:#b45309;border:1px solid #fde68a;border-radius:5px;padding:5px 8px;font-size:12px;">
         <span>👤</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${(_taskModalContactName||'Contact').replace(/</g,'&lt;')}</span>
+        ${openBtn("_taskOpenLinked('contact')", 'Open this contact')}
         <button onclick="_taskLinkClearContact()" style="background:none;border:none;color:inherit;cursor:pointer;font-size:14px;padding:0 2px;line-height:1;">✕</button>
       </div>`;
     }
@@ -46325,6 +46331,7 @@ function _taskLinkRowHtml(kind){
   if(_taskModalBuyerCritId){
     return `<div style="display:flex;align-items:center;gap:6px;background:#dbeafe;color:#1e40af;border:1px solid #93c5fd;border-radius:5px;padding:5px 8px;font-size:12px;">
       <span>💼</span><span style="flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap;">${(_taskModalBuyerCritLabel||'Buyer Criteria').replace(/</g,'&lt;')}</span>
+      ${openBtn("_taskOpenLinked('buyer')", 'Open this buyer criteria')}
       <button onclick="_taskLinkClearBuyerCrit()" style="background:none;border:none;color:inherit;cursor:pointer;font-size:14px;padding:0 2px;line-height:1;">✕</button>
     </div>`;
   }
@@ -46333,6 +46340,29 @@ function _taskLinkRowHtml(kind){
     <div id="ctask_buyerResults" style="display:none;position:absolute;left:0;right:0;top:100%;background:var(--surface);border:1px solid var(--border);border-radius:5px;box-shadow:0 8px 24px rgba(0,0,0,0.12);max-height:200px;overflow-y:auto;z-index:10;margin-top:2px;"></div>
   </div>`;
 }
+
+// v178: close the edit-task modal and open whichever record is linked.
+window._taskOpenLinked = function(kind){
+  if(kind === 'deal'){
+    const id = _taskModalDealId;
+    if(!id) return;
+    closeTaskModal();
+    const d = (typeof allDeals !== 'undefined') ? allDeals.find(x => x.id === id) : null;
+    if(d && typeof openDeal === 'function') openDeal(d);
+    else if(typeof openDealSnapshot === 'function') openDealSnapshot(id);
+  } else if(kind === 'contact'){
+    const id = _taskModalContactId;
+    if(!id) return;
+    closeTaskModal();
+    if(typeof showContactDetailPage === 'function') showContactDetailPage(id);
+    else if(typeof openContactModal === 'function') openContactModal(id);
+  } else if(kind === 'buyer'){
+    const id = _taskModalBuyerCritId;
+    if(!id) return;
+    closeTaskModal();
+    if(typeof bcOpenExpanded === 'function') bcOpenExpanded(id);
+  }
+};
 // Repaint the three link rows + the type pills (so the picker chip and the
 // auto-flipped type stay in sync after a selection / clear).
 function _taskRefreshLinkRows(){

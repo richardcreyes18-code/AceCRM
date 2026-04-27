@@ -8272,11 +8272,11 @@ function _renderUnitMixSection(d){
       const derivedTitle = _hasUnitRents ? 'Auto-averaged from individual units below' : '';
       return `<tr style="border-bottom:1px solid #f1f5f9;">
         <td style="padding:8px 8px;font-weight:600;color:#1e293b;font-size:12px;">${t.label}</td>
-        <td style="padding:6px 8px;text-align:center;"><input class="form-input" id="um_${umId[t.key]}" value="${d[t.countF]||''}" style="width:96px;text-align:center;" placeholder="0" oninput="mfRentCalcTotal();_umRefreshStats()"/></td>
-        <td style="padding:6px 8px;text-align:center;"><input class="form-input" id="um_${umId[t.key]}_v" value="${d[t.vacF]||''}" style="width:96px;text-align:center;" placeholder="0" oninput="_umRefreshStats()"/></td>
+        <td style="padding:6px 8px;text-align:center;"><input class="form-input" id="um_${umId[t.key]}" value="${d[t.countF]||''}" style="width:96px;text-align:center;" placeholder="0" oninput="mfRentCalcTotal();_umRefreshStats();_umMarkDirty()"/></td>
+        <td style="padding:6px 8px;text-align:center;"><input class="form-input" id="um_${umId[t.key]}_v" value="${d[t.vacF]||''}" style="width:96px;text-align:center;" placeholder="0" oninput="_umRefreshStats();_umMarkDirty()"/></td>
         <td style="padding:6px 8px;text-align:right;position:relative;">
           <span style="position:absolute;right:106px;top:50%;transform:translateY(-50%);color:#94a3b8;font-size:11px;pointer-events:none;">$</span>
-          <input class="form-input num-input" id="umr_${t.key}" type="text" inputmode="numeric" value="${_fmtNum(avg||'')}" style="width:120px;text-align:right;padding-left:14px;${derivedStyle}" placeholder="0" title="${derivedTitle}" oninput="mfRentCalcTotal();_umRefreshStats()"/>
+          <input class="form-input num-input" id="umr_${t.key}" type="text" inputmode="numeric" value="${_fmtNum(avg||'')}" style="width:120px;text-align:right;padding-left:14px;${derivedStyle}" placeholder="0" title="${derivedTitle}" oninput="mfRentCalcTotal();_umRefreshStats();_umMarkDirty()"/>
         </td>
         <td style="padding:8px 8px;text-align:right;color:#1a3a6e;font-weight:700;font-size:13px;" id="umr_tot_${t.key}">${tot?'$'+(tot).toLocaleString():'<span style="color:#cbd5e1;font-weight:500;">—</span>'}</td>
       </tr>`;
@@ -8298,7 +8298,7 @@ function _renderUnitMixSection(d){
         <td style="padding:6px 8px;">
           <div style="display:flex;align-items:center;gap:6px;">
             <span style="width:8px;height:8px;border-radius:50%;background:${statusColor};display:inline-block;flex-shrink:0;"></span>
-            <select class="form-select" style="width:130px;font-size:12px;" onchange="mfRentSetUnit(${i},'status',this.value);mfRentCalcTotal();_umRefreshStats();_renderMFUnitRows()">
+            <select class="form-select" style="width:130px;font-size:12px;" onchange="mfRentSetUnit(${i},'status',this.value);_mfRentDeriveAvgs();mfRentCalcTotal();_umRefreshStats();_renderMFUnitRows()">
               ${['Occupied','Vacant','Owner-Occupied','Section 8'].map(s=>`<option${u.status===s?' selected':''}>${s}</option>`).join('')}
             </select>
           </div>
@@ -8336,13 +8336,13 @@ function _renderUnitMixSection(d){
         <div style="display:flex;gap:18px;flex-wrap:wrap;align-items:flex-start;">
           <div style="min-width:160px;">
             <label class="pd-lbl" style="display:block;margin-bottom:4px;">No. of Units</label>
-            <input class="form-input" id="um_totalUnits" value="${d['No. of Units']||''}" style="width:140px;" placeholder="—" oninput="_umRefreshStats()"/>
+            <input class="form-input" id="um_totalUnits" value="${d['No. of Units']||''}" style="width:140px;" placeholder="—" oninput="_umRefreshStats();_umMarkDirty()"/>
             <div style="font-size:10px;color:#94a3b8;margin-top:4px;">Total doors at the property.</div>
           </div>
           <div style="min-width:160px;">
             <label class="pd-lbl" style="display:block;margin-bottom:4px;">Occupancy</label>
             <div style="display:flex;align-items:center;gap:6px;">
-              <input class="form-input" id="um_occupancy" value="${d['Occupancy (%)']||''}" style="width:100px;" placeholder="—" oninput="_umRefreshStats()"/>
+              <input class="form-input" id="um_occupancy" value="${d['Occupancy (%)']||''}" style="width:100px;" placeholder="—" oninput="_umRefreshStats();_umMarkDirty()"/>
               <span style="color:#64748b;font-size:12px;">%</span>
             </div>
             <div style="font-size:10px;color:#94a3b8;margin-top:4px;">Auto-calc from rent roll when units are filled.</div>
@@ -8707,16 +8707,80 @@ function _mfRentDeriveAvgs(){
     'Efficiency':'eff','1 Bedroom':'1br','2 Bedroom':'2br',
     '3 Bedroom':'3br','4 Bedroom':'4br','Other':'oth'
   })[t] || 'oth';
+  const idMap = {eff:'eff','1br':'1br','2br':'2br','3br':'3br','4br':'4br',oth:'other'};
   const groups = {};
+  const counts = {};
+  const vacCounts = {};
   let hasAny = false;
-  (_mfRentUnits||[]).forEach(u => {
+  let occupied = 0;
+  const units = _mfRentUnits || [];
+  units.forEach(u => {
+    const k = typeKey(u.type);
+    counts[k] = (counts[k]||0) + 1;
+    if(u.status === 'Vacant') vacCounts[k] = (vacCounts[k]||0) + 1;
+    if(u.status === 'Occupied' || u.status === 'Section 8') occupied++;
     const r = Number(u.rent)||0;
     if(!r) return;
     hasAny = true;
-    const k = typeKey(u.type);
     if(!groups[k]) groups[k] = [];
     groups[k].push(r);
   });
+  const hasAnyUnit = units.length > 0;
+  // v170: auto-populate per-bedroom unit counts + vacant counts from the rent roll
+  ['eff','1br','2br','3br','4br','oth'].forEach(k => {
+    const cInp = document.getElementById('um_'+idMap[k]);
+    const vInp = document.getElementById('um_'+idMap[k]+'_v');
+    if(cInp){
+      if(hasAnyUnit){
+        const c = counts[k] || 0;
+        cInp.value = c || '';
+        cInp.style.background = '#f8fafc';
+        cInp.style.color = '#475569';
+        cInp.title = 'Auto-counted from individual units below';
+      } else {
+        cInp.style.background = '';
+        cInp.style.color = '';
+        cInp.title = '';
+      }
+    }
+    if(vInp){
+      if(hasAnyUnit){
+        const v = vacCounts[k] || 0;
+        vInp.value = v || '';
+        vInp.style.background = '#f8fafc';
+        vInp.style.color = '#475569';
+        vInp.title = 'Auto-counted from individual units below (status = Vacant)';
+      } else {
+        vInp.style.background = '';
+        vInp.style.color = '';
+        vInp.title = '';
+      }
+    }
+  });
+  // v170: total units + occupancy auto-derive when a rent roll exists
+  const totalInp = document.getElementById('um_totalUnits');
+  if(totalInp && hasAnyUnit){
+    totalInp.value = units.length;
+    totalInp.style.background = '#f8fafc';
+    totalInp.style.color = '#475569';
+    totalInp.title = 'Auto-counted from individual units below';
+  } else if(totalInp){
+    totalInp.style.background = '';
+    totalInp.style.color = '';
+    totalInp.title = '';
+  }
+  const occInp = document.getElementById('um_occupancy');
+  if(occInp && hasAnyUnit){
+    const pct = units.length ? Math.round((occupied/units.length)*100) : 0;
+    occInp.value = pct || '';
+    occInp.style.background = '#f8fafc';
+    occInp.style.color = '#475569';
+    occInp.title = 'Auto-calc from rent roll occupancy (Occupied + Section 8)';
+  } else if(occInp){
+    occInp.style.background = '';
+    occInp.style.color = '';
+    occInp.title = '';
+  }
   ['eff','1br','2br','3br','4br','oth'].forEach(k => {
     const inp = document.getElementById('umr_'+k);
     if(!inp) return;
@@ -8761,8 +8825,10 @@ function mfRentCalcTotal(){
   const tEl=document.getElementById('umr_unitTotal');
   if(tEl){
     if(unitTotal > 0){
-      tEl.innerHTML = `Total Monthly Rent: <strong>$${unitTotal.toLocaleString()}</strong>` +
-        (occupied !== unitTotal ? ` &nbsp;·&nbsp; <span style="color:#2e7d32;">Occupied only: <strong>$${occupied.toLocaleString()}</strong></span>` : '');
+      const yr = unitTotal * 12;
+      const occYr = occupied * 12;
+      tEl.innerHTML = `Monthly: <strong>$${unitTotal.toLocaleString()}</strong> &nbsp;·&nbsp; Yearly: <strong>$${yr.toLocaleString()}</strong>` +
+        (occupied !== unitTotal ? ` &nbsp;·&nbsp; <span style="color:#2e7d32;">Occupied: <strong>$${occupied.toLocaleString()}</strong>/mo &nbsp;·&nbsp; <strong>$${occYr.toLocaleString()}</strong>/yr</span>` : '');
     } else {
       tEl.textContent = '';
     }
@@ -8819,6 +8885,7 @@ async function _umFlushIfDirty(){
 function mfRentAddUnit(){
   _mfRentUnits.push({label:'',type:'1 Bedroom',rent:0,status:'Occupied'});
   _renderMFUnitRows();
+  _mfRentDeriveAvgs();
   mfRentCalcTotal();
   _umMarkDirty();
 }
@@ -8826,6 +8893,7 @@ function mfRentAddUnit(){
 function mfRentRemoveUnit(i){
   _mfRentUnits.splice(i,1);
   _renderMFUnitRows();
+  _mfRentDeriveAvgs();
   mfRentCalcTotal();
   _umMarkDirty();
 }
@@ -8853,7 +8921,7 @@ function _renderMFUnitRows(){
       <td style="padding:6px 8px;">
         <div style="display:flex;align-items:center;gap:6px;">
           <span style="width:8px;height:8px;border-radius:50%;background:${statusColor};display:inline-block;flex-shrink:0;"></span>
-          <select class="form-select" style="width:130px;font-size:12px;" onchange="mfRentSetUnit(${i},'status',this.value);mfRentCalcTotal();_umRefreshStats();_renderMFUnitRows()">
+          <select class="form-select" style="width:130px;font-size:12px;" onchange="mfRentSetUnit(${i},'status',this.value);_mfRentDeriveAvgs();mfRentCalcTotal();_umRefreshStats();_renderMFUnitRows()">
             ${['Occupied','Vacant','Owner-Occupied','Section 8'].map(s=>`<option${u.status===s?' selected':''}>${s}</option>`).join('')}
           </select>
         </div>

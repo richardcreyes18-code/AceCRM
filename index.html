@@ -49071,8 +49071,9 @@ function setDealTag(tag){
 // Backed by ace_properties.review_tag. Used as a quick onboarding signal
 // while we go through the existing Hot Active deals one by one.
 const REVIEW_TAGS = [
-  {key:'deal_reviewed',  label:'✓ Deal Reviewed',  bg:'#eff6ff', color:'#1e40af', border:'#93c5fd'},
-  {key:'agent_reviewed', label:'✓ Agent Reviewed', bg:'#f0fdf4', color:'#15803d', border:'#86efac'},
+  {key:'deal_reviewed',     label:'✓ Deal Reviewed',     bg:'#eff6ff', color:'#1e40af', border:'#93c5fd'},
+  {key:'agent_reviewed',    label:'✓ Agent Reviewed',    bg:'#f0fdf4', color:'#15803d', border:'#86efac'},
+  {key:'needs_update_info', label:'⚠ Needs Update/Info', bg:'#fff7ed', color:'#c2410c', border:'#fdba74'},
 ];
 function _reviewTagMeta(key){ return REVIEW_TAGS.find(t => t.key === key) || null; }
 // Tiny pill renderer used by the kanban cards. Returns '' when no tag set
@@ -50779,10 +50780,12 @@ function _buildPipelineFilterChipsHTML(){
     const hi = f.commMax != null ? fmtMoney(f.commMax) : '—';
     chips.push(chip('commRange','',`Comm ${lo}–${hi}`));
   }
-  // v132: review-tag exclusions
+  // v132: review-tag exclusions — labels come from REVIEW_TAGS so adding
+  // a new tag flows through automatically.
   if(Array.isArray(f.excludeReviewTags)){
     f.excludeReviewTags.forEach(tag => {
-      const label = tag === 'deal_reviewed' ? 'Deal Reviewed' : tag === 'agent_reviewed' ? 'Agent Reviewed' : tag;
+      const meta = (typeof _reviewTagMeta === 'function') ? _reviewTagMeta(tag) : null;
+      const label = (meta && meta.label) ? meta.label.replace(/^[✓✕✦⚠]\s*/, '') : tag;
       chips.push(chip('excludeReviewTag', tag, '🚫 ' + label));
     });
   }
@@ -50791,10 +50794,13 @@ function _buildPipelineFilterChipsHTML(){
   // Pipeline & Status card.
   if(Array.isArray(f.includeReviewTags)){
     f.includeReviewTags.forEach(tag => {
-      const label = tag === 'deal_reviewed' ? '✓ Deal Reviewed'
-                  : tag === 'agent_reviewed' ? '✓ Agent Reviewed'
-                  : tag === 'untagged' ? '○ Untagged'
-                  : tag;
+      let label;
+      if(tag === 'untagged'){
+        label = '○ Untagged';
+      } else {
+        const meta = (typeof _reviewTagMeta === 'function') ? _reviewTagMeta(tag) : null;
+        label = (meta && meta.label) || tag;
+      }
       chips.push(chip('includeReviewTag', tag, label));
     });
   }
@@ -50976,11 +50982,12 @@ function _buildPipelineFilterPanelHTML(){
       ${on?'✕ ':''}${label}
     </span>`;
   };
+  // v156: render exclude pills from REVIEW_TAGS so adding a new tag
+  // automatically populates this section without editing markup.
   const excludeReviewHTML = `
     <div style="margin-bottom:6px;">
       <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Hide deals tagged</div>
-      ${exclTagPill('deal_reviewed',  '✓ Deal Reviewed',  '#1e40af', '#eff6ff', '#93c5fd')}
-      ${exclTagPill('agent_reviewed', '✓ Agent Reviewed', '#15803d', '#f0fdf4', '#86efac')}
+      ${REVIEW_TAGS.map(t => exclTagPill(t.key, t.label, t.color, t.bg, t.border)).join('')}
       <div style="font-size:10px;color:#94a3b8;margin-top:4px;">Click a pill to hide deals carrying that review tag.</div>
     </div>`;
 
@@ -50994,12 +51001,13 @@ function _buildPipelineFilterPanelHTML(){
       ${on?'✓ ':''}${label}
     </span>`;
   };
+  // v156: render include pills from REVIEW_TAGS + the synthetic 'untagged'
+  // option (which matches deals with no review_tag set).
   const includeReviewHTML = `
     <div style="margin-bottom:14px;">
       <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Review tag</div>
-      ${inclTagPill('deal_reviewed',  '✓ Deal Reviewed',  '#1e40af', '#eff6ff', '#93c5fd')}
-      ${inclTagPill('agent_reviewed', '✓ Agent Reviewed', '#15803d', '#f0fdf4', '#86efac')}
-      ${inclTagPill('untagged',       '○ Untagged',       '#475569', '#f1f5f9', '#cbd5e1')}
+      ${REVIEW_TAGS.map(t => inclTagPill(t.key, t.label, t.color, t.bg, t.border)).join('')}
+      ${inclTagPill('untagged', '○ Untagged', '#475569', '#f1f5f9', '#cbd5e1')}
       <div style="font-size:10px;color:#94a3b8;margin-top:4px;">Show only deals with these tags. Leave empty for all.</div>
     </div>`;
 

@@ -47578,6 +47578,7 @@ async function deleteTaskRecord(taskId, source){
 // since ace_tasks has no sort_order column — order is device-local.
 let _tasksSectionFilter  = 'all';   // 'all' | 'overdue' | 'today' | 'future'
 let _tasksPriorityFilter = 'all';   // 'all' | 'Top' | 'High' | 'Medium' | 'Low' | 'None'
+let _tasksSearch         = '';      // v179: free-text search within the active tab
 // v113.22: new tab + view state for the Tasks page rebuild.
 //   _taskTabFilter: which top-level tab is active.
 //   _taskAssignedToOthersAgentFilter: on the "Assigned to Others" tab, which
@@ -48064,6 +48065,20 @@ function _tasksSetPriorityFilter(v){ _tasksPriorityFilter = v; _renderGlobalTask
 //   all/deal/buyer/contact/admin → assigned_to_user_id = me, type filter
 //   assigned_to_others           → assigned_by_user_id = me (see fetch)
 function _tasksSetTabFilter(v){ _taskTabFilter = v; _renderGlobalTasks(); }
+// v179: live search within whatever tab is active. Cache stays valid; this
+// is a pure DOM filter pass.
+let _tasksSearchDebounce = null;
+function _tasksSetSearch(v){
+  _tasksSearch = String(v||'');
+  clearTimeout(_tasksSearchDebounce);
+  _tasksSearchDebounce = setTimeout(() => _renderGlobalTasks(), 120);
+}
+function _tasksClearSearch(){
+  _tasksSearch = '';
+  const el = document.getElementById('taskSearchBox');
+  if(el) el.value = '';
+  _renderGlobalTasks();
+}
 function _tasksSetAssignedToOthersAgent(v){ _taskAssignedToOthersAgentFilter = v; _renderGlobalTasks(); }
 function _tasksSetAssignedToOthersSort(v){ _taskAssignedToOthersSortBy = v; _renderGlobalTasks(); }
 
@@ -48078,7 +48093,11 @@ async function showTasksPage(){
           <div style="font-size:15px;font-weight:600;">☑ Tasks</div>
           <div style="font-size:11px;color:var(--text2);">Your queue + tasks you've assigned to the team</div>
         </div>
-        <div style="display:flex;gap:8px;align-items:center;">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <div style="position:relative;">
+            <input id="taskSearchBox" type="text" placeholder="🔍 Search this tab..." value="${(_tasksSearch||'').replace(/"/g,'&quot;')}" oninput="_tasksSetSearch(this.value);document.getElementById('taskSearchClear').style.display=this.value?'block':'none'" style="font-size:12px;padding:6px 28px 6px 12px;border:1px solid var(--border);border-radius:6px;background:var(--surface);color:var(--text);width:220px;"/>
+            <button id="taskSearchClear" onclick="_tasksClearSearch();this.style.display='none'" title="Clear search" style="display:${_tasksSearch?'block':'none'};position:absolute;right:4px;top:50%;transform:translateY(-50%);background:none;border:none;color:var(--text3);font-size:14px;cursor:pointer;line-height:1;padding:2px 6px;">✕</button>
+          </div>
           <select id="taskGlobalFilter" onchange="_renderGlobalTasks()" style="font-size:12px;padding:5px 8px;border:1px solid var(--border);border-radius:5px;background:var(--surface);color:var(--text);">
             <option value="pending">Pending</option>
             <option value="all">All Tasks</option>
@@ -48318,7 +48337,7 @@ async function _renderGlobalTasks(force){
 
     // Map rows → display objects (preserve the legacy field names so the
     // existing renderer code below stays untouched).
-    const tasks = raw.map(r => ({
+    let tasks = raw.map(r => ({
       id: r.id,
       'Task': r.task,
       'Status': r.status,
@@ -48342,6 +48361,29 @@ async function _renderGlobalTasks(force){
       if(t._contact_id)    t._contact_name      = cache.contactNameById.get(t._contact_id) || 'Contact';
       if(t._buyer_crit_id) t._buyer_crit_label  = cache.bcLabelById.get(t._buyer_crit_id)   || 'Buyer Criteria';
     });
+
+    // v179: free-text search within the active tab. Matches against task
+    // name, notes, priority, contact name, buyer-crit label, linked deal
+    // address, and assignee name. Cache stays valid — pure DOM filter.
+    const q = (_tasksSearch || '').trim().toLowerCase();
+    let searchHidCount = 0;
+    if(q){
+      const before = tasks.length;
+      tasks = tasks.filter(t => {
+        const linkedAddr = (t['Related Property']||[])[0]
+          ? (typeof allDeals !== 'undefined' && allDeals.find(d => d.id === t['Related Property'][0])?.['Address']) || ''
+          : '';
+        const assigneeNm = t._assigned_to ? _userName(t._assigned_to, '') : '';
+        const fromNm     = t._assigned_by ? _userName(t._assigned_by, '') : '';
+        const hay = [
+          t['Task'], t['Notes'], t['Priority'],
+          t._contact_name, t._buyer_crit_label, linkedAddr,
+          assigneeNm, fromNm
+        ].map(v => String(v||'').toLowerCase()).join(' ');
+        return hay.includes(q);
+      });
+      searchHidCount = before - tasks.length;
+    }
 
     // Queue-position lookup — only on the Assigned-to-Others tab.
     // Pulls every pending task for each assignee in one OR query, then
@@ -48370,15 +48412,22 @@ async function _renderGlobalTasks(force){
 
     // Empty state — render the toolbar so the user can still switch agents.
     if(!tasks.length){
+      const headline = q
+        ? `No tasks match "${String(_tasksSearch).replace(/</g,'&lt;')}"`
+        : isAssignedToOthersTab ? "You haven't assigned any tasks to other agents yet."
+        : filterVal==='done' ? 'No completed tasks yet'
+        : 'All clear — no pending tasks in this tab!';
+      const sub = q
+        ? 'Try a different search term or clear the search.'
+        : 'Create tasks to track follow-ups, deadlines, and action items.';
+      const cta = q
+        ? `<button onclick="_tasksClearSearch()" style="background:#7c3aed;color:#fff;border:none;padding:9px 22px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">✕ Clear Search</button>`
+        : `<button onclick="openCreateTaskModal(null,'','global')" style="background:#7c3aed;color:#fff;border:none;padding:9px 22px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">+ Create Task</button>`;
       el.innerHTML = extraToolbar + `<div style="text-align:center;padding:48px;color:var(--text3);">
-        <div style="font-size:40px;margin-bottom:10px;">☑</div>
-        <div style="font-size:14px;font-weight:600;margin-bottom:6px;">${
-          isAssignedToOthersTab ? "You haven't assigned any tasks to other agents yet."
-          : filterVal==='done' ? 'No completed tasks yet'
-          : 'All clear — no pending tasks in this tab!'
-        }</div>
-        <div style="font-size:12px;margin-bottom:16px;">Create tasks to track follow-ups, deadlines, and action items.</div>
-        <button onclick="openCreateTaskModal(null,'','global')" style="background:#7c3aed;color:#fff;border:none;padding:9px 22px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">+ Create Task</button>
+        <div style="font-size:40px;margin-bottom:10px;">${q?'🔍':'☑'}</div>
+        <div style="font-size:14px;font-weight:600;margin-bottom:6px;">${headline}</div>
+        <div style="font-size:12px;margin-bottom:16px;">${sub}</div>
+        ${cta}
       </div>`;
       return;
     }

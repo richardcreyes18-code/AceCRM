@@ -50094,6 +50094,10 @@ function _defaultPipelineFilters(){
     // v132: Do Not Include — exclude deals whose Review Tag is in this list.
     // Values are review_tag column values: 'deal_reviewed' | 'agent_reviewed'.
     excludeReviewTags: [],
+    // v153: positive include filter — show ONLY deals whose Review Tag is in
+    // this list. Supports 'deal_reviewed' | 'agent_reviewed' | 'untagged'
+    // (the third matches deals with no review tag set).
+    includeReviewTags: [],
   };
 }
 
@@ -50278,6 +50282,13 @@ function applyPipelineFilters(deals){
     if(Array.isArray(f.excludeReviewTags) && f.excludeReviewTags.length){
       const tag = d['Review Tag'] || '';
       if(tag && f.excludeReviewTags.includes(tag)) return false;
+    }
+    // v153: positive include filter — show ONLY deals carrying these tags.
+    // 'untagged' matches deals with no review_tag set.
+    if(Array.isArray(f.includeReviewTags) && f.includeReviewTags.length){
+      const tag = d['Review Tag'] || '';
+      const key = tag || 'untagged';
+      if(!f.includeReviewTags.includes(key)) return false;
     }
     // Phase A: Region chips — OR semantics (deal passes if ANY chip matches)
     if(f.regionChipIds && f.regionChipIds.length){
@@ -50943,6 +50954,25 @@ function _buildPipelineFilterPanelHTML(){
       <div style="font-size:10px;color:#94a3b8;margin-top:4px;">Click a pill to hide deals carrying that review tag.</div>
     </div>`;
 
+  // v153: positive Review Tag include filter — counterpart to "Do Not Include".
+  // Lives inside the Pipeline & Status card so the user can narrow to ONLY
+  // deals that carry a chosen tag (or are untagged) without leaving that section.
+  const incl = Array.isArray(f.includeReviewTags) ? f.includeReviewTags : [];
+  const inclTagPill = (key, label, color, bg, border) => {
+    const on = incl.includes(key);
+    return `<span onclick="togglePipelineIncludeReviewTag('${key}')" style="display:inline-block;padding:6px 12px;border-radius:99px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${on?color:border};background:${on?color:bg};color:${on?'#fff':color};margin-right:6px;margin-bottom:5px;">
+      ${on?'✓ ':''}${label}
+    </span>`;
+  };
+  const includeReviewHTML = `
+    <div style="margin-bottom:14px;">
+      <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Review tag</div>
+      ${inclTagPill('deal_reviewed',  '✓ Deal Reviewed',  '#1e40af', '#eff6ff', '#93c5fd')}
+      ${inclTagPill('agent_reviewed', '✓ Agent Reviewed', '#15803d', '#f0fdf4', '#86efac')}
+      ${inclTagPill('untagged',       '○ Untagged',       '#475569', '#f1f5f9', '#cbd5e1')}
+      <div style="font-size:10px;color:#94a3b8;margin-top:4px;">Show only deals with these tags. Leave empty for all.</div>
+    </div>`;
+
   // v132: count helper for per-card "N filters" badges so each section
   // surfaces its own active count (mirrors the mockup).
   const countOf = keys => keys.reduce((n, k) => {
@@ -50989,8 +51019,8 @@ function _buildPipelineFilterPanelHTML(){
         + rangeInput('Cap Rate', 'capMin', 'capMax', '%', '%')
         + rangeInput('Commission Amount', 'commMin', 'commMax', '$', ''))}
       ${card('#f59e0b', 'Pipeline & Status',
-        (f.stages && f.stages.length?1:0) + (f.agents && f.agents.length?1:0) + (f.needsReviewOnly?1:0),
-        stageCombo + agentCombo + reviewToggleHTML)}
+        (f.stages && f.stages.length?1:0) + (f.agents && f.agents.length?1:0) + (f.needsReviewOnly?1:0) + (incl.length?1:0),
+        stageCombo + agentCombo + includeReviewHTML + reviewToggleHTML)}
       ${card('#dc2626', 'Do Not Include', excl.length,
         excludeReviewHTML)}
     </div>`;
@@ -51070,6 +51100,27 @@ function togglePipelineExcludeReviewTag(tag){
   const i = list.indexOf(tag);
   if(i >= 0) list.splice(i, 1); else list.push(tag);
   f.excludeReviewTags = list;
+  // v153: clearing exclude+include conflict — if user is including a tag,
+  // unselect it from exclude so the two never contradict each other.
+  if(Array.isArray(f.includeReviewTags) && f.includeReviewTags.includes(tag)){
+    f.includeReviewTags = f.includeReviewTags.filter(t => t !== tag);
+  }
+  savePipelineFilters();
+  showPipelineView();
+}
+
+// v153: positive include toggle — show ONLY deals with the selected
+// review tag(s). 'untagged' matches deals with no Review Tag set.
+function togglePipelineIncludeReviewTag(tag){
+  const f = getPipelineFilters();
+  const list = Array.isArray(f.includeReviewTags) ? f.includeReviewTags.slice() : [];
+  const i = list.indexOf(tag);
+  if(i >= 0) list.splice(i, 1); else list.push(tag);
+  f.includeReviewTags = list;
+  // Mirror image of togglePipelineExcludeReviewTag — drop conflicts.
+  if(tag !== 'untagged' && Array.isArray(f.excludeReviewTags) && f.excludeReviewTags.includes(tag)){
+    f.excludeReviewTags = f.excludeReviewTags.filter(t => t !== tag);
+  }
   savePipelineFilters();
   showPipelineView();
 }

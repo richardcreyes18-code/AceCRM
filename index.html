@@ -22444,6 +22444,19 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v145: Google Places autocomplete city-extraction bug. When the user
+//   picked "712 Broadway, Newark, NJ" from the dropdown, the modal
+//   filled City="North Broadway" instead — because Google's response
+//   contains BOTH locality:"Newark" AND neighborhood/sublocality:
+//   "North Broadway", and our `get()` helper returned the FIRST
+//   matching component (which is the neighborhood, since Google lists
+//   them in geographic-specificity order). Switched the city lookup
+//   to a priority chain: locality → sublocality_level_1 → sublocality
+//   → postal_town → neighborhood. Locality (the actual city) wins
+//   when present. Also: edge fn ai-parse-deal-v2 v25 deployed in the
+//   same session — aggressive auto-N/A on empty fields + email-
+//   template-priority-over-notes on conflicts.
+//   File: index.html:56456-56476 (autocomplete city lookup)
 // v144: address normalization for fuzzy property search.
 //   New _normalizeAddr(s) helper collapses every common spelling
 //   variant of an address into a canonical form. So a query like
@@ -56454,10 +56467,19 @@ function attachPlacesAutocomplete(inputId, onSelect){
           return c ? (short ? c.short_name : c.long_name) : '';
         };
 
+        // v145: city lookup is PRIORITIZED, not unioned. The previous combined
+        // get(['locality','sublocality_level_1','neighborhood','postal_town'])
+        // returned the FIRST address-components entry that matched ANY of
+        // those types, so Google's response for "712 Broadway, Newark"
+        // (which contains BOTH neighborhood:"North Broadway" AND
+        // locality:"Newark") returned "North Broadway" because the
+        // neighborhood component appears earlier in the array. Now we try
+        // locality first and only fall back to sublocality/neighborhood/
+        // postal_town when locality is genuinely missing.
         const components = {
           streetNumber: get(['street_number']),
           route:        get(['route']),
-          city:         get(['locality','sublocality_level_1','neighborhood','postal_town']),
+          city:         get(['locality']) || get(['sublocality_level_1']) || get(['sublocality']) || get(['postal_town']) || get(['neighborhood']),
           county:       get(['administrative_area_level_2']),
           state:        get(['administrative_area_level_1']),
           stateShort:   get(['administrative_area_level_1'], true),

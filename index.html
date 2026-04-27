@@ -46349,9 +46349,33 @@ async function _taskLinkSearchNow(kind, q){
         `select=id,name&name=ilike.*${encodeURIComponent(term)}*&limit=8`);
       rows = (sb||[]).map(r => ({ id:r.id, label:r.name || 'Contact' }));
     } else if(kind === 'buyer'){
-      const sb = await _sbGet(SB_TABLES.buyerCriteria,
-        `select=id,desired_property_types,contact_id,ace_contacts(name)&or=(desired_property_types.ilike.*${encodeURIComponent(term)}*,ace_contacts.name.ilike.*${encodeURIComponent(term)}*)&deleted_at=is.null&limit=8`);
-      rows = (sb||[]).map(r => {
+      // v173.1: PostgREST doesn't allow embedded-resource columns
+      // (ace_contacts.name) inside an or=() filter on the parent — it errors
+      // with "failed to parse logic tree". Run two queries in parallel:
+      // one against buyer-criteria fields, one against contact name → contact
+      // ids → criteria. Merge + dedupe up to 8 rows.
+      const t = encodeURIComponent(term);
+      const [byCrit, byContact] = await Promise.all([
+        _sbGet(SB_TABLES.buyerCriteria,
+          `select=id,desired_property_types,contact_id,ace_contacts(name)&desired_property_types=ilike.*${t}*&deleted_at=is.null&limit=8`),
+        _sbGet(SB_TABLES.contacts,
+          `select=id&name=ilike.*${t}*&limit=20`)
+      ]);
+      let byContactCrit = [];
+      const matchedContactIds = (byContact||[]).map(c => c.id);
+      if(matchedContactIds.length){
+        byContactCrit = await _sbGet(SB_TABLES.buyerCriteria,
+          `select=id,desired_property_types,contact_id,ace_contacts(name)&contact_id=in.(${matchedContactIds.join(',')})&deleted_at=is.null&limit=8`);
+      }
+      const seen = new Set();
+      const merged = [];
+      for(const r of [...(byCrit||[]), ...(byContactCrit||[])]){
+        if(seen.has(r.id)) continue;
+        seen.add(r.id);
+        merged.push(r);
+        if(merged.length >= 8) break;
+      }
+      rows = merged.map(r => {
         const cn = r.ace_contacts && r.ace_contacts.name;
         const pt = r.desired_property_types;
         const lbl = cn ? `${cn}${pt?' · '+pt:''}` : (pt || 'Buyer Criteria');

@@ -862,7 +862,10 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
       </div>
       <div>
         <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">County</label>
-        <input class="form-input" id="nameCounty" style="width:100%;" oninput="_liveUpdateHeader()"/>
+        <input class="form-input" id="nameCounty" list="canonicalCountyList" style="width:100%;"
+          oninput="_liveUpdateHeader();_countyInputCheck()" onblur="_countyInputCheck()" autocomplete="off"/>
+        <datalist id="canonicalCountyList"></datalist>
+        <div id="nameCountyHint" style="font-size:10px;color:#94a3b8;margin-top:3px;display:none;line-height:1.3;"></div>
       </div>
       <div style="grid-column:1 / -1;">
         <label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Municipality</label>
@@ -5208,6 +5211,10 @@ function openEditAddressModal(){
   set('nameZip',          parsed.zip);
   set('nameCounty',       d['Simple County']);
   set('nameMunicipality', d['Municipality']);
+  // v164: refresh datalist + run the canonical check so the existing
+  // value lights up the "Request to add" link if it's non-canonical.
+  if(typeof _populateCountyDatalist === 'function') _populateCountyDatalist();
+  if(typeof _countyInputCheck === 'function') _countyInputCheck();
   // State select
   const stateEl = document.getElementById('nameState');
   if(stateEl){
@@ -5601,6 +5608,96 @@ function dsUpdateCapRate(){
   if(el) el.textContent = ask && noi ? ((noi/ask)*100).toFixed(2)+'%' : '—';
 }
 
+// v164: populate the County <datalist> autocomplete from canonical
+// _appLists.counties. Called when the Edit Address modal opens.
+function _populateCountyDatalist(){
+  const dl = document.getElementById('canonicalCountyList');
+  if(!dl) return;
+  const list = (_appLists && Array.isArray(_appLists.counties)) ? _appLists.counties : [];
+  dl.innerHTML = list.map(c => `<option value="${String(c).replace(/"/g,'&quot;')}"></option>`).join('');
+}
+
+// v164: validate the typed county against canonical and surface a
+// "Request to add this county" link when it doesn't match. Empty
+// values are allowed (optional field). The check is purely informative
+// — saving still proceeds; the row is just flagged needs_county_review
+// so the user can audit later.
+function _countyInputCheck(){
+  const inp = document.getElementById('nameCounty');
+  const hint = document.getElementById('nameCountyHint');
+  if(!inp || !hint) return;
+  const raw = (inp.value || '').trim();
+  if(!raw){ hint.style.display = 'none'; return; }
+  const list = (_appLists && Array.isArray(_appLists.counties)) ? _appLists.counties : [];
+  const canonical = list.some(c => String(c).toLowerCase() === raw.toLowerCase());
+  if(canonical){
+    hint.style.display = 'block';
+    hint.style.color = '#15803d';
+    hint.textContent = '✓ Standard county';
+  } else {
+    const safeRaw = raw.replace(/'/g,"\\'");
+    hint.style.display = 'block';
+    hint.style.color = '#b45309';
+    hint.innerHTML = `⚠ "${raw.replace(/</g,'&lt;')}" isn't in the standard list. `
+      + `<a href="javascript:void(0)" onclick="requestCountyAddition('${safeRaw}')" `
+      + `style="color:#1d4ed8;text-decoration:underline;font-weight:600;cursor:pointer;">`
+      + `Request to add</a>`;
+  }
+}
+
+// v164: submit a request to add a non-canonical county to the
+// canonical app_lists.counties. Stored in ace_county_requests for an
+// admin to approve. The save itself still goes through with the
+// non-canonical value (and needs_county_review=true) — this is the
+// notification path the user asked for.
+async function requestCountyAddition(value){
+  if(!isSupabase()){
+    alert('County requests require Supabase.');
+    return;
+  }
+  const v = String(value || '').trim();
+  if(!v) return;
+  const stateEl = document.getElementById('nameState');
+  const stateVal = stateEl ? (stateEl.value || '') : '';
+  const stateAbbr = ({
+    'New Jersey':'NJ','Pennsylvania':'PA','New York':'NY','Connecticut':'CT',
+    'Delaware':'DE','Maryland':'MD','Florida':'FL','Texas':'TX','California':'CA',
+    'Massachusetts':'MA','Virginia':'VA'
+  })[stateVal] || stateVal || null;
+  const propertyId = (typeof currentDeal !== 'undefined' && currentDeal && currentDeal.id) ? currentDeal.id : null;
+  const userId     = (typeof _currentUser !== 'undefined' && _currentUser && _currentUser.id) ? _currentUser.id : null;
+  try {
+    // De-dupe: if this user already has a pending request for this exact
+    // value, don't insert another one. Cheap PostgREST filter.
+    const existing = await _sbGet('ace_county_requests',
+      `requested_value=eq.${encodeURIComponent(v)}&status=eq.pending&limit=1`);
+    if(Array.isArray(existing) && existing.length){
+      showSaveConfirm('✓ Already requested — pending admin review');
+      const hint = document.getElementById('nameCountyHint');
+      if(hint){
+        hint.style.color = '#15803d';
+        hint.textContent = '✓ Already requested — pending admin review';
+      }
+      return;
+    }
+    await _sbPost('ace_county_requests', {
+      requested_value: v,
+      state: stateAbbr,
+      requested_by: userId,
+      property_id: propertyId,
+      status: 'pending',
+    });
+    showSaveConfirm('📨 County request sent for admin review');
+    const hint = document.getElementById('nameCountyHint');
+    if(hint){
+      hint.style.color = '#15803d';
+      hint.textContent = '✓ Request submitted — admin will review';
+    }
+  } catch(e){
+    alert('Could not submit request: ' + (e.message || 'unknown error'));
+  }
+}
+
 async function saveEditAddressModal(){
   if(!currentDeal) return;
   const get = id => document.getElementById(id)?.value?.trim() || '';
@@ -5630,8 +5727,17 @@ async function saveEditAddressModal(){
   if(newAddress) fields['Address'] = newAddress;
   if(propName) fields['Property Name'] = propName;
   if(complex !== undefined) fields['Complex Name'] = complex || null;
-  // v113.27: canonicalize on write
-  if(county) fields['Simple County'] = _canonicalCounty(county);
+  // v113.27: canonicalize on write.
+  // v164: set Needs County Review = true when the canonicalized value
+  // isn't in app_lists.counties — keeps non-canonical writes flagged so
+  // the user can audit them. Cleared (false) when the value IS canonical.
+  if(county){
+    const canon = _canonicalCounty(county);
+    fields['Simple County'] = canon;
+    const list = (_appLists && Array.isArray(_appLists.counties)) ? _appLists.counties : [];
+    const isStd = canon && list.some(c => String(c).toLowerCase() === String(canon).toLowerCase());
+    fields['Needs County Review'] = !isStd;
+  }
   if(muni !== undefined) fields['Municipality'] = muni || null;
 
   msg.style.display='block';
@@ -15184,6 +15290,89 @@ async function _appListAddCounty(){
 //   • Only writes rows where the new value actually differs
 //   • PATCHes one row at a time so a single failure doesn't poison the rest
 //   • Logs every write to console for an audit trail
+// v164: load + render the pending county requests in the Settings panel.
+async function _loadCountyRequests(){
+  const listEl = document.getElementById('countyReqList');
+  const countEl = document.getElementById('countyReqCount');
+  if(!listEl) return;
+  if(!isSupabase()){
+    listEl.innerHTML = '<div style="color:#94a3b8;">Supabase required.</div>';
+    return;
+  }
+  listEl.innerHTML = '<div style="color:#94a3b8;">Loading…</div>';
+  try {
+    const rows = await _sbGet('ace_county_requests',
+      'select=id,requested_value,state,property_id,requested_by,created_at,status&status=eq.pending&order=created_at.desc&limit=200');
+    const arr = Array.isArray(rows) ? rows : [];
+    if(countEl) countEl.textContent = arr.length ? `(${arr.length})` : '';
+    if(!arr.length){
+      listEl.innerHTML = '<div style="color:#94a3b8;padding:8px;">No pending requests.</div>';
+      return;
+    }
+    listEl.innerHTML = arr.map(r => {
+      const dt = r.created_at ? new Date(r.created_at).toLocaleString('en-US',{month:'short',day:'numeric',hour:'numeric',minute:'2-digit'}) : '';
+      const safeVal = String(r.requested_value || '').replace(/'/g,"\\'").replace(/</g,'&lt;');
+      return `<div style="background:#fff;border:1px solid #c7d2fe;border-radius:5px;padding:8px 10px;margin-bottom:6px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <div style="flex:1;min-width:0;">
+          <div style="font-weight:700;color:#0f172a;">${String(r.requested_value||'').replace(/</g,'&lt;')}${r.state?` <span style="font-weight:500;color:#6366f1;">(${String(r.state).replace(/</g,'&lt;')})</span>`:''}</div>
+          <div style="font-size:10px;color:#94a3b8;margin-top:2px;">${dt}</div>
+        </div>
+        <button onclick="_approveCountyRequest('${r.id}','${safeVal}')" style="background:#16a34a;color:#fff;border:none;padding:5px 12px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;">✓ Approve</button>
+        <button onclick="_rejectCountyRequest('${r.id}')" style="background:#fff;color:#b91c1c;border:1px solid #fecaca;padding:5px 12px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;">✕ Reject</button>
+      </div>`;
+    }).join('');
+  } catch(e){
+    listEl.innerHTML = `<div style="color:#b91c1c;">Error loading: ${e.message||e}</div>`;
+  }
+}
+
+async function _approveCountyRequest(id, value){
+  if(!confirm(`Add "${value}" to the canonical counties list?`)) return;
+  try {
+    // Insert into app_lists (ignore if already exists — rare race)
+    const existing = await _sbGet(SB_TABLES.appLists,
+      `list_key=eq.counties&value=eq.${encodeURIComponent(value)}&limit=1`);
+    if(!Array.isArray(existing) || !existing.length){
+      await _sbPost(SB_TABLES.appLists, {
+        list_key: 'counties',
+        value,
+        sort_order: 9999,
+        is_active: true,
+      });
+    }
+    const userId = (typeof _currentUser !== 'undefined' && _currentUser && _currentUser.id) ? _currentUser.id : null;
+    await _sbPatch('ace_county_requests', id, {
+      status: 'approved',
+      resolved_by: userId,
+      resolved_at: new Date().toISOString(),
+    });
+    // Refresh canonical list cache so the rest of the app sees it
+    if(typeof _loadAppLists === 'function') await _loadAppLists();
+    showSaveConfirm(`✓ Added "${value}" to canonical list`);
+    _loadCountyRequests();
+  } catch(e){
+    alert('Approve failed: ' + (e.message || 'unknown error'));
+  }
+}
+
+async function _rejectCountyRequest(id){
+  const note = prompt('Reason (optional):', '');
+  if(note === null) return; // cancel
+  try {
+    const userId = (typeof _currentUser !== 'undefined' && _currentUser && _currentUser.id) ? _currentUser.id : null;
+    await _sbPatch('ace_county_requests', id, {
+      status: 'rejected',
+      admin_notes: note || null,
+      resolved_by: userId,
+      resolved_at: new Date().toISOString(),
+    });
+    showSaveConfirm('✕ Request rejected');
+    _loadCountyRequests();
+  } catch(e){
+    alert('Reject failed: ' + (e.message || 'unknown error'));
+  }
+}
+
 async function _adminNormalizeCounties(){
   if(!isSupabase()){
     alert('Supabase required for this operation.');
@@ -32854,6 +33043,17 @@ function showSettingsPage(){
               <div style="font-size:12px;font-weight:700;color:#78350f;margin-bottom:4px;">🔧 Normalize county data across the database</div>
               <div style="font-size:11px;color:#92400e;line-height:1.5;margin-bottom:8px;">Scans every deal and buyer criteria row, finds county values that don't exactly match the canonical names above (e.g. <i>"monmouth"</i>, <i>"Monmouth County"</i> → <i>"Monmouth"</i>), and rewrites them so all filters/dedupes show one row per county. Shows a preview before applying — no surprise writes.</div>
               <button onclick="_adminNormalizeCounties()" style="background:#b45309;color:#fff;border:none;padding:7px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;">🔧 Scan + Normalize Counties</button>
+            </div>
+            <!-- v164: Pending county-add requests submitted by users from
+                 the Edit Address modal. Admin clicks Approve to insert the
+                 value into the canonical list, or Reject to dismiss. -->
+            <div style="background:#eef2ff;border:1px solid #c7d2fe;border-radius:6px;padding:10px 12px;margin-bottom:10px;">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                <div style="font-size:12px;font-weight:700;color:#3730a3;">📨 Pending county requests <span id="countyReqCount" style="margin-left:6px;color:#6366f1;"></span></div>
+                <button onclick="_loadCountyRequests()" style="background:#fff;color:#3730a3;border:1px solid #c7d2fe;padding:4px 10px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;">↻ Refresh</button>
+              </div>
+              <div style="font-size:11px;color:#4338ca;line-height:1.5;margin-bottom:8px;">Users can request a new county from the Edit Property modal when their entry isn't in the standard list. Approving here inserts the value into the canonical list immediately.</div>
+              <div id="countyReqList" style="font-size:12px;max-height:260px;overflow-y:auto;">Click ↻ Refresh to load.</div>
             </div>
             <div id="alListCounties" style="max-height:520px;overflow-y:auto;font-size:12px;">Loading…</div>
           </div>

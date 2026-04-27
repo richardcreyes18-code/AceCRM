@@ -6258,19 +6258,17 @@ function renderDealPage(){
       <div class="tabs-row" id="tabsRow1" style="display:flex;align-items:center;flex-wrap:wrap;gap:0;">
         <button class="tab-btn active" onclick="switchTab('summary',this)" style="font-weight:bold;color:#1a3a6e;">📋 Summary</button>
         <button class="tab-btn" onclick="switchTab('property',this)">Property Details</button>
+        <!-- v168: Offers / Tenant Mix / Comps now live inside Financial Analysis as sub-tabs. -->
         <button class="tab-btn" onclick="switchTab('financial',this)">Financial Analysis</button>
-        <button class="tab-btn" onclick="switchTab('offers',this)" style="font-weight:600;color:#059669;">💰 Offers</button>
         <button class="tab-btn" onclick="switchTab('documents',this)">Documents</button>
         <button class="tab-btn" onclick="switchTab('dealstatus',this)">Deal Status / Pipeline</button>
         <button class="tab-btn" onclick="switchTab('contacts',this)">Contacts / Buyers</button>
         <button class="tab-btn" onclick="switchTab('notes',this)">Notes (${notesCount(d)})</button>
         <button class="tab-btn" onclick="switchTab('tasks',this)" style="font-weight:600;color:#7c3aed;">☑ Tasks</button>
         <button class="tab-btn" onclick="switchTab('calendar',this)">Calendar</button>
-        <button class="tab-btn" onclick="switchTab('comps',this)">Comparables / Comps</button>
         <button class="tab-btn" style="color:#6a0dad;" onclick="switchTab('aicomm',this)">✦ AI Communication</button>
         <button class="tab-btn" style="color:#1a7a3a;font-weight:bold;" onclick="switchTab('buyermatch',this)">🎯 Buyer Match</button>
         <button class="tab-btn" style="color:#b8912a;font-weight:bold;" onclick="switchTab('brochure',this)">📄 OM & Flyer Creator</button>
-        <button class="tab-btn" style="color:#2a7a2a;font-weight:bold;" onclick="switchTab('tenantmix',this)">🏪 Tenant Mix</button>
         <button class="tab-btn" style="color:#1a3a6e;font-weight:bold;" onclick="switchTab('pitchout',this)">📊 Buyer Pitch</button>
         <button id="fmToggleBtn" onclick="toggleFieldMapDrawer()" title="Show where each field is stored in Airtable"
           style="margin-left:auto;padding:4px 10px;font-size:10px;font-weight:bold;background:#f0f4ff;border:1px solid #4a90d9;color:#1a3a6e;border-radius:3px;cursor:pointer;white-space:nowrap;">
@@ -6973,7 +6971,39 @@ function _equalizeTextareaGroup(groupName){
   }
 }
 
+// v168: track which sub-tab is active inside Financial Analysis. Persists
+// across deal switches within a session so the user can lock the page on
+// e.g. Offers and have it stay there as they nav between deals.
+let _finSubTab = 'financial'; // 'financial' | 'offers' | 'tenantmix' | 'comps'
+
+function _finSubTabBarHTML(){
+  const subs = [
+    ['financial', '📊 Financial Analysis'],
+    ['offers',    '💰 Offers'],
+    ['tenantmix', '🏪 Tenant Mix'],
+    ['comps',     '🏘 Comps'],
+  ];
+  return `<div class="fin-subtabs" style="display:flex;gap:0;border-bottom:1px solid #e2e8f0;margin:-4px -2px 14px;padding:0 2px;flex-wrap:wrap;">
+    ${subs.map(([k, label]) => {
+      const active = _finSubTab === k;
+      return `<button onclick="switchTab('${k}', this)"
+        style="padding:9px 16px;background:${active?'#fff':'transparent'};border:1px solid ${active?'#e2e8f0':'transparent'};border-bottom:${active?'2px solid #2563eb':'2px solid transparent'};font-size:12px;font-weight:${active?'700':'600'};color:${active?'#0f172a':'#64748b'};cursor:pointer;font-family:inherit;border-radius:6px 6px 0 0;margin-bottom:-1px;">${label}</button>`;
+    }).join('')}
+  </div>`;
+}
+
 function switchTab(name, btn){
+  // v168: Offers / Tenant Mix / Comps are sub-tabs of Financial Analysis.
+  // Translate the old top-level names so existing call sites keep working,
+  // and update _finSubTab so the sub-tab bar renders the right content.
+  const FIN_SUB_NAMES = ['financial','offers','tenantmix','comps'];
+  if(FIN_SUB_NAMES.includes(name)){
+    _finSubTab = name;
+    name = 'financial';
+    // Highlight the parent "Financial Analysis" tab regardless of which
+    // sub-bar button was clicked.
+    btn = document.querySelector('.tab-btn[onclick*="switchTab(\'financial\'"]') || btn;
+  }
   // Dismiss any browser autocomplete dropdown that may be floating
   if(document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
   // 1. Snapshot whatever is currently in the DOM before we wipe it
@@ -7007,22 +7037,28 @@ function switchTab(name, btn){
   if(drawer && drawer.style.display !== 'none') renderFieldMapDrawer();
 
   const d=currentDeal;
+  // v168: financial is now a parent — its content is the sub-tab bar +
+  // whichever sub-renderer is active.
+  const _finSubRenderers = {
+    financial: renderFinancialTab,
+    offers:    renderOffersTab,
+    tenantmix: renderTenantMixTab,
+    comps:     renderCompsTab,
+  };
+  const _finRender = _finSubRenderers[_finSubTab] || renderFinancialTab;
   const content={
     summary: renderSummaryTab(d),
     property: renderPropertyTab(d),
-    financial: renderFinancialTab(d),
-    offers: renderOffersTab(d),
+    financial: _finSubTabBarHTML() + _finRender(d),
     documents: renderDocumentsTab(d),
     dealstatus: renderDealStatusTab(d),
     contacts: renderContactsTab(d),
     notes: renderNotesTab(d),
     tasks: renderTasksTab(d),
     calendar: renderCalendarTab(),
-    comps: renderCompsTab(d),
     aicomm: renderAICommTab(d),
     brochure: renderBrochureTab(d),
     buyermatch: renderBuyerMatchTab(d),
-    tenantmix: renderTenantMixTab(d),
     pitchout:  renderPitchOutTab(d)
   };
 
@@ -7065,13 +7101,13 @@ function switchTab(name, btn){
   if(name==='contacts' && currentDeal?.id){ loadSellerContact(currentDeal.id); loadBuyerPitches(currentDeal.id); loadDealPitches(currentDeal.id); }
   if(name==='aicomm' && currentDeal?.id) loadAICommTab(currentDeal.id);
   if(name==='buyermatch' && currentDeal?.id) loadBuyerMatchTab(currentDeal.id);
-  if(name==='tenantmix'  && currentDeal?.id) loadTenantMixTab(currentDeal.id);
-  // v113.9: load user-entered market comps (ace_manual_comps). Pipeline comps
-  // are rendered synchronously from allDeals inside renderCompsTab — only the
-  // manual list needs an async DB fetch.
-  if(name==='comps'      && currentDeal?.id) loadCompsTab(currentDeal.id);
+  // v168: financial sub-tab loaders — fire whichever matches the active sub.
+  if(name==='financial' && currentDeal?.id){
+    if(_finSubTab === 'tenantmix') loadTenantMixTab(currentDeal.id);
+    else if(_finSubTab === 'comps') loadCompsTab(currentDeal.id);
+    else if(_finSubTab === 'offers') loadOffersTab(currentDeal.id);
+  }
   if(name==='pitchout'   && currentDeal?.id) loadPitchOutTab(currentDeal.id);
-  if(name==='offers'     && currentDeal?.id) loadOffersTab(currentDeal.id);
   if(name==='contacts' && currentDeal?.id) { loadBuyerPitches(currentDeal.id); loadDealPitches(currentDeal.id); }
   if(name==='brochure' && currentDeal?.id) {
     loadBrochurePhotos(currentDeal.id);
@@ -7083,7 +7119,10 @@ function switchTab(name, btn){
     }, 30);
   }
   if(name==='tasks'    && currentDeal?.id) _loadAndRenderDealTasks(currentDeal.id, currentDeal['Address']||'');
-  if(name==='financial'){
+  if(name==='financial' && _finSubTab === 'financial'){
+    // v168: only run the Financial Analysis init when its OWN sub is
+    // active. The sub-tab bar otherwise shows Offers/Tenant Mix/Comps,
+    // none of which need the mortApply / updateIncomeTotals path.
     setTimeout(()=>{
       _rendering = true;   // block markDirty during programmatic init
       try{
@@ -7134,7 +7173,8 @@ async function _summaryToggleMode(section){
   if(tabContentEl){
     _rendering = true;
     if(currentTab === 'property')       tabContentEl.innerHTML = renderPropertyTab(currentDeal);
-    else if(currentTab === 'financial') tabContentEl.innerHTML = renderFinancialTab(currentDeal);
+    // v168: financial tab now has sub-tabs — keep the sub-tab bar prefix.
+    else if(currentTab === 'financial') tabContentEl.innerHTML = _finSubTabBarHTML() + renderFinancialTab(currentDeal);
     else                                tabContentEl.innerHTML = renderSummaryTab(currentDeal);
     _rendering = false;
     if(typeof _naDecorate === 'function') _naDecorate(tabContentEl);

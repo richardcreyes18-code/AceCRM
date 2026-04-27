@@ -7516,6 +7516,16 @@ function renderPropertyTab(d){
   const _showUnitMix    = _assetTypeStr.includes('multifamily') || _assetTypeStr.includes('mixed use');
   const _showIndustrial = _assetTypeStr.includes('industrial')  || _assetTypeStr.includes('warehouse')
                        || _assetTypeStr.includes('flex');
+  // v147: Show Tenant Mix card on the Property Details page for any
+  // property type that has commercial tenants (industrial / retail /
+  // office). Mixed-use renders its own version right after Unit Mix.
+  const _showTenantMixHere = !_assetTypeStr.includes('mixed use') && (
+    _showIndustrial || _assetTypeStr.includes('retail') || _assetTypeStr.includes('office')
+  );
+  const _tenantMixCtx = _showIndustrial ? 'industrial'
+                      : _assetTypeStr.includes('retail') ? 'retail'
+                      : _assetTypeStr.includes('office') ? 'office'
+                      : 'mixed';
   return `
     <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;flex-wrap:wrap;">
       <div class="section-hdr" style="margin-bottom:0;"><span class="icon">🏢</span> Property Details</div>
@@ -7739,8 +7749,9 @@ function renderPropertyTab(d){
     </div>
 
     ${_showUnitMix ? _renderUnitMixSection(d) : ''}
-    ${_assetTypeStr.includes('mixed use') ? _renderMixedUseTenantMixSection(d) : ''}
+    ${_assetTypeStr.includes('mixed use') ? _renderMixedUseTenantMixSection(d, 'mixed') : ''}
     ${_showIndustrial ? _renderIndustrialSection(d) : ''}
+    ${_showTenantMixHere ? _renderMixedUseTenantMixSection(d, _tenantMixCtx) : ''}
 
     <!-- v113.74: Property Use & Status section removed — moved into the
          compact dropdown row inside Property Information above. -->
@@ -8339,10 +8350,11 @@ function _renderIndustrialSection(d){
 `;
 }
 
-// v146: Mixed-use deals also have retail tenants. Render a Tenant Mix
-// shortcut card right after the Unit Mix section (mirrors how the
-// Industrial section opens its Tenant Mix tab).
-function _renderMixedUseTenantMixSection(d){
+// v146/v147: Tenant Mix shortcut card. Used by mixed-use (after unit
+// mix), industrial/warehouse/flex (after industrial details), and
+// retail/office (where it's the primary tenant section).
+function _renderMixedUseTenantMixSection(d, ctx){
+  ctx = ctx || 'mixed';
   let tenants = [];
   try {
     const raw = d['Tenant Mix Data'];
@@ -8364,15 +8376,29 @@ function _renderMixedUseTenantMixSection(d){
     </tr>`;
   }).join('');
   const moreNote = count > 8 ? `<div style="font-size:10px;color:#64748b;padding:6px 8px;">+ ${count - 8} more — open Tenant Mix tab</div>` : '';
-  return `    <!-- MIXED-USE TENANT MIX -->
+  const titleByCtx = {
+    mixed: '🏪 Tenant Mix (Retail / Commercial)',
+    industrial: '🏪 Tenant Mix',
+    retail: '🏪 Tenant Mix',
+    office: '🏪 Tenant Mix',
+  };
+  const emptyByCtx = {
+    mixed: 'No retail tenants yet. Mixed-use combines apartments (above) with retail/commercial tenants. Click "Open Tenant Mix" to add tenants.',
+    industrial: 'No tenants yet. Click "Open Tenant Mix" to add the property\u2019s industrial / warehouse tenants.',
+    retail: 'No tenants yet. Click "Open Tenant Mix" to add the property\u2019s retail tenants.',
+    office: 'No tenants yet. Click "Open Tenant Mix" to add the property\u2019s office tenants.',
+  };
+  const title = titleByCtx[ctx] || titleByCtx.mixed;
+  const emptyMsg = emptyByCtx[ctx] || emptyByCtx.mixed;
+  return `    <!-- TENANT MIX SUMMARY -->
     <div class="info-box">
       <div class="info-box-title" style="display:flex;justify-content:space-between;align-items:center;">
-        <span>🏪 Tenant Mix (Retail / Commercial)</span>
+        <span>${title}</span>
         <button onclick="switchTab('tenantmix', document.querySelector('.tab-btn[onclick*=tenantmix]'))" style="background:linear-gradient(135deg,#2a7a2a,#1a5a1a);color:#fff;border:none;padding:4px 12px;font-size:11px;font-weight:600;border-radius:5px;cursor:pointer;">🏪 Open Tenant Mix →</button>
       </div>
       ${count === 0 ? `
         <div style="padding:14px;font-size:11px;color:#64748b;text-align:center;background:#f8fafc;border-radius:5px;">
-          No retail tenants yet. Mixed-use combines apartments (above) with retail/commercial tenants. Click "Open Tenant Mix" to add tenants.
+          ${emptyMsg}
         </div>
       ` : `
         <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px;">

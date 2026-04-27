@@ -23397,6 +23397,309 @@ const _AI_SOURCE_COLS = [
   'ace_starter_note','accepted_by_seller_note','pitch_out_note','ace_chat_summary'
 ];
 
+// ─── BULK AI AUTO-FILL (v150) ────────────────────────────────────
+// Settings → Tools tile → modal that filters deals (stage, has-template,
+// review-tag) and runs the AI Auto-Fill across each match serially. Each
+// successful deal is auto-stamped with review_tag = 'deal_reviewed' so it
+// won't be picked up on the next run. Concurrency = 1 (AI calls cost
+// money + are slow).
+const _bulkAi = {
+  open: false,
+  running: false,
+  cancelled: false,
+  stages: new Set(['Hot Active Listing']),
+  hasTemplate: 'yes', // 'yes' | 'no' | 'any'
+  excludeReviewed: true,
+  ok: 0, fail: 0, skipped: 0, total: 0, currentIdx: 0,
+  errors: [], queue: []
+};
+
+window._bulkAiOpen = function(){
+  _bulkAi.open = true;
+  _bulkAi.running = false;
+  _bulkAi.cancelled = false;
+  _bulkAi.ok = 0; _bulkAi.fail = 0; _bulkAi.skipped = 0;
+  _bulkAi.total = 0; _bulkAi.currentIdx = 0;
+  _bulkAi.errors = []; _bulkAi.queue = [];
+  _bulkAiRender();
+};
+
+window._bulkAiClose = function(){
+  if(_bulkAi.running){
+    if(!confirm('A bulk run is in progress. Cancel and close?')) return;
+    _bulkAi.cancelled = true;
+  }
+  _bulkAi.open = false;
+  document.getElementById('bulkAiModal')?.remove();
+};
+
+window._bulkAiToggleStage = function(stage){
+  if(_bulkAi.stages.has(stage)) _bulkAi.stages.delete(stage);
+  else _bulkAi.stages.add(stage);
+  _bulkAiRender();
+};
+
+window._bulkAiSetTemplate = function(v){ _bulkAi.hasTemplate = v; _bulkAiRender(); };
+window._bulkAiSetExcludeReviewed = function(v){ _bulkAi.excludeReviewed = !!v; _bulkAiRender(); };
+
+function _bulkAiCandidates(){
+  const stages = _bulkAi.stages;
+  return (allDeals || []).filter(d => {
+    if(!d || !d.id || d['Is Archived']) return false;
+    if(stages.size > 0){
+      const s = (typeof getStage === 'function' ? getStage(d) : d['Pipeline Stage']) || '';
+      if(!stages.has(s)) return false;
+    }
+    if(_bulkAi.hasTemplate !== 'any'){
+      const has = _dealHasTemplate(d.id);
+      if(_bulkAi.hasTemplate === 'yes' && !has) return false;
+      if(_bulkAi.hasTemplate === 'no'  &&  has) return false;
+    }
+    if(_bulkAi.excludeReviewed){
+      if(d['Review Tag'] === 'deal_reviewed') return false;
+    }
+    return true;
+  });
+}
+
+function _bulkAiRender(){
+  let modal = document.getElementById('bulkAiModal');
+  if(!modal){
+    modal = document.createElement('div');
+    modal.id = 'bulkAiModal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:99998;display:flex;align-items:center;justify-content:center;padding:20px;';
+    modal.onclick = (e) => { if(e.target === modal && !_bulkAi.running) _bulkAiClose(); };
+    document.body.appendChild(modal);
+  }
+  const stages = (typeof NEW_PIPELINE_STAGES !== 'undefined' ? NEW_PIPELINE_STAGES : []);
+  const stageChips = stages.map(s => {
+    const active = _bulkAi.stages.has(s);
+    const color = (typeof NEW_PIPELINE_COLORS !== 'undefined' && NEW_PIPELINE_COLORS[s]) || '#6b7280';
+    return `<button onclick="_bulkAiToggleStage('${s}')" ${_bulkAi.running?'disabled':''} style="background:${active?color:'#fff'};color:${active?'#fff':'#475569'};border:1px solid ${active?color:'#cbd5e1'};padding:5px 10px;font-size:11px;font-weight:600;border-radius:99px;cursor:${_bulkAi.running?'not-allowed':'pointer'};">${s}</button>`;
+  }).join('');
+
+  const candidates = _bulkAiCandidates();
+  const totalCount = candidates.length;
+  const previewRows = candidates.slice(0, 8).map(d => {
+    const tplC = _dealTemplateCount(d.id);
+    return `<div style="padding:6px 10px;border-bottom:1px solid #f1f5f9;font-size:11px;color:#0f172a;display:flex;justify-content:space-between;gap:8px;">
+      <span style="overflow:hidden;text-overflow:ellipsis;white-space:nowrap;flex:1;">${_ddEsc(d['Address']||'(no address)')}</span>
+      <span style="color:#64748b;font-size:10px;flex-shrink:0;">${tplC > 0 ? '📧 '+tplC : '📭'}</span>
+    </div>`;
+  }).join('') + (totalCount > 8 ? `<div style="padding:6px 10px;font-size:10px;color:#64748b;text-align:center;font-style:italic;">+ ${totalCount - 8} more</div>` : '');
+
+  const isRunning = _bulkAi.running;
+  const progressPct = _bulkAi.total > 0 ? Math.round((_bulkAi.currentIdx / _bulkAi.total) * 100) : 0;
+  const progressBar = isRunning || _bulkAi.total > 0 ? `
+    <div style="margin-top:14px;padding:12px 14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
+      <div style="display:flex;justify-content:space-between;align-items:baseline;margin-bottom:6px;">
+        <div style="font-size:12px;font-weight:700;color:#0f172a;">${isRunning ? `Processing ${_bulkAi.currentIdx} / ${_bulkAi.total}` : `Done — ${_bulkAi.ok} succeeded, ${_bulkAi.fail} failed${_bulkAi.skipped ? ', '+_bulkAi.skipped+' skipped' : ''}`}</div>
+        <div style="font-size:11px;color:#64748b;">${progressPct}%</div>
+      </div>
+      <div style="height:6px;background:#e2e8f0;border-radius:99px;overflow:hidden;">
+        <div style="height:100%;width:${progressPct}%;background:#7c3aed;transition:width .25s ease;"></div>
+      </div>
+      ${_bulkAi.errors.length ? `
+        <div style="margin-top:10px;font-size:11px;color:#b91c1c;max-height:140px;overflow-y:auto;">
+          ${_bulkAi.errors.slice(-10).map(e => `<div>✗ ${_ddEsc(e.address||e.id)}: ${_ddEsc(e.message||'')}</div>`).join('')}
+        </div>
+      ` : ''}
+    </div>` : '';
+
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;width:100%;max-width:760px;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 25px 60px rgba(0,0,0,0.25);overflow:hidden;">
+      <div style="padding:16px 20px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <div style="font-size:15px;font-weight:700;color:#0f172a;">⚡ Bulk AI Auto-Fill</div>
+          <div style="font-size:11px;color:#64748b;margin-top:3px;">Filter, preview, run. Each deal runs the full AI Auto-Fill and is auto-stamped ✓ Deal Reviewed on success.</div>
+        </div>
+        <button onclick="_bulkAiClose()" ${isRunning?'disabled':''} style="background:none;border:none;color:#94a3b8;font-size:22px;line-height:1;cursor:${isRunning?'not-allowed':'pointer'};padding:4px 8px;">×</button>
+      </div>
+      <div style="padding:16px 20px;overflow-y:auto;flex:1;">
+        <div style="font-size:11px;font-weight:700;color:#475569;margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;">Pipeline stages</div>
+        <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:14px;">${stageChips}</div>
+
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-bottom:14px;">
+          <div>
+            <div style="font-size:11px;font-weight:700;color:#475569;margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;">Email template</div>
+            <div style="display:flex;gap:5px;">
+              ${[['yes','📧 Has template'],['no','📭 No template'],['any','Any']].map(([v,l]) => `
+                <button onclick="_bulkAiSetTemplate('${v}')" ${isRunning?'disabled':''} style="flex:1;background:${_bulkAi.hasTemplate===v?'#7c3aed':'#fff'};color:${_bulkAi.hasTemplate===v?'#fff':'#475569'};border:1px solid ${_bulkAi.hasTemplate===v?'#7c3aed':'#cbd5e1'};padding:6px 10px;font-size:11px;font-weight:600;border-radius:6px;cursor:${isRunning?'not-allowed':'pointer'};">${l}</button>
+              `).join('')}
+            </div>
+          </div>
+          <div>
+            <div style="font-size:11px;font-weight:700;color:#475569;margin-bottom:6px;text-transform:uppercase;letter-spacing:.04em;">Review tag</div>
+            <label style="display:flex;align-items:center;gap:8px;font-size:12px;color:#0f172a;cursor:${isRunning?'not-allowed':'pointer'};padding:6px 10px;border:1px solid #cbd5e1;border-radius:6px;${_bulkAi.excludeReviewed?'background:#f8fafc;':''}">
+              <input type="checkbox" ${_bulkAi.excludeReviewed?'checked':''} ${isRunning?'disabled':''} onchange="_bulkAiSetExcludeReviewed(this.checked)" />
+              Skip deals already ✓ Deal Reviewed
+            </label>
+          </div>
+        </div>
+
+        <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;overflow:hidden;">
+          <div style="padding:8px 12px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;">
+            <div style="font-size:12px;font-weight:700;color:#0f172a;">${totalCount} deal${totalCount===1?'':'s'} match</div>
+            <div style="font-size:10px;color:#64748b;">~${Math.ceil(totalCount * 15 / 60)} min at ~15 sec each</div>
+          </div>
+          ${totalCount > 0 ? previewRows : '<div style="padding:18px 12px;font-size:11px;color:#94a3b8;text-align:center;">No deals match these filters.</div>'}
+        </div>
+
+        ${progressBar}
+      </div>
+      <div style="padding:12px 20px;border-top:1px solid #e2e8f0;display:flex;justify-content:space-between;gap:8px;">
+        <div style="font-size:10px;color:#94a3b8;align-self:center;">Cost: ~$0.01-0.02 per deal in Anthropic API. Concurrency = 1 (serial).</div>
+        <div style="display:flex;gap:8px;">
+          ${isRunning
+            ? `<button onclick="_bulkAi.cancelled = true; this.disabled=true; this.textContent='Cancelling…';" style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:6px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;">Cancel</button>`
+            : `<button onclick="_bulkAiClose()" style="background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;">Close</button>
+               <button ${totalCount===0?'disabled':''} onclick="_bulkAiRun()" style="background:${totalCount===0?'#cbd5e1':'#7c3aed'};color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:12px;font-weight:700;cursor:${totalCount===0?'not-allowed':'pointer'};">⚡ Run on ${totalCount} deal${totalCount===1?'':'s'}</button>`}
+        </div>
+      </div>
+    </div>`;
+}
+
+window._bulkAiRun = async function(){
+  const candidates = _bulkAiCandidates();
+  if(candidates.length === 0) return;
+  if(!confirm(`Run AI Auto-Fill on ${candidates.length} deal${candidates.length===1?'':'s'}?\n\n` +
+              `• Each deal: AI parses ~130 fields, applies all proposed values + N/A markers, marks ✓ Deal Reviewed.\n` +
+              `• Concurrency = 1 (~15 sec per deal).\n` +
+              `• You can cancel mid-run; deals already processed stay updated.\n\n` +
+              `Estimated time: ~${Math.ceil(candidates.length * 15 / 60)} minutes.\n` +
+              `Estimated cost: ~$${(candidates.length * 0.015).toFixed(2)} in Anthropic API.`)) return;
+  _bulkAi.running = true;
+  _bulkAi.cancelled = false;
+  _bulkAi.queue = candidates.map(d => d.id);
+  _bulkAi.total = _bulkAi.queue.length;
+  _bulkAi.currentIdx = 0;
+  _bulkAi.ok = 0; _bulkAi.fail = 0; _bulkAi.skipped = 0;
+  _bulkAi.errors = [];
+  _bulkAiRender();
+
+  for(const propertyId of _bulkAi.queue){
+    if(_bulkAi.cancelled) break;
+    _bulkAi.currentIdx++;
+    _bulkAiRender();
+    const d = (allDeals||[]).find(x => x.id === propertyId);
+    const addr = d ? (d['Address']||propertyId) : propertyId;
+    try {
+      await _bulkAiOneDeal(propertyId);
+      _bulkAi.ok++;
+    } catch(e){
+      _bulkAi.fail++;
+      _bulkAi.errors.push({ id: propertyId, address: addr, message: (e && e.message) || String(e) });
+    }
+  }
+
+  _bulkAi.running = false;
+  _bulkAiRender();
+  if(typeof _refreshPipelineBody === 'function') _refreshPipelineBody();
+  if(typeof buildSidebar === 'function') buildSidebar(document.getElementById('sideSearch')?.value||'');
+};
+
+// Headless single-deal worker. Calls ai-parse-deal-v2, builds a patch from
+// proposed_changes + na_proposals, applies via _sbPatch, then stamps
+// review_tag='deal_reviewed'. Mirrors the modal-apply flow from
+// _aiAutoFillApply (lines ~23874+) but skips per-field user overrides.
+async function _bulkAiOneDeal(propertyId){
+  const cfg = getConfig();
+  if(!cfg || !cfg.url || !cfg.key) throw new Error('Supabase config missing');
+
+  const r = await fetch(`${cfg.url}/functions/v1/ai-parse-deal-v2`, {
+    method: 'POST',
+    headers: { 'Content-Type':'application/json', apikey: cfg.key, Authorization: 'Bearer '+cfg.key },
+    body: JSON.stringify({ property_id: propertyId, dry_run: true, only_fill_empty: false }),
+  });
+  const resp = await r.json();
+  if(!r.ok || !resp.ok) throw new Error(resp.error || `HTTP ${r.status}`);
+
+  const proposed   = resp.proposed_changes || {};
+  const naProposals = Array.isArray(resp.na_proposals) ? resp.na_proposals : [];
+  const currentNa  = Array.isArray(resp.current_na_fields) ? resp.current_na_fields : [];
+  const uncertain  = Array.isArray(resp.uncertain_fields) ? resp.uncertain_fields : [];
+
+  const patch = {};
+  for(const [col, info] of Object.entries(proposed)){
+    if(info && info.proposed !== null && info.proposed !== undefined && info.proposed !== '') {
+      patch[col] = info.proposed;
+    }
+  }
+
+  if(naProposals.length){
+    patch.na_fields = Array.from(new Set([...(currentNa||[]), ...naProposals]));
+  }
+
+  if(uncertain.length){
+    try {
+      const cur = await _sbGet(SB_TABLES.properties, `id=eq.${propertyId}&select=ai_clarifying_notes&limit=1`);
+      const existing = (Array.isArray(cur) && cur[0]?.ai_clarifying_notes) || '';
+      const summary = uncertain.map(u => `• ${u.field || u.col || u.column || u.name || u.key || ''}: ${u.reason || u.message || u.note || u.description || u.explanation || ''}`).join('\n');
+      patch.ai_clarifying_notes = (existing ? existing + '\n\n' : '')
+        + `--- AI uncertain (${new Date().toISOString().slice(0,10)}, bulk) ---\n` + summary;
+    } catch(_){}
+  }
+
+  // Auto-flip noi_override_active if user-net or proforma NOI was applied.
+  if((patch.noi_actual_yr != null || patch.noi_proforma_yr != null) && patch.noi_override_active !== true){
+    patch.noi_override_active = true;
+  }
+
+  patch.ai_parsed_at = new Date().toISOString();
+  patch.review_tag = 'deal_reviewed';
+
+  // Apply.
+  await _sbPatch(SB_TABLES.properties, propertyId, patch);
+
+  // Mirror in-memory deal so the pipeline / sidebar reflect immediately.
+  const idx = (allDeals||[]).findIndex(x => x.id === propertyId);
+  if(idx > -1){
+    const d = allDeals[idx];
+    // Map snake_case → Airtable field names for any keys we know about.
+    if(typeof SB_PROP_MAP !== 'undefined' && typeof _sbToAt === 'function'){
+      const overlay = _sbToAt(patch, SB_PROP_MAP);
+      Object.assign(d, overlay);
+    } else {
+      d['Review Tag'] = 'deal_reviewed';
+    }
+  }
+
+  // Mirror the offers upsert from _aiAutoFillApply for asking_price /
+  // target_seller_net so the Offers tab stays in sync.
+  if(patch.target_seller_net != null && Number(patch.target_seller_net) > 0){
+    try {
+      const existing = await _sbGet('ace_deal_offers',
+        `deal_id=eq.${propertyId}&offer_type=eq.accepted_by_seller&select=id&order=created_at.desc&limit=1`);
+      const amount = Number(patch.target_seller_net);
+      if(existing && existing.length > 0){
+        await _sbPatch('ace_deal_offers', existing[0].id, { amount });
+      } else {
+        await _sbPost('ace_deal_offers', {
+          deal_id: propertyId, offer_type: 'accepted_by_seller', amount,
+          offer_date: new Date().toISOString().slice(0,10),
+          notes: 'Bulk AI Auto-Fill: seller target net'
+        });
+      }
+    } catch(_){}
+  }
+  if(patch.asking_price != null && Number(patch.asking_price) > 0){
+    try {
+      const existing = await _sbGet('ace_deal_offers',
+        `deal_id=eq.${propertyId}&offer_type=eq.asking&select=id&order=created_at.desc&limit=1`);
+      const amount = Number(patch.asking_price);
+      if(existing && existing.length > 0){
+        await _sbPatch('ace_deal_offers', existing[0].id, { amount });
+      } else {
+        await _sbPost('ace_deal_offers', {
+          deal_id: propertyId, offer_type: 'asking', amount,
+          offer_date: new Date().toISOString().slice(0,10),
+          notes: 'Bulk AI Auto-Fill: seller asking'
+        });
+      }
+    } catch(_){}
+  }
+}
+
 window._aiCatalogOpen = function(){
   const groupOrder = ['Pricing','Income','Returns','Expenses','Expense Details','Pro Forma','Mortgages','Financing','Physical','Quality','Components','Unit Mix','Tenant Mix','Industrial','Asset-Specific','Seller','Flags','Identity'];
   const groups = {};
@@ -32118,6 +32421,18 @@ function showSettingsPage(){
             </div>
           </div>
           <button onclick="_aiCatalogOpen()" style="background:#7c3aed;color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Open catalog →</button>
+        </section>
+
+        <!-- v150: Bulk AI Auto-Fill tile -->
+        <section data-settings-tab="tools" style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
+          <div style="font-size:28px;flex-shrink:0;">⚡</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:15px;font-weight:700;color:#0f172a;">Bulk AI Auto-Fill</div>
+            <div style="font-size:12px;color:#64748b;margin-top:3px;line-height:1.5;">
+              Run AI Auto-Fill across many deals at once. Filter by stage, email-template link, and review tag. After each deal finishes, marks it ✓ Deal Reviewed so it won't be picked up next time. ~10-20 sec per deal.
+            </div>
+          </div>
+          <button onclick="_bulkAiOpen()" style="background:#7c3aed;color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Open bulk runner →</button>
         </section>
 
         <!-- v111 Ship 3: Asset Cleanup tile -->

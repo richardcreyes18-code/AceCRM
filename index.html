@@ -44876,16 +44876,37 @@ async function submitCreateTask(){
   }
 }
 
-// ── DEAL TASKS TAB ─────────────────────────────────────────────
+// ── DEAL TASKS TAB (v158: parity with main Tasks page) ─────────
+// State scoped to the deal-card Tasks tab. Independent from the main
+// page state so switching between deal pages doesn't poison the global
+// Tasks page filters.
+let _dealTasksSubTab = 'all';     // 'all' | 'mine' | 'others'
+let _dealTasksPrioFilter = '';    // '' = all
+let _dealTasksData = { tasks: [], assignees: new Map() }; // cached so filter switches don't re-fetch
+let _dealTasksDragState = null;
+
 function renderTasksTab(d){
   const addr=d['Address']||'this deal';
-  // NOTE: async load is triggered by switchTab after DOM is set, not here
   return `
     <div class="section-hdr"><span class="icon">☑</span> Tasks</div>
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:8px;">
-      <div style="font-size:12px;color:var(--text2);">Tasks for this deal — synced with Airtable.</div>
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:8px;">
+      <div style="font-size:12px;color:var(--text2);">All tasks linked to this property — drag to reorder, click any task to open its full detail.</div>
       <button onclick="openCreateTaskModal('${d.id}','${addr.replace(/'/g,"\\'")}','deal')"
         style="background:#7c3aed;color:#fff;border:none;padding:7px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">+ Create Task</button>
+    </div>
+    <div id="dealTasksFilterBar" style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;padding:10px 12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
+      <div style="display:flex;gap:4px;border:1px solid #cbd5e1;border-radius:6px;overflow:hidden;background:#fff;" id="dealTasksSubTabs"></div>
+      <div style="margin-left:auto;display:flex;gap:6px;align-items:center;">
+        <span style="font-size:10px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.04em;">Priority</span>
+        <select id="dealTasksPrioFilter" onchange="_dealTasksSetPriorityFilter(this.value)" style="padding:5px 8px;font-size:11px;border:1px solid #cbd5e1;border-radius:5px;background:#fff;">
+          <option value="">All</option>
+          <option value="Top Priority">🔥 Top</option>
+          <option value="High Priority">⚡ High</option>
+          <option value="Medium Priority">Medium</option>
+          <option value="Low Priority">Low</option>
+          <option value="None">None</option>
+        </select>
+      </div>
     </div>
     <div id="dealTasksContent" style="min-height:80px;">
       <div style="text-align:center;padding:30px;color:var(--text3);font-size:12px;"><div class="spinner" style="margin:0 auto 8px;"></div>Loading tasks...</div>
@@ -44893,64 +44914,266 @@ function renderTasksTab(d){
 }
 
 async function _loadAndRenderDealTasks(dealId, address){
-  const el=document.getElementById('dealTasksContent'); if(!el) return;
-  const cfg=getConfig();
-  if((!cfg.key && !isSupabase())||dealId?.startsWith('demo')){
-    el.innerHTML=`<div style="text-align:center;padding:24px;color:var(--text3);font-size:12px;">Connect your database to view tasks.</div>`;
+  const el = document.getElementById('dealTasksContent');
+  if(!el) return;
+  if(!isSupabase() || dealId?.startsWith('demo')){
+    el.innerHTML = `<div style="text-align:center;padding:24px;color:var(--text3);font-size:12px;">Connect your database to view tasks.</div>`;
     return;
   }
-  try{
-    let tasks=[];
-    if(isSupabase()){
-      const rows=await _sbGet(SB_TABLES.tasks,`property_id=eq.${dealId}&select=*&order=due_date.asc.nullslast`);
-      tasks=(rows||[]).map(r=>({id:r.id,'Task':r.task,'Status':r.status,'Priority':r.priority,'Due Date':r.due_date,'Notes':r.notes,'Related Property':[r.property_id]}));
-    } else {
-      const url=`https://api.airtable.com/v0/${cfg.base}/${TASKS_TABLE_ID}?maxRecords=500`;
-      const res=await fetch(url,{headers:{Authorization:`Bearer ${cfg.key}`}});
-      if(!res.ok){
-        const errText=await res.text();
-        el.innerHTML=`<div style="padding:16px;background:#fee2e2;border:1px solid #fca5a5;border-radius:6px;color:#dc2626;font-size:12px;"><strong>Error ${res.status}:</strong> ${errText}</div>`;
-        return;
+  // Reset state for the newly-opened deal.
+  _dealTasksSubTab = 'all';
+  _dealTasksPrioFilter = '';
+  try {
+    // Fetch tasks scoped to this property + their junction rows so we
+    // know who's assigned. Two parallel queries — no JOIN needed.
+    const [taskRows, junctionRows] = await Promise.all([
+      _sbGet(SB_TABLES.tasks, `property_id=eq.${dealId}&select=*&order=sort_order.asc.nullslast,due_date.asc.nullslast`),
+      (async () => {
+        try {
+          // Fetch ALL junction rows for this user's universe — cheap and
+          // we filter client-side. Alternative would be a second query
+          // after taskRows resolves with task_id=in.(…), but doing it in
+          // parallel is faster.
+          return await _sbGet(SB_TABLES.taskAssignees, `select=task_id,user_id&limit=10000`);
+        } catch(_e){ return []; }
+      })(),
+    ]);
+    const tasks = (taskRows || []).map(r => ({
+      id: r.id, 'Task': r.task, 'Status': r.status, 'Priority': r.priority,
+      'Due Date': r.due_date, 'Notes': r.notes, 'Related Property': [r.property_id],
+      _sortOrder: r.sort_order || 0,
+      _assignedToUserId: r.assigned_to_user_id,
+    }));
+    // Build a Map<task_id, Set<user_id>> for fast assignee lookup.
+    const assignees = new Map();
+    for(const j of (junctionRows || [])){
+      if(!j.task_id) continue;
+      let s = assignees.get(j.task_id);
+      if(!s){ s = new Set(); assignees.set(j.task_id, s); }
+      s.add(j.user_id);
+    }
+    // Backfill from primary assignee for tasks that don't have a
+    // junction row yet (newly imported / pre-v157).
+    for(const t of tasks){
+      if(!assignees.has(t.id) && t._assignedToUserId){
+        assignees.set(t.id, new Set([t._assignedToUserId]));
       }
-      const allTasks=(await res.json()).records?.map(r=>({id:r.id,...r.fields}))||[];
-      tasks=allTasks.filter(t=>(t['Related Property']||[]).includes(dealId))
-        .sort((a,b)=>{
-          if(!a['Due Date']&&!b['Due Date']) return 0;
-          if(!a['Due Date']) return 1; if(!b['Due Date']) return -1;
-          return a['Due Date']<b['Due Date']?-1:1;
-        });
     }
-    if(!tasks.length){
-      el.innerHTML=`<div style="text-align:center;padding:36px;color:var(--text3);">
-        <div style="font-size:32px;margin-bottom:8px;">☑</div>
-        <div style="font-size:13px;font-weight:600;margin-bottom:4px;">No tasks yet for this deal</div>
-        <div style="font-size:12px;margin-bottom:14px;">Track follow-ups, deadlines, and action items here.</div>
-        <button onclick="openCreateTaskModal('${dealId}','${(address||'').replace(/'/g,"\\'")}','deal')"
-          style="background:#7c3aed;color:#fff;border:none;padding:8px 18px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">+ Create First Task</button>
-      </div>`; return;
-    }
-    const pending=tasks.filter(t=>t['Status']!=='Done'), done=tasks.filter(t=>t['Status']==='Done');
-    const row=t=>{
-      const isDone=t['Status']==='Done', due=_fmtTaskDue(t['Due Date']);
-      const prio=t['Priority']?`<span style="${_taskPrioStyle(t['Priority'])}padding:2px 8px;border-radius:99px;font-size:10px;font-weight:600;white-space:nowrap;">${t['Priority'].trim()}</span>`:'';
-      return `<div style="background:var(--surface);border:1px solid ${due.overdue&&!isDone?'#fca5a5':'var(--border)'};border-radius:var(--radius-sm);padding:11px 14px;margin-bottom:7px;display:flex;align-items:flex-start;gap:12px;${isDone?'opacity:0.55;':''}">
-        <input type="checkbox" ${isDone?'checked':''} onchange="toggleTaskDone('${t.id}','${t['Status']}','deal')" style="width:16px;height:16px;margin-top:2px;cursor:pointer;flex-shrink:0;accent-color:#7c3aed;">
-        <div style="flex:1;min-width:0;">
-          <div style="font-size:13px;font-weight:600;${isDone?'text-decoration:line-through;':''}margin-bottom:4px;">${t['Task']||'Untitled'}</div>
-          ${t['Notes']?`<div style="font-size:12px;color:var(--text2);margin-bottom:5px;">${t['Notes']}</div>`:''}
-          <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center;">${prio}<span style="font-size:11px;color:${due.color};font-weight:500;">${due.text}</span></div>
-        </div>
-        <button onclick="openEditTaskModal('${t.id}','${(t['Task']||'').replace(/'/g,"\\'")}','${(t['Priority']||'').trim()}','${t['Due Date']||''}','${(t['Notes']||'').replace(/'/g,"\\'").replace(/\n/g,' ')}','deal')" title="Edit" style="background:none;border:none;color:var(--text3);font-size:14px;cursor:pointer;padding:0 4px;flex-shrink:0;" onmouseover="this.style.color='#7c3aed'" onmouseout="this.style.color='var(--text3)'">✏️</button>
-        <button onclick="deleteTaskRecord('${t.id}','deal')" title="Delete" style="background:none;border:none;color:var(--text3);font-size:16px;cursor:pointer;padding:0 4px;flex-shrink:0;" onmouseover="this.style.color='#dc2626'" onmouseout="this.style.color='var(--text3)'">✕</button>
-      </div>`;
-    };
-    el.innerHTML=
-      (pending.length?`<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:8px;">Open (${pending.length})</div>${pending.map(row).join('')}`:'') +
-      (done.length?`<div style="font-size:11px;font-weight:600;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-top:16px;margin-bottom:8px;">Completed (${done.length})</div>${done.map(row).join('')}`:'');
-  }catch(e){
-    el.innerHTML=`<div style="padding:16px;color:#dc2626;font-size:12px;">Failed to load tasks: ${e.message}</div>`;
+    _dealTasksData = { tasks, assignees, dealId, address };
+    _renderDealTasksUI();
+  } catch(e){
+    el.innerHTML = `<div style="padding:16px;color:#dc2626;font-size:12px;">Failed to load tasks: ${e.message}</div>`;
   }
 }
+
+window._dealTasksSetSubTab = function(tab){
+  _dealTasksSubTab = tab;
+  _renderDealTasksUI();
+};
+
+window._dealTasksSetPriorityFilter = function(v){
+  _dealTasksPrioFilter = String(v||'');
+  _renderDealTasksUI();
+};
+
+function _renderDealTasksUI(){
+  // Render the sub-tabs (counts depend on assignee membership).
+  const me = (_currentUser && _currentUser.id) || null;
+  const { tasks, assignees, dealId, address } = _dealTasksData;
+  const counts = { all: tasks.length, mine: 0, others: 0 };
+  for(const t of tasks){
+    const set = assignees.get(t.id) || new Set();
+    if(me && set.has(me)) counts.mine++;
+    else counts.others++;
+  }
+  const tabsEl = document.getElementById('dealTasksSubTabs');
+  if(tabsEl){
+    const tab = (key, label, count) => {
+      const on = _dealTasksSubTab === key;
+      return `<button onclick="_dealTasksSetSubTab('${key}')" style="background:${on?'#1a3a6e':'transparent'};color:${on?'#fff':'#475569'};border:none;padding:6px 12px;font-size:11px;font-weight:600;cursor:pointer;border-right:1px solid #cbd5e1;">${label} <span style="opacity:.7;font-weight:500;margin-left:4px;">${count}</span></button>`;
+    };
+    tabsEl.innerHTML = `
+      ${tab('all',    'All tasks',     counts.all)}
+      ${tab('mine',   '👤 My tasks',   counts.mine)}
+      ${tab('others', '👥 Other agents', counts.others)}
+    `.replace(/border-right:1px solid #cbd5e1;"(?=[^"]*$)/, ''); // strip trailing border
+  }
+  // Filter by sub-tab.
+  let filtered;
+  if(_dealTasksSubTab === 'mine'){
+    filtered = tasks.filter(t => me && (assignees.get(t.id)||new Set()).has(me));
+  } else if(_dealTasksSubTab === 'others'){
+    filtered = tasks.filter(t => !me || !(assignees.get(t.id)||new Set()).has(me));
+  } else {
+    filtered = tasks;
+  }
+  // Filter by priority.
+  if(_dealTasksPrioFilter){
+    filtered = filtered.filter(t => (t['Priority']||'').trim() === _dealTasksPrioFilter);
+  }
+
+  const el = document.getElementById('dealTasksContent');
+  if(!el) return;
+  if(!filtered.length){
+    el.innerHTML = `<div style="text-align:center;padding:36px;color:var(--text3);">
+      <div style="font-size:32px;margin-bottom:8px;">☑</div>
+      <div style="font-size:13px;font-weight:600;margin-bottom:4px;">${tasks.length===0 ? 'No tasks yet for this deal' : 'No tasks match these filters'}</div>
+      <div style="font-size:12px;margin-bottom:14px;">${tasks.length===0 ? 'Track follow-ups, deadlines, and action items here.' : 'Try a different sub-tab or clear the priority filter.'}</div>
+      ${tasks.length===0 ? `<button onclick="openCreateTaskModal('${dealId}','${(address||'').replace(/'/g,"\\'")}','deal')" style="background:#7c3aed;color:#fff;border:none;padding:8px 18px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">+ Create First Task</button>` : ''}
+    </div>`;
+    return;
+  }
+
+  // Group by section: Overdue / Today / Future / Done. Within each
+  // section, sort by Priority bucket then sort_order.
+  const PRIO_RANK = { 'Top Priority': 0, 'High Priority': 1, 'Medium Priority': 2, 'Low Priority': 3, '': 4, 'None': 4 };
+  const today = new Date(); today.setHours(0,0,0,0);
+  const sections = { overdue: [], today: [], future: [], done: [] };
+  for(const t of filtered){
+    if((t['Status']||'') === 'Done'){ sections.done.push(t); continue; }
+    if(!t['Due Date']){ sections.future.push(t); continue; }
+    const due = new Date(t['Due Date'] + 'T00:00:00');
+    if(due < today) sections.overdue.push(t);
+    else if(due.getTime() === today.getTime()) sections.today.push(t);
+    else sections.future.push(t);
+  }
+  for(const k of Object.keys(sections)){
+    sections[k].sort((a,b) => {
+      const pa = PRIO_RANK[(a['Priority']||'').trim()] ?? 4;
+      const pb = PRIO_RANK[(b['Priority']||'').trim()] ?? 4;
+      if(pa !== pb) return pa - pb;
+      return (a._sortOrder||0) - (b._sortOrder||0);
+    });
+  }
+
+  el.innerHTML =
+    _dealTasksRenderSection('overdue', '🔥 Overdue',     sections.overdue,  '#dc2626') +
+    _dealTasksRenderSection('today',   '📍 Today',       sections.today,    '#0891b2') +
+    _dealTasksRenderSection('future',  '📅 Upcoming',    sections.future,   '#475569') +
+    _dealTasksRenderSection('done',    '✓ Completed',    sections.done,     '#059669');
+}
+
+function _dealTasksRenderSection(key, label, tasks, color){
+  if(!tasks.length) return '';
+  const rows = tasks.map(t => _dealTasksRenderRow(t, key)).join('');
+  return `
+    <div style="margin-bottom:14px;">
+      <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:${color};margin-bottom:6px;">${label} <span style="color:#94a3b8;font-weight:500;margin-left:4px;">(${tasks.length})</span></div>
+      <div data-deal-tasks-section="${key}">${rows}</div>
+    </div>`;
+}
+
+function _dealTasksRenderRow(t, sectionKey){
+  const isDone = (t['Status']||'') === 'Done';
+  const due = _fmtTaskDue(t['Due Date']);
+  const prio = (t['Priority']||'').trim();
+  const prioPill = prio ? `<span style="${_taskPrioStyle(prio)}padding:2px 8px;border-radius:99px;font-size:10px;font-weight:600;white-space:nowrap;">${prio}</span>` : '';
+  const set = (_dealTasksData.assignees.get(t.id) || new Set());
+  const me = (_currentUser && _currentUser.id) || null;
+  const sharedBadge = set.size > 1
+    ? `<span title="Shared with ${set.size} agents" style="background:#f5f3ff;color:#5b21b6;border:1px solid #ddd6fe;padding:1px 7px;border-radius:99px;font-size:10px;font-weight:700;">👥 ${set.size}</span>`
+    : '';
+  // Show short assignee chips. Limit to 2 + "+N" overflow.
+  const assigneeChips = (() => {
+    if(!set.size) return '';
+    const ids = [...set];
+    const names = ids.slice(0,2).map(id => {
+      const u = (_usersCache||[]).find(x => x.id === id);
+      const nm = (u && (u.name || u.email || '')).trim() || 'Agent';
+      const initials = nm.split(/\s+/).map(s => s[0]||'').join('').slice(0,2).toUpperCase();
+      const isMe = id === me;
+      return `<span title="${nm.replace(/[<>]/g,'')}" style="background:${isMe?'#1a3a6e':'#e2e8f0'};color:${isMe?'#fff':'#475569'};font-size:9px;font-weight:700;padding:2px 6px;border-radius:99px;">${initials}</span>`;
+    }).join('');
+    const overflow = ids.length > 2 ? `<span style="font-size:10px;color:#64748b;">+${ids.length-2}</span>` : '';
+    return names + overflow;
+  })();
+  const safeTask  = (t['Task']  || '').replace(/'/g, "\\'");
+  const safePrio  = prio.replace(/'/g, "\\'");
+  const safeDue   = (t['Due Date'] || '').replace(/'/g, "\\'");
+  const safeNotes = (t['Notes'] || '').replace(/'/g, "\\'").replace(/\n/g, ' ');
+  return `
+    <div data-task-id="${t.id}" data-section="${sectionKey}"
+      draggable="true"
+      ondragstart="_dealTasksDragStart(event,'${t.id}','${sectionKey}')"
+      ondragend="_dealTasksDragEnd(event)"
+      ondragover="_dealTasksDragOver(event)"
+      ondragleave="_dealTasksDragLeave(event)"
+      ondrop="_dealTasksDrop(event)"
+      onclick="if(event.target.tagName!=='INPUT' && event.target.tagName!=='BUTTON') openEditTaskModal('${t.id}','${safeTask}','${safePrio}','${safeDue}','${safeNotes}','deal')"
+      style="background:var(--surface);border:1px solid ${due.overdue && !isDone ? '#fca5a5' : 'var(--border)'};border-radius:var(--radius-sm);padding:10px 12px;margin-bottom:6px;display:flex;align-items:flex-start;gap:10px;cursor:pointer;${isDone?'opacity:0.55;':''}"
+      onmouseenter="this.style.background='#f8fafc'" onmouseleave="this.style.background='var(--surface)'">
+      <div style="color:#cbd5e1;cursor:grab;line-height:1;font-size:14px;padding-top:1px;" title="Drag to reorder">⠿</div>
+      <input type="checkbox" ${isDone?'checked':''} onclick="event.stopPropagation()" onchange="toggleTaskDone('${t.id}','${t['Status']||'Pending'}','deal')" style="width:15px;height:15px;margin-top:1px;cursor:pointer;flex-shrink:0;accent-color:#7c3aed;">
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:13px;font-weight:600;${isDone?'text-decoration:line-through;':''}margin-bottom:3px;color:#0f172a;">${(t['Task']||'Untitled').replace(/[<>]/g,'')}</div>
+        ${t['Notes']?`<div style="font-size:11px;color:var(--text2);margin-bottom:4px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${(t['Notes']||'').replace(/[<>]/g,'').slice(0,160)}</div>`:''}
+        <div style="display:flex;gap:7px;flex-wrap:wrap;align-items:center;">
+          ${prioPill}
+          <span style="font-size:11px;color:${due.color};font-weight:500;">${due.text}</span>
+          ${sharedBadge}
+          ${assigneeChips}
+        </div>
+      </div>
+      <button onclick="event.stopPropagation();deleteTaskRecord('${t.id}','deal')" title="Delete" style="background:none;border:none;color:var(--text3);font-size:14px;cursor:pointer;padding:0 4px;flex-shrink:0;" onmouseover="this.style.color='#dc2626'" onmouseout="this.style.color='var(--text3)'">✕</button>
+    </div>`;
+}
+
+// Drag-reorder within a section. Persists per-task sort_order so the
+// new order survives reload and applies across users (bucket scoped).
+window._dealTasksDragStart = function(ev, taskId, section){
+  _dealTasksDragState = { taskId, section };
+  try { ev.dataTransfer.effectAllowed = 'move'; ev.dataTransfer.setData('text/plain', taskId); } catch(_e){}
+  ev.currentTarget.style.opacity = '0.4';
+};
+window._dealTasksDragEnd = function(ev){
+  ev.currentTarget.style.opacity = '';
+  _dealTasksDragState = null;
+  document.querySelectorAll('[data-task-id].deal-task-drop-over').forEach(n => n.classList.remove('deal-task-drop-over'));
+};
+window._dealTasksDragOver = function(ev){
+  if(!_dealTasksDragState) return;
+  const target = ev.currentTarget;
+  if(target.getAttribute('data-section') !== _dealTasksDragState.section) return;
+  ev.preventDefault();
+  try { ev.dataTransfer.dropEffect = 'move'; } catch(_e){}
+  target.classList.add('deal-task-drop-over');
+  target.style.borderColor = '#7c3aed';
+};
+window._dealTasksDragLeave = function(ev){
+  ev.currentTarget.classList.remove('deal-task-drop-over');
+  ev.currentTarget.style.borderColor = '';
+};
+window._dealTasksDrop = async function(ev){
+  if(!_dealTasksDragState) return;
+  const target = ev.currentTarget;
+  const section = target.getAttribute('data-section');
+  target.classList.remove('deal-task-drop-over');
+  target.style.borderColor = '';
+  if(section !== _dealTasksDragState.section){ _dealTasksDragState = null; return; }
+  ev.preventDefault();
+  const dragId = _dealTasksDragState.taskId;
+  const dropId = target.getAttribute('data-task-id');
+  _dealTasksDragState = null;
+  if(!dragId || !dropId || dragId === dropId) return;
+  const container = document.querySelector(`[data-deal-tasks-section="${section}"]`);
+  if(!container) return;
+  const ids = [...container.querySelectorAll('[data-task-id]')].map(n => n.getAttribute('data-task-id'));
+  const fromIdx = ids.indexOf(dragId);
+  const toIdx = ids.indexOf(dropId);
+  if(fromIdx < 0 || toIdx < 0) return;
+  ids.splice(fromIdx, 1);
+  ids.splice(toIdx, 0, dragId);
+  // Persist by reusing the main page's helper.
+  if(typeof _tasksPersistOrder === 'function') await _tasksPersistOrder(ids);
+  // Update in-memory data so the re-render reflects the new order.
+  if(_dealTasksData && _dealTasksData.tasks){
+    const idIndex = new Map(ids.map((id,i) => [id, i]));
+    for(const t of _dealTasksData.tasks){
+      if(idIndex.has(t.id)) t._sortOrder = idIndex.get(t.id);
+    }
+  }
+  _renderDealTasksUI();
+};
 
 // ── CONTACT TASKS (v113.5) ─────────────────────────────────────
 // Opens the Create Task modal pre-linked to a contact. Resolves the

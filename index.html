@@ -19798,23 +19798,16 @@ function showDealBoard(){
           </button>
         </div>
 
-        <!-- FILTER ROW 2: LOC-001 Location Selector (State / Region / County / City) -->
+        <!-- v160: GROUPED-CARDS FILTER LAYOUT (Deal Board only).
+             Mirrors the Pipeline filter mockup: Location / Asset / Financial /
+             Pipeline & Status. Each card has a colored accent strip on the
+             left + a per-card filter count in the top-right. Underlying
+             handlers (LOC-001, _dbStageComboHTML, _dbAdvRange, etc.) are
+             unchanged — this is purely a layout reshuffle. -->
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-          ${_locCompactBarHTML()}
-        </div>
-
-        <!-- FILTER ROW 3: Stages + Asset Type + Sources + Priority + spacer + Columns + Clear Filters -->
-        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-          ${_dbStageComboHTML(stages)}
-          ${_locRenderSingleField('type', 'Asset Type')}
-          ${_dbSourceComboHTML(sources)}
-          <label class="db-fbar-check">
-            <input type="checkbox" id="db_priority" onchange="renderDealBoard();dbRefreshMapPins()"/>
-            &#9733; Priority Only
-          </label>
           <button onclick="_dbToggleAdvFilters()" id="db_advToggle"
             style="background:#fff;color:#334155;border:1px solid #cbd5e1;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;"
-            title="Open advanced numeric filters (price, sqft, units, cap rate, year built, …)">
+            title="Open the rare numeric filters (NOI, lot size, year built, occupancy)">
             ▾ More Filters <span id="db_advCount" style="margin-left:4px;font-size:10px;color:#94a3b8;"></span>
           </button>
           <div style="flex:1;"></div>
@@ -19824,14 +19817,102 @@ function showDealBoard(){
           </button>
         </div>
 
-        <!-- v113.55: ADVANCED FILTERS PANEL — numeric ranges. Collapsed by default. -->
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(280px, 1fr));gap:14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:14px;align-items:start;">
+          <!-- Location card -->
+          <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span style="display:inline-block;width:4px;height:18px;border-radius:2px;background:#3b82f6;"></span>
+                <span style="font-size:13px;font-weight:700;color:#0f172a;">Location</span>
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:8px;">
+              <div>
+                <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">State</div>
+                ${_locRenderSingleField('state', 'State')}
+              </div>
+              <div>
+                <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Region</div>
+                ${_locRenderSingleField('region', 'Region')}
+              </div>
+              <div>
+                <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">County</div>
+                ${_locRenderSingleField('county', 'County')}
+              </div>
+              <div>
+                <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">City</div>
+                ${_locRenderSingleField('city', 'City')}
+              </div>
+            </div>
+          </div>
+
+          <!-- Asset card -->
+          <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span style="display:inline-block;width:4px;height:18px;border-radius:2px;background:#22c55e;"></span>
+                <span style="font-size:13px;font-weight:700;color:#0f172a;">Asset</span>
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:8px;">
+              <div>
+                <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Asset Type</div>
+                ${_locRenderSingleField('type', 'Asset Type')}
+              </div>
+              <div>
+                ${_dbAdvRange('sqft',  'Square Footage', '', ' SF')}
+              </div>
+              <div>
+                ${_dbAdvRange('units', '# Units',        '', '')}
+              </div>
+            </div>
+          </div>
+
+          <!-- Financial card -->
+          <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span style="display:inline-block;width:4px;height:18px;border-radius:2px;background:#7c3aed;"></span>
+                <span style="font-size:13px;font-weight:700;color:#0f172a;">Financial</span>
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:8px;">
+              ${_dbAdvRange('price',   'Asking Price', '$', '')}
+              ${_dbAdvRange('caprate', 'Cap Rate',     '',  '%')}
+              ${_dbAdvRange('noi',     'NOI (yearly)', '$', '')}
+            </div>
+          </div>
+
+          <!-- Pipeline & Status card -->
+          <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:14px 16px;">
+            <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;">
+              <div style="display:flex;align-items:center;gap:8px;">
+                <span style="display:inline-block;width:4px;height:18px;border-radius:2px;background:#f59e0b;"></span>
+                <span style="font-size:13px;font-weight:700;color:#0f172a;">Pipeline &amp; Status</span>
+              </div>
+            </div>
+            <div style="display:flex;flex-direction:column;gap:8px;">
+              <div>
+                <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Stage</div>
+                ${_dbStageComboHTML(stages)}
+              </div>
+              <div>
+                <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px;">Source</div>
+                ${_dbSourceComboHTML(sources)}
+              </div>
+              <label class="db-fbar-check" style="margin-top:4px;">
+                <input type="checkbox" id="db_priority" onchange="renderDealBoard();dbRefreshMapPins()"/>
+                &#9733; Priority Only
+              </label>
+            </div>
+          </div>
+        </div>
+
+        <!-- v113.55: ADVANCED FILTERS PANEL — extra numeric ranges that
+             didn't make the four cards above (year built, lot size,
+             occupancy). Collapsed by default. -->
         <div id="db_advPanel" style="display:none;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-top:6px;">
           <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px 16px;font-size:11px;color:#334155;">
-            ${_dbAdvRange('price',     'Asking Price', '$', '')}
-            ${_dbAdvRange('noi',       'NOI (yearly)', '$', '')}
-            ${_dbAdvRange('caprate',   'Cap Rate %',   '',  '%')}
-            ${_dbAdvRange('sqft',      'Square Footage','', ' SF')}
-            ${_dbAdvRange('units',     '# Units (MF)', '',  '')}
             ${_dbAdvRange('lotsize',   'Lot Size',     '',  ' ac')}
             ${_dbAdvRange('yearbuilt', 'Year Built',   '',  '')}
             ${_dbAdvRange('occupancy', 'Occupancy %',  '',  '%')}

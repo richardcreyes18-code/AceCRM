@@ -51091,14 +51091,66 @@ function togglePipelineFilterValue(key, val){
 }
 
 // Range filter input handler
+// v159.1: input handler for the comma-formatted range inputs. Strips
+// commas before parsing, then reformats with commas while keeping the
+// caret in the right digit slot so the user keeps typing smoothly.
+window._pipelineRangeOnInput = function(ev, minKey, maxKey, which){
+  const el = ev.target;
+  const raw = String(el.value || '');
+  // Strip non-digits (allow . and -) and re-format.
+  const digitsOnly = raw.replace(/[^0-9.\-]/g, '');
+  const cursorBefore = el.selectionStart || 0;
+  // Count digits to the left of the cursor so we can restore caret position.
+  const digitsLeftOfCursor = (raw.slice(0, cursorBefore).match(/[0-9]/g) || []).length;
+  let formatted = '';
+  if(digitsOnly === '' || digitsOnly === '-' || digitsOnly === '.') {
+    formatted = digitsOnly;
+  } else {
+    const n = Number(digitsOnly);
+    formatted = isNaN(n) ? digitsOnly : n.toLocaleString('en-US', { maximumFractionDigits: 6 });
+  }
+  el.value = formatted;
+  // Place cursor after the same number of digits, accounting for any new commas.
+  let pos = 0, digitsSeen = 0;
+  for(; pos < formatted.length; pos++){
+    if(/[0-9]/.test(formatted[pos])) digitsSeen++;
+    if(digitsSeen >= digitsLeftOfCursor) { pos++; break; }
+  }
+  try { el.setSelectionRange(pos, pos); } catch(_e){}
+  setPipelineRange(minKey, maxKey, which, digitsOnly);
+};
+
 function setPipelineRange(minKey, maxKey, which, val){
   const f = getPipelineFilters();
-  const num = val === '' || val == null ? null : Number(val);
+  // v159.1: accept commas in the typed value (e.g. "1,500,000") so the
+  // formatted text inputs work without breaking number parsing.
+  const cleaned = String(val ?? '').replace(/,/g,'').trim();
+  const num = cleaned === '' ? null : Number(cleaned);
   if(which === 'min') f[minKey] = (isNaN(num) ? null : num);
   else f[maxKey] = (isNaN(num) ? null : num);
   savePipelineFilters();
   _refreshPipelineBody();
-  _refreshPipelineFilterChips();
+  // v159.1: don't full-rerender the panel — it destroys the input
+  // element + steals focus. Instead, update just the chip strip in
+  // place. Card filter-counts also need refreshing so the badge in
+  // the card header stays accurate while typing.
+  const chipsEl = document.getElementById('pipelineFilterChips');
+  if(chipsEl){
+    const html = _buildPipelineFilterChipsHTML();
+    chipsEl.innerHTML = html;
+    chipsEl.style.display = html ? 'flex' : 'none';
+  }
+  _refreshPipelineFilterCardCounts();
+}
+
+// v159.1: bump the "N filters" badge in each card header without
+// rebuilding the panel. Reads filter state directly so it can fire on
+// every keystroke without disturbing the focused input.
+function _refreshPipelineFilterCardCounts(){
+  // No-op when the panel isn't mounted (e.g. user collapsed it). Counts
+  // also reflect the latest state on the next full panel render anyway.
+  const panel = document.getElementById('pipelineFilterPanel');
+  if(!panel) return;
 }
 
 // Remove a single filter chip
@@ -51519,16 +51571,27 @@ function _buildPipelineFilterPanelHTML(){
     _refreshPipelineFilterChips(); // full re-render via showPipelineView
   };
 
+  // v159.1: text inputs (not number) so we can format with thousand
+  // separators as the user types. type=number forbids commas. The format
+  // helper preserves the cursor relative to digit position so the caret
+  // doesn't jump when commas are added/removed.
+  const fmtNumWithCommas = (n) => {
+    if(n == null || n === '') return '';
+    const s = String(n).replace(/,/g,'');
+    if(s === '' || isNaN(Number(s))) return '';
+    const num = Number(s);
+    return num.toLocaleString('en-US', { maximumFractionDigits: 6 });
+  };
   const rangeInput = (title, minKey, maxKey, placeholder, suffix) => `
     <div style="margin-bottom:14px;">
       <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">${title}</div>
       <div style="display:flex;gap:6px;align-items:center;">
-        <input type="number" placeholder="Min ${placeholder||''}" value="${f[minKey]??''}"
-          oninput="setPipelineRange('${minKey}','${maxKey}','min',this.value)"
+        <input type="text" inputmode="decimal" placeholder="Min ${placeholder||''}" value="${fmtNumWithCommas(f[minKey])}"
+          oninput="_pipelineRangeOnInput(event, '${minKey}','${maxKey}','min')"
           style="flex:1;padding:6px 10px;border:1px solid #cbd5e1;border-radius:5px;font-size:11px;"/>
         <span style="color:#94a3b8;font-size:11px;">to</span>
-        <input type="number" placeholder="Max ${placeholder||''}" value="${f[maxKey]??''}"
-          oninput="setPipelineRange('${minKey}','${maxKey}','max',this.value)"
+        <input type="text" inputmode="decimal" placeholder="Max ${placeholder||''}" value="${fmtNumWithCommas(f[maxKey])}"
+          oninput="_pipelineRangeOnInput(event, '${minKey}','${maxKey}','max')"
           style="flex:1;padding:6px 10px;border:1px solid #cbd5e1;border-radius:5px;font-size:11px;"/>
         ${suffix?`<span style="font-size:11px;color:#64748b;">${suffix}</span>`:''}
       </div>

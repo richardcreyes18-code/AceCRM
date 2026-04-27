@@ -1785,7 +1785,10 @@ const SB_TABLES = {
   // (filtered allDeals), these are market comps the user types in manually.
   manualComps:         'ace_manual_comps',
   // v113.21: Task notifications — bell dropdown, triggered on assign / overdue-plan / completed.
-  taskNotifications:   'ace_task_notifications'
+  taskNotifications:   'ace_task_notifications',
+  // v157: junction table for shared tasks (multi-assignee). Per-(task,user)
+  // sort_order so each agent has their own queue position for the task.
+  taskAssignees:       'ace_task_assignees'
 };
 
 // ─── SUPABASE ↔ AIRTABLE FIELD MAPS ───────────────────────────
@@ -3268,6 +3271,9 @@ async function syncData(){
       // v149: warm the per-property template-link cache so the pipeline
       // table + detail card show "📧 linked" badges immediately.
       try { await _loadPropertyTemplateMap(); } catch(e){ console.warn('template map warm failed:', e.message); }
+      // v157: kick off the task-notification poller so newly-assigned
+      // tasks surface as a top-of-page toast banner within ~20 seconds.
+      try { _taskNotifPollStart(); } catch(e){ console.warn('task-notif poll start failed:', e.message); }
     }
 
     if(typeof _splashStep==='function') _splashStep('Building sidebar', 7, 8);
@@ -32832,6 +32838,127 @@ function _dealHasTemplate(dealId){
   return _dealTemplateCount(dealId) > 0;
 }
 
+// v157: Task-notification toast — polls ace_task_notifications every 20s
+// for new "assigned" rows where the current user is the recipient. New
+// notifications surface as a small banner at the top of the page that
+// auto-dismisses after 5 seconds; clicking it opens the task detail.
+let _taskNotifPollTimer = null;
+let _taskNotifLastSeenAt = null;
+const _taskNotifShown = new Set();
+
+function _taskNotifPollStart(){
+  if(_taskNotifPollTimer) return;
+  // First check runs ~3s after sync so the splash settles.
+  setTimeout(_taskNotifPollOnce, 3000);
+  _taskNotifPollTimer = setInterval(_taskNotifPollOnce, 20000);
+}
+
+async function _taskNotifPollOnce(){
+  if(!isSupabase() || !_currentUser?.id) return;
+  try {
+    let qs = `recipient_user_id=eq.${_currentUser.id}&read_at=is.null&select=id,task_id,actor_user_id,type,message,created_at&order=created_at.desc&limit=10`;
+    if(_taskNotifLastSeenAt){
+      qs += `&created_at=gt.${encodeURIComponent(_taskNotifLastSeenAt)}`;
+    }
+    const rows = await _sbGet(SB_TABLES.taskNotifications, qs);
+    if(!Array.isArray(rows) || !rows.length) return;
+    rows.sort((a,b) => new Date(a.created_at) - new Date(b.created_at));
+    for(const n of rows){
+      if(_taskNotifShown.has(n.id)) continue;
+      _taskNotifShown.add(n.id);
+      _taskNotifLastSeenAt = n.created_at;
+      try { await _showTaskNotifToast(n); } catch(e){ console.warn('toast render failed:', e.message); }
+    }
+  } catch(e){ /* network blip — try again next tick */ }
+}
+
+async function _showTaskNotifToast(notif){
+  // Pull the full task to render priority / due / snippet on the banner.
+  let task = null;
+  try {
+    const rows = await _sbGet(SB_TABLES.tasks, `id=eq.${notif.task_id}&select=id,task,priority,due_date,notes&limit=1`);
+    task = Array.isArray(rows) && rows[0];
+  } catch(_e){}
+  if(!task){
+    // Notification points at a task that's gone — mark it read silently.
+    try { await _sbPatch(SB_TABLES.taskNotifications, notif.id, { read_at: new Date().toISOString() }); } catch(_e){}
+    return;
+  }
+  const tName = task.task || 'Untitled task';
+  const prio = task.priority || '';
+  const due = task.due_date ? new Date(task.due_date + 'T00:00:00').toLocaleDateString(undefined, { month:'short', day:'numeric' }) : '';
+  const snippet = (task.notes || '').slice(0, 80);
+  const prioColor = prio === 'Top Priority' ? '#dc2626'
+                  : prio === 'High Priority' ? '#ea580c'
+                  : prio === 'Medium Priority' ? '#0891b2'
+                  : prio === 'Low Priority' ? '#64748b'
+                  : '#94a3b8';
+
+  // Stack toasts vertically when several arrive together.
+  let stack = document.getElementById('taskNotifStack');
+  if(!stack){
+    stack = document.createElement('div');
+    stack.id = 'taskNotifStack';
+    stack.style.cssText = 'position:fixed;top:14px;left:50%;transform:translateX(-50%);z-index:99999;display:flex;flex-direction:column;gap:8px;pointer-events:none;';
+    document.body.appendChild(stack);
+  }
+  const toast = document.createElement('div');
+  toast.style.cssText = 'pointer-events:auto;background:#fff;border:1px solid #e2e8f0;border-left:4px solid #7c3aed;border-radius:8px;box-shadow:0 10px 30px rgba(15,23,42,0.18);padding:10px 14px;min-width:340px;max-width:520px;cursor:pointer;display:flex;align-items:center;gap:10px;font-family:inherit;animation:taskNotifIn .25s ease;';
+  toast.innerHTML = `
+    <div style="font-size:18px;line-height:1;">☑</div>
+    <div style="flex:1;min-width:0;">
+      <div style="font-size:11px;color:#64748b;font-weight:600;margin-bottom:2px;">New task · from ${(_taskNotifActorName(notif.actor_user_id)||'an agent').replace(/[<>]/g,'')}</div>
+      <div style="font-size:13px;font-weight:700;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${tName.replace(/[<>]/g,'')}</div>
+      <div style="font-size:11px;color:#475569;margin-top:2px;display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        ${prio?`<span style="background:${prioColor};color:#fff;padding:1px 8px;border-radius:99px;font-size:10px;font-weight:700;">${prio}</span>`:''}
+        ${due?`<span>📅 ${due}</span>`:''}
+        ${snippet?`<span style="color:#64748b;">${snippet.replace(/[<>]/g,'')}${(task.notes||'').length>80?'…':''}</span>`:''}
+      </div>
+    </div>
+    <button onclick="event.stopPropagation();this.closest('div[data-toast]').remove();_taskNotifMarkRead('${notif.id}');" style="background:none;border:none;color:#94a3b8;font-size:18px;cursor:pointer;padding:2px 6px;line-height:1;">×</button>`;
+  toast.setAttribute('data-toast', '1');
+  toast.onclick = () => {
+    _taskNotifMarkRead(notif.id);
+    toast.remove();
+    if(typeof showTasksPage === 'function') showTasksPage();
+    setTimeout(() => {
+      if(typeof openEditTaskModal === 'function'){
+        openEditTaskModal(task.id, task.task, task.priority, task.due_date, task.notes, 'global');
+      }
+    }, 300);
+  };
+  stack.appendChild(toast);
+  setTimeout(() => {
+    if(toast.parentElement){
+      toast.style.transition = 'opacity .25s ease, transform .25s ease';
+      toast.style.opacity = '0';
+      toast.style.transform = 'translateY(-8px)';
+      setTimeout(() => { toast.remove(); _taskNotifMarkRead(notif.id); }, 260);
+    }
+  }, 5000);
+}
+
+window._taskNotifMarkRead = async function(notifId){
+  if(!notifId) return;
+  try { await _sbPatch(SB_TABLES.taskNotifications, notifId, { read_at: new Date().toISOString() }); }
+  catch(_e){}
+};
+
+function _taskNotifActorName(userId){
+  if(!userId) return '';
+  const u = (_usersCache||[]).find(x => x.id === userId);
+  return (u && (u.name || u.email)) || '';
+}
+
+// Inject a single keyframe rule for the toast slide-in.
+(function(){
+  if(document.getElementById('taskNotifKeyframes')) return;
+  const s = document.createElement('style');
+  s.id = 'taskNotifKeyframes';
+  s.textContent = '@keyframes taskNotifIn { from { opacity:0; transform:translateY(-8px);} to { opacity:1; transform:translateY(0);} }';
+  document.head.appendChild(s);
+})();
+
 // Mutators — keep the map in sync after link/unlink/delete actions so
 // the indicators update without a full reload.
 function _ptmInc(propertyId){
@@ -44020,10 +44147,96 @@ let _taskModalTypeOverride = null;
 // "Assign to" select writes here. Submit reads this to stamp
 // assigned_to_user_id (and assigned_by/at when it's a cross-agent handoff).
 let _taskModalAssigneeId = null;
+// v157: shared-task state. Mode='one' renders the existing single-select
+// (writes _taskModalAssigneeId only). Mode='many' renders a checkbox list
+// with current user pre-checked + locked, populates _taskModalAssigneeIds
+// (Set<userId>) — submit fans this out into ace_task_assignees junction
+// rows. Default is 'one'.
+let _taskModalAssignMode = 'one';
+let _taskModalAssigneeIds = new Set();
 // v113.23: task being edited (full ace_tasks row), or null for create. Set
 // by openEditTaskModal so submitEditTask can persist link/type/assignee
 // changes without bouncing through positional onclick args.
 let _taskModalEditing = null;
+
+// v157: assignee section — toggle (one / many) + body that matches the
+// current mode. Used by both Create and Edit task modals so the picker
+// stays consistent. When mode='many', current user is force-checked
+// (you can't share a task without including yourself; submitting still
+// works if user un-toggles back to 'one').
+function _taskAssigneeSectionHtml(){
+  const meId = (_currentUser && _currentUser.id) || null;
+  const mode = _taskModalAssignMode || 'one';
+  const togglePill = (key, label) => {
+    const on = mode === key;
+    return `<button type="button" onclick="_taskModalSetAssignMode('${key}')" style="background:${on?'#7c3aed':'#fff'};color:${on?'#fff':'#475569'};border:1px solid ${on?'#7c3aed':'#cbd5e1'};padding:5px 12px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;margin-right:6px;">${label}</button>`;
+  };
+  return `
+    <div style="margin-bottom:13px;">
+      <label style="font-size:12px;font-weight:600;color:var(--text2);display:block;margin-bottom:5px;">Assign to one agent or multiple</label>
+      <div style="margin-bottom:8px;">
+        ${togglePill('one',  '○ One agent')}
+        ${togglePill('many', '👥 Multiple agents')}
+      </div>
+      <div id="ctask_assigneeBody">${_taskAssigneeBodyHtml()}</div>
+    </div>`;
+}
+
+function _taskAssigneeBodyHtml(){
+  const meId = (_currentUser && _currentUser.id) || null;
+  const users = (_usersCache && _usersCache.length ? _usersCache : [{id: meId, name: 'Me'}]).filter(u => u.is_active !== false);
+  if((_taskModalAssignMode || 'one') === 'one'){
+    const sel = _taskModalAssigneeId || meId;
+    return `
+      <select id="ctask_assignee" class="form-select" style="width:100%;" onchange="_taskModalAssigneeId=this.value||null;">
+        ${users.map(u =>
+          `<option value="${u.id}" ${u.id===sel?'selected':''}>${(u.name||u.email||'Agent').replace(/</g,'&lt;')}${u.id===meId?' (me)':''}</option>`
+        ).join('')}
+      </select>`;
+  }
+  // Multi-select. Force current user checked so they can't accidentally
+  // share a task with others without including themselves; the checkbox
+  // is rendered disabled.
+  if(meId) _taskModalAssigneeIds.add(meId);
+  return `
+    <div style="border:1px solid var(--border);border-radius:6px;padding:8px;max-height:200px;overflow-y:auto;background:#fff;">
+      ${users.map(u => {
+        const checked = _taskModalAssigneeIds.has(u.id);
+        const isMe = u.id === meId;
+        return `<label style="display:flex;align-items:center;gap:8px;padding:5px 4px;cursor:${isMe?'not-allowed':'pointer'};font-size:12px;color:#0f172a;${isMe?'background:#f8fafc;border-radius:4px;':''}">
+          <input type="checkbox" ${checked?'checked':''} ${isMe?'disabled':''} onchange="_taskModalToggleAssignee('${u.id}', this.checked)" />
+          <span>${(u.name||u.email||'Agent').replace(/</g,'&lt;')}${isMe?' <span style="color:#7c3aed;font-size:10px;font-weight:600;">(me, locked)</span>':''}</span>
+        </label>`;
+      }).join('')}
+    </div>
+    <div style="font-size:10px;color:var(--text3);margin-top:4px;">${_taskModalAssigneeIds.size} agent${_taskModalAssigneeIds.size===1?'':'s'} selected — task appears in each agent's queue with a 👥 shared badge.</div>`;
+}
+
+window._taskModalSetAssignMode = function(mode){
+  _taskModalAssignMode = (mode === 'many') ? 'many' : 'one';
+  const meId = (_currentUser && _currentUser.id) || null;
+  if(_taskModalAssignMode === 'many'){
+    if(meId) _taskModalAssigneeIds.add(meId);
+    if(_taskModalAssigneeId && _taskModalAssigneeId !== meId){
+      _taskModalAssigneeIds.add(_taskModalAssigneeId);
+    }
+  }
+  const body = document.getElementById('ctask_assigneeBody');
+  if(body) body.innerHTML = _taskAssigneeBodyHtml();
+  // Re-render the toggle pills (active state)
+  const wrap = body && body.parentElement;
+  if(wrap){
+    wrap.outerHTML = _taskAssigneeSectionHtml();
+  }
+};
+
+window._taskModalToggleAssignee = function(userId, checked){
+  if(checked) _taskModalAssigneeIds.add(userId);
+  else _taskModalAssigneeIds.delete(userId);
+  // Refresh just the count footer; full re-render isn't needed.
+  const body = document.getElementById('ctask_assigneeBody');
+  if(body) body.innerHTML = _taskAssigneeBodyHtml();
+};
 
 // v113.23: link-picker state setters / search. Each picker (deal, contact,
 // buyer criteria) has a hidden id input + a visible chip when filled or a
@@ -44194,6 +44407,11 @@ function openCreateTaskModal(dealId=null,address='',source='deal',contactId=null
   // override + assignee so a stale prior selection doesn't leak.
   _taskModalTypeOverride = null;
   _taskModalAssigneeId   = (_currentUser && _currentUser.id) || null;
+  // v157: reset shared-task state. Default is single-assign mode with
+  // current user. When user toggles to "multiple", the current user is
+  // auto-checked and stays checked.
+  _taskModalAssignMode = 'one';
+  _taskModalAssigneeIds = new Set([_taskModalAssigneeId].filter(Boolean));
   _taskModalEditing      = null;
   let modal=document.getElementById('createTaskModal');
   if(!modal){ modal=document.createElement('div'); modal.id='createTaskModal'; document.body.appendChild(modal); }
@@ -44232,14 +44450,7 @@ function openCreateTaskModal(dealId=null,address='',source='deal',contactId=null
             <input id="ctask_due" type="date" class="form-input" value="${tomorrow}" style="width:100%;"/>
           </div>
         </div>
-        <div style="margin-bottom:13px;">
-          <label style="font-size:12px;font-weight:600;color:var(--text2);display:block;margin-bottom:5px;">Assign to</label>
-          <select id="ctask_assignee" class="form-select" style="width:100%;" onchange="_taskModalAssigneeId=this.value||null;">
-            ${(_usersCache.length?_usersCache:[{id:_taskModalAssigneeId,name:'Me'}]).filter(u=>u.is_active!==false).map(u =>
-              `<option value="${u.id}" ${u.id===_taskModalAssigneeId?'selected':''}>${(u.name||u.email||'Agent').replace(/</g,'&lt;')}${u.id===(_currentUser&&_currentUser.id)?' (me)':''}</option>`
-            ).join('')}
-          </select>
-        </div>
+        ${_taskAssigneeSectionHtml()}
         <div style="margin-bottom:13px;">
           <label style="font-size:12px;font-weight:600;color:var(--text2);display:block;margin-bottom:5px;">Task Type</label>
           <div id="ctask_typePills" style="display:flex;gap:6px;flex-wrap:wrap;">${_taskTypePillsHtml()}</div>
@@ -44264,15 +44475,12 @@ function openCreateTaskModal(dealId=null,address='',source='deal',contactId=null
     </div>`;
   modal.addEventListener('click', e=>{ if(e.target===modal) closeTaskModal(); }, {once:true});
   setTimeout(()=>document.getElementById('ctask_name')?.focus(), 80);
-  // v113.23: re-paint the assignee dropdown once _ensureUsersCache resolves —
-  // the modal opens optimistically with whatever cache existed at click time.
+  // v113.23 / v157: re-paint the assignee section once _ensureUsersCache
+  // resolves — the modal opens optimistically with whatever cache existed
+  // at click time. Re-render the whole section to handle both modes.
   _ensureUsersCache().then(() => {
-    const sel = document.getElementById('ctask_assignee');
-    if(!sel) return;
-    sel.innerHTML = (_usersCache||[]).filter(u=>u.is_active!==false).map(u =>
-      `<option value="${u.id}" ${u.id===_taskModalAssigneeId?'selected':''}>${(u.name||u.email||'Agent').replace(/</g,'&lt;')}${u.id===(_currentUser&&_currentUser.id)?' (me)':''}</option>`
-    ).join('');
-    sel.onchange = () => { _taskModalAssigneeId = sel.value || null; };
+    const body = document.getElementById('ctask_assigneeBody');
+    if(body) body.innerHTML = _taskAssigneeBodyHtml();
   });
 }
 
@@ -44309,6 +44517,22 @@ async function openEditTaskModal(taskId, taskName, priority, dueDate, notes, sou
   _taskModalBuyerCritLabel = '';
   _taskModalTypeOverride = (row && row.task_type) || null;
   _taskModalAssigneeId   = (row && row.assigned_to_user_id) || (_currentUser && _currentUser.id) || null;
+  // v157: load existing junction rows so the multi-assign checkbox list
+  // pre-checks every current assignee. Mode flips to 'many' when the
+  // task is already shared (2+ rows), otherwise stays 'one'.
+  _taskModalAssigneeIds = new Set();
+  _taskModalAssignMode = 'one';
+  try {
+    const aRows = await _sbGet(SB_TABLES.taskAssignees, `task_id=eq.${taskId}&select=user_id`);
+    if(Array.isArray(aRows) && aRows.length){
+      aRows.forEach(r => { if(r.user_id) _taskModalAssigneeIds.add(r.user_id); });
+      if(aRows.length > 1) _taskModalAssignMode = 'many';
+    } else if(_taskModalAssigneeId){
+      _taskModalAssigneeIds.add(_taskModalAssigneeId);
+    }
+  } catch(_e){
+    if(_taskModalAssigneeId) _taskModalAssigneeIds.add(_taskModalAssigneeId);
+  }
 
   // Resolve display labels for the chips (best-effort).
   if(_taskModalContactId){
@@ -44366,14 +44590,7 @@ async function openEditTaskModal(taskId, taskName, priority, dueDate, notes, sou
             <input id="ctask_due" type="date" class="form-input" value="${curDue||''}" style="width:100%;"/>
           </div>
         </div>
-        <div style="margin-bottom:13px;">
-          <label style="font-size:12px;font-weight:600;color:var(--text2);display:block;margin-bottom:5px;">Assign to</label>
-          <select id="ctask_assignee" class="form-select" style="width:100%;" onchange="_taskModalAssigneeId=this.value||null;">
-            ${(_usersCache||[]).filter(u=>u.is_active!==false).map(u =>
-              `<option value="${u.id}" ${u.id===_taskModalAssigneeId?'selected':''}>${(u.name||u.email||'Agent').replace(/</g,'&lt;')}${u.id===(_currentUser&&_currentUser.id)?' (me)':''}</option>`
-            ).join('')}
-          </select>
-        </div>
+        ${_taskAssigneeSectionHtml()}
         <div style="margin-bottom:13px;">
           <label style="font-size:12px;font-weight:600;color:var(--text2);display:block;margin-bottom:5px;">Task Type</label>
           <div id="ctask_typePills" style="display:flex;gap:6px;flex-wrap:wrap;">${_taskTypePillsHtml()}</div>
@@ -44412,11 +44629,20 @@ async function submitEditTask(taskId, source){
   if(errEl) errEl.style.display='none';
   try{
     if(isSupabase()){
-      // v113.23: also persist link, type, and assignee changes. When the
-      // edit changes the assignee to someone other than the existing
-      // assignee we treat that as a re-assignment: stamp assigned_by_*
-      // and fire a notification.
-      const assigneeId  = document.getElementById('ctask_assignee')?.value || _taskModalAssigneeId || (_currentUser && _currentUser.id) || null;
+      // v113.23 / v157: persist all field changes plus reconcile the
+      // ace_task_assignees junction. The mode toggle picks the source of
+      // truth: 'one' uses the dropdown's value; 'many' uses the checkbox
+      // set (current user always included).
+      const meId = _currentUser && _currentUser.id;
+      let assigneeIds = [];
+      if(_taskModalAssignMode === 'many'){
+        assigneeIds = Array.from(_taskModalAssigneeIds || new Set());
+        if(meId && !assigneeIds.includes(meId)) assigneeIds.push(meId);
+      } else {
+        const single = (document.getElementById('ctask_assignee')?.value) || _taskModalAssigneeId || meId;
+        if(single) assigneeIds = [single];
+      }
+      const primary = (meId && assigneeIds.includes(meId)) ? meId : (assigneeIds[0] || meId);
       const typeChosen  = document.getElementById('ctask_type')?.value || _taskModalTypeOverride
                         || _taskTypeFromSource(_taskModalSrc, _taskModalDealId, _taskModalContactId, _taskModalBuyerCritId);
 
@@ -44429,26 +44655,57 @@ async function submitEditTask(taskId, source){
         contact_id:         _taskModalContactId   || null,
         buyer_criteria_id:  _taskModalBuyerCritId || null,
         task_type:          typeChosen,
-        assigned_to_user_id: assigneeId,
+        assigned_to_user_id: primary,
       };
 
       const prev = _taskModalEditing && _taskModalEditing.assigned_to_user_id;
-      const meId = _currentUser && _currentUser.id;
-      const isHandOff = assigneeId && meId && assigneeId !== meId && prev !== assigneeId;
+      const isHandOff = primary && meId && primary !== meId && prev !== primary;
       if(isHandOff){
         patch.assigned_by_user_id = meId;
         patch.assigned_at = new Date().toISOString();
-        // Reassignment moves to the end of the new assignee's queue so we
-        // don't collide with their existing sort_order.
-        try { patch.sort_order = await _tasksNextSortOrder(assigneeId); } catch(_e){}
+        try { patch.sort_order = await _tasksNextSortOrder(primary); } catch(_e){}
       }
 
       await _sbPatch(SB_TABLES.tasks, taskId, patch);
 
+      // Reconcile junction rows: insert any newly-checked, delete any
+      // newly-unchecked. Existing rows keep their sort_order.
+      try {
+        const existing = await _sbGet(SB_TABLES.taskAssignees, `task_id=eq.${taskId}&select=id,user_id`);
+        const existingMap = new Map((existing||[]).map(r => [r.user_id, r.id]));
+        const wantedSet = new Set(assigneeIds);
+        const toAdd = assigneeIds.filter(uid => !existingMap.has(uid));
+        const toRemove = [...existingMap.entries()].filter(([uid]) => !wantedSet.has(uid));
+        for(const uid of toAdd){
+          let so;
+          try { so = await _tasksNextSortOrder(uid); } catch(_e){}
+          await _sbPost(SB_TABLES.taskAssignees, {
+            task_id: taskId, user_id: uid,
+            sort_order: so || 0,
+            added_by_user_id: meId || null,
+          });
+          // Notify newly-added agents (other than the actor).
+          if(uid !== meId){
+            try {
+              await _sbPost(SB_TABLES.taskNotifications, {
+                recipient_user_id: uid,
+                actor_user_id: meId,
+                task_id: taskId,
+                type: 'assigned',
+                message: (_currentUser?.name || 'Someone') + ' added you to: ' + name
+              });
+            } catch(_e){}
+          }
+        }
+        for(const [, rowId] of toRemove){
+          await _sbDelete(SB_TABLES.taskAssignees, rowId);
+        }
+      } catch(_e){ console.warn('Junction reconcile failed:', _e.message); }
+
       if(isHandOff){
         try {
           await _sbPost(SB_TABLES.taskNotifications, {
-            recipient_user_id: assigneeId,
+            recipient_user_id: primary,
             actor_user_id: meId,
             task_id: taskId,
             type: 'assigned',
@@ -44519,9 +44776,22 @@ async function submitCreateTask(){
   if(_taskModalDealId&&!_taskModalDealId.startsWith('demo')) fields['Related Property']=[_taskModalDealId];
   try{
     if(isSupabase()){
-      // v113.23: assignee comes from the modal's <select> (state mirror is
-      // _taskModalAssigneeId). Default = current user when nothing else.
-      const assigneeId = (document.getElementById('ctask_assignee')?.value) || _taskModalAssigneeId || (_currentUser && _currentUser.id) || null;
+      // v157: resolve the final assignee set based on mode.
+      // - mode='one' → single assignee from the dropdown (legacy behavior).
+      // - mode='many' → checkbox list. Current user is always included.
+      const meId = (_currentUser && _currentUser.id) || null;
+      let assigneeIds = [];
+      if(_taskModalAssignMode === 'many'){
+        assigneeIds = Array.from(_taskModalAssigneeIds || new Set());
+        if(meId && !assigneeIds.includes(meId)) assigneeIds.push(meId);
+      } else {
+        const single = (document.getElementById('ctask_assignee')?.value) || _taskModalAssigneeId || meId;
+        if(single) assigneeIds = [single];
+      }
+      // Primary assignee = current user when they're in the set, otherwise
+      // the first picked. Used for the legacy ace_tasks.assigned_to_user_id
+      // pointer — keeps existing single-assignee queries working.
+      const assigneeId = (meId && assigneeIds.includes(meId)) ? meId : (assigneeIds[0] || meId);
       const buyerCritId = _taskModalBuyerCritId || null;
       // The pill row writes to a hidden #ctask_type input; if for some
       // reason that's missing, fall back to the override state then to the
@@ -44558,17 +44828,36 @@ async function submitCreateTask(){
       // depending on the proxy — normalize so we can read the id.
       const newId = newRow && (newRow.id || (Array.isArray(newRow) && newRow[0] && newRow[0].id));
 
-      // Fire a notification when the task is handed off to another agent.
-      if(sbTask.assigned_by_user_id && newId){
+      // v157: write junction rows for every assignee (including primary)
+      // so per-user queues + sort orders work for shared tasks. Each
+      // non-creator assignee also gets a task notification fired so the
+      // toast banner appears on their next poll.
+      if(newId){
+        const junction = assigneeIds.map(uid => ({
+          task_id: newId,
+          user_id: uid,
+          sort_order: sortOrder,
+          added_by_user_id: creatorId || null,
+        }));
         try {
-          await _sbPost(SB_TABLES.taskNotifications, {
-            recipient_user_id: assigneeId,
-            actor_user_id: creatorId,
-            task_id: newId,
-            type: 'assigned',
-            message: (_currentUser?.name || 'Someone') + ' assigned you: ' + name
-          });
-        } catch(_e){ console.warn('Notification insert failed:', _e.message); }
+          for(const row of junction){
+            await _sbPost(SB_TABLES.taskAssignees, row);
+          }
+        } catch(_e){ console.warn('Task assignees insert failed:', _e.message); }
+
+        const recipients = assigneeIds.filter(uid => uid && uid !== creatorId);
+        for(const recipientId of recipients){
+          try {
+            const sharedNote = recipients.length > 1 ? ' (shared with ' + recipients.length + ' agents)' : '';
+            await _sbPost(SB_TABLES.taskNotifications, {
+              recipient_user_id: recipientId,
+              actor_user_id: creatorId,
+              task_id: newId,
+              type: 'assigned',
+              message: (_currentUser?.name || 'Someone') + ' assigned you: ' + name + sharedNote
+            });
+          } catch(_e){ console.warn('Notification insert failed:', _e.message); }
+        }
       }
     } else {
       const res=await fetch(`https://api.airtable.com/v0/${cfg.base}/${TASKS_TABLE_ID}`,{

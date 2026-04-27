@@ -1806,6 +1806,7 @@ const SB_PROP_MAP = {
   next_steps:'Next Steps', deal_notes:'Deal Notes',
   general_property_notes:'General Property Notes',
   financial_property_notes:'Financial Property Notes',
+  property_highlights:'Property Highlights',
   top_priority:'Top Priority', is_archived:'Is Archived',
   property_details_mode:'Property Details Mode',
   financial_analysis_mode:'Financial Analysis Mode',
@@ -6794,6 +6795,17 @@ function collectAllDealFields(){
   s(fields,'Deal Notes',             getVal('dealNotes'));
   s(fields,'General Property Notes', getVal('generalNotes'));
 
+  // v188: Property Highlights — read every input under #highlightsList,
+  // collect non-blank values, persist as JSONB array. Skipped when the
+  // input list isn't in the DOM (e.g. saving while on a different tab).
+  const _hlList = document.getElementById('highlightsList');
+  if(_hlList){
+    const hls = [...(_hlList.querySelectorAll('input'))]
+      .map(i => String(i.value||'').trim())
+      .filter(Boolean);
+    fields['Property Highlights'] = hls;
+  }
+
   // Remove null/undefined/empty-string entries to avoid overwriting with blanks
   Object.keys(fields).forEach(k => { if(fields[k]===null||fields[k]===''||fields[k]===undefined) delete fields[k]; });
   return fields;
@@ -7961,13 +7973,20 @@ function renderPropertyTab(d){
               </div>
             </div>
 
-            <!-- v113.75: Highlights default to 2 rows; user can add more -->
+            <!-- v113.75 / v188: Highlights load saved values; default 2 rows. -->
             <div class="pd-hl-section">
               <div class="pd-subhdr" style="margin-top:0;">🔦 Property Highlights</div>
               <div id="highlightsContainer">
                 <div style="display:flex;flex-direction:column;gap:5px;" id="highlightsList">
-                  <div style="display:flex;gap:6px;align-items:center;"><input class="form-input" style="flex:1;height:32px;" placeholder="—"/><button class="save-btn" style="padding:2px 7px;" onclick="removeHighlight(this)">✕</button></div>
-                  <div style="display:flex;gap:6px;align-items:center;"><input class="form-input" style="flex:1;height:32px;" placeholder="—"/><button class="save-btn" style="padding:2px 7px;" onclick="removeHighlight(this)">✕</button></div>
+                  ${(function(){
+                    let arr = [];
+                    const raw = d['Property Highlights'];
+                    if(Array.isArray(raw)) arr = raw;
+                    else if(typeof raw === 'string'){ try { const p = JSON.parse(raw); if(Array.isArray(p)) arr = p; } catch(_){} }
+                    arr = arr.map(s => String(s||'').trim()).filter(Boolean);
+                    while(arr.length < 2) arr.push('');
+                    return arr.map(v => `<div style="display:flex;gap:6px;align-items:center;"><input class="form-input" style="flex:1;height:32px;" placeholder="—" oninput="markDirty()" value="${String(v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}"/><button class="save-btn" style="padding:2px 7px;" onclick="removeHighlight(this)">✕</button></div>`).join('');
+                  })()}
                 </div>
                 <button class="save-btn" style="margin-top:8px;" onclick="addHighlight()">+ Add Highlight</button>
               </div>
@@ -9356,15 +9375,19 @@ function addHighlight(){
   if(!list) return;
   const row=document.createElement('div');
   row.style.cssText='display:flex;gap:6px;align-items:center;margin-top:4px;';
-  row.innerHTML=`<input class="form-input" style="width:100%;" placeholder="Enter highlight..."/>
+  // v188: oninput→markDirty so autosave picks up new highlights without a manual save click.
+  row.innerHTML=`<input class="form-input" style="width:100%;" placeholder="Enter highlight..." oninput="markDirty()"/>
     <button class="save-btn" style="padding:2px 7px;" onclick="removeHighlight(this)">✕</button>`;
   list.appendChild(row);
+  markDirty();
+  row.querySelector('input').focus();
 }
 
 function removeHighlight(btn){
   const row=btn.closest('div');
   if(document.getElementById('highlightsList').children.length>1) row.remove();
   else btn.closest('div').querySelector('input').value='';
+  markDirty();
 }
 
 function addAmenityItem(listId){
@@ -13969,6 +13992,18 @@ const EMAIL_TPL_FIELDS = [
 
   // ── Property Description (own section per user request) ───────────────────
   { k:'propDesc',      group:'Property Description', label:'Property Description', token:'{property description}', get:d=>d['Property Description'] },
+  { k:'propHighlights', group:'Property Description', label:'Property Highlights', token:'{property highlights}', get:d=>{
+      // v188: returns the highlights as a bullet list joined by newlines so
+      // the email reads naturally. Stored as JSONB array of strings.
+      const raw = d['Property Highlights'];
+      let arr = [];
+      if(Array.isArray(raw)) arr = raw;
+      else if(typeof raw === 'string'){
+        try { const p = JSON.parse(raw); if(Array.isArray(p)) arr = p; } catch(_){ arr = raw.split('\n'); }
+      }
+      arr = arr.map(s => String(s||'').trim()).filter(Boolean);
+      return arr.length ? arr.map(s => '• ' + s).join('\n') : '';
+  } },
 
   // ── Physical Details ──────────────────────────────────────────────────────
   { k:'sqft',          group:'Physical',     label:'Building SF',           token:'{building sf}',      get:d=>{ const v=d['Square Footage']||d['Total Building SF']; return v?Number(v).toLocaleString()+' SF':''; } },
@@ -14660,8 +14695,10 @@ const ASSET_TPL_KEYS = [
 ];
 
 // Default required fields per the user's spec.
+// v188: propHighlights is now its own field, satisfying the "at least one
+// property highlight" requirement directly instead of leaning on propDesc.
 const ASSET_TPL_DEFAULT_REQUIRED = [
-  'propType','county','address','propDesc','numTenants','sqft','ceilingHeight','askingPrice','grossRevYearly','noi'
+  'propType','county','address','propHighlights','numTenants','sqft','ceilingHeight','askingPrice','grossRevYearly','noi'
 ];
 
 // Sensible starter templates. The user can edit any of these from Settings →
@@ -14676,6 +14713,9 @@ I'm reaching out with an off-market industrial / warehouse opportunity located a
 
 PROPERTY OVERVIEW
 {building sf} square foot facility on a {lot size} lot, built in {year built}. {ceiling height} clear ceiling height. {property class} class building, {property condition} condition.
+
+PROPERTY HIGHLIGHTS
+{property highlights}
 
 TENANCY
 {num tenants} tenant(s). {occupancy} occupancy.
@@ -14932,6 +14972,7 @@ function _getAssetTemplate(slug){
 // don't have it / not applicable") and shouldn't appear as missing.
 const _ATPL_NA_COL_BY_KEY = {
   ceilingHeight: 'ceiling_height_ft',
+  propHighlights:'property_highlights',
   numTenants:    'num_tenants',
   units:         'no_of_units',
   yearBuilt:     'year_built',

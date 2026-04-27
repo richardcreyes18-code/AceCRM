@@ -13807,6 +13807,13 @@ function renderAICommTab(d){
       <div class="info-box-title" style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:8px;">
         <span>✉️ AI Email Template</span>
         <div style="display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+          <button id="applyTplBtn" onclick="applyAssetTemplate()" style="
+            background:linear-gradient(180deg,#fff,#f1f5f9);
+            color:#1a3a6e;border:1px solid #1a3a6e;
+            padding:5px 14px;font-size:12px;font-weight:bold;
+            border-radius:3px;cursor:pointer;" title="Load the asset-type template from Settings → Marketing into this email">
+            📨 Apply Template
+          </button>
           <button id="runAgentBtn" onclick="runEmailAgent()" style="
             background:linear-gradient(180deg,#7b2fff,#5a0dc8);
             color:#fff;border:1px solid #3d0090;
@@ -13889,6 +13896,9 @@ function renderAICommTab(d){
         ✦ Generating email...
       </div>
 
+      <!-- v183: Missing-fields warning + active asset-type indicator -->
+      <div id="atplStatusBar" style="display:none;margin-bottom:10px;"></div>
+
       <!-- Subject line -->
       <div style="margin-bottom:6px;">
         <label style="font-size:10px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.05em;display:block;margin-bottom:3px;">Subject</label>
@@ -13952,6 +13962,7 @@ const EMAIL_TPL_FIELDS = [
   // ── Basic Info ────────────────────────────────────────────────────────────
   { k:'address',       group:'Basic Info',   label:'Address',               token:'{property address}', get:d=>d['Address'] },
   { k:'propType',      group:'Basic Info',   label:'Property Type',         token:'{property type}',    get:d=>d['Simple Text Property Type']||d['CRM Asset Classification'] },
+  { k:'county',        group:'Basic Info',   label:'County',                token:'{county}',           get:d=>d['Simple County']||d['County'] },
   { k:'askingPrice',   group:'Basic Info',   label:'Asking Price',          token:'{asking price}',     get:d=>{ const v=d['Pitch Out Price']||d['Asking Price']; return v?'$'+Number(v).toLocaleString():''; } },
   { k:'pipeline',      group:'Basic Info',   label:'Pipeline Stage',        token:'{pipeline stage}',   get:d=>d['Pipeline Stage'] },
 
@@ -13973,6 +13984,8 @@ const EMAIL_TPL_FIELDS = [
   { k:'propCondition', group:'Physical',     label:'Property Condition',    token:'{property condition}', get:d=>d['Property Condition'] },
   { k:'noOfStories',   group:'Physical',     label:'# of Stories',          token:'{stories}',          get:d=>d['No. of Stories'] },
   { k:'parking',       group:'Physical',     label:'Parking Spaces',        token:'{parking}',          get:d=>d['No. of Parking Spaces'] },
+  { k:'numTenants',    group:'Physical',     label:'# of Tenants',          token:'{num tenants}',      get:d=>d['Num Tenants'] },
+  { k:'ceilingHeight', group:'Physical',     label:'Ceiling Height',        token:'{ceiling height}',   get:d=>{ const v=d['Ceiling Height Ft']; return (v!=null&&v!=='') ? v+' ft' : ''; } },
 
   // ── Financials (Actual) ───────────────────────────────────────────────────
   { k:'griMonthly',    group:'Financials',   label:'GRI (Monthly)',         token:'{gri monthly}',      get:d=>{ const v=d['Gross Rental Income (Monthly)']; return v?'$'+Number(v).toLocaleString()+'/mo':''; } },
@@ -14440,11 +14453,408 @@ function _marketingPopulateForm(){
   set('mkgDefaultPrompt',    s.default_prompt);
   set('mkgStyleGuide',       s.style_guide);
   set('mkgDefaultSignature', s.default_signature);
+  // v183: re-render the asset-template editor when settings load
+  if(typeof _atplRenderEditor === 'function') _atplRenderEditor();
 }
+
+// ─── v183: Asset-type email templates ────────────────────────────────────────
+// Per-asset-type templates stored in ace_user_marketing_settings.asset_templates.
+// Each template: { subject, body, required_fields:[field_key,...] }.
+// AI Comm tab "Apply Template" button auto-picks the right one based on the
+// deal's asset type + owner-occupied status.
+
+const ASSET_TPL_KEYS = [
+  { slug:'industrial_investment',     label:'🏭 Industrial — Investment Property' },
+  { slug:'industrial_owner_occupied', label:'🏭 Industrial — Owner Occupied' },
+  { slug:'multifamily',               label:'🏘️ Multifamily' },
+  { slug:'mixed_use',                 label:'🏢 Mixed Use' },
+  { slug:'retail',                    label:'🛍️ Retail' },
+  { slug:'office',                    label:'🏢 Office' },
+  { slug:'land',                      label:'🌱 Land' },
+  { slug:'automotive',                label:'⛽ Automotive / Gas' },
+  { slug:'special_purpose',           label:'🎯 Special Purpose' },
+  { slug:'generic',                   label:'📄 Generic (fallback)' },
+];
+
+// Default required fields per the user's spec.
+const ASSET_TPL_DEFAULT_REQUIRED = [
+  'propType','county','address','propDesc','numTenants','sqft','ceilingHeight','askingPrice','grossRevYearly','noi'
+];
+
+// Sensible starter templates. The user can edit any of these from Settings →
+// Marketing. Industrial Investment seeds with the user's screenshot template.
+const ASSET_TPL_DEFAULTS = {
+  industrial_investment: {
+    subject: '{property type} | {property address} | {agent name}',
+    body:
+`Hey {contact first name},
+
+I'm reaching out with an off-market industrial / warehouse opportunity located at {property address} in {county}.
+
+PROPERTY OVERVIEW
+{building sf} square foot facility on a {lot size} lot, built in {year built}. {ceiling height} clear ceiling height. {property class} class building, {property condition} condition.
+
+TENANCY
+{num tenants} tenant(s). {occupancy} occupancy.
+
+FINANCIAL HIGHLIGHTS
+- Gross Revenue: {gross revenue}/yr
+- Expenses: {expenses}/yr
+- Net Operating Income: {noi}
+- Cap Rate: {cap rate}
+- Price / SF: {price per sf}
+
+ASKING PRICE: {asking price}
+
+{property description}
+
+Please reply with your initial thoughts or availability for a quick call — happy to walk through the numbers.
+
+Thank you,
+{agent name}`,
+    required_fields: ASSET_TPL_DEFAULT_REQUIRED.slice(),
+  },
+  industrial_owner_occupied: {
+    subject: 'Owner-Occupied Industrial | {property address} | {agent name}',
+    body:
+`Hey {contact first name},
+
+I have an off-market owner-occupied industrial property at {property address} in {county} — owner is open to a sale-leaseback or vacating at close.
+
+PROPERTY OVERVIEW
+{building sf} SF on {lot size}, built in {year built}. {ceiling height} clear ceiling, {property class} class.
+
+ASKING PRICE: {asking price}
+Price / SF: {price per sf}
+
+{property description}
+
+Open to a quick call to walk through the deal?
+
+{agent name}`,
+    required_fields: ['propType','county','address','propDesc','sqft','ceilingHeight','askingPrice'],
+  },
+  multifamily: {
+    subject: 'Multifamily | {property address} | {units} units',
+    body:
+`Hey {contact first name},
+
+Off-market multifamily opportunity at {property address} ({county}). {units} units, {occupancy} occupied.
+
+FINANCIALS
+- Gross Rental Income: {gri monthly}
+- NOI: {noi}
+- Cap Rate: {cap rate}
+- Price / Unit: {price per unit}
+
+ASKING PRICE: {asking price}
+
+{property description}
+
+Worth a look?
+
+{agent name}`,
+    required_fields: ['propType','county','address','units','occupancy','griMonthly','noi','capRate','askingPrice'],
+  },
+  mixed_use: {
+    subject: 'Mixed Use | {property address} | {agent name}',
+    body:
+`Hey {contact first name},
+
+Off-market mixed-use deal at {property address} in {county}. {building sf} SF total combining residential and commercial uses.
+
+FINANCIALS
+- Gross Revenue: {gross revenue}
+- NOI: {noi}
+- Cap Rate: {cap rate}
+
+ASKING PRICE: {asking price}
+
+{property description}
+
+Quick call to discuss?
+
+{agent name}`,
+    required_fields: ['propType','county','address','sqft','grossRevYearly','noi','askingPrice'],
+  },
+  retail: {
+    subject: 'Retail | {property address} | {cap rate} cap',
+    body:
+`Hey {contact first name},
+
+Off-market retail opportunity at {property address} in {county}.
+
+PROPERTY
+- {building sf} SF, {num tenants} tenant(s), {occupancy} occupied
+
+FINANCIALS
+- NOI: {noi}
+- Cap Rate: {cap rate}
+- Price / SF: {price per sf}
+
+ASKING PRICE: {asking price}
+
+{property description}
+
+Reply with thoughts or availability for a call.
+
+{agent name}`,
+    required_fields: ['propType','county','address','sqft','numTenants','noi','capRate','askingPrice'],
+  },
+  office: {
+    subject: 'Office | {property address} | {agent name}',
+    body:
+`Hey {contact first name},
+
+Off-market office building at {property address} in {county}.
+
+PROPERTY
+- {building sf} SF, {property class} class
+- {num tenants} tenant(s), {occupancy} occupied
+
+FINANCIALS
+- NOI: {noi}
+- Cap Rate: {cap rate}
+
+ASKING PRICE: {asking price}
+
+{property description}
+
+Worth a look?
+
+{agent name}`,
+    required_fields: ['propType','county','address','sqft','propClass','noi','capRate','askingPrice'],
+  },
+  land: {
+    subject: 'Land | {property address} | {lot size}',
+    body:
+`Hey {contact first name},
+
+Off-market land opportunity at {property address} in {county}. {lot size}.
+
+ASKING PRICE: {asking price}
+Price / SF: {price per sf}
+
+{property description}
+
+Open to a quick call?
+
+{agent name}`,
+    required_fields: ['propType','county','address','lotSize','askingPrice'],
+  },
+  automotive: {
+    subject: 'Automotive | {property address} | {agent name}',
+    body:
+`Hey {contact first name},
+
+Off-market automotive / gas station at {property address} in {county}.
+
+PROPERTY
+- {building sf} SF on {lot size}, built {year built}
+
+FINANCIALS
+- NOI: {noi}
+- Cap Rate: {cap rate}
+
+ASKING PRICE: {asking price}
+
+{property description}
+
+{agent name}`,
+    required_fields: ['propType','county','address','sqft','noi','capRate','askingPrice'],
+  },
+  special_purpose: {
+    subject: 'Special Purpose | {property address}',
+    body:
+`Hey {contact first name},
+
+Off-market special-purpose property at {property address} in {county}.
+
+{building sf} SF on {lot size}, {property class} class.
+
+ASKING PRICE: {asking price}
+
+{property description}
+
+{agent name}`,
+    required_fields: ['propType','county','address','sqft','askingPrice'],
+  },
+  generic: {
+    subject: '{property type} | {property address}',
+    body:
+`Hey {contact first name},
+
+Off-market {property type} at {property address} in {county}.
+
+{property description}
+
+ASKING PRICE: {asking price}
+
+{agent name}`,
+    required_fields: ['propType','county','address','askingPrice'],
+  },
+};
+
+// Resolve which template applies to a given deal.
+// Industrial logic: owner-occupied AND no tenants → owner_occupied.
+// Anything else industrial (including partial owner-occupied) → investment.
+function _resolveAssetTemplateKey(d){
+  if(!d) return 'generic';
+  const type = String(d['Simple Text Property Type'] || d['CRM Asset Classification'] || '').toLowerCase();
+  if(type.includes('industrial') || type.includes('warehouse') || type.includes('flex')){
+    const ownerOcc = d['Owner Occupied'] === true || d['Owner Occupied'] === 'Yes';
+    const numTenants = Number(d['Num Tenants']) || 0;
+    let tenantMixHasRows = false;
+    try {
+      const raw = d['Tenant Mix Data'];
+      if(raw){
+        const arr = typeof raw === 'string' ? JSON.parse(raw) : raw;
+        tenantMixHasRows = Array.isArray(arr) && arr.length > 0;
+      }
+    } catch(_e){}
+    if(ownerOcc && numTenants === 0 && !tenantMixHasRows) return 'industrial_owner_occupied';
+    return 'industrial_investment';
+  }
+  if(type.includes('multifamily') || type.includes('apartment') || type.includes('residential')) return 'multifamily';
+  if(type.includes('mixed')) return 'mixed_use';
+  if(type.includes('retail') || type.includes('shopping') || type.includes('strip')) return 'retail';
+  if(type.includes('office')) return 'office';
+  if(type.includes('land') || type.includes('vacant')) return 'land';
+  if(type.includes('automotive') || type.includes('gas') || type.includes('car wash')) return 'automotive';
+  if(type.includes('special') || type.includes('hotel') || type.includes('medical')) return 'special_purpose';
+  return 'generic';
+}
+
+// Read a template by slug, falling back to defaults if the user hasn't
+// customized this slug yet. _marketingSettings.asset_templates is the source
+// of truth for user edits.
+function _getAssetTemplate(slug){
+  const userMap = (_marketingSettings && _marketingSettings.asset_templates) || {};
+  const userTpl = userMap[slug];
+  const defTpl  = ASSET_TPL_DEFAULTS[slug] || ASSET_TPL_DEFAULTS.generic;
+  return {
+    subject:         (userTpl && userTpl.subject) || defTpl.subject || '',
+    body:            (userTpl && userTpl.body)    || defTpl.body    || '',
+    required_fields: (userTpl && Array.isArray(userTpl.required_fields))
+                       ? userTpl.required_fields
+                       : (defTpl.required_fields || []),
+    isCustom:        !!(userTpl && (userTpl.subject || userTpl.body)),
+  };
+}
+
+// Compute which required fields are empty for this deal. Returns an array of
+// EMAIL_TPL_FIELDS objects (label / token) so the caller can render a list.
+function _missingRequiredFields(d, requiredKeys){
+  if(!Array.isArray(requiredKeys) || !d) return [];
+  const out = [];
+  for(const key of requiredKeys){
+    const f = EMAIL_TPL_FIELDS.find(x => x.k === key);
+    if(!f) continue;
+    let v = '';
+    try { v = f.get(d); } catch(_e){}
+    if(v == null || String(v).trim() === '') out.push(f);
+  }
+  return out;
+}
+
+// v183: Asset-Template editor module — paints the picker + subject/body
+// textareas + required-field checkboxes inside the Marketing settings tab.
+let _atplDraft = null;
+let _atplActiveSlug = 'industrial_investment';
+
+function _atplLoadDraft(){
+  const userMap = (_marketingSettings && _marketingSettings.asset_templates) || {};
+  _atplDraft = {};
+  ASSET_TPL_KEYS.forEach(({slug}) => {
+    const def = ASSET_TPL_DEFAULTS[slug] || ASSET_TPL_DEFAULTS.generic;
+    const u = userMap[slug] || {};
+    _atplDraft[slug] = {
+      subject: (u.subject != null && u.subject !== '') ? u.subject : (def.subject || ''),
+      body:    (u.body    != null && u.body    !== '') ? u.body    : (def.body    || ''),
+      required_fields: Array.isArray(u.required_fields) ? u.required_fields.slice() : (def.required_fields || []).slice(),
+    };
+  });
+}
+window._atplCaptureCurrent = function(){
+  if(!_atplDraft || !_atplActiveSlug) return;
+  const sub = document.getElementById('atplSubject');
+  const bod = document.getElementById('atplBody');
+  if(sub) _atplDraft[_atplActiveSlug].subject = sub.value;
+  if(bod) _atplDraft[_atplActiveSlug].body    = bod.value;
+  const reqs = [];
+  document.querySelectorAll('input[data-atpl-req]:checked').forEach(el => reqs.push(el.dataset.atplReq));
+  _atplDraft[_atplActiveSlug].required_fields = reqs;
+};
+window._atplSelect = function(slug){
+  if(typeof _atplCaptureCurrent === 'function') _atplCaptureCurrent();
+  _atplActiveSlug = slug;
+  if(typeof _atplRenderEditor === 'function') _atplRenderEditor();
+};
+window._atplResetCurrent = function(){
+  if(!_atplActiveSlug) return;
+  const def = ASSET_TPL_DEFAULTS[_atplActiveSlug] || ASSET_TPL_DEFAULTS.generic;
+  if(!_atplDraft) _atplDraft = {};
+  _atplDraft[_atplActiveSlug] = {
+    subject: def.subject || '',
+    body: def.body || '',
+    required_fields: (def.required_fields || []).slice(),
+  };
+  if(typeof _atplRenderEditor === 'function') _atplRenderEditor();
+};
+function _atplRenderEditor(){
+  if(!_atplDraft) _atplLoadDraft();
+  const root = document.getElementById('atplEditorRoot');
+  if(!root) return;
+  const cur = _atplDraft[_atplActiveSlug] || { subject:'', body:'', required_fields:[] };
+  const safeSubj = String(cur.subject||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  const safeBody = String(cur.body||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  const requiredSet = new Set(cur.required_fields || []);
+  // Asset selector chips
+  const chips = ASSET_TPL_KEYS.map(({slug, label}) => {
+    const isActive = slug === _atplActiveSlug;
+    return `<button type="button" onclick="_atplSelect('${slug}')" style="background:${isActive?'#1e3a8a':'#fff'};color:${isActive?'#fff':'#475569'};border:1px solid ${isActive?'#1e3a8a':'#cbd5e1'};padding:5px 12px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;">${label}</button>`;
+  }).join('');
+  // Required-field checkboxes grouped by EMAIL_TPL_FIELDS group
+  const groups = {};
+  EMAIL_TPL_FIELDS.forEach(f => {
+    const g = f.group || 'Other';
+    if(!groups[g]) groups[g] = [];
+    groups[g].push(f);
+  });
+  const fieldsHTML = Object.entries(groups).map(([group, fields]) => `
+    <div style="margin-bottom:10px;">
+      <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">${group}</div>
+      <div style="display:flex;flex-wrap:wrap;gap:6px;">
+        ${fields.map(f => {
+          const on = requiredSet.has(f.k);
+          return `<label style="display:inline-flex;align-items:center;gap:5px;padding:4px 10px;background:${on?'#dbeafe':'#fff'};border:1px solid ${on?'#1e3a8a':'#cbd5e1'};border-radius:99px;cursor:pointer;font-size:11px;color:${on?'#1e40af':'#475569'};">
+            <input type="checkbox" data-atpl-req="${f.k}" ${on?'checked':''} onchange="_atplCaptureCurrent();_atplRenderEditor()" style="margin:0;" />
+            ${f.label}
+          </label>`;
+        }).join('')}
+      </div>
+    </div>
+  `).join('');
+  root.innerHTML = `
+    <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:14px;">${chips}</div>
+    <div style="display:flex;justify-content:space-between;align-items:flex-end;margin:0 0 4px;">
+      <label style="font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.5px;">Subject template</label>
+      <button type="button" onclick="_atplResetCurrent()" title="Reset this asset's template to the default" style="background:none;border:1px solid #cbd5e1;color:#475569;border-radius:4px;padding:3px 10px;font-size:10px;font-weight:600;cursor:pointer;">↺ Reset to default</button>
+    </div>
+    <input id="atplSubject" type="text" value="${safeSubj}" oninput="_atplCaptureCurrent()" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;font-family:ui-monospace,Menlo,monospace;box-sizing:border-box;" placeholder="{property type} | {property address}" />
+    <label style="display:block;font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.5px;margin:14px 0 4px;">Body template <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">(use {tokens} — they resolve to live deal values at send time)</span></label>
+    <textarea id="atplBody" rows="16" oninput="_atplCaptureCurrent()" style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;font-family:ui-monospace,Menlo,monospace;line-height:1.5;resize:vertical;box-sizing:border-box;" placeholder="Hey {contact first name},&#10;...">${safeBody}</textarea>
+    <label style="display:block;font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.5px;margin:14px 0 4px;">Required fields <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">(missing values surface as a warning on the deal's AI Communication tab)</span></label>
+    <div>${fieldsHTML}</div>
+  `;
+}
+window._atplRenderEditor = _atplRenderEditor;
 
 async function _marketingSave(){
   if(!isSupabase()){ alert('Marketing defaults require Supabase mode.'); return; }
   if(!_currentUser?.email){ alert('Sign in first.'); return; }
+  // v183: capture any pending asset-template edits from the inputs before saving.
+  if(typeof _atplCaptureCurrent === 'function') _atplCaptureCurrent();
   const get = id => document.getElementById(id)?.value?.trim() || null;
   const payload = {
     user_email:               _currentUser.email,
@@ -14453,6 +14863,7 @@ async function _marketingSave(){
     default_prompt:           get('mkgDefaultPrompt'),
     style_guide:              get('mkgStyleGuide'),
     default_signature:        get('mkgDefaultSignature'),
+    asset_templates:          _atplDraft || {},
   };
   const status = document.getElementById('mkgSaveStatus');
   try{
@@ -14837,6 +15248,12 @@ async function loadAICommTab(recordId){
     if(typeof _emailTplRenderFields === 'function') _emailTplRenderFields();
     // v113.14: populate placeholder pills + saved templates picker
     if(typeof _emailTplRenderPlaceholders === 'function') _emailTplRenderPlaceholders();
+    // v183: load marketing settings (for asset_templates) and paint the
+    // missing-fields warning bar above the body.
+    if(_marketingSettings === null && typeof _marketingLoad === 'function'){
+      try { await _marketingLoad(); } catch(_e){}
+    }
+    if(typeof _atplRefreshStatusBar === 'function') _atplRefreshStatusBar();
     if(typeof _emailBindFocus === 'function') _emailBindFocus();
     if(typeof _loadUserTemplatesList === 'function'){
       await _loadUserTemplatesList();
@@ -15058,6 +15475,59 @@ async function runEmailAgent(){
     setTimeout(()=>{ status.style.display='none'; }, 5000);
   }
 }
+
+// v183: Apply the asset-type template from Settings → Marketing into the
+// current deal's email body + subject. Saves to the deal so the choice
+// persists. Refreshes the missing-fields warning bar.
+async function applyAssetTemplate(){
+  if(!currentDeal){ alert('No deal selected.'); return; }
+  // Make sure we have the latest marketing settings (template store)
+  if(_marketingSettings === null && typeof _marketingLoad === 'function'){
+    try { await _marketingLoad(); } catch(_e){}
+  }
+  const slug = _resolveAssetTemplateKey(currentDeal);
+  const tpl = _getAssetTemplate(slug);
+  const subjEl = document.getElementById('emailTemplateSubject');
+  const bodyEl = document.getElementById('emailTemplateText');
+  if(subjEl) subjEl.value = tpl.subject || '';
+  if(bodyEl) bodyEl.value = tpl.body || '';
+  try { await saveEmailTemplate(true); } catch(_e){}
+  showSaveConfirm('✓ Applied ' + (ASSET_TPL_KEYS.find(x => x.slug === slug)?.label || 'template'));
+  _atplRefreshStatusBar();
+}
+window.applyAssetTemplate = applyAssetTemplate;
+
+// v183: paint the missing-fields warning + active-template chip above the
+// email body. Called whenever the AI Comm tab renders or the user applies
+// a template. Hidden when there's no deal or no required fields are missing.
+function _atplRefreshStatusBar(){
+  const bar = document.getElementById('atplStatusBar');
+  if(!bar) return;
+  if(!currentDeal){ bar.style.display = 'none'; bar.innerHTML = ''; return; }
+  const slug = _resolveAssetTemplateKey(currentDeal);
+  const tpl  = _getAssetTemplate(slug);
+  const tplLabel = (ASSET_TPL_KEYS.find(x => x.slug === slug)?.label) || 'Generic';
+  const missing = _missingRequiredFields(currentDeal, tpl.required_fields || []);
+  let html = '';
+  // Active-template chip — always show
+  html += `<div style="display:inline-flex;align-items:center;gap:6px;background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;padding:4px 10px;border-radius:99px;font-size:11px;font-weight:600;margin-right:6px;">
+    📨 ${tplLabel}
+  </div>`;
+  if(missing.length){
+    const items = missing.map(f => `<code style="background:rgba(255,255,255,0.6);padding:1px 6px;border-radius:3px;font-size:11px;">${f.label}</code>`).join(' · ');
+    html += `<div style="display:inline-block;background:#fef3c7;color:#92400e;border:1px solid #fde68a;padding:6px 12px;border-radius:8px;font-size:11px;line-height:1.5;">
+      <strong>⚠ Missing data:</strong> ${items}
+      <div style="font-size:10px;color:#a16207;margin-top:4px;">Fill these on the Property Details / Financial Analysis tabs for a complete email.</div>
+    </div>`;
+  } else if(tpl.required_fields && tpl.required_fields.length){
+    html += `<div style="display:inline-block;background:#dcfce7;color:#166534;border:1px solid #86efac;padding:4px 10px;border-radius:8px;font-size:11px;font-weight:600;">
+      ✓ All required fields filled
+    </div>`;
+  }
+  bar.innerHTML = html;
+  bar.style.display = '';
+}
+window._atplRefreshStatusBar = _atplRefreshStatusBar;
 
 async function saveEmailTemplate(silent=false){
   // v113.14: saves body + subject to the deal. (The separate "saved template
@@ -34539,7 +35009,16 @@ function showSettingsPage(){
           <label style="display:block;font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.5px;margin:14px 0 4px;">Default signature</label>
           <textarea id="mkgDefaultSignature" rows="4" style="width:100%;padding:10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;font-family:inherit;line-height:1.5;resize:vertical;" placeholder="e.g.&#10;Richard Reyes&#10;KW Commercial&#10;(843) 926-1393"></textarea>
 
-          <div id="mkgSaveStatus" style="margin-top:10px;font-size:11px;color:#64748b;min-height:14px;"></div>
+          <!-- v183: Asset-Type Templates editor -->
+          <div style="border-top:1px solid #e2e8f0;margin-top:22px;padding-top:18px;">
+            <div style="font-size:14px;font-weight:700;color:#0f172a;margin-bottom:4px;">📨 Asset-Type Templates</div>
+            <div style="font-size:12px;color:#64748b;margin-bottom:14px;line-height:1.5;">
+              Each asset type has its own starter template. The AI Communication tab's <b>Apply Template</b> button auto-picks the right one based on the deal's asset type — Industrial uses the <i>Investment Property</i> template by default and the <i>Owner Occupied</i> variant only when the building has no tenants. Tokens like <code style="background:#f1f5f9;padding:1px 4px;border-radius:3px;">{asking price}</code> resolve to live deal values at send time. Pick which fields are required to highlight missing data on the deal page.
+            </div>
+            <div id="atplEditorRoot"></div>
+          </div>
+
+          <div id="mkgSaveStatus" style="margin-top:14px;font-size:11px;color:#64748b;min-height:14px;"></div>
         </section>
 
         <section data-settings-tab="config" style="background:#fff;border-radius:10px;padding:22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;opacity:0.7;">

@@ -12827,6 +12827,9 @@ async function saveAllPropertyDetails(){
 
 // Default include state — all sections ON. Keys match the SECTION_DEFS
 // below so adding a new section = two small edits (the def + this key).
+// v167.1: granular unit-mix / expense / pricing / class sections — each
+// only renders when data exists, so toggling them on for a deal that
+// has no rent roll won't pollute the message.
 const _tmmInclude = {
   contact:    true,
   property:   true,
@@ -12838,6 +12841,12 @@ const _tmmInclude = {
   whySelling: true,
   assetSpecific: true,
   sellerFin:  true,
+  // v167.1
+  unitMixIndiv:    true,
+  unitMixAvg:      true,
+  expenseBreakdown:true,
+  pitchPricing:    true,
+  propertyClass:   true,
 };
 
 // Format a number as "$1.5M", "$250K", "$5,200" — same logic as _bmFmt
@@ -12963,6 +12972,24 @@ function _tmmBuildText(d, opt){
     }
   }
 
+  // ── PROPERTY CLASS / CONDITION ─────────────────────────────────
+  // v167.1: Class, condition, location class/type — useful for buyer
+  // pitches even when none of the other detail blocks fire.
+  if(opt.propertyClass){
+    const cls = [];
+    const add = (label, val) => { if(val !== null && val !== undefined && String(val).trim() !== '') cls.push(label + ': ' + val); };
+    add('Class',          d['Property Class']);
+    add('Condition',      d['Property Condition']);
+    add('Location Class', d['Location Class']);
+    add('Location Type',  d['Location Type']);
+    add('Location Trend', d['Location Trending']);
+    if(cls.length){
+      out.push('');
+      out.push('Class / Condition:');
+      cls.forEach(l => out.push(l));
+    }
+  }
+
   // ── ASSET-SPECIFIC DETAILS (mf unit mix, warehouse ceilings, etc.) ──
   if(opt.assetSpecific){
     const block = _tmmAssetSpecificBlock(d);
@@ -12970,6 +12997,68 @@ function _tmmBuildText(d, opt){
       out.push('');
       out.push('Property Details:');
       out.push(block);
+    }
+  }
+
+  // ── UNIT MIX — AVERAGES BY BEDROOM (only when MF data exists) ──
+  // v167.1: shows the per-bedroom count + avg rent table even if the
+  // user hasn't filled in the individual rent roll. Pulls directly from
+  // the bedroom-type columns the property tab writes.
+  if(opt.unitMixAvg){
+    const rows = [];
+    const types = [
+      ['Eff', 'Units Efficiency', 'Avg Rent Eff'],
+      ['1BR', 'Units 1 Bedroom',  'Avg Rent 1BR'],
+      ['2BR', 'Units 2 Bedroom',  'Avg Rent 2BR'],
+      ['3BR', 'Units 3 Bedroom',  'Avg Rent 3BR'],
+      ['4BR', 'Units 4 Bedroom',  'Avg Rent 4BR'],
+    ];
+    // Try direct DB fields first (Avg Rent X). Fall back to MF Unit Rent Data byType if missing.
+    let rentByType = {};
+    try {
+      const raw = d['MF Unit Rent Data'];
+      const parsed = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : null;
+      if(parsed && parsed.byType) rentByType = parsed.byType;
+    } catch(_e){}
+    const rentKeyMap = { Eff:'eff', '1BR':'1br', '2BR':'2br', '3BR':'3br', '4BR':'4br' };
+    for(const [label, countField, avgField] of types){
+      const cnt = Number(d[countField]) || 0;
+      const avgFromDb = Number(d[avgField]) || 0;
+      const avgFromJson = Number(rentByType[rentKeyMap[label]]) || 0;
+      const avg = avgFromDb || avgFromJson;
+      if(cnt || avg) rows.push(`${label}: ${cnt} units${avg ? ' @ ' + _tmmMoney(avg) + '/mo' : ''}`);
+    }
+    if(rows.length){
+      out.push('');
+      out.push('Unit Mix — Avg by Bedroom:');
+      rows.forEach(l => out.push(l));
+    }
+  }
+
+  // ── UNIT MIX — INDIVIDUAL RENT ROLL ───────────────────────────
+  // v167.1: list each unit with its label, type, rent, status. Only
+  // fires when the deal has at least one populated unit row.
+  if(opt.unitMixIndiv){
+    let units = [];
+    try {
+      const raw = d['MF Unit Rent Data'];
+      const parsed = raw ? (typeof raw === 'string' ? JSON.parse(raw) : raw) : null;
+      if(parsed && Array.isArray(parsed.units)) units = parsed.units;
+    } catch(_e){}
+    const populated = units.filter(u => (u.label || '').trim() || Number(u.rent) > 0);
+    if(populated.length){
+      out.push('');
+      out.push('Unit Mix — Individual Units:');
+      let total = 0;
+      populated.forEach(u => {
+        const lbl   = (u.label || '').trim() || '—';
+        const type  = u.type   || '—';
+        const rent  = Number(u.rent) || 0;
+        const stat  = u.status ? ` (${u.status})` : '';
+        if(rent) total += rent;
+        out.push(`• ${lbl} — ${type} — ${rent ? _tmmMoney(rent) + '/mo' : 'no rent'}${stat}`);
+      });
+      if(total) out.push(`Rent Roll Total: ${_tmmMoney(total)}/mo  ·  ${_tmmMoney(total*12)}/yr`);
     }
   }
 
@@ -12994,6 +13083,84 @@ function _tmmBuildText(d, opt){
       out.push('Financials:');
       fin.forEach(l => out.push(l));
       if(fnotes && String(fnotes).trim()) out.push(String(fnotes).trim());
+    }
+  }
+
+  // ── EXPENSE BREAKDOWN ──────────────────────────────────────────
+  // v167.1: itemized monthly + yearly expenses, only the line items
+  // that have a non-zero value. Mirrors the Financial Analysis tab.
+  if(opt.expenseBreakdown){
+    const items = [
+      ['Property Tax',       'Property Tax (Monthly)'],
+      ['Insurance',          'Insurance (Monthly)'],
+      ['Liability Insurance','Liability Insurance (Monthly)'],
+      ['Electric',           'Electric (Monthly)'],
+      ['Gas',                'Gas (Monthly)'],
+      ['Water & Sewer',      'Water & Sewer (Monthly)'],
+      ['Trash',              'Trash (Monthly)'],
+      ['Other Utilities',    'Other Utilities (Monthly)'],
+      ['Maintenance & Repair','Maintenance & Repair Costs (Monthly)'],
+      ['Maintenance Salary', 'Maintenance & Repair Salary (Monthly)'],
+      ['Janitorial',         'Janitorial (Monthly)'],
+      ['Landscaping',        'Landscaping (Monthly)'],
+      ['Pool',               'Pool (Monthly)'],
+      ['Supplies',           'Supplies (Monthly)'],
+      ['Property Management','Property Management Fee (Monthly)'],
+      ['Other Mgmt',         'Other Mgmt (Monthly)'],
+      ['Capital Reserve',    'Capital Reserve (Monthly)'],
+      ['Admin',              'Admin Expenses (Monthly)'],
+      ['Accounting',         'Accounting (Monthly)'],
+      ['Legal',              'Legal (Monthly)'],
+      ['Other Admin',        'Other Admin (Monthly)'],
+      ['Other Tax',          'Other Tax (Monthly)'],
+      ['Misc',               'Miscellaneous Expenses (Monthly)'],
+      ['Other Misc',         'Other Misc (Monthly)'],
+    ];
+    const lines = [];
+    let totalMo = 0;
+    for(const [label, key] of items){
+      const v = Number(d[key]) || 0;
+      if(v > 0){
+        lines.push(`${label}: ${_tmmMoney(v)}/mo  ·  ${_tmmMoney(v * 12)}/yr`);
+        totalMo += v;
+      }
+    }
+    if(lines.length){
+      out.push('');
+      out.push('Expense Breakdown:');
+      lines.forEach(l => out.push(l));
+      out.push(`Total: ${_tmmMoney(totalMo)}/mo  ·  ${_tmmMoney(totalMo * 12)}/yr`);
+    }
+  }
+
+  // ── PITCH / PRICING ────────────────────────────────────────────
+  // v167.1: lays out the negotiation pipeline (Asking → Starter →
+  // Accepted → Pitch Out → Spread). Only renders fields that exist.
+  if(opt.pitchPricing){
+    const lines = [];
+    const asking      = Number(d['Asking Price']) || 0;
+    const starter     = Number(d['Offer Price'])  || 0;  // Ace Starter Offer
+    const acceptedNet = Number(d['Target Seller Net']) || 0;
+    const pitchOut    = Number(d['Pitch Out Price']) || 0;
+    if(asking)      lines.push('Seller Asking: '         + _tmmMoney(asking));
+    if(starter)     lines.push('Ace Starter Offer: '     + _tmmMoney(starter));
+    if(acceptedNet) lines.push('Accepted from Seller: '  + _tmmMoney(acceptedNet));
+    if(pitchOut)    lines.push('Pitch Out: '             + _tmmMoney(pitchOut));
+    if(pitchOut && acceptedNet){
+      const spread = pitchOut - acceptedNet;
+      if(spread !== 0) lines.push('Spread: ' + _tmmMoney(spread));
+    }
+    // Markup mode + value (stored as snake_case columns, accessed directly)
+    const markupType  = d.pitch_out_markup_type;
+    const markupValue = d.pitch_out_markup_value;
+    if(markupType && markupValue != null && markupValue !== ''){
+      const fmt = markupType === 'percent' ? `${markupValue}%` : _tmmMoney(markupValue);
+      lines.push(`Pitch Out Markup: ${fmt} (${markupType})`);
+    }
+    if(lines.length){
+      out.push('');
+      out.push('Pitch / Pricing:');
+      lines.forEach(l => out.push(l));
     }
   }
 
@@ -13086,16 +13253,22 @@ function _tmmResetToggles(){
 }
 
 // Section definitions for the checkbox row. [key, label] pairs.
+// v167.1: ordering reflects the order they render in the textarea.
 const _TMM_SECTIONS = [
-  ['contact',       '👤 Contact'],
-  ['property',      '📍 Address'],
-  ['assetType',     '🏗️ Type / SF / Units'],
-  ['general',       '📝 General Notes'],
-  ['assetSpecific', '🔧 Property Details'],
-  ['financials',    '💰 Financials'],
-  ['sellerFin',     '🏦 Seller Financing'],
-  ['whySelling',    '🎯 Why Selling'],
-  ['askingWords',   '🏷️ Asking Price'],
+  ['contact',         '👤 Contact'],
+  ['property',        '📍 Address'],
+  ['assetType',       '🏗️ Type / SF / Units'],
+  ['propertyClass',   '🏷 Class / Condition'],
+  ['general',         '📝 General Notes'],
+  ['assetSpecific',   '🔧 Property Details'],
+  ['unitMixAvg',      '🛏 Unit Mix — Avg'],
+  ['unitMixIndiv',    '🚪 Unit Mix — Individual'],
+  ['financials',      '💰 Financials'],
+  ['expenseBreakdown','💸 Expense Breakdown'],
+  ['pitchPricing',    '🎯 Pitch / Pricing'],
+  ['sellerFin',       '🏦 Seller Financing'],
+  ['whySelling',      '🎯 Why Selling'],
+  ['askingWords',     '🏷️ Asking Price'],
 ];
 
 function renderAICommTab(d){

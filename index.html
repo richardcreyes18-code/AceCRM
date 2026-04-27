@@ -9476,7 +9476,7 @@ function renderQuickCalcTab(d){
           <thead><tr><th style="text-align:left;">Metric</th><th>Actual (current)</th></tr></thead>
           <tbody>
             <tr><td class="metric-label">CAP Rate</td>
-              <td>${(noi && ask) ? pct(noi/ask) : (capStored ? pct(capStored) : '—')}</td></tr>
+              <td>${(aNOI && ask) ? pct(aNOI/ask) : ((Number(d['Cap Rate (CRM)'])||0) ? pct(Number(d['Cap Rate (CRM)'])) : '—')}</td></tr>
             <tr><td class="metric-label">Gross Rent Multiplier</td>
               <td>${(grossYr && ask) ? (ask / grossYr).toFixed(2) : '—'}</td></tr>
             <tr><td class="metric-label">Expense Ratio</td>
@@ -9502,9 +9502,9 @@ function renderQuickCalcTab(d){
               <td>${cashFlow?dol(cashFlow):'—'}</td>
               <td>${(cashFlow && totalSF)?'$'+(cashFlow/totalSF).toFixed(2):'—'}</td></tr>
             <tr><td class="cf-label">Net Operating Income</td>
-              <td>${noi?dol(noi/12):'—'}</td>
-              <td>${noi?dol(noi):'—'}</td>
-              <td>${(noi && totalSF)?'$'+(noi/totalSF).toFixed(2):'—'}</td></tr>
+              <td>${aNOI?dol(aNOI/12):'—'}</td>
+              <td>${aNOI?dol(aNOI):'—'}</td>
+              <td>${(aNOI && totalSF)?'$'+(aNOI/totalSF).toFixed(2):'—'}</td></tr>
           </tbody>
         </table>
       </div>

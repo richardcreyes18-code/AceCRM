@@ -22373,6 +22373,26 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v143: per-template "no link needed" manual toggle.
+//   Folder-based classification covers most cases but the user wanted
+//   to clear individual stragglers from Unlinked without renaming
+//   their folder. New BOOLEAN column ace_user_email_templates.
+//   no_link_needed (default false). Toggling it removes the template
+//   from the Unlinked bucket and lands it in 📎 No Link Needed.
+//   UI:
+//   - Click the yellow "🔗 Unlinked" badge on any row → flips to
+//     "📎 No link needed" instantly.
+//   - Click the gray 📎 badge to flip back (only on user-marked,
+//     not folder-classified ones — to revert folder-classified,
+//     edit the _EMAIL_TPL_NO_LINK_FOLDERS set).
+//   - Edit modal: footer button "📎 Remove from Unlinked" / "🔗
+//     Mark as Unlinked" toggles + closes modal.
+//   - Header badge in the editor is also clickable (same toggle).
+//   _emailTplIsNoLinkNeeded(row) returns true if the user flag is
+//   set OR the folder is in _EMAIL_TPL_NO_LINK_FOLDERS.
+//   File: index.html:32443-32488 (classifier + toggle), 32498-32525
+//          (editor badge), 32547-32556 (footer button), badge in
+//          _emailTplsLibPaintTemplates rows.
 // v142: extend no-link folders + broaden auto-link scan.
 //   Added "FUB Import (no folder)" to _EMAIL_TPL_NO_LINK_FOLDERS — all
 //   the (FUB IMPORT) templates without a folder label are marketing /
@@ -32084,7 +32104,11 @@ window._emailTplsOpenEditor = function(templateId){
             ${updated ? ` · Updated ${updated}` : ''}
           </div>
           <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;">
-            ${prop ? `<span onclick="openDeal(allDeals.find(d=>d.id==='${prop.id}'))" style="display:inline-block;background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;cursor:pointer;">🏢 ${_ddEsc((prop['Address']||'').slice(0,60))}</span>` : '<span style="display:inline-block;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;">🔗 Unlinked</span>'}
+            ${prop
+              ? `<span onclick="openDeal(allDeals.find(d=>d.id==='${prop.id}'))" style="display:inline-block;background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;cursor:pointer;">🏢 ${_ddEsc((prop['Address']||'').slice(0,60))}</span>`
+              : (_emailTplIsNoLinkNeeded(t)
+                  ? `<span ${t.no_link_needed ? `onclick="_emailTplsToggleNoLink('${t.id}', false); this.closest('#emailTplsEditorModal').remove();" title="Click to mark as needing a property link" style="cursor:pointer;"` : 'style=""'} style="display:inline-block;background:#f1f5f9;color:#475569;border:1px solid #e2e8f0;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;${t.no_link_needed ? 'cursor:pointer;' : ''}">📎 No link needed</span>`
+                  : `<span onclick="_emailTplsToggleNoLink('${t.id}', true); this.closest('#emailTplsEditorModal').remove();" title="Remove this template from Unlinked — mark as no-link-needed" style="display:inline-block;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;cursor:pointer;">🔗 Unlinked</span>`)}
             ${owner ? `<span onclick="openContactModal('${owner.id}')" style="display:inline-block;background:#dcfce7;color:#15803d;border:1px solid #86efac;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;cursor:pointer;">👤 ${_ddEsc(owner['Name']||'')}</span>` : ''}
             ${prop && prop['Assigned Agent'] ? (typeof _agentList === 'function' ? _agentList(prop['Assigned Agent']) : String(prop['Assigned Agent']).split('|').map(s=>s.trim()).filter(Boolean)).map(a => `<span style="display:inline-block;background:#ede9fe;color:#5b21b6;border:1px solid #ddd6fe;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;" title="${_ddEsc(a)}">🤵 ${_ddEsc(typeof _agentDisplayName==='function'?_agentDisplayName(a):a)}</span>`).join('') : ''}
             ${/^\(FUB IMPORT/.test(t.name||'') ? '<span style="display:inline-block;background:#f1f5f9;color:#475569;border:1px solid #e2e8f0;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;">📥 FUB Import</span>' : ''}
@@ -32106,8 +32130,11 @@ window._emailTplsOpenEditor = function(templateId){
           Placeholders like %sender_name%, %contact_first_name% are filled at send-time.
         </div>
       </div>
-      <div style="padding:12px 20px;border-top:1px solid #e2e8f0;display:flex;justify-content:space-between;gap:10px;">
-        <button onclick="_emailTplsDeleteOne('${t.id}')" style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:6px;padding:7px 14px;font-size:11px;font-weight:600;cursor:pointer;">🗑 Delete</button>
+      <div style="padding:12px 20px;border-top:1px solid #e2e8f0;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;">
+        <div style="display:flex;gap:8px;flex-wrap:wrap;">
+          <button onclick="_emailTplsDeleteOne('${t.id}')" style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:6px;padding:7px 14px;font-size:11px;font-weight:600;cursor:pointer;">🗑 Delete</button>
+          ${!prop ? `<button onclick="_emailTplsToggleNoLink('${t.id}', ${!t.no_link_needed}); this.closest('#emailTplsEditorModal').remove();" title="${t.no_link_needed ? 'Move back to the Unlinked folder' : 'Remove this template from Unlinked — admin / marketing, no property needed'}" style="background:${t.no_link_needed ? '#fef3c7' : '#f1f5f9'};color:${t.no_link_needed ? '#92400e' : '#475569'};border:1px solid ${t.no_link_needed ? '#fde68a' : '#cbd5e1'};border-radius:6px;padding:7px 14px;font-size:11px;font-weight:600;cursor:pointer;">${t.no_link_needed ? '🔗 Mark as Unlinked' : '📎 Remove from Unlinked'}</button>` : ''}
+        </div>
         <div style="display:flex;gap:8px;">
           <button onclick="this.closest('#emailTplsEditorModal').remove()" style="background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;padding:7px 14px;font-size:11px;font-weight:600;cursor:pointer;">Close</button>
           <button onclick="_emailTplsSaveOne('${t.id}')" style="background:#1a3a6e;color:#fff;border:none;border-radius:6px;padding:7px 16px;font-size:11px;font-weight:700;cursor:pointer;">✓ Save</button>
@@ -32467,9 +32494,35 @@ const _EMAIL_TPL_NO_LINK_FOLDERS = new Set([
 
 function _emailTplIsNoLinkNeeded(row){
   if(!row) return false;
+  // v143: per-template manual flag wins. Even a template from a folder
+  // that normally needs a link (e.g. Active Deal Email Temp) can be
+  // user-marked as "no link needed" — useful when the user looks at a
+  // specific template and decides it's actually generic.
+  if(row.no_link_needed === true) return true;
   const f = _emailTplsExtractFolder(row.name);
   return !!(f && _EMAIL_TPL_NO_LINK_FOLDERS.has(f));
 }
+
+// v143: toggle a template's no_link_needed flag. Updates DB, in-memory
+// state, and repaints the library. Called from the edit modal AND from
+// clicking the "🔗 Unlinked" badge on a row to flip it to "📎 No link
+// needed". Reverse direction (un-mark) is also supported — click the
+// 📎 No link needed badge to flip it back to 🔗 Unlinked.
+window._emailTplsToggleNoLink = async function(tplId, value){
+  const r = (_emailTplsLibState.rows || []).find(x => x.id === tplId);
+  if(!r){ alert('Template not found.'); return; }
+  const next = (typeof value === 'boolean') ? value : !r.no_link_needed;
+  try {
+    await _sbPatch('ace_user_email_templates', tplId, { no_link_needed: next });
+    r.no_link_needed = next;
+    if(typeof _emailTplsLibPaint === 'function') _emailTplsLibPaint();
+    if(typeof showSaveConfirm === 'function'){
+      showSaveConfirm(next ? '📎 Marked as no link needed' : '🔗 Marked as needing a property link');
+    }
+  } catch(e){
+    alert('Update failed: ' + e.message);
+  }
+};
 
 function _emailTplsLibPaint(){
   const root = document.getElementById('emailTplsTabRoot');
@@ -32640,11 +32693,30 @@ function _emailTplsLibPaintTemplates(folder){
     } else if(isNoLinkNeeded){
       // v141: admin / marketing folders don't need a link — show a calmer
       // badge that doesn't read like an action item.
-      tags += `<span style="display:inline-block;background:#f1f5f9;color:#475569;border:1px solid #e2e8f0;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;margin-right:4px;margin-bottom:3px;">
-        📎 No link needed
-      </span>`;
+      // v143: badge is clickable when the no-link state was set manually
+      //   (no_link_needed = true on the row) so the user can flip it back
+      //   if they marked something by mistake. Folder-classified templates
+      //   stay non-clickable — to "un-classify" those, edit the folder set.
+      const userMarked = r.no_link_needed === true;
+      if(userMarked){
+        tags += `<span onclick="event.stopPropagation(); _emailTplsToggleNoLink('${r.id}', false)"
+          title="Click to mark as needing a property link"
+          style="display:inline-block;background:#f1f5f9;color:#475569;border:1px solid #e2e8f0;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;margin-right:4px;margin-bottom:3px;cursor:pointer;">
+          📎 No link needed
+        </span>`;
+      } else {
+        tags += `<span style="display:inline-block;background:#f1f5f9;color:#475569;border:1px solid #e2e8f0;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;margin-right:4px;margin-bottom:3px;">
+          📎 No link needed
+        </span>`;
+      }
     } else {
-      tags += `<span style="display:inline-block;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;margin-right:4px;margin-bottom:3px;">
+      // v143: clicking the Unlinked badge flips the template to "no link
+      // needed" so the user can clear individual templates from the
+      // Unlinked folder without opening the editor. Right-side button
+      // path (Link to property…) still works for actually linking.
+      tags += `<span onclick="event.stopPropagation(); _emailTplsToggleNoLink('${r.id}', true)"
+        title="Click to mark this template as no-link-needed (removes it from Unlinked)"
+        style="display:inline-block;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;margin-right:4px;margin-bottom:3px;cursor:pointer;">
         🔗 Unlinked
       </span>`;
     }

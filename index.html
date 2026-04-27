@@ -7739,6 +7739,7 @@ function renderPropertyTab(d){
     </div>
 
     ${_showUnitMix ? _renderUnitMixSection(d) : ''}
+    ${_assetTypeStr.includes('mixed use') ? _renderMixedUseTenantMixSection(d) : ''}
     ${_showIndustrial ? _renderIndustrialSection(d) : ''}
 
     <!-- v113.74: Property Use & Status section removed — moved into the
@@ -8334,6 +8335,73 @@ function _renderIndustrialSection(d){
       <div style="text-align:right;margin-top:6px;">
         <button class="save-btn" onclick="masterSave().catch(e=>console.warn('manual save error:',e))">Save</button>
       </div>
+    </div>
+`;
+}
+
+// v146: Mixed-use deals also have retail tenants. Render a Tenant Mix
+// shortcut card right after the Unit Mix section (mirrors how the
+// Industrial section opens its Tenant Mix tab).
+function _renderMixedUseTenantMixSection(d){
+  let tenants = [];
+  try {
+    const raw = d['Tenant Mix Data'];
+    if(raw) tenants = typeof raw === 'string' ? JSON.parse(raw) : (Array.isArray(raw) ? raw : []);
+  } catch(_){ tenants = []; }
+  const count = Array.isArray(tenants) ? tenants.length : 0;
+  const totalRent = (tenants||[]).reduce((s,t)=>s+(Number(String(t['Monthly Rent']||t.monthly_rent||t.rent||'').toString().replace(/[^\d.\-]/g,''))||0),0);
+  const totalSF = (tenants||[]).reduce((s,t)=>s+(Number(t['Square Footage']||t.sf||0)||0),0);
+  const rows = (tenants||[]).slice(0,8).map(t=>{
+    const name = t['Tenant Name']||t.name||'—';
+    const sf   = Number(t['Square Footage']||t.sf||0)||0;
+    const lt   = t['Lease Type']||t.lease_type||'—';
+    const mo   = Number(String(t['Monthly Rent']||t.monthly_rent||t.rent||'').toString().replace(/[^\d.\-]/g,''))||0;
+    return `<tr style="border-bottom:1px solid #e2e8f0;">
+      <td style="padding:5px 8px;font-size:11px;">${name}</td>
+      <td style="padding:5px 8px;font-size:11px;text-align:right;">${sf?sf.toLocaleString():'—'}</td>
+      <td style="padding:5px 8px;font-size:11px;">${lt}</td>
+      <td style="padding:5px 8px;font-size:11px;text-align:right;font-weight:600;">${mo?'$'+mo.toLocaleString():'—'}</td>
+    </tr>`;
+  }).join('');
+  const moreNote = count > 8 ? `<div style="font-size:10px;color:#64748b;padding:6px 8px;">+ ${count - 8} more — open Tenant Mix tab</div>` : '';
+  return `    <!-- MIXED-USE TENANT MIX -->
+    <div class="info-box">
+      <div class="info-box-title" style="display:flex;justify-content:space-between;align-items:center;">
+        <span>🏪 Tenant Mix (Retail / Commercial)</span>
+        <button onclick="switchTab('tenantmix', document.querySelector('.tab-btn[onclick*=tenantmix]'))" style="background:linear-gradient(135deg,#2a7a2a,#1a5a1a);color:#fff;border:none;padding:4px 12px;font-size:11px;font-weight:600;border-radius:5px;cursor:pointer;">🏪 Open Tenant Mix →</button>
+      </div>
+      ${count === 0 ? `
+        <div style="padding:14px;font-size:11px;color:#64748b;text-align:center;background:#f8fafc;border-radius:5px;">
+          No retail tenants yet. Mixed-use combines apartments (above) with retail/commercial tenants. Click "Open Tenant Mix" to add tenants.
+        </div>
+      ` : `
+        <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;margin-bottom:10px;">
+          <div style="background:#f1f5f9;border-radius:5px;padding:8px 10px;">
+            <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.4px;font-weight:700;">Tenants</div>
+            <div style="font-size:18px;font-weight:700;color:#1a3a6e;">${count}</div>
+          </div>
+          <div style="background:#f1f5f9;border-radius:5px;padding:8px 10px;">
+            <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.4px;font-weight:700;">Total SF</div>
+            <div style="font-size:18px;font-weight:700;color:#1a3a6e;">${totalSF?totalSF.toLocaleString():'—'}</div>
+          </div>
+          <div style="background:#f1f5f9;border-radius:5px;padding:8px 10px;">
+            <div style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:0.4px;font-weight:700;">Total Rent / Mo</div>
+            <div style="font-size:18px;font-weight:700;color:#1a3a6e;">${totalRent?'$'+totalRent.toLocaleString():'—'}</div>
+          </div>
+        </div>
+        <table style="width:100%;border-collapse:collapse;font-size:11px;">
+          <thead>
+            <tr style="border-bottom:1px solid #cbd5e1;">
+              <th style="text-align:left;padding:5px 8px;font-size:9px;font-weight:700;letter-spacing:0.5px;color:#64748b;text-transform:uppercase;">Tenant</th>
+              <th style="text-align:right;padding:5px 8px;font-size:9px;font-weight:700;letter-spacing:0.5px;color:#64748b;text-transform:uppercase;">SF</th>
+              <th style="text-align:left;padding:5px 8px;font-size:9px;font-weight:700;letter-spacing:0.5px;color:#64748b;text-transform:uppercase;">Lease</th>
+              <th style="text-align:right;padding:5px 8px;font-size:9px;font-weight:700;letter-spacing:0.5px;color:#64748b;text-transform:uppercase;">Monthly Rent</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+        ${moreNote}
+      `}
     </div>
 `;
 }
@@ -11132,13 +11200,19 @@ function renderFinancialTab(d){
                 Gross Rental Income ${tip('gri','Gross Rental Income = Total potential rent if 100% occupied. Enter the actual monthly rent roll.')}
                 ${(()=>{
                   const ac = (d['CRM Asset Classification']||d['Simple Text Property Type']||'').toLowerCase();
-                  const isMF = ac.includes('multifamily') || ac.includes('mixed use');
+                  const isMixed = ac.includes('mixed use');
+                  const isMF = ac.includes('multifamily') || isMixed;
                   const isInd = ac.includes('industrial') || ac.includes('warehouse') || ac.includes('flex');
                   // v113.80: "📋 Details" button opens a modal with the right
                   // editor (rent roll for MF, tenant mix for industrial).
+                  // v146: Mixed-use shows BOTH (apartments on top, retail below).
+                  const kind = isMixed ? 'mixed' : (isMF ? 'mf' : 'industrial');
+                  const ttl = isMixed ? 'Edit apartments and retail tenants together'
+                            : (isMF ? 'Edit the rent roll without leaving Financial Analysis'
+                                    : 'Edit tenant mix without leaving Financial Analysis');
                   const detailsBtn = (isMF || isInd) ? `
-                    <button type="button" onclick="_openRentRollModal('${d.id}', '${isMF?'mf':'industrial'}')"
-                      title="${isMF?'Edit the rent roll without leaving Financial Analysis':'Edit tenant mix without leaving Financial Analysis'}"
+                    <button type="button" onclick="_openRentRollModal('${d.id}', '${kind}')"
+                      title="${ttl}"
                       style="margin-left:8px;background:#1a3a6e;color:#fff;border:none;padding:2px 9px;font-size:9px;font-weight:700;border-radius:4px;cursor:pointer;vertical-align:middle;">
                       📋 Details
                     </button>` : '';
@@ -11146,15 +11220,15 @@ function renderFinancialTab(d){
                   const savedSrc = fi.aGRISource || 'custom';
                   return `
                     <div style="display:inline-flex;margin-left:10px;gap:0;border:1px solid #cbd5e1;border-radius:4px;overflow:hidden;vertical-align:middle;" id="aGRISourceToggle">
-                      <button type="button" onclick="setFinGRISource('unitMix')"
-                        id="aGRISrc_unitMix"
-                        style="padding:2px 8px;font-size:9px;font-weight:600;border:none;cursor:pointer;background:${savedSrc==='unitMix'?'#1a3a6e':'#f8fafc'};color:${savedSrc==='unitMix'?'#fff':'#475569'};">
-                        Use Unit Mix
-                      </button>
                       <button type="button" onclick="setFinGRISource('custom')"
                         id="aGRISrc_custom"
                         style="padding:2px 8px;font-size:9px;font-weight:600;border:none;cursor:pointer;background:${savedSrc==='custom'?'#1a3a6e':'#f8fafc'};color:${savedSrc==='custom'?'#fff':'#475569'};">
                         Custom
+                      </button>
+                      <button type="button" onclick="setFinGRISource('unitMix')"
+                        id="aGRISrc_unitMix"
+                        style="padding:2px 8px;font-size:9px;font-weight:600;border:none;cursor:pointer;background:${savedSrc==='unitMix'?'#1a3a6e':'#f8fafc'};color:${savedSrc==='unitMix'?'#fff':'#475569'};">
+                        Use Unit Mix
                       </button>
                     </div>
                     ${detailsBtn}
@@ -50916,12 +50990,36 @@ function _refreshFinGRIFromUnitMix(){
     monthly = _mfRentCalcGRIOccupiedFromDeal();
   }
 
+  // Mixed-use deals: also add retail tenant rents from tenant_mix_data so the
+  // GRI reflects apartments + retail combined.
+  const _ac = (currentDeal['CRM Asset Classification']||currentDeal['Simple Text Property Type']||'').toLowerCase();
+  if(_ac.includes('mixed')){
+    monthly += _tenantMixCalcMonthlyFromDeal(currentDeal);
+  }
+
   _applyFinGRILock(true);
   moEl.value = monthly || '';
   yrEl.value = monthly ? (monthly*12) : '';
   // Re-run income calc without marking dirty (the user didn't type anything)
   if(typeof updateIncomeTotals === 'function') updateIncomeTotals();
   if(typeof debouncedRecalc === 'function') debouncedRecalc();
+}
+
+// v146: sum monthly rents from tenant_mix_data on a deal. Used by the
+// "Use Unit Mix" toggle on mixed-use deals to combine apartment GRI with
+// retail tenant rents into one Gross Rental Income figure.
+function _tenantMixCalcMonthlyFromDeal(d){
+  if(!d) return 0;
+  const raw = d['Tenant Mix Data'];
+  if(!raw) return 0;
+  let arr;
+  try { arr = typeof raw === 'string' ? JSON.parse(raw) : (Array.isArray(raw) ? raw : []); }
+  catch(_){ return 0; }
+  if(!Array.isArray(arr)) return 0;
+  return arr.reduce((sum, t) => {
+    const r = Number(String(t['Monthly Rent']||t.monthly_rent||t.rent||'').toString().replace(/[^\d.\-]/g,''))||0;
+    return sum + r;
+  }, 0);
 }
 
 function incomeCalc(){
@@ -51067,11 +51165,14 @@ function toggleExpMode(){
 window._openRentRollModal = function(propertyId, kind){
   if(!currentDeal || currentDeal.id !== propertyId) return;
   const d = currentDeal;
-  const title = (kind === 'mf') ? '📋 Rent Roll' : '🏪 Tenant Mix';
+  const title = (kind === 'mf') ? '📋 Rent Roll'
+              : (kind === 'mixed') ? '📋 Mixed-Use Details'
+              : '🏪 Tenant Mix';
   // Build modal shell
   const modal = document.createElement('div');
   modal.id = 'rentRollModal';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:10000;display:flex;align-items:center;justify-content:center;padding:20px;';
+  const showSave = (kind === 'mf' || kind === 'mixed');
   modal.innerHTML = `
     <div style="background:#fff;border-radius:12px;width:100%;max-width:1100px;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 25px 60px rgba(0,0,0,0.25);overflow:hidden;">
       <div style="padding:14px 18px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;">
@@ -51084,20 +51185,33 @@ window._openRentRollModal = function(propertyId, kind){
       <div id="rentRollModalBody" style="padding:14px 18px;overflow-y:auto;flex:1;"></div>
       <div style="padding:12px 18px;border-top:1px solid #e2e8f0;display:flex;justify-content:flex-end;gap:8px;">
         <button onclick="_closeRentRollModal()" style="background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;">Close</button>
-        ${kind === 'mf' ? `<button onclick="_saveRentRollModal()" style="background:#1a3a6e;color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:12px;font-weight:700;cursor:pointer;">✓ Save & Apply</button>` : ''}
+        ${showSave ? `<button onclick="_saveRentRollModal()" style="background:#1a3a6e;color:#fff;border:none;border-radius:6px;padding:7px 18px;font-size:12px;font-weight:700;cursor:pointer;">✓ Save & Apply</button>` : ''}
       </div>
     </div>`;
   document.body.appendChild(modal);
   const body = modal.querySelector('#rentRollModalBody');
-  if(kind === 'mf'){
-    // Render the existing unit-mix section inside the modal. The same
-    // input ids are used, so masterSave's collector picks them up
-    // unchanged. Re-init _mfRentUnits state from the deal's stored JSON.
-    body.innerHTML = (typeof _renderUnitMixSection === 'function') ? _renderUnitMixSection(d) : '<em>Unit-mix renderer not loaded.</em>';
+  if(kind === 'mf' || kind === 'mixed'){
+    // Render unit-mix on top. For mixed-use, also append tenant-mix below
+    // so the user sees apartments + retail in one modal.
+    const mfHtml = (typeof _renderUnitMixSection === 'function') ? _renderUnitMixSection(d) : '<em>Unit-mix renderer not loaded.</em>';
+    if(kind === 'mixed'){
+      const tmHtml = (typeof renderTenantMixTab === 'function') ? renderTenantMixTab(d) : '<em>Tenant-mix renderer not loaded.</em>';
+      body.innerHTML = `
+        <div style="margin-bottom:6px;font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">🏠 Apartments / Unit Mix</div>
+        ${mfHtml}
+        <div style="height:18px;"></div>
+        <div style="margin-bottom:6px;font-size:11px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.4px;">🏪 Retail / Commercial Tenants</div>
+        ${tmHtml}
+      `;
+      setTimeout(() => {
+        if(typeof loadTenantMixTab === 'function' && d.id) loadTenantMixTab(d.id);
+      }, 30);
+    } else {
+      body.innerHTML = mfHtml;
+    }
     try {
       const _mfRd = _mfRentLoad(d['MF Unit Rent Data']||'');
       _mfRentUnits = _mfRd.units || [];
-      // Re-render the byUnit table if we landed in byUnit mode
       if(_mfRd.mode === 'byUnit' && typeof _renderMFUnitRows === 'function'){
         setTimeout(_renderMFUnitRows, 30);
       }

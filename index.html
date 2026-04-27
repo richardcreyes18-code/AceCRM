@@ -32873,6 +32873,11 @@ async function _taskNotifPollOnce(){
 }
 
 async function _showTaskNotifToast(notif){
+  // v158.1: ensure the user directory is loaded so the actor name renders
+  // as "from <Agent Name>" instead of falling back to "from an agent".
+  if(typeof _ensureUsersCache === 'function'){
+    try { await _ensureUsersCache(); } catch(_e){}
+  }
   // Pull the full task to render priority / due / snippet on the banner.
   let task = null;
   try {
@@ -32935,7 +32940,7 @@ async function _showTaskNotifToast(notif){
       toast.style.transform = 'translateY(-8px)';
       setTimeout(() => { toast.remove(); _taskNotifMarkRead(notif.id); }, 260);
     }
-  }, 5000);
+  }, 10000); // v158.1: 10s window per user request
 }
 
 window._taskNotifMarkRead = async function(notifId){

@@ -14284,6 +14284,23 @@ window._dbAdvRangeOnInput = function(ev){
   _dbAdvOnChange();
 };
 
+// v162: show/hide the entire grouped-card filter panel. State is stored
+// in sessionStorage so it survives in-tab navigation, defaults to open.
+function _dbFilterPanelOpen(){
+  try {
+    const v = sessionStorage.getItem('db_filt_panel_open');
+    return v === null ? true : (v === '1');
+  } catch(e) { return true; }
+}
+function _dbToggleFilterPanel(){
+  const open = !_dbFilterPanelOpen();
+  try { sessionStorage.setItem('db_filt_panel_open', open ? '1' : '0'); } catch(e){}
+  const panel = document.getElementById('db_filtPanel');
+  const icon  = document.getElementById('db_filtToggleIcon');
+  if(panel) panel.style.display = open ? 'grid' : 'none';
+  if(icon)  icon.textContent = open ? '▾' : '▸';
+}
+
 // Toggle the advanced filter panel open/closed.
 function _dbToggleAdvFilters(){
   const panel = document.getElementById('db_advPanel');
@@ -16677,6 +16694,13 @@ function _locInjectCSS(){
     }
     .db-fbar-search:focus{border-color:#0f172a;background:#fff;}
     .db-fbar-search::placeholder{color:#94a3b8;}
+    /* v162: plain-search variant — white background, taller, no width cap.
+       Used in the Deal Board header where the search now sits alone in
+       its row. */
+    .db-fbar-search.db-fbar-search-plain{
+      width:auto;background:#fff;font-size:13px;padding:9px 14px;
+      border-color:#cbd5e1;
+    }
     .db-fbar-btn{
       background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;
       padding:8px 12px;font-size:12px;font-family:inherit;
@@ -19841,35 +19865,31 @@ function showDealBoard(){
           </div>
         </div>
 
-        <!-- FILTER ROW 1: search + dedupe -->
+        <!-- v162: SEARCH ROW — plain search bar (Find Duplicates moved
+             out of the deal board header) + the filter-panel toggle and
+             trailing controls (Columns / Clear Filters). -->
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-          <input id="db_search" class="db-fbar-search"
+          <input id="db_search" class="db-fbar-search db-fbar-search-plain"
             placeholder="Search address, county, notes, lead ID..."
-            style="flex:1;max-width:420px;"
+            style="flex:1;min-width:240px;"
             oninput="renderDealBoard();dbRefreshMapPins()"/>
-          <button onclick="openDealDedupeModal()" title="Find and merge duplicate deals"
-            style="background:#f1f5f9;color:#334155;border:1px solid #cbd5e1;border-radius:6px;padding:6px 12px;font-size:12px;font-weight:600;cursor:pointer;"
-            onmouseenter="this.style.background='#e0e7ff';this.style.borderColor='#93c5fd';this.style.color='#1a3a6e'"
-            onmouseleave="this.style.background='#f1f5f9';this.style.borderColor='#cbd5e1';this.style.color='#334155'">
-            🔍 Find Duplicates
+          <button id="db_filtToggle" onclick="_dbToggleFilterPanel()"
+            style="background:#fff;color:#0f172a;border:1px solid #cbd5e1;border-radius:8px;padding:7px 14px;font-size:12px;font-weight:600;cursor:pointer;"
+            title="Show or hide the filter panel">
+            <span id="db_filtToggleIcon">${_dbFilterPanelOpen() ? '▾' : '▸'}</span> Filters
           </button>
-        </div>
-
-        <!-- v161: GROUPED-CARDS FILTER LAYOUT (Deal Board only).
-             Four cards laid out in a fixed 4-column grid (collapses to 2
-             on narrow screens, 1 on mobile). All filters visible at once
-             — no "More Filters" toggle. Outer label above each field is
-             the only label (the LOC fields are rendered with empty inline
-             labels via opts.block=true). -->
-        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-          <div style="flex:1;"></div>
           ${_dbColsMenuHTML()}
           <button onclick="dbClearAllFilters()" class="db-fbar-clear">
             &#10005; Clear Filters
           </button>
         </div>
 
-        <div class="db-card-grid" style="display:grid;grid-template-columns:repeat(4, minmax(0, 1fr));gap:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;align-items:stretch;">
+        <!-- v161: GROUPED-CARDS FILTER LAYOUT (Deal Board only).
+             Four cards laid out in a fixed 4-column grid (collapses to 2
+             on narrow screens, 1 on mobile). v162: wrapped in a toggle
+             so the user can hide the whole panel when they just want the
+             table. The toggle remembers its state for the session. -->
+        <div id="db_filtPanel" class="db-card-grid" style="display:${_dbFilterPanelOpen() ? 'grid' : 'none'};grid-template-columns:repeat(4, minmax(0, 1fr));gap:12px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:10px;padding:12px;align-items:stretch;">
           <!-- Location card -->
           <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:12px 14px;display:flex;flex-direction:column;">
             <div style="display:flex;align-items:center;gap:8px;margin-bottom:10px;">

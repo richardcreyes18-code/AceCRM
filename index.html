@@ -22225,6 +22225,8 @@ window._ddManualMergeRun = async function(){
     losers.forEach(l => { l['Is Archived'] = true; });
     _purgeMergedFromMemory(losers.map(l => l.id));
     await _ddRefreshDealInMemory(survivor.id);
+    // v158.4: server-side repoint of email-template links — refresh the cache.
+    if(typeof _loadPropertyTemplateMap === 'function') _loadPropertyTemplateMap();
     showSaveConfirm(`✓ Merged ${losers.length} duplicate${losers.length>1?'s':''}`);
     _ddManualMerge.selected.clear();
     _ddManualMerge.survivorId = null;
@@ -25093,6 +25095,10 @@ async function _ddMergeGroup(groupIdx, fuzzy){
     // v140: purge losers from in-memory caches so they're not searchable.
     _purgeMergedFromMemory(losers.map(l => l.id));
     await _ddRefreshDealInMemory(survivor.id);
+    // v158.4: email-template repoint happens server-side now. Reload the
+    // client cache so the 📧 N badges on pipeline + detail card reflect
+    // the survivor's new template count immediately.
+    if(typeof _loadPropertyTemplateMap === 'function') _loadPropertyTemplateMap();
 
     showSaveConfirm(`✓ Merged ${losers.length} duplicate${losers.length>1?'s':''}`);
     list.splice(groupIdx, 1);

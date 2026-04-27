@@ -46498,6 +46498,33 @@ function closeTaskModal(){
   _taskModalEditing=null;
 }
 
+// v176: session-level cache of the global Tasks page data. _renderGlobalTasks
+// reads from this when the filterVal hasn't changed, so tab / section /
+// priority clicks become pure DOM ops with no network round-trips. Reset
+// on entry to showTasksPage(), patched in place by writes (submitEditTask),
+// invalidated by mutations that change the row set (create/delete/toggle).
+let _globalTasksCache = null;
+function _globalTasksInvalidate(){ _globalTasksCache = null; }
+function _globalTasksPatchRow(taskId, partial){
+  if(!_globalTasksCache) return;
+  const apply = arr => arr.map(r => r.id === taskId ? Object.assign({}, r, partial) : r);
+  _globalTasksCache.my  = apply(_globalTasksCache.my  || []);
+  _globalTasksCache.out = apply(_globalTasksCache.out || []);
+}
+function _globalTasksRemoveRow(taskId){
+  if(!_globalTasksCache) return;
+  _globalTasksCache.my  = (_globalTasksCache.my  || []).filter(r => r.id !== taskId);
+  _globalTasksCache.out = (_globalTasksCache.out || []).filter(r => r.id !== taskId);
+}
+function _globalTasksHandleStatusChange(taskId, newStatus){
+  if(!_globalTasksCache) return;
+  _globalTasksPatchRow(taskId, { status: newStatus });
+  const f = _globalTasksCache.filterVal;
+  if((f === 'pending' && newStatus === 'Done') || (f === 'done' && newStatus !== 'Done')){
+    _globalTasksRemoveRow(taskId);
+  }
+}
+
 // v175: in-memory cache of the full task row + assigneeIds, populated by the
 // list renderers. Lets openEditTaskModal render synchronously instead of
 // blocking on fetch round-trips, and lets submitEditTask diff junction-row
@@ -46689,6 +46716,9 @@ async function submitEditTask(taskId, source){
   showSaveConfirm('✓ Task updated');
   _taskCachePatchRow(taskId, patch);
   _taskCacheSetAssignees(taskId, assigneeIds);
+  // v176: keep the global Tasks page cache in sync so the next render
+  // (tab / section / priority click) shows the new values without refetching.
+  _globalTasksPatchRow(taskId, patch);
   // Patch the deal-tasks in-memory data so a re-render of the same deal
   // shows the new values without a refetch.
   if(_dealTasksData && Array.isArray(_dealTasksData.tasks)){
@@ -46935,6 +46965,9 @@ async function submitCreateTask(){
     const _dealAddr = _taskModalDealAddr;
     const _ctcId    = _taskModalContactId;
     closeTaskModal(); showSaveConfirm('☑ Task created: '+name);
+    // v176: a new task changes the row set — invalidate the global cache
+    // so the next render of the Tasks page picks it up.
+    _globalTasksInvalidate();
     if(_src==='deal' && _dealId && document.getElementById('dealTasksContent')) _loadAndRenderDealTasks(_dealId, _dealAddr);
     else if(_src==='contact' && _ctcId) _contactLoadLinkedTasks(_ctcId);
     else if(_src==='global') showTasksPage();
@@ -47383,6 +47416,11 @@ async function toggleTaskDone(taskId, currentStatus, source){
       const t = _dealTasksData.tasks.find(x => x.id === taskId);
       if(t) t['Status'] = newStatus;
     }
+    // v176: keep the global Tasks cache in sync. Drops the row from
+    // cache.my/.out when the new status no longer matches the filter.
+    _globalTasksHandleStatusChange(taskId, newStatus);
+    // v175: status lives on the cached row used by the edit modal too.
+    _taskCachePatchRow(taskId, { status: newStatus });
     if(typeof showSaveConfirm === 'function'){
       showSaveConfirm(newStatus === 'Done' ? '✓ Task completed' : '↩ Task reopened');
     }
@@ -47441,9 +47479,12 @@ async function deleteTaskRecord(taskId, source){
       });
     }
     showSaveConfirm('✓ Task deleted');
+    // v176: drop the deleted row from the global cache and the modal cache.
+    _globalTasksRemoveRow(taskId);
+    _taskCache.delete(taskId);
     if(source==='deal'&&currentDeal?.id) _loadAndRenderDealTasks(currentDeal.id, currentDeal['Address']||'');
     else if(source==='contact' && _currentContactTasksId) _contactLoadLinkedTasks(_currentContactTasksId);
-    else if(source==='global') showTasksPage();
+    else if(source==='global') _renderGlobalTasks();
   }catch(e){ alert('Failed to delete task: '+e.message); }
 }
 
@@ -47799,7 +47840,11 @@ async function submitOverduePlan(taskId, assignerId, taskName){
     }
     closeOverduePlanModal();
     showSaveConfirm('📝 Plan sent');
-    if(typeof showTasksPage === 'function') showTasksPage();
+    // v176: patch the cache instead of re-running the full page entry.
+    const planPatch = { overdue_plan: plan, overdue_plan_at: new Date().toISOString() };
+    _globalTasksPatchRow(taskId, planPatch);
+    _taskCachePatchRow(taskId, planPatch);
+    if(typeof _renderGlobalTasks === 'function') _renderGlobalTasks();
   } catch(e){
     if(btn){ btn.disabled = false; btn.textContent = 'Send Plan'; }
     if(errEl){ errEl.textContent = 'Failed: '+e.message; errEl.style.display='block'; }
@@ -47891,7 +47936,10 @@ async function _tasksDrop(ev){
   currentIds.splice(fromIdx, 1);
   currentIds.splice(toIdx, 0, dragId);
   await _tasksPersistOrder(currentIds);
-  _renderGlobalTasks();
+  // v176: drag re-orders the rows but the cached array still has the old
+  // sort_order values — invalidate so the next render re-fetches.
+  _globalTasksInvalidate();
+  _renderGlobalTasks(true);
 }
 
 // v113.22: write the new order to the DB. We issue one PATCH per row in the
@@ -47962,7 +48010,9 @@ async function showTasksPage(){
     <div id="allTasksContent" style="max-width:960px;margin:0 auto;padding:20px 18px;">
       <div style="text-align:center;padding:40px;color:var(--text3);font-size:12px;"><div class="spinner" style="margin:0 auto 8px;"></div>Loading tasks...</div>
     </div>`;
-  await _renderGlobalTasks();
+  // v176: page entry forces a fresh fetch so any tasks created/edited
+  // elsewhere show up. Subsequent tab/section/priority clicks use cache.
+  await _renderGlobalTasks(true);
 }
 
 // v113.22: paint the primary tab bar. Counts are passed in so we only do
@@ -47999,11 +48049,87 @@ function _tasksPaintTabBar(countsByTab){
   }).join('');
 }
 
-// v113.22: full rewrite — tab-aware, DB-backed sort_order, multi-agent
-// awareness. Two scoped fetches (my queue + tasks I assigned out) feed the
-// entire page so every tab + count + queue position derives from the same
-// in-memory snapshot. No per-tab round-trips.
-async function _renderGlobalTasks(){
+// v176: do the actual network work + chip-label resolution and stash the
+// result in _globalTasksCache. Pure side-effect helper.
+async function _globalTasksFetchAndCache(filterVal, userId){
+  const statusClause = filterVal==='pending' ? '&status=neq.Done'
+                    : filterVal==='done'    ? '&status=eq.Done' : '';
+  const orderClause = '&order=sort_order.asc.nullslast,due_date.asc.nullslast';
+  const myQueueParams      = `select=*&assigned_to_user_id=eq.${userId}${statusClause}${orderClause}`;
+  const assignedOutParams  = `select=*&assigned_by_user_id=eq.${userId}&assigned_to_user_id=neq.${userId}${statusClause}${orderClause}`;
+  const [myRows, outRows] = await Promise.all([
+    _sbGet(SB_TABLES.tasks, myQueueParams),
+    _sbGet(SB_TABLES.tasks, assignedOutParams),
+  ]);
+  const my  = Array.isArray(myRows)  ? myRows  : [];
+  const out = Array.isArray(outRows) ? outRows : [];
+
+  // Junction rows for every task we just pulled — feeds both the modal
+  // cache and the count chips.
+  const allRows = [...my, ...out];
+  const ids = allRows.map(r => r.id);
+  let junction = [];
+  if(ids.length){
+    try {
+      junction = await _sbGet(SB_TABLES.taskAssignees,
+        `task_id=in.(${ids.join(',')})&select=task_id,user_id`);
+    } catch(_e){ junction = []; }
+  }
+  const byTask = new Map();
+  for(const j of (junction||[])){
+    if(!j.task_id) continue;
+    let s = byTask.get(j.task_id);
+    if(!s){ s = new Set(); byTask.set(j.task_id, s); }
+    s.add(j.user_id);
+  }
+  allRows.forEach(r => {
+    const fallback = r.assigned_to_user_id ? new Set([r.assigned_to_user_id]) : new Set();
+    _taskCacheSet(r.id, r, byTask.get(r.id) || fallback);
+  });
+
+  // Resolve contact names (warm-cache + bulk fetch for the rest).
+  const contactIds = [...new Set(allRows.map(r => r.contact_id).filter(Boolean))];
+  const contactNameById = new Map();
+  if(contactIds.length){
+    (allContacts||[]).forEach(c => {
+      if(contactIds.includes(c.id)) contactNameById.set(c.id, (c.fields && c.fields.Name) || '');
+    });
+    const missing = contactIds.filter(id => !contactNameById.has(id));
+    if(missing.length){
+      try {
+        const list = missing.map(id => 'id.eq.' + id).join(',');
+        const cRows = await _sbGet(SB_TABLES.contacts, 'or=(' + list + ')&select=id,name');
+        (cRows||[]).forEach(r => contactNameById.set(r.id, r.name || ''));
+      } catch(e){ console.warn('Task contact-name lookup failed:', e.message); }
+    }
+  }
+
+  // Resolve buyer-criteria labels (uses desired_property_types since
+  // ace_buyer_criteria has no single "name" column).
+  const bcIds = [...new Set(allRows.map(r => r.buyer_criteria_id).filter(Boolean))];
+  const bcLabelById = new Map();
+  if(bcIds.length){
+    try {
+      const list = bcIds.map(id => 'id.eq.' + id).join(',');
+      const bRows = await _sbGet(SB_TABLES.buyerCriteria,
+        'or=(' + list + ')&select=id,desired_property_types,contact_id,ace_contacts(name)');
+      (bRows||[]).forEach(r => {
+        const cn = r.ace_contacts && r.ace_contacts.name;
+        const pt = r.desired_property_types;
+        const lbl = cn ? `${cn}${pt?' · '+pt:''}` : (pt || 'Buyer Criteria');
+        bcLabelById.set(r.id, lbl);
+      });
+    } catch(e){ console.warn('Task buyer-criteria lookup failed:', e.message); }
+  }
+
+  _globalTasksCache = { filterVal, my, out, contactNameById, bcLabelById, ts: Date.now() };
+  return _globalTasksCache;
+}
+
+// v113.22 / v176: tab-aware renderer. v176 caches the fetched + resolved
+// data in _globalTasksCache so tab / section / priority filter clicks are
+// pure DOM ops. Pass force=true to bypass the cache (used by showTasksPage).
+async function _renderGlobalTasks(force){
   const el=document.getElementById('allTasksContent'); if(!el) return;
   const cfg=getConfig();
   if(!isSupabase()){
@@ -48021,51 +48147,21 @@ async function _renderGlobalTasks(){
     _tasksPaintTabBar({});
     return;
   }
-  const filterVal=document.getElementById('taskGlobalFilter')?.value||'pending';
-  const statusClause = filterVal==='pending' ? '&status=neq.Done'
-                    : filterVal==='done'    ? '&status=eq.Done' : '';
+  const filterVal = document.getElementById('taskGlobalFilter')?.value || 'pending';
 
   try {
     await _ensureUsersCache();
 
-    // Two scoped fetches — one for the agent's own queue, one for the tasks
-    // they've handed to teammates. Counts + queue-position calculations all
-    // come from these in-memory results so nothing else round-trips per tab.
-    const orderClause = '&order=sort_order.asc.nullslast,due_date.asc.nullslast';
-    const myQueueParams      = `select=*&assigned_to_user_id=eq.${userId}${statusClause}${orderClause}`;
-    const assignedOutParams  = `select=*&assigned_by_user_id=eq.${userId}&assigned_to_user_id=neq.${userId}${statusClause}${orderClause}`;
-    const [myRows, outRows] = await Promise.all([
-      _sbGet(SB_TABLES.tasks, myQueueParams),
-      _sbGet(SB_TABLES.tasks, assignedOutParams),
-    ]);
-    const my  = Array.isArray(myRows)  ? myRows  : [];
-    const out = Array.isArray(outRows) ? outRows : [];
-
-    // v175: populate the open-modal cache with the raw rows + their
-    // junction-row assignees so opening the edit modal doesn't round-trip.
-    // One scoped junction fetch covers every task we just rendered.
-    {
-      const allRows = [...my, ...out];
-      const ids = allRows.map(r => r.id);
-      let junction = [];
-      if(ids.length){
-        try {
-          junction = await _sbGet(SB_TABLES.taskAssignees,
-            `task_id=in.(${ids.join(',')})&select=task_id,user_id`);
-        } catch(_e){ junction = []; }
-      }
-      const byTask = new Map();
-      for(const j of (junction||[])){
-        if(!j.task_id) continue;
-        let s = byTask.get(j.task_id);
-        if(!s){ s = new Set(); byTask.set(j.task_id, s); }
-        s.add(j.user_id);
-      }
-      allRows.forEach(r => {
-        const fallback = r.assigned_to_user_id ? new Set([r.assigned_to_user_id]) : new Set();
-        _taskCacheSet(r.id, r, byTask.get(r.id) || fallback);
-      });
+    // v176: fetch only when cache is missing or the Pending/All/Done filter
+    // changed. Tab / section / priority clicks land here with the cache
+    // already populated → zero round-trips.
+    const cacheValid = !force && _globalTasksCache && _globalTasksCache.filterVal === filterVal;
+    if(!cacheValid){
+      await _globalTasksFetchAndCache(filterVal, userId);
     }
+    const cache = _globalTasksCache || { my:[], out:[], contactNameById:new Map(), bcLabelById:new Map() };
+    const my  = cache.my  || [];
+    const out = cache.out || [];
 
     // v158.2: "Assigned FROM Others" = tasks in my queue that someone else
     // assigned to me (assigned_by_user_id is set AND not me). Counterpart
@@ -48158,42 +48254,12 @@ async function _renderGlobalTasks(){
       _overdue_plan: r.overdue_plan || null,
     }));
 
-    // Resolve contact names (warm-cache + bulk fetch for the rest).
-    const contactIds = [...new Set(tasks.map(t => t._contact_id).filter(Boolean))];
-    const contactNameById = new Map();
-    if(contactIds.length){
-      (allContacts||[]).forEach(c => {
-        if(contactIds.includes(c.id)) contactNameById.set(c.id, (c.fields && c.fields.Name) || '');
-      });
-      const missing = contactIds.filter(id => !contactNameById.has(id));
-      if(missing.length){
-        try {
-          const list = missing.map(id => 'id.eq.' + id).join(',');
-          const cRows = await _sbGet(SB_TABLES.contacts, 'or=(' + list + ')&select=id,name');
-          (cRows||[]).forEach(r => contactNameById.set(r.id, r.name || ''));
-        } catch(e){ console.warn('Task contact-name lookup failed:', e.message); }
-      }
-    }
-    tasks.forEach(t => { if(t._contact_id) t._contact_name = contactNameById.get(t._contact_id) || 'Contact'; });
-
-    // Resolve buyer-criteria labels for chips (uses desired_property_types
-    // since ace_buyer_criteria has no single "name" column).
-    const bcIds = [...new Set(tasks.map(t => t._buyer_crit_id).filter(Boolean))];
-    const bcLabelById = new Map();
-    if(bcIds.length){
-      try {
-        const list = bcIds.map(id => 'id.eq.' + id).join(',');
-        const bRows = await _sbGet(SB_TABLES.buyerCriteria,
-          'or=(' + list + ')&select=id,desired_property_types,contact_id,ace_contacts(name)');
-        (bRows||[]).forEach(r => {
-          const cn = r.ace_contacts && r.ace_contacts.name;
-          const pt = r.desired_property_types;
-          const lbl = cn ? `${cn}${pt?' · '+pt:''}` : (pt || 'Buyer Criteria');
-          bcLabelById.set(r.id, lbl);
-        });
-      } catch(e){ console.warn('Task buyer-criteria lookup failed:', e.message); }
-    }
-    tasks.forEach(t => { if(t._buyer_crit_id) t._buyer_crit_label = bcLabelById.get(t._buyer_crit_id) || 'Buyer Criteria'; });
+    // v176: chip labels come from the cached lookup maps populated by
+    // _globalTasksFetchAndCache — no per-render network work.
+    tasks.forEach(t => {
+      if(t._contact_id)    t._contact_name      = cache.contactNameById.get(t._contact_id) || 'Contact';
+      if(t._buyer_crit_id) t._buyer_crit_label  = cache.bcLabelById.get(t._buyer_crit_id)   || 'Buyer Criteria';
+    });
 
     // Queue-position lookup — only on the Assigned-to-Others tab.
     // Pulls every pending task for each assignee in one OR query, then

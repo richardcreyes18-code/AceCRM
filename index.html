@@ -23598,14 +23598,16 @@ window._bulkAiRun = async function(){
   if(typeof buildSidebar === 'function') buildSidebar(document.getElementById('sideSearch')?.value||'');
 };
 
-// Headless single-deal worker. Calls ai-parse-deal-v2, builds a patch from
-// proposed_changes + na_proposals, applies via _sbPatch, then stamps
-// review_tag='deal_reviewed'. Mirrors the modal-apply flow from
-// _aiAutoFillApply (lines ~23874+) but skips per-field user overrides.
+// v151: Bulk worker now goes through the SAME _aiApplyChanges core that
+// the in-deal ✦ modal uses. Same edge-function call, same accept-all
+// behavior the modal would produce if you opened it and clicked Apply
+// without unchecking anything. Same audit log, same offers upsert.
+// After the apply, we additionally stamp review_tag='deal_reviewed'.
 async function _bulkAiOneDeal(propertyId){
   const cfg = getConfig();
   if(!cfg || !cfg.url || !cfg.key) throw new Error('Supabase config missing');
 
+  // 1. Call the AI — identical request the modal makes.
   const r = await fetch(`${cfg.url}/functions/v1/ai-parse-deal-v2`, {
     method: 'POST',
     headers: { 'Content-Type':'application/json', apikey: cfg.key, Authorization: 'Bearer '+cfg.key },
@@ -23614,87 +23616,38 @@ async function _bulkAiOneDeal(propertyId){
   const resp = await r.json();
   if(!r.ok || !resp.ok) throw new Error(resp.error || `HTTP ${r.status}`);
 
-  const proposed   = resp.proposed_changes || {};
-  const naProposals = Array.isArray(resp.na_proposals) ? resp.na_proposals : [];
-  const currentNa  = Array.isArray(resp.current_na_fields) ? resp.current_na_fields : [];
-  const uncertain  = Array.isArray(resp.uncertain_fields) ? resp.uncertain_fields : [];
+  const proposed     = resp.proposed_changes  || {};
+  const naProposals  = Array.isArray(resp.na_proposals)       ? resp.na_proposals       : [];
+  const currentNa    = Array.isArray(resp.current_na_fields)  ? resp.current_na_fields  : [];
+  const uncertain    = Array.isArray(resp.uncertain_fields)   ? resp.uncertain_fields   : [];
+  const allFields    = Array.isArray(resp.all_fields)         ? resp.all_fields         : [];
 
-  const patch = {};
-  for(const [col, info] of Object.entries(proposed)){
-    if(info && info.proposed !== null && info.proposed !== undefined && info.proposed !== '') {
-      patch[col] = info.proposed;
-    }
-  }
+  // 2. Auto-accept everything the modal would default-check: every
+  //    proposed value AND every na_proposal. Mirrors clicking Apply
+  //    without unchecking any rows.
+  const acceptedValueCols = new Set(Object.keys(proposed));
+  const acceptedNaCols    = new Set(naProposals);
 
-  if(naProposals.length){
-    patch.na_fields = Array.from(new Set([...(currentNa||[]), ...naProposals]));
-  }
+  // 3. Apply via the shared core.
+  await _aiApplyChanges(propertyId, {
+    proposed, naProposals, currentNa, uncertain, allFields,
+    acceptedValueCols, acceptedNaCols, userOverrides: {},
+  });
 
-  if(uncertain.length){
-    try {
-      const cur = await _sbGet(SB_TABLES.properties, `id=eq.${propertyId}&select=ai_clarifying_notes&limit=1`);
-      const existing = (Array.isArray(cur) && cur[0]?.ai_clarifying_notes) || '';
-      const summary = uncertain.map(u => `• ${u.field || u.col || u.column || u.name || u.key || ''}: ${u.reason || u.message || u.note || u.description || u.explanation || ''}`).join('\n');
-      patch.ai_clarifying_notes = (existing ? existing + '\n\n' : '')
-        + `--- AI uncertain (${new Date().toISOString().slice(0,10)}, bulk) ---\n` + summary;
-    } catch(_){}
-  }
+  // 4. Stamp review_tag — bulk-only step. Done as a separate small PATCH
+  //    so it doesn't risk colliding with the audit-log PATCH.
+  await _sbPatch(SB_TABLES.properties, propertyId, { review_tag: 'deal_reviewed' });
 
-  // Auto-flip noi_override_active if user-net or proforma NOI was applied.
-  if((patch.noi_actual_yr != null || patch.noi_proforma_yr != null) && patch.noi_override_active !== true){
-    patch.noi_override_active = true;
-  }
-
-  patch.ai_parsed_at = new Date().toISOString();
-  patch.review_tag = 'deal_reviewed';
-
-  // Apply.
-  await _sbPatch(SB_TABLES.properties, propertyId, patch);
-
-  // Mirror in-memory deal so the pipeline / sidebar reflect immediately.
+  // 5. Mirror the new state on the in-memory deal so the pipeline table
+  //    + sidebar reflect immediately. We do NOT call _aiRefreshDealUI
+  //    here — re-rendering the deal page on every iteration would thrash.
   const idx = (allDeals||[]).findIndex(x => x.id === propertyId);
   if(idx > -1){
-    const d = allDeals[idx];
-    // Map snake_case → Airtable field names for any keys we know about.
-    if(typeof SB_PROP_MAP !== 'undefined' && typeof _sbToAt === 'function'){
-      const overlay = _sbToAt(patch, SB_PROP_MAP);
-      Object.assign(d, overlay);
-    } else {
-      d['Review Tag'] = 'deal_reviewed';
-    }
-  }
-
-  // Mirror the offers upsert from _aiAutoFillApply for asking_price /
-  // target_seller_net so the Offers tab stays in sync.
-  if(patch.target_seller_net != null && Number(patch.target_seller_net) > 0){
     try {
-      const existing = await _sbGet('ace_deal_offers',
-        `deal_id=eq.${propertyId}&offer_type=eq.accepted_by_seller&select=id&order=created_at.desc&limit=1`);
-      const amount = Number(patch.target_seller_net);
-      if(existing && existing.length > 0){
-        await _sbPatch('ace_deal_offers', existing[0].id, { amount });
-      } else {
-        await _sbPost('ace_deal_offers', {
-          deal_id: propertyId, offer_type: 'accepted_by_seller', amount,
-          offer_date: new Date().toISOString().slice(0,10),
-          notes: 'Bulk AI Auto-Fill: seller target net'
-        });
-      }
-    } catch(_){}
-  }
-  if(patch.asking_price != null && Number(patch.asking_price) > 0){
-    try {
-      const existing = await _sbGet('ace_deal_offers',
-        `deal_id=eq.${propertyId}&offer_type=eq.asking&select=id&order=created_at.desc&limit=1`);
-      const amount = Number(patch.asking_price);
-      if(existing && existing.length > 0){
-        await _sbPatch('ace_deal_offers', existing[0].id, { amount });
-      } else {
-        await _sbPost('ace_deal_offers', {
-          deal_id: propertyId, offer_type: 'asking', amount,
-          offer_date: new Date().toISOString().slice(0,10),
-          notes: 'Bulk AI Auto-Fill: seller asking'
-        });
+      const fresh = await _sbGet(SB_TABLES.properties, `id=eq.${propertyId}`);
+      if(Array.isArray(fresh) && fresh[0]){
+        const overlay = _sbToAt(fresh[0], SB_PROP_MAP);
+        Object.assign(allDeals[idx], fresh[0], overlay);
       }
     } catch(_){}
   }
@@ -24174,6 +24127,174 @@ window._aiAutoFillDeal = async function(propertyId, opts){
   modal._allFields = all;
 };
 
+// v151: Shared apply core. Single source of truth used by both the
+// modal "Apply Selected" button and the Bulk AI Auto-Fill runner.
+// ctx shape:
+//   { proposed, naProposals, currentNa, uncertain, allFields,
+//     acceptedValueCols: Set<col>,
+//     acceptedNaCols:    Set<col>,
+//     userOverrides:     Record<col, value> }
+// Returns: { valCount, naCount } on success; throws on PATCH failure.
+async function _aiApplyChanges(propertyId, ctx){
+  const proposed     = ctx.proposed     || {};
+  const naProposals  = ctx.naProposals  || [];
+  const currentNa    = ctx.currentNa    || [];
+  const uncertain    = ctx.uncertain    || [];
+  const allFields    = ctx.allFields    || [];
+  const acceptedValue = ctx.acceptedValueCols || new Set();
+  const acceptedNaSet = ctx.acceptedNaCols    || new Set();
+  const userOverrides = ctx.userOverrides     || {};
+
+  const valuePatch = {};
+  const overrideFlags = {};
+  for(const col of acceptedValue){
+    if(!proposed[col]) continue;
+    let v = proposed[col].proposed;
+    if(Object.prototype.hasOwnProperty.call(userOverrides, col)){
+      const ov = userOverrides[col];
+      if(ov !== v && !(ov == null && v == null)){
+        overrideFlags[col] = true;
+        v = ov;
+      }
+    }
+    if(v === null || v === undefined || v === '') continue;
+    valuePatch[col] = v;
+  }
+  const acceptedNa = [...acceptedNaSet];
+
+  const patch = { ...valuePatch };
+  if(acceptedNa.length){
+    patch.na_fields = Array.from(new Set([...(currentNa || []), ...acceptedNa]));
+  }
+
+  if(uncertain.length){
+    const summary = uncertain.map(u => {
+      if(typeof u === 'string') return `• ${u}`;
+      const fld = u.field || u.col || u.column || u.name || u.key || '';
+      const rsn = u.reason || u.message || u.note || u.description || u.explanation || '';
+      return `• ${fld}${fld && rsn ? ': ' : ''}${rsn}`;
+    }).join('\n');
+    try {
+      const cur = await _sbGet(SB_TABLES.properties, `id=eq.${propertyId}&select=ai_clarifying_notes&limit=1`);
+      const existing = (Array.isArray(cur) && cur[0]?.ai_clarifying_notes) || '';
+      patch.ai_clarifying_notes = (existing ? existing + '\n\n' : '')
+        + `--- AI uncertain (${new Date().toISOString().slice(0,10)}) ---\n` + summary;
+    } catch(_){}
+  }
+  patch.ai_parsed_at = new Date().toISOString();
+
+  // Auto-flip noi_override_active if a NOI value was applied without it.
+  if((valuePatch.noi_actual_yr != null || valuePatch.noi_proforma_yr != null) && valuePatch.noi_override_active !== true){
+    valuePatch.noi_override_active = true;
+    patch.noi_override_active = true;
+  }
+
+  // Audit log — same shape the modal-apply produced.
+  try {
+    const appliedSet = new Set(Object.keys(valuePatch));
+    const naSet = new Set(acceptedNa);
+    const changes = [];
+    for(const f of allFields){
+      const isProp  = f.proposed !== null && f.proposed !== undefined;
+      const isNaProp = !!f.na_proposed;
+      if(!isProp && !isNaProp) continue;
+      const applied = appliedSet.has(f.col);
+      const appliedNa = naSet.has(f.col);
+      changes.push({
+        col: f.col,
+        label: f.col.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+        before: f.current ?? null,
+        proposed: f.proposed ?? null,
+        applied: applied ? (valuePatch[f.col] ?? null) : null,
+        applied_na: appliedNa,
+        skipped: !applied && !appliedNa,
+        explanation: f.explanation || null,
+        user_override: !!overrideFlags[f.col],
+      });
+    }
+    const logEntry = {
+      at: new Date().toISOString(),
+      applied_count: Object.keys(valuePatch).length,
+      na_count: acceptedNa.length,
+      changes,
+    };
+    const cur = await _sbGet(SB_TABLES.properties, `id=eq.${propertyId}&select=ai_autofill_log&limit=1`);
+    const existing = (Array.isArray(cur) && cur[0]?.ai_autofill_log) || [];
+    const arr = Array.isArray(existing) ? existing : [];
+    arr.push(logEntry);
+    patch.ai_autofill_log = arr;
+  } catch(e){ console.warn('[ai-autofill] log build failed:', e.message); }
+
+  await _sbPatch(SB_TABLES.properties, propertyId, patch);
+
+  // Offers upsert (same as the original modal-apply path).
+  if(valuePatch.target_seller_net != null && Number(valuePatch.target_seller_net) > 0){
+    try {
+      const existing = await _sbGet('ace_deal_offers',
+        `deal_id=eq.${propertyId}&offer_type=eq.accepted_by_seller&select=id&order=created_at.desc&limit=1`);
+      const amount = Number(valuePatch.target_seller_net);
+      if(existing && existing.length > 0){
+        await _sbPatch('ace_deal_offers', existing[0].id, { amount });
+      } else {
+        await _sbPost('ace_deal_offers', {
+          deal_id: propertyId, offer_type: 'accepted_by_seller', amount,
+          offer_date: new Date().toISOString().slice(0,10),
+          notes: 'AI Auto-Fill: seller target net'
+        });
+      }
+    } catch(e){ console.warn('[ai-autofill] accepted_by_seller upsert failed:', e.message); }
+  }
+  if(valuePatch.asking_price != null && Number(valuePatch.asking_price) > 0){
+    try {
+      const existing = await _sbGet('ace_deal_offers',
+        `deal_id=eq.${propertyId}&offer_type=eq.asking&select=id&order=created_at.desc&limit=1`);
+      const amount = Number(valuePatch.asking_price);
+      if(existing && existing.length > 0){
+        await _sbPatch('ace_deal_offers', existing[0].id, { amount });
+      } else {
+        await _sbPost('ace_deal_offers', {
+          deal_id: propertyId, offer_type: 'asking', amount,
+          offer_date: new Date().toISOString().slice(0,10),
+          notes: 'AI Auto-Fill: seller asking'
+        });
+      }
+    } catch(e){ console.warn('[ai-autofill] asking offer upsert failed:', e.message); }
+  }
+
+  return { valCount: Object.keys(valuePatch).length, naCount: acceptedNa.length, valuePatch };
+}
+
+// Refreshes the in-memory deal + active tab after an apply. Modal-apply
+// uses this; bulk-apply skips it (rendering each deal's tab during a
+// many-deal loop would thrash the UI).
+async function _aiRefreshDealUI(propertyId){
+  if(typeof allDeals === 'undefined' || !Array.isArray(allDeals)) return;
+  const idx = allDeals.findIndex(d => d.id === propertyId);
+  if(idx < 0) return;
+  try {
+    const fresh = await _sbGet(SB_TABLES.properties, `id=eq.${propertyId}`);
+    if(!Array.isArray(fresh) || !fresh[0]) return;
+    const refreshed = _sbToAt(fresh[0], SB_PROP_MAP);
+    Object.assign(allDeals[idx], fresh[0], refreshed);
+    if(typeof currentDeal !== 'undefined' && currentDeal?.id === propertyId){
+      Object.assign(currentDeal, fresh[0], refreshed);
+      if(typeof renderDealPage === 'function') renderDealPage();
+      try {
+        const tabContentEl = document.getElementById('tabContent');
+        if(tabContentEl && typeof currentTab !== 'undefined'){
+          if(currentTab === 'financial' && typeof renderFinancialTab === 'function'){
+            tabContentEl.innerHTML = renderFinancialTab(currentDeal);
+          } else if(currentTab === 'offers' && typeof loadOffersTab === 'function'){
+            loadOffersTab(propertyId);
+          } else if(currentTab === 'tenantmix' && typeof loadTenantMixTab === 'function'){
+            loadTenantMixTab(propertyId);
+          }
+        }
+      } catch(_){}
+    }
+  } catch(_){}
+}
+
 window._aiAutoFillApply = async function(propertyId, btn){
   const modal = document.getElementById('aiAutoFillModal');
   if(!modal) return;
@@ -24181,19 +24302,20 @@ window._aiAutoFillApply = async function(propertyId, btn){
   const naProposals = modal._naProposals || [];
   const currentNa = modal._currentNa || [];
   const uncertain = modal._uncertain || [];
+  const allFields = modal._allFields || [];
 
-  // Walk every checkbox in the modal — apply by data-kind. v128: when a
-  // value-row has an editable input (aiVal_<col>), prefer the user-typed
-  // value over the original AI proposal so users can override before apply.
-  const valuePatch = {};
-  const userOverrides = {}; // col -> true when user changed the AI value
-  const acceptedNa = [];
+  // Walk every checkbox in the modal — same logic as before, but now we
+  // hand the resolved selections to the shared core. Keeps user-override
+  // input handling local to the modal.
+  const acceptedValueCols = new Set();
+  const acceptedNaCols = new Set();
+  const userOverrides = {};
   for(const cb of modal.querySelectorAll('input[type=checkbox][data-kind]')){
     if(!cb.checked) continue;
     const col = (cb.id || '').replace(/^aiAccept_/, '');
     if(!col) continue;
     if(cb.dataset.kind === 'value' && proposed[col]){
-      let v = proposed[col].proposed;
+      acceptedValueCols.add(col);
       const editEl = document.getElementById('aiVal_' + col);
       if(editEl){
         const editType = editEl.dataset.editType || 'text';
@@ -24210,187 +24332,29 @@ window._aiAutoFillApply = async function(propertyId, btn){
         } else {
           parsed = raw === '' ? null : raw;
         }
-        if(parsed !== v && !(parsed == null && v == null)){
-          userOverrides[col] = true;
-          v = parsed;
-        }
+        userOverrides[col] = parsed;
       }
-      // Skip rows where user cleared the input AND the original was also empty.
-      if(v === null || v === undefined || v === '') continue;
-      valuePatch[col] = v;
     } else if(cb.dataset.kind === 'na'){
-      acceptedNa.push(col);
+      acceptedNaCols.add(col);
     }
   }
 
-  if(Object.keys(valuePatch).length === 0 && acceptedNa.length === 0){
+  if(acceptedValueCols.size === 0 && acceptedNaCols.size === 0){
     alert('Nothing selected.');
     return;
   }
   if(btn){ btn.disabled = true; btn.textContent = 'Applying…'; }
 
-  const patch = { ...valuePatch };
-
-  // Merge accepted N/A into existing na_fields.
-  if(acceptedNa.length){
-    const merged = Array.from(new Set([...(currentNa || []), ...acceptedNa]));
-    patch.na_fields = merged;
-  }
-
-  if(uncertain.length){
-    const summary = uncertain.map(u => `• ${u.field}: ${u.reason}`).join('\n');
-    try {
-      const cur = await _sbGet(SB_TABLES.properties, `id=eq.${propertyId}&select=ai_clarifying_notes&limit=1`);
-      const existing = (Array.isArray(cur) && cur[0]?.ai_clarifying_notes) || '';
-      patch.ai_clarifying_notes = (existing ? existing + '\n\n' : '')
-        + `--- AI uncertain (${new Date().toISOString().slice(0,10)}) ---\n` + summary;
-    } catch(_){}
-  }
-  patch.ai_parsed_at = new Date().toISOString();
-
-  // v121: when the user accepts noi_actual_yr or noi_proforma_yr but didn't
-  // tick the noi_override_active row, auto-flip it on. Otherwise the
-  // Financial Analysis NOI display keeps using EGI-Expenses instead of the
-  // override value. The edge fn v14+ proposes the boolean too, but it's a
-  // separate checkbox row in the modal and easy to miss.
-  if((valuePatch.noi_actual_yr != null || valuePatch.noi_proforma_yr != null) && valuePatch.noi_override_active !== true){
-    valuePatch.noi_override_active = true;
-    patch.noi_override_active = true;
-  }
-
-  // v128: snapshot the entire diff into ai_autofill_log BEFORE the patch so
-  // the user has an audit trail of every AI run — including fields they
-  // unchecked and any user overrides. We append to the existing log array
-  // (or seed a new one if the column was null).
   try {
-    const allFields = modal._allFields || [];
-    const appliedSet = new Set(Object.keys(valuePatch));
-    const naSet = new Set(acceptedNa);
-    const changes = [];
-    for(const f of allFields){
-      const isProp  = f.proposed !== null && f.proposed !== undefined;
-      const isNaProp = !!f.na_proposed;
-      if(!isProp && !isNaProp) continue;
-      const applied = appliedSet.has(f.col);
-      const appliedNa = naSet.has(f.col);
-      if(!applied && !appliedNa) {
-        // Skipped — still log so the audit shows what AI saw.
-      }
-      changes.push({
-        col: f.col,
-        label: f.col.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
-        before: f.current ?? null,
-        proposed: f.proposed ?? null,
-        applied: applied ? (valuePatch[f.col] ?? null) : null,
-        applied_na: appliedNa,
-        skipped: !applied && !appliedNa,
-        explanation: f.explanation || null,
-        user_override: !!userOverrides[f.col],
-      });
-    }
-    const logEntry = {
-      at: new Date().toISOString(),
-      applied_count: Object.keys(valuePatch).length,
-      na_count: acceptedNa.length,
-      changes,
-    };
-    const cur = await _sbGet(SB_TABLES.properties, `id=eq.${propertyId}&select=ai_autofill_log&limit=1`);
-    const existing = (Array.isArray(cur) && cur[0]?.ai_autofill_log) || [];
-    const arr = Array.isArray(existing) ? existing : [];
-    arr.push(logEntry);
-    patch.ai_autofill_log = arr;
-  } catch(e){ console.warn('[ai-autofill] log build failed:', e.message); }
-
-  try {
-    await _sbPatch(SB_TABLES.properties, propertyId, patch);
-
-    // v120: when target_seller_net is applied, also upsert an Accepted-From-Seller
-    // offer row so the value lands on the Offers tab card.
-    if(valuePatch.target_seller_net != null && Number(valuePatch.target_seller_net) > 0){
-      try {
-        const existing = await _sbGet('ace_deal_offers',
-          `deal_id=eq.${propertyId}&offer_type=eq.accepted_by_seller&select=id&order=created_at.desc&limit=1`);
-        const amount = Number(valuePatch.target_seller_net);
-        if(existing && existing.length > 0){
-          await _sbPatch('ace_deal_offers', existing[0].id, { amount });
-        } else {
-          await _sbPost('ace_deal_offers', {
-            deal_id: propertyId,
-            offer_type: 'accepted_by_seller',
-            amount,
-            offer_date: new Date().toISOString().slice(0,10),
-            notes: 'AI Auto-Fill: seller target net'
-          });
-        }
-      } catch(e){ console.warn('[ai-autofill] accepted_by_seller upsert failed:', e.message); }
-    }
-
-    // v121: same upsert pattern for asking_price -> ace_deal_offers (offer_type='asking')
-    // so the Seller Original Asking card on the Offers tab matches asking_price.
-    // Without this, the column is updated but the offer row drifts.
-    if(valuePatch.asking_price != null && Number(valuePatch.asking_price) > 0){
-      try {
-        const existing = await _sbGet('ace_deal_offers',
-          `deal_id=eq.${propertyId}&offer_type=eq.asking&select=id&order=created_at.desc&limit=1`);
-        const amount = Number(valuePatch.asking_price);
-        if(existing && existing.length > 0){
-          await _sbPatch('ace_deal_offers', existing[0].id, { amount });
-        } else {
-          await _sbPost('ace_deal_offers', {
-            deal_id: propertyId,
-            offer_type: 'asking',
-            amount,
-            offer_date: new Date().toISOString().slice(0,10),
-            notes: 'AI Auto-Fill: seller asking'
-          });
-        }
-      } catch(e){ console.warn('[ai-autofill] asking offer upsert failed:', e.message); }
-    }
-
-    const valCount = Object.keys(valuePatch).length;
-    const naCount = acceptedNa.length;
+    const result = await _aiApplyChanges(propertyId, {
+      proposed, naProposals, currentNa, uncertain, allFields,
+      acceptedValueCols, acceptedNaCols, userOverrides,
+    });
     const summaryParts = [];
-    if(valCount) summaryParts.push(`${valCount} value${valCount===1?'':'s'}`);
-    if(naCount) summaryParts.push(`${naCount} N/A`);
+    if(result.valCount) summaryParts.push(`${result.valCount} value${result.valCount===1?'':'s'}`);
+    if(result.naCount)  summaryParts.push(`${result.naCount} N/A`);
     if(typeof showSaveConfirm === 'function') showSaveConfirm(`✓ Applied ${summaryParts.join(' + ')}`);
-    // Refresh in-memory deal
-    if(typeof allDeals !== 'undefined' && Array.isArray(allDeals)){
-      const idx = allDeals.findIndex(d => d.id === propertyId);
-      if(idx >= 0){
-        try {
-          const fresh = await _sbGet(SB_TABLES.properties, `id=eq.${propertyId}`);
-          if(Array.isArray(fresh) && fresh[0]){
-            const refreshed = _sbToAt(fresh[0], SB_PROP_MAP);
-            // v122: also merge raw snake_case columns. _sbToAt only writes
-            // Airtable-style labels, but several UI readers (e.g. the Offers
-            // tab's pitch_out_price card at _renderOffersSummary) read the
-            // snake_case key directly off currentDeal. Without this merge,
-            // those readers see undefined right after AI apply and show a
-            // blank value despite the DB write succeeding.
-            Object.assign(allDeals[idx], fresh[0], refreshed);
-            if(typeof currentDeal !== 'undefined' && currentDeal?.id === propertyId){
-              Object.assign(currentDeal, fresh[0], refreshed);
-              if(typeof renderDealPage === 'function') renderDealPage();
-              // v121: force the active tab to re-render with fresh data so the
-              // Financial Analysis NOI override + Asking Price input pick up
-              // newly-applied AI values without a manual tab switch.
-              try {
-                const tabContentEl = document.getElementById('tabContent');
-                if(tabContentEl && typeof currentTab !== 'undefined'){
-                  if(currentTab === 'financial' && typeof renderFinancialTab === 'function'){
-                    tabContentEl.innerHTML = renderFinancialTab(currentDeal);
-                  } else if(currentTab === 'offers' && typeof loadOffersTab === 'function'){
-                    loadOffersTab(propertyId);
-                  } else if(currentTab === 'tenantmix' && typeof loadTenantMixTab === 'function'){
-                    loadTenantMixTab(propertyId);
-                  }
-                }
-              } catch(_){}
-            }
-          }
-        } catch(_){}
-      }
-    }
+    await _aiRefreshDealUI(propertyId);
     modal.remove();
   } catch(e){
     if(btn){ btn.disabled = false; btn.textContent = '✓ Apply Selected'; }

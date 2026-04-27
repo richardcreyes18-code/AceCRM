@@ -44877,10 +44877,19 @@ async function submitCreateTask(){
       });
       if(!res.ok) throw new Error(await res.text());
     }
+    // v158.5: capture src + ids BEFORE closeTaskModal() resets them, so
+    // the post-create reload actually fires on the deal-card / contact
+    // tab. Previously the close call cleared _taskModalDealId first and
+    // the reload guard skipped — newly-created task didn't appear until
+    // the user manually switched tabs and back.
+    const _src      = _taskModalSrc;
+    const _dealId   = _taskModalDealId;
+    const _dealAddr = _taskModalDealAddr;
+    const _ctcId    = _taskModalContactId;
     closeTaskModal(); showSaveConfirm('☑ Task created: '+name);
-    if(_taskModalSrc==='deal' && _taskModalDealId && document.getElementById('dealTasksContent')) _loadAndRenderDealTasks(_taskModalDealId,_taskModalDealAddr);
-    else if(_taskModalSrc==='contact' && _taskModalContactId) _contactLoadLinkedTasks(_taskModalContactId);
-    else if(_taskModalSrc==='global') showTasksPage();
+    if(_src==='deal' && _dealId && document.getElementById('dealTasksContent')) _loadAndRenderDealTasks(_dealId, _dealAddr);
+    else if(_src==='contact' && _ctcId) _contactLoadLinkedTasks(_ctcId);
+    else if(_src==='global') showTasksPage();
   }catch(e){
     if(btn){btn.disabled=false;btn.textContent='Create Task';}
     if(errEl){errEl.textContent='Failed: '+e.message;errEl.style.display='block';}
@@ -45283,6 +45292,18 @@ async function _contactLoadLinkedTasks(contactId){
 async function toggleTaskDone(taskId, currentStatus, source){
   const cfg=getConfig();
   const newStatus=currentStatus==='Done'?'Pending':'Done';
+  // v158.5: optimistic local update — fade the row out (or back in) without
+  // re-rendering the entire page. The previous behavior called showTasksPage()
+  // / _loadAndRenderDealTasks() on every checkbox click which scrolled the
+  // user to the top of a long list. Now the row removes itself smoothly.
+  const rowEls = document.querySelectorAll(`[data-task-id="${taskId}"]`);
+  if(newStatus === 'Done'){
+    rowEls.forEach(el => {
+      el.style.transition = 'opacity .25s ease, transform .25s ease';
+      el.style.opacity = '0.4';
+      el.style.transform = 'translateX(8px)';
+    });
+  }
   try{
     if(isSupabase()){
       await _sbPatch(SB_TABLES.tasks, taskId, {status: newStatus});
@@ -45292,10 +45313,31 @@ async function toggleTaskDone(taskId, currentStatus, source){
         body:JSON.stringify({fields:{Status:newStatus}})
       });
     }
-    if(source==='deal'&&currentDeal?.id) _loadAndRenderDealTasks(currentDeal.id, currentDeal['Address']||'');
-    else if(source==='contact' && _currentContactTasksId) _contactLoadLinkedTasks(_currentContactTasksId);
-    else if(source==='global') showTasksPage();
-  }catch(e){ alert('Failed to update task: '+e.message); }
+    // Remove the row from the DOM after the fade. Update in-memory caches
+    // so re-renders later are correct without re-fetching.
+    if(newStatus === 'Done'){
+      setTimeout(() => rowEls.forEach(el => el.remove()), 280);
+    } else {
+      // Toggling back to Pending — restore the row visually.
+      rowEls.forEach(el => {
+        el.style.opacity = '';
+        el.style.transform = '';
+      });
+    }
+    // Patch local data caches so a user who later switches sub-tabs / views
+    // sees the new status without a full reload.
+    if(source === 'deal' && _dealTasksData && Array.isArray(_dealTasksData.tasks)){
+      const t = _dealTasksData.tasks.find(x => x.id === taskId);
+      if(t) t['Status'] = newStatus;
+    }
+    if(typeof showSaveConfirm === 'function'){
+      showSaveConfirm(newStatus === 'Done' ? '✓ Task completed' : '↩ Task reopened');
+    }
+  }catch(e){
+    // Roll back the visual change if the PATCH failed.
+    rowEls.forEach(el => { el.style.opacity = ''; el.style.transform = ''; });
+    alert('Failed to update task: '+e.message);
+  }
 }
 
 async function deleteTaskRecord(taskId, source){

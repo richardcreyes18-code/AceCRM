@@ -3939,6 +3939,10 @@ async function _saveSnoozeToDB(dealId,dateStr,isSnoozed){
 function buildSidebar(filter=''){
   const list=document.getElementById('recentList');
   const f = (filter||'').toLowerCase();
+  // v144: precompute a normalized version of the query so any spelling
+  // variant ("first ave" / "1st avenue" / "NJ-77" / "Highway 77" / "1616
+  // new jersey 77") finds the same property.
+  const fNorm = f ? _normalizeAddr(f) : '';
   let deals=allDeals.filter(d=>{
     if(f){
       const addr = (d['Address']||'').toLowerCase();
@@ -3946,7 +3950,10 @@ function buildSidebar(filter=''){
       // v105: also search by owner name + cleaned address for better matching
       const ownerName = (d._ownerName || d['Owner Name'] || '').toLowerCase();
       const cleanAddr = cleanAddress(d['Address']||'').toLowerCase();
-      if(!addr.includes(f) && !id.includes(f) && !ownerName.includes(f) && !cleanAddr.includes(f)) return false;
+      // v144: address-normalized substring match in addition to raw substring
+      const normAddr = fNorm ? _normalizeAddr(d['Address']||'') : '';
+      const normMatches = fNorm && normAddr.indexOf(fNorm) !== -1;
+      if(!addr.includes(f) && !id.includes(f) && !ownerName.includes(f) && !cleanAddr.includes(f) && !normMatches) return false;
     }
     if(_sideView==='archived') return !!d['Is Archived'];
     if(_sideView==='starred') return !!d['Top Priority'] && !d['Is Archived'];
@@ -3988,6 +3995,70 @@ function getStageShort(d){
   const map={'New Lead':'NEW','Need INFO':'INFO','Needs Offer':'OFFER','Pitch Out':'PITCH','Limbo':'LIMBO','Needs a 1031':'1031','Negotiating':'NEG','Won':'WON','Closed':'CLSD','Overpriced':'OVER','Nurture':'NURT',
     'Prospect / Lead':'PROS','Offer In':'OFFER','Under Contract':'U/C','Dead':'DEAD'};
   return map[s]||s.substring(0,4).toUpperCase();
+}
+
+// v144: address normalization for fuzzy search — collapses every common
+// spelling variant of an address into a canonical form so a query like
+// "1616 nj 77" finds "1616 New Jersey 77, Elmer NJ 08318", and "first
+// ave" finds "1st Avenue", and "I-95" finds "Interstate 95" / "Route 95".
+//
+// Order matters — highway-alias substitution runs BEFORE punctuation
+// stripping (so "NJ-77" → "hwy 77" works); ordinals + word-numbers run
+// before punctuation stripping (so "1st" / "first" both → "1").
+//
+// Highway aliases only fire when followed by a 1-3 digit route number
+// at a word boundary, so "Elmer, NJ 08318" (state + 5-digit zip) keeps
+// "nj" — not converted to "hwy 08318".
+function _normalizeAddr(s){
+  if(!s) return '';
+  let n = String(s).toLowerCase();
+  // Fancy unicode dashes → simple hyphen
+  n = n.replace(/[\u2013\u2014]/g, '-');
+  // Multi-word highway aliases first ("New Jersey 77" → "hwy 77")
+  n = n.replace(/\bnew\s+jersey[\s\-]*(\d{1,3})\b/g, 'hwy $1');
+  // Single-token highway aliases (NJ / US / RT / Hwy / I / Route / Interstate)
+  // Only fires when followed by a 1-3 digit route number, which keeps
+  // "Elmer NJ 08318" (state + zip) untouched.
+  n = n.replace(/\b(?:nj|n\.j\.|us|u\.s\.|rt|rte|route|hwy|highway|interstate|i)[\s\-]*(\d{1,3})\b/g, 'hwy $1');
+  // Word numbers → digits (street ordinals like "1st Avenue" / "first ave")
+  const wordNums = {
+    first:'1', second:'2', third:'3', fourth:'4', fifth:'5', sixth:'6',
+    seventh:'7', eighth:'8', ninth:'9', tenth:'10',
+    eleventh:'11', twelfth:'12', thirteenth:'13', fourteenth:'14',
+    fifteenth:'15', sixteenth:'16', seventeenth:'17', eighteenth:'18',
+    nineteenth:'19', twentieth:'20', thirtieth:'30', fortieth:'40',
+    fiftieth:'50', sixtieth:'60', seventieth:'70', eightieth:'80',
+    ninetieth:'90', hundredth:'100',
+  };
+  n = n.replace(/\b(first|second|third|fourth|fifth|sixth|seventh|eighth|ninth|tenth|eleventh|twelfth|thirteenth|fourteenth|fifteenth|sixteenth|seventeenth|eighteenth|nineteenth|twentieth|thirtieth|fortieth|fiftieth|sixtieth|seventieth|eightieth|ninetieth|hundredth)\b/g, m => wordNums[m] || m);
+  // Ordinal suffixes "1st" → "1", "21st" → "21", "23rd" → "23"
+  n = n.replace(/(\d+)(st|nd|rd|th)\b/g, '$1');
+  // Directions
+  const dirMap = {
+    'north':'n', 'south':'s', 'east':'e', 'west':'w',
+    'northeast':'ne', 'northwest':'nw', 'southeast':'se', 'southwest':'sw',
+  };
+  n = n.replace(/\b(north|south|east|west|northeast|northwest|southeast|southwest)\b/g, m => dirMap[m] || m);
+  // Street suffixes
+  const sufMap = {
+    avenue:'ave', street:'st', boulevard:'blvd', road:'rd',
+    drive:'dr', lane:'ln', court:'ct', place:'pl',
+    parkway:'pkwy', terrace:'ter', circle:'cir', square:'sq',
+    trail:'trl', expressway:'expy',
+  };
+  n = n.replace(/\b(avenue|street|boulevard|road|drive|lane|court|place|parkway|terrace|circle|square|trail|expressway)\b/g, m => sufMap[m] || m);
+  // Strip everything that isn't alphanumeric or space
+  n = n.replace(/[^a-z0-9 ]+/g, ' ');
+  // Collapse whitespace
+  n = n.replace(/\s+/g, ' ').trim();
+  return n;
+}
+
+// v144: substring match against the normalized form of both query and
+// haystack — handles "1616 nj 77" finding "1616 New Jersey 77 ..." etc.
+function _addrMatches(haystack, queryNorm){
+  if(!queryNorm) return true;
+  return _normalizeAddr(haystack).indexOf(queryNorm) !== -1;
 }
 
 // ─── ADDRESS CLEANING & GEOCODING ────────────────────────────────
@@ -22373,6 +22444,31 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v144: address normalization for fuzzy property search.
+//   New _normalizeAddr(s) helper collapses every common spelling
+//   variant of an address into a canonical form. So a query like
+//   "1616 nj 77" finds "1616 New Jersey 77, Elmer NJ 08318";
+//   "first ave" finds "1st Avenue"; "I-95" finds "Interstate 95"
+//   / "Route 95" / "RT 95" / "US 95".
+//   Handles:
+//   - Highway aliases: NJ / US / RT / Rte / Route / Hwy / Highway /
+//     Interstate / I / "New Jersey" all collapse to "hwy" when
+//     followed by a 1-3 digit route number. State+zip ("Elmer NJ
+//     08318") stays untouched because the digit count gates this.
+//   - Ordinals: "1st" / "first" / "1ST" all → "1"; "21st" → "21"
+//   - Street suffixes: Avenue/Ave, Street/St, Boulevard/Blvd,
+//     Road/Rd, Drive/Dr, Lane/Ln, Court/Ct, Place/Pl, Parkway/Pkwy,
+//     Terrace/Ter, Circle/Cir, Square/Sq, Trail/Trl, Expressway/Expy
+//   - Directions: North/N, South/S, East/E, West/W + diagonals
+//   - Punctuation stripped, whitespace collapsed.
+//   Wired into:
+//   - buildSidebar() property search (sidebar)
+//   - applyPipelineFilters() pipeline view search box
+//   - _emailTplsLinkPicker renderList (Link to Property modal)
+//   - _emailTplsAutoLinkUnlinked auto-link worker uses the unified
+//     helper so its matches benefit from the same canonicalization.
+//   File: index.html:3993-4055 (helper), 3947-3961 (sidebar),
+//          48773-48792 (pipeline), 32354-32367 (picker).
 // v143: per-template "no link needed" manual toggle.
 //   Folder-based classification covers most cases but the user wanted
 //   to clear individual stragglers from Unlinked without renaming
@@ -32279,8 +32375,16 @@ window._emailTplsLinkPicker = function(tplId){
 
   const renderList = (q) => {
     const ql = String(q||'').trim().toLowerCase();
+    // v144: normalized-address match catches spelling variants in the
+    // search box ("first ave" / "1st avenue", "NJ-77" / "Highway 77").
+    const qlNorm = ql ? _normalizeAddr(ql) : '';
     const list = ql
-      ? candidates.filter(c => c.address.toLowerCase().includes(ql) || c.agent.toLowerCase().includes(ql))
+      ? candidates.filter(c => {
+          if(c.address.toLowerCase().includes(ql)) return true;
+          if(c.agent.toLowerCase().includes(ql)) return true;
+          if(qlNorm && _normalizeAddr(c.address).indexOf(qlNorm) !== -1) return true;
+          return false;
+        })
       : candidates.slice(0, 50);
     if(!list.length) return '<div style="padding:20px;text-align:center;font-size:12px;color:#94a3b8;">No properties match.</div>';
     return list.slice(0, 200).map(c => `
@@ -32348,12 +32452,11 @@ window._emailTplsAutoLinkUnlinked = async function(){
   if(!confirm(`Scan ${candidates.length} unlinked template${candidates.length===1?'':'s'} for an address and auto-link to the matching property?\n\n• Templates whose body or subject contains a uniquely-matching property address get linked.\n• Ambiguous matches (multiple candidates) are skipped — left unlinked for manual review.\n• Linked templates auto-set as official if the property has no official yet.`)) return;
 
   if(btn){ btn.disabled = true; btn.textContent = 'Scanning…'; }
-  // Build a normalized address index from allDeals. Key = stripped address
-  // (lowercase, alphanumerics + spaces only). Value = array of {id, address}.
-  const norm = (s) => String(s||'').toLowerCase()
-    .replace(/[^a-z0-9 ]+/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
+  // v144: use the unified _normalizeAddr so spelling variants collapse
+  // ("1st" / "first", "NJ-77" / "Highway 77" / "Route 77" all match).
+  const norm = (typeof _normalizeAddr === 'function')
+    ? _normalizeAddr
+    : (s) => String(s||'').toLowerCase().replace(/[^a-z0-9 ]+/g, ' ').replace(/\s+/g, ' ').trim();
   const STREET_WORDS = '(?:st|street|ave|avenue|rd|road|blvd|boulevard|ln|lane|dr|drive|ct|court|way|pl|place|hwy|highway|pkwy|parkway|ter|terrace|cir|circle|sq|square|trl|trail|expy|expressway|loop)';
   // Address regex: digits + 1-6 words + street suffix (case-insensitive).
   const ADDR_RE = new RegExp('\\b(\\d{1,6}(?:\\s+[A-Za-z0-9.\\-]+){1,6}\\s+' + STREET_WORDS + '\\b\\.?)', 'gi');
@@ -49402,6 +49505,9 @@ function _collectFilterOptions(){
 function applyPipelineFilters(deals){
   const f = getPipelineFilters();
   const q = (f.search || '').trim().toLowerCase();
+  // v144: also normalize the query so spelling variants on the address
+  // ("1st" / "first", "NJ-77" / "Highway 77") match.
+  const qNorm = q ? _normalizeAddr(q) : '';
 
   return deals.filter(d => {
     // Search: match if ANY of address, owner, agent, asset type, city, county, or lead ID contains the query
@@ -49413,9 +49519,11 @@ function applyPipelineFilters(deals){
       const propName = (d['Property Name']||'').toLowerCase();
       const county = (d['Simple County']||'').toLowerCase();
       const leadId = (d.id||'').toLowerCase();
+      // v144: normalized-address match catches spelling variants
+      const normHit = qNorm && _normalizeAddr(d['Address']||'').indexOf(qNorm) !== -1;
       const hit = addr.includes(q) || owner.includes(q) || agent.includes(q) ||
                   atype.includes(q) || propName.includes(q) || county.includes(q) ||
-                  leadId.includes(q);
+                  leadId.includes(q) || normHit;
       if(!hit) return false;
     }
     // Stage

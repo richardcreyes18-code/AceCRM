@@ -14190,6 +14190,160 @@ const EMAIL_TPL_PLACEHOLDERS = [
 // can emit tokens for any field, and the resolver auto-handles substitution.
 // EMAIL_TPL_FIELDS is the source of truth — adding a `token` to a field
 // makes it instantly tokenizable in emails.
+// ─── v187: Rich-text editor ──────────────────────────────────────────────
+// Replaces a <textarea> with a contenteditable <div> + toolbar (B / I / U,
+// font size, bullet list, numbered list, link, clear formatting). The new
+// div inherits the textarea's id and exposes a .value accessor mirroring
+// innerHTML, so existing code that reads/writes .value works unchanged.
+// Plain text saved before this version still renders correctly — newline
+// chars convert to <br> on load. Tokens like {asking price} pass through
+// HTML untouched, so the existing send-time substitution still works.
+
+function _rtTextToHTML(text){
+  if(!text) return '';
+  return String(text)
+    .replace(/&/g,'&amp;')
+    .replace(/</g,'&lt;').replace(/>/g,'&gt;')
+    .replace(/\n/g,'<br>');
+}
+// Heuristic: does this string already look like HTML?
+function _rtLooksLikeHTML(s){
+  return /<(b|i|u|p|div|br|ul|ol|li|a|span|font|strong|em|h[1-6])\b/i.test(String(s||''));
+}
+// Sanitize pasted HTML — keep basic formatting, strip styles/classes/scripts.
+function _rtSanitizePaste(html){
+  const wrap = document.createElement('div');
+  wrap.innerHTML = String(html||'');
+  const allowed = new Set(['B','I','U','STRONG','EM','UL','OL','LI','BR','P','DIV','A','SPAN','FONT','H1','H2','H3']);
+  const walk = (node) => {
+    [...node.childNodes].forEach(walk);
+    if(node.nodeType === 1){
+      if(node.tagName === 'SCRIPT' || node.tagName === 'STYLE'){ node.remove(); return; }
+      if(!allowed.has(node.tagName)){
+        // Replace with its text content
+        const parent = node.parentNode;
+        while(node.firstChild) parent.insertBefore(node.firstChild, node);
+        parent.removeChild(node);
+        return;
+      }
+      // Strip everything except a few safe attrs
+      [...node.attributes].forEach(a => {
+        const ok = (node.tagName === 'A' && a.name === 'href')
+                || (node.tagName === 'FONT' && a.name === 'size');
+        if(!ok) node.removeAttribute(a.name);
+      });
+    }
+  };
+  walk(wrap);
+  return wrap.innerHTML;
+}
+
+function _rtBuildToolbar(){
+  const btn = 'background:#fff;border:1px solid #cbd5e1;color:#475569;padding:4px 8px;font-size:12px;font-weight:600;border-radius:4px;cursor:pointer;line-height:1;height:28px;display:inline-flex;align-items:center;justify-content:center;min-width:28px;';
+  const sep = '<span style="width:1px;background:#cbd5e1;margin:0 2px;align-self:stretch;"></span>';
+  return `
+    <div class="rt-toolbar" style="display:flex;flex-wrap:wrap;gap:4px;align-items:stretch;padding:6px 8px;background:#f1f5f9;border:1px solid #cbd5e1;border-bottom:none;border-top-left-radius:6px;border-top-right-radius:6px;">
+      <button type="button" data-rt-cmd="bold"      title="Bold (⌘B)"      style="${btn}"><b>B</b></button>
+      <button type="button" data-rt-cmd="italic"    title="Italic (⌘I)"    style="${btn}"><i>I</i></button>
+      <button type="button" data-rt-cmd="underline" title="Underline (⌘U)" style="${btn}"><u>U</u></button>
+      ${sep}
+      <select data-rt-cmd="fontSize" title="Font size" style="${btn}padding:2px 6px;font-weight:500;cursor:pointer;">
+        <option value="2">Small</option>
+        <option value="3" selected>Normal</option>
+        <option value="5">Large</option>
+        <option value="6">XL</option>
+      </select>
+      ${sep}
+      <button type="button" data-rt-cmd="insertUnorderedList" title="Bullet list"   style="${btn}">• List</button>
+      <button type="button" data-rt-cmd="insertOrderedList"   title="Numbered list" style="${btn}">1. List</button>
+      ${sep}
+      <button type="button" data-rt-cmd="createLink" title="Insert link" style="${btn}">🔗 Link</button>
+      <button type="button" data-rt-cmd="unlink"     title="Remove link" style="${btn}">🔗✕</button>
+      ${sep}
+      <button type="button" data-rt-cmd="removeFormat" title="Clear formatting" style="${btn}">🧹</button>
+    </div>
+  `;
+}
+
+// Replace the textarea with id=`textareaId` with a rich-text editor.
+// Idempotent: if already mounted, this re-syncs the value and returns.
+function _rtMount(textareaId, opts){
+  opts = opts || {};
+  const ta = document.getElementById(textareaId);
+  if(!ta) return null;
+  if(ta.dataset.rtMounted === '1') return ta;
+  const initialVal = ta.value || ta.textContent || '';
+  const minH = opts.minHeight || ta.style.minHeight || '180px';
+  // Build the container and toolbar
+  const wrap = document.createElement('div');
+  wrap.className = 'rt-wrap';
+  wrap.style.cssText = 'display:flex;flex-direction:column;';
+  wrap.innerHTML = _rtBuildToolbar();
+  const toolbar = wrap.querySelector('.rt-toolbar');
+  // Build the contenteditable div, inheriting the textarea's id
+  const div = document.createElement('div');
+  div.id = ta.id;
+  div.contentEditable = 'true';
+  div.dataset.rtMounted = '1';
+  div.style.cssText = `padding:10px;border:1px solid #94a3b8;border-top:none;background:#fff;min-height:${minH};font-size:12px;font-family:Tahoma,Arial,sans-serif;line-height:1.5;border-bottom-left-radius:6px;border-bottom-right-radius:6px;outline:none;overflow-y:auto;box-sizing:border-box;`;
+  div.innerHTML = _rtLooksLikeHTML(initialVal) ? initialVal : _rtTextToHTML(initialVal);
+  // .value accessor mirrors innerHTML, so existing .value reads/writes still work
+  Object.defineProperty(div, 'value', {
+    configurable: true,
+    get: () => div.innerHTML,
+    set: (v) => {
+      if(v == null){ div.innerHTML = ''; return; }
+      const s = String(v);
+      div.innerHTML = _rtLooksLikeHTML(s) ? s : _rtTextToHTML(s);
+    }
+  });
+  // Wire toolbar buttons
+  toolbar.querySelectorAll('[data-rt-cmd]').forEach(el => {
+    el.addEventListener('mousedown', e => e.preventDefault()); // keep editor focus
+    if(el.tagName === 'SELECT'){
+      el.addEventListener('change', () => {
+        try { document.execCommand('fontSize', false, el.value); } catch(_e){}
+        div.dispatchEvent(new Event('input', { bubbles:true }));
+      });
+    } else {
+      el.addEventListener('click', () => {
+        const cmd = el.dataset.rtCmd;
+        try {
+          if(cmd === 'createLink'){
+            const url = prompt('Enter URL (https://...):', 'https://');
+            if(url) document.execCommand('createLink', false, url);
+          } else {
+            document.execCommand(cmd, false, null);
+          }
+        } catch(_e){}
+        div.dispatchEvent(new Event('input', { bubbles:true }));
+      });
+    }
+  });
+  // Paste cleanup
+  div.addEventListener('paste', (e) => {
+    e.preventDefault();
+    const cd = e.clipboardData || window.clipboardData;
+    const html = cd?.getData('text/html');
+    const text = cd?.getData('text/plain') || '';
+    if(html){
+      try { document.execCommand('insertHTML', false, _rtSanitizePaste(html)); }
+      catch(_e){ document.execCommand('insertText', false, text); }
+    } else {
+      document.execCommand('insertText', false, text);
+    }
+  });
+  // Forward an inline oninput attribute that the original textarea had
+  if(ta.hasAttribute('oninput')){
+    div.setAttribute('oninput', ta.getAttribute('oninput'));
+  }
+  // Mount
+  ta.parentNode.insertBefore(wrap, ta);
+  wrap.appendChild(div);
+  ta.remove();
+  return div;
+}
+
 (function _emailExtendPlaceholdersFromFields(){
   if(typeof EMAIL_TPL_FIELDS === 'undefined' || !Array.isArray(EMAIL_TPL_FIELDS)) return;
   const have = new Set(EMAIL_TPL_PLACEHOLDERS.map(p => p.token.toLowerCase()));
@@ -14285,6 +14439,15 @@ function _emailBindFocus(){
 function _emailInsertPlaceholder(token){
   const el = document.getElementById(_emailLastFocus) || document.getElementById('emailTemplateText');
   if(!el) return;
+  // v187: contenteditable path — use Selection / execCommand to insert at cursor.
+  if(el.isContentEditable){
+    el.focus();
+    try { document.execCommand('insertText', false, token); }
+    catch(_e){ el.appendChild(document.createTextNode(token)); }
+    el.dispatchEvent(new Event('input', { bubbles:true }));
+    return;
+  }
+  // <input> / <textarea> path — slice .value at the cursor.
   const start = el.selectionStart ?? el.value.length;
   const end   = el.selectionEnd   ?? el.value.length;
   el.value = el.value.slice(0, start) + token + el.value.slice(end);
@@ -14901,6 +15064,8 @@ function _atplRenderEditor(){
     <label style="display:block;font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:0.5px;margin:14px 0 4px;">Required fields <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">(missing values surface as a warning on the deal's AI Communication tab)</span></label>
     <div>${fieldsHTML}</div>
   `;
+  // v187: mount rich-text editor on the asset-template body textarea.
+  if(typeof _rtMount === 'function') _rtMount('atplBody', { minHeight:'320px' });
 }
 window._atplRenderEditor = _atplRenderEditor;
 
@@ -15308,6 +15473,8 @@ async function loadAICommTab(recordId){
       try { await _marketingLoad(); } catch(_e){}
     }
     if(typeof _atplRefreshStatusBar === 'function') _atplRefreshStatusBar();
+    // v187: mount rich-text editor on the email body textarea.
+    if(typeof _rtMount === 'function') _rtMount('emailTemplateText', { minHeight:'520px' });
     if(typeof _emailBindFocus === 'function') _emailBindFocus();
     if(typeof _loadUserTemplatesList === 'function'){
       await _loadUserTemplatesList();

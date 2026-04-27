@@ -14439,18 +14439,60 @@ function _dbMultiChanged(kind){
 //
 // v102.24: Location-family kinds (state, region, county, city) are now sourced
 // from _locFilters (the LOC-001 component state) instead of from checkbox DOM.
-// Empty selection = null (no filter). Non-empty = array of picks. The rest
-// (stage, type, source) still read from the legacy checkbox multi-selects.
+// Empty selection = null (no filter). Non-empty = array of picks.
+// v159: stage + source moved off the legacy checkbox-dropdown UI into the
+// chip-style typeahead store (_dbStageFilter / _dbSourceFilter).
 function _dbMultiGetSelected(kind){
   if(kind === 'state' || kind === 'region' || kind === 'county' || kind === 'city' || kind === 'type'){
     const arr = _locFilters[kind] || [];
     return arr.length ? arr.slice() : null;
+  }
+  if(kind === 'stage'){
+    return (_dbStageFilter && _dbStageFilter.length) ? _dbStageFilter.slice() : null;
+  }
+  if(kind === 'source'){
+    return (_dbSourceFilter && _dbSourceFilter.length) ? _dbSourceFilter.slice() : null;
   }
   const cbs = [...document.querySelectorAll(`.db_${kind}_cb`)];
   if(cbs.length === 0) return null;
   const checked = cbs.filter(c => c.checked).map(c => c.value);
   if(checked.length === cbs.length) return null; // "all" = unfiltered
   return checked;
+}
+
+// v159: chip-style multi-select combos for Deal Board Stage + Source.
+// Same typeahead pattern as the State chip in LOC-001 — type to narrow,
+// Enter / click adds a chip, × removes. Shares the underlying combobox
+// helper that powers every Pipeline filter — but uses dedicated Deal
+// Board state so we don't touch _pipelineFilters.
+function _dbStageComboHTML(values){
+  return _filterComboHTML({
+    id: 'db_stageCombo',
+    label: 'Stage',
+    placeholder: 'Search stage…',
+    options: () => (values || []).slice(),
+    getSelected: () => _dbStageFilter || [],
+    setSelected: (vals) => {
+      _dbStageFilter = Array.isArray(vals) ? vals : [];
+      renderDealBoard();
+      if(typeof dbRefreshMapPins === 'function') dbRefreshMapPins();
+    },
+  });
+}
+
+function _dbSourceComboHTML(values){
+  return _filterComboHTML({
+    id: 'db_sourceCombo',
+    label: 'Source',
+    placeholder: 'Search source…',
+    options: () => (values || []).slice(),
+    getSelected: () => _dbSourceFilter || [],
+    setSelected: (vals) => {
+      _dbSourceFilter = Array.isArray(vals) ? vals : [];
+      renderDealBoard();
+      if(typeof dbRefreshMapPins === 'function') dbRefreshMapPins();
+    },
+  });
 }
 
 // Type-ahead search inside a multi-select popup. Hides rows that don't match.
@@ -14473,6 +14515,13 @@ function dbClearAllFilters(){
   // remaining checkbox-backed filters.
   // v102.34: 'type' also moved into LOC-001 — _locClearAll() clears it.
   _locClearAll();
+  // v159: clear chip-style stage + source filters
+  _dbStageFilter = [];
+  _dbSourceFilter = [];
+  if(typeof _comboRefresh === 'function'){
+    if(document.getElementById('combo-si-db_stageCombo')) _comboRefresh('db_stageCombo');
+    if(document.getElementById('combo-si-db_sourceCombo')) _comboRefresh('db_sourceCombo');
+  }
   ['stage','source'].forEach(kind => {
     document.querySelectorAll(`.db_${kind}_cb`).forEach(cb => { cb.checked = true; });
     _dbMultiChanged(kind);
@@ -16552,6 +16601,14 @@ function _dbGetCities(){
 // LOC-001 selection state. Default NJ selected (matches component gallery spec).
 // v102.34: 'type' joins state/region/county/city as a LOC-backed filter.
 const _locFilters = { state: ['NJ'], region: [], county: [], city: [], type: [] };
+
+// v159: Deal Board stage + source filters as chip-style typeahead state.
+// Empty array = no filter (matches everything). Mirrors the State chip
+// pattern in LOC-001 — type to narrow, click/Enter to add a chip, click
+// the × on a chip to remove. Only the Deal Board uses these; the
+// Pipeline keeps its own filter state in _pipelineFilters.
+let _dbStageFilter = [];
+let _dbSourceFilter = [];
 
 // Keyboard navigation cursor per field (index of currently-highlighted option).
 const _locKb = { state: -1, region: -1, county: -1, city: -1, type: -1 };
@@ -19586,7 +19643,12 @@ const _DB_FILTER_KEY    = 'ace_db_filters_v1';
 
 function _dbSaveFilterState(){
   try{
+    // v159: stage + source moved to chip-style state vars; legacy
+    // checkbox-DOM read kept as a fallback for any code path that still
+    // mutates the checkboxes during the transition.
     const readKind = (kind) => {
+      if(kind === 'stage')  return (_dbStageFilter && _dbStageFilter.length)  ? _dbStageFilter.slice()  : null;
+      if(kind === 'source') return (_dbSourceFilter && _dbSourceFilter.length) ? _dbSourceFilter.slice() : null;
       const cbs = [...document.querySelectorAll(`.db_${kind}_cb`)];
       if(!cbs.length) return null;
       const checked = cbs.filter(c => c.checked).map(c => c.value);
@@ -19626,18 +19688,16 @@ function _dbRestoreFilterState(){
     if(search && typeof st.search === 'string') search.value = st.search;
     const priority = document.getElementById('db_priority');
     if(priority) priority.checked = !!st.priority;
-    ['stage','source'].forEach(kind => {
-      const cbs = [...document.querySelectorAll(`.db_${kind}_cb`)];
-      if(!cbs.length) return;
-      const saved = st[kind];
-      if(!Array.isArray(saved)){
-        cbs.forEach(cb => cb.checked = true);
-      } else {
-        const ss = new Set(saved);
-        cbs.forEach(cb => cb.checked = ss.has(cb.value));
-      }
-      _dbMultiChanged(kind);
-    });
+    // v159: restore stage + source into chip-style state. Empty / null =
+    // no filter (matches everything). Non-empty array = active picks.
+    if(Array.isArray(st.stage)) _dbStageFilter = st.stage.slice();
+    else _dbStageFilter = [];
+    if(Array.isArray(st.source)) _dbSourceFilter = st.source.slice();
+    else _dbSourceFilter = [];
+    if(typeof _comboRefresh === 'function'){
+      if(document.getElementById('combo-si-db_stageCombo'))  _comboRefresh('db_stageCombo');
+      if(document.getElementById('combo-si-db_sourceCombo')) _comboRefresh('db_sourceCombo');
+    }
     if(st.loc){
       ['state','region','county','city','type'].forEach(k => {
         if(Array.isArray(st.loc[k])){
@@ -19745,9 +19805,9 @@ function showDealBoard(){
 
         <!-- FILTER ROW 3: Stages + Asset Type + Sources + Priority + spacer + Columns + Clear Filters -->
         <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-          ${_dbMultiBtn('stage', 'All Stages', stages, false)}
+          ${_dbStageComboHTML(stages)}
           ${_locRenderSingleField('type', 'Asset Type')}
-          ${_dbMultiBtn('source', 'All Sources', sources, false)}
+          ${_dbSourceComboHTML(sources)}
           <label class="db-fbar-check">
             <input type="checkbox" id="db_priority" onchange="renderDealBoard();dbRefreshMapPins()"/>
             &#9733; Priority Only
@@ -19857,6 +19917,13 @@ function showDealBoard(){
   // here after showDealBoard's innerHTML has landed.
   _locWireField('type');
   _locRenderTags('type');
+  // v159: wire the Stage + Source typeahead combos so they share the
+  // same chip-input UX as the Pipeline Stage / State filters. Wired
+  // here after innerHTML so the combo-* elements exist in the DOM.
+  if(typeof _comboWire === 'function'){
+    if(document.getElementById('combo-si-db_stageCombo')) _comboWire('db_stageCombo');
+    if(document.getElementById('combo-si-db_sourceCombo')) _comboWire('db_sourceCombo');
+  }
   // v102.42: Restore the user's last filter state (sessionStorage, 60-min
   // TTL) BEFORE the first render so filter inputs / LOC tags / sort are
   // already populated when renderDealBoard runs. Tab close clears session

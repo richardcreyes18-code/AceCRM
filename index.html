@@ -36138,25 +36138,49 @@ function _bcBuildFilterChipsHTML(){
   return chips.join(' ');
 }
 
+// v163.1: parse a "list" field that may be either:
+//   - a real JS array (when the column is JSONB-typed)
+//   - a JSON-string array like '["Ocean","Warren"]'
+//   - a comma/semicolon/pipe-separated plain string
+// Returns a clean array of trimmed strings with stray quotes/brackets
+// removed. Used by the BC filter to keep junk data ("Ocean"]) from
+// poisoning either the option lists or the matching logic.
+function _bcParseList(raw){
+  if(!raw) return [];
+  if(Array.isArray(raw)) return raw.map(s => String(s).trim()).filter(Boolean);
+  const s = String(raw).trim();
+  if(!s) return [];
+  if((s.startsWith('[') && s.endsWith(']')) || (s.startsWith('{') && s.endsWith('}'))){
+    try {
+      const v = JSON.parse(s);
+      if(Array.isArray(v)) return v.map(x => String(x).trim()).filter(Boolean);
+    } catch(_e){}
+  }
+  // Fall back: strip outer brackets, split, strip stray quotes per token.
+  return s.replace(/^[\[\{]+|[\]\}]+$/g,'')
+          .split(/[,;|]/)
+          .map(t => t.trim().replace(/^["']|["']$/g,'').trim())
+          .filter(Boolean);
+}
+
 // Build the grouped-card filter panel HTML. Mirrors the Pipeline panel
 // structure so the buyer page feels consistent with the deal pages.
+//
+// v163.1: dropdown options come from the canonical _appLists (Settings →
+// App Lists) instead of from buyer rows, because buyer columns hold
+// dirty data (JSON-string arrays, free-text). The user's expectation is
+// that filters always show the standard list. Buyer data is still used
+// for MATCHING but parsed via _bcParseList so junk like '["Ocean"]'
+// resolves to ['Ocean'].
 function _bcBuildFilterPanelHTML(){
-  // Collect distinct asset types / counties / cities / states from loaded
-  // buyer records so the combo options reflect actual data.
-  const recs = allBuyerCriteria || [];
-  const assetTypes = [...new Set(recs.flatMap(r => {
-    const s = (r.fields['Simple Text Desired Property Type']||'').replace(/[🔴🟠🟡🟢🔵🟣]/g,'').trim();
-    return s.split(',').map(t=>t.trim()).filter(Boolean);
-  }))].sort();
-  const counties = [...new Set(recs.flatMap(r =>
-    String(r.fields['Preferred Counties']||'').split(/[,;|]/).map(s=>s.trim()).filter(Boolean)
-  ))].sort();
-  const cities = [...new Set(recs.flatMap(r =>
-    String(r.fields['Preferred Cities']||'').split(/[,;|]/).map(s=>s.trim()).filter(Boolean)
-  ))].sort();
-  const states = [...new Set(recs.flatMap(r =>
-    String(r.fields['Preferred States']||'').split(/[,;|]/).map(s=>s.trim()).filter(Boolean)
-  ))].sort((a,b) => a==='NJ'?-1:b==='NJ'?1:a.localeCompare(b));
+  const assetTypes = (_appLists && _appLists.asset_types && _appLists.asset_types.length
+    ? _appLists.asset_types.slice() : []).sort();
+  const counties   = (_appLists && _appLists.counties && _appLists.counties.length
+    ? _appLists.counties.slice() : []).sort();
+  const cities     = (_appLists && _appLists.preferred_cities && _appLists.preferred_cities.length
+    ? _appLists.preferred_cities.slice() : []).sort();
+  const states     = (_appLists && _appLists.states && _appLists.states.length
+    ? _appLists.states.slice() : []).sort((a,b) => a==='NJ'?-1:b==='NJ'?1:a.localeCompare(b));
 
   const fmtNumWithCommas = (n) => {
     if(n == null || n === '') return '';
@@ -36347,23 +36371,18 @@ function renderBuyerCriteriaTable(records){
     // list; match if ANY of selected types appears as a substring.
     const matchT = !selTypes.length || selTypes.some(t => assets.includes(t));
 
-    // States — buyer's "Preferred States" is comma/semi-colon delimited.
-    const buyerStates = String(f['Preferred States']||'')
-      .split(/[,;|]/).map(s=>s.trim()).filter(Boolean);
+    // v163.1: parse buyer's preferred-* fields with the robust parser so
+    // JSON-string arrays don't show up as 'Ocean"]' in matching either.
+    const buyerStates   = _bcParseList(f['Preferred States']);
+    const buyerCounties = _bcParseList(f['Preferred Counties']).map(s => s.toLowerCase());
+    const buyerCities   = _bcParseList(f['Preferred Cities']).map(s => s.toLowerCase());
+
     const matchSt = !selStates.length
       || buyerStates.some(s => selStates.includes(s));
 
-    // Counties — match if ANY selected county is in Preferred Counties or
-    // Simple Area Preference (legacy text). Buyer's preferred_counties is
-    // a comma list of county names.
-    const buyerCounties = String(f['Preferred Counties']||'')
-      .split(/[,;|]/).map(s=>s.trim().toLowerCase()).filter(Boolean);
     const matchC = !selCounties.length
       || selCounties.some(c => buyerCounties.includes(c) || areas.includes(c));
 
-    // Cities — exact preferred-cities OR substring of preferred_cities text.
-    const buyerCities = String(f['Preferred Cities']||'')
-      .split(/[,;|]/).map(s=>s.trim().toLowerCase()).filter(Boolean);
     const matchCity = !selCities.length
       || selCities.some(c => buyerCities.includes(c));
 

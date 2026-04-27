@@ -6491,8 +6491,18 @@ function collectAllDealFields(){
   s(fields,'NOI', getNum('bi_noi'));
 
   // ── PROPERTY DETAILS ─────────────────────────────────────────
-  const street1 = getVal('nameStreet1'), city=getVal('nameCity'), state=getVal('nameState'), zip=getVal('nameZip');
-  if(street1){ let a=street1; if(city) a+=', '+city; if(state) a+=', '+state; if(zip) a+=' '+zip; s(fields,'Address',a); }
+  // v152: ONLY read nameStreet1/City/State/Zip when the Edit Address modal
+  // is actually visible. These inputs persist in the DOM after the modal
+  // is hidden, so any markDirty()→autosave that fires later (e.g. from an
+  // unrelated owner-change) was reading the stale values and overwriting
+  // the deal's Address with whatever street/city was last typed in that
+  // modal. Triggered the cross-deal address-contamination bug — fixed.
+  const _editAddrModal = document.getElementById('editAddrModal');
+  const _editAddrOpen  = !!_editAddrModal && _editAddrModal.style.display !== 'none' && _editAddrModal.offsetParent !== null;
+  if(_editAddrOpen){
+    const street1 = getVal('nameStreet1'), city=getVal('nameCity'), state=getVal('nameState'), zip=getVal('nameZip');
+    if(street1){ let a=street1; if(city) a+=', '+city; if(state) a+=', '+state; if(zip) a+=' '+zip; s(fields,'Address',a); }
+  }
 
   // v113.74: propUse / constStatus are now <select> with display-string
   // values. Distressed / Ground Lease / Sale Leaseback are select-of-
@@ -12328,7 +12338,11 @@ async function saveSellerContact(propertyId){
           currentDeal['Owner'] = [record.id];
           currentDeal['_ownerName'] = name;
           currentDeal['_sellerName'] = name;
-          _liveUpdateHeader && _liveUpdateHeader();
+          // v152: don't call _liveUpdateHeader here — see linkExistingSellerContact.
+          // _refreshOwnerHeader handles the visible owner row without tripping
+          // the markDirty-then-masterSave path that was reading stale Edit
+          // Address modal inputs.
+          if(typeof _refreshOwnerHeader === 'function') _refreshOwnerHeader();
         }
       }catch(e){ console.warn('owner_contact_id link failed:', e.message); }
     }
@@ -40762,8 +40776,11 @@ async function linkExistingSellerContact(propertyId, contactId, contactRow){
       currentDeal['_sellerContactNotes'] = contactRow.contact_notes  || '';
       currentDeal['Owner']               = [contactId];
       currentDeal['_ownerName']          = contactRow.name || '';
-      // Update the deal-card header strip too
-      if(typeof _liveUpdateHeader === 'function') _liveUpdateHeader();
+      // v152: do NOT call _liveUpdateHeader here — it reads leftover values
+      // from the Edit Address modal inputs (nameStreet1/City/Zip) and calls
+      // markDirty(), which causes the next autosave to overwrite the deal's
+      // address with whatever address was last typed in that modal (even on
+      // a different deal). _refreshOwnerHeader covers the owner row alone.
     }
     showSaveConfirm('✓ Owner linked to ' + (contactRow.name || 'contact'));
     _dcRefreshContactsTab();
@@ -40791,7 +40808,9 @@ async function unlinkSellerContact(propertyId){
       currentDeal['_sellerContactNotes'] = '';
       currentDeal['Owner']               = [];
       currentDeal['_ownerName']          = '';
-      if(typeof _liveUpdateHeader === 'function') _liveUpdateHeader();
+      // v152: same fix as linkExistingSellerContact above — _liveUpdateHeader
+      // would trip the autosave bug that overwrites Address from stale modal
+      // inputs. _refreshOwnerHeader is the right call here.
     }
     showSaveConfirm('✓ Owner unlinked');
     _dcRefreshContactsTab();

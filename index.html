@@ -21905,6 +21905,9 @@ async function _ddMergeAllConfident(opts){
       await _ddPrePromoteNotesToGPN(survivor, losers);
       await _ddCallMergeEdgeFn(survivor.id, losers.map(l => l.id));
       losers.forEach(l => { l['Is Archived'] = true; });
+      // v140: remove losers from every in-memory cache so they vanish from
+      // search, pickers, sidebars on this client without a page reload.
+      _purgeMergedFromMemory(losers.map(l => l.id));
       // Best-effort survivor refresh — not awaited inside the worker so the
       // next group can start while the row reload runs in parallel.
       _ddRefreshDealInMemory(survivor.id);
@@ -22370,6 +22373,23 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v140: Merged properties no longer leak into search / pickers / sidebars.
+//   Rule from user: "merged properties should never be searchable in the
+//   user-facing CRM, only internally on Supabase by an admin." The merge
+//   edge function correctly sets deleted_at on losers, but the in-memory
+//   allDeals array retained the loser entries (just flagged Is Archived
+//   = true) until next page reload — and the email-template Link-to-
+//   Property picker iterated allDeals + _emailTplsExtraProps without
+//   filtering on Is Archived, so it leaked merged duplicates back into
+//   search results. Fix:
+//     - new _purgeMergedFromMemory(loserIds) helper splices losers out
+//       of allDeals + _allDealsSnapshot + _emailTplsExtraProps.
+//     - both merge call sites (per-card _ddMergeGroup + bulk processOne)
+//       call it after _ddCallMergeEdgeFn returns.
+//     - picker also defensively skips Is Archived entries for safety
+//       across stale sessions.
+//   File: index.html:21906-21915 (bulk merge), 24263-24268 (per-card),
+//          24226-24252 (purge helper), 32145-32165 (picker defense)
 // v139: AI Communication tab — auto-load the OFFICIAL email template on
 //   open instead of defaulting to "(new / unsaved)" (blank). Previously
 //   v113.16 explicitly cleared _currentTemplateId on init to prevent
@@ -24224,6 +24244,32 @@ async function _ddRefreshDealInMemory(dealId){
   } catch(e){ console.warn('[_ddRefreshDealInMemory] failed for', dealId, e.message); }
 }
 
+// v140: after a merge, remove the loser ids from every in-memory cache so
+// they stop appearing in user-facing search / pickers / sidebars. The DB
+// already has deleted_at set — the rule from the user is "merged
+// properties should never be searchable in the user-facing CRM, only
+// internally on Supabase by an admin." Without this purge, allDeals
+// retains the loser entries (just flagged Is Archived = true) and
+// downstream readers that don't filter on Is Archived (e.g. the email-
+// template Link-to-property picker) leak them into the search results.
+function _purgeMergedFromMemory(loserIds){
+  if(!Array.isArray(loserIds) || !loserIds.length) return;
+  const lset = new Set(loserIds);
+  if(typeof allDeals !== 'undefined' && Array.isArray(allDeals)){
+    for(let i = allDeals.length - 1; i >= 0; i--){
+      if(lset.has(allDeals[i]?.id)) allDeals.splice(i, 1);
+    }
+  }
+  if(typeof _allDealsSnapshot !== 'undefined' && Array.isArray(_allDealsSnapshot)){
+    for(let i = _allDealsSnapshot.length - 1; i >= 0; i--){
+      if(lset.has(_allDealsSnapshot[i]?.id)) _allDealsSnapshot.splice(i, 1);
+    }
+  }
+  if(typeof window !== 'undefined' && window._emailTplsExtraProps instanceof Map){
+    for(const id of loserIds) window._emailTplsExtraProps.delete(id);
+  }
+}
+
 async function _ddMergeGroup(groupIdx, fuzzy){
   fuzzy = !!fuzzy;
   const list = fuzzy ? _dealDedupeState.fuzzyGroups : _dealDedupeState.groups;
@@ -24262,6 +24308,8 @@ async function _ddMergeGroup(groupIdx, fuzzy){
     await _ddPrePromoteNotesToGPN(survivor, losers);
     await _ddCallMergeEdgeFn(survivor.id, losers.map(l => l.id));
     losers.forEach(l => { l['Is Archived'] = true; });
+    // v140: purge losers from in-memory caches so they're not searchable.
+    _purgeMergedFromMemory(losers.map(l => l.id));
     await _ddRefreshDealInMemory(survivor.id);
 
     showSaveConfirm(`✓ Merged ${losers.length} duplicate${losers.length>1?'s':''}`);
@@ -32147,16 +32195,22 @@ window._emailTplsLinkPicker = function(tplId){
   if(!tpl){ alert('Template not found.'); return; }
 
   // Build candidate property list (allDeals union with lazy cache).
+  // v140: skip any entry flagged Is Archived (post-merge soft-delete) so
+  // merged-loser properties never appear in the user-facing picker.
+  // The merge handler already calls _purgeMergedFromMemory; this is a
+  // defensive belt-and-suspenders for stale state from prior sessions.
   const seen = new Set();
   const candidates = [];
   const seedHint = (tpl.subject || tpl.name || '').toLowerCase();
   for(const d of (allDeals||[])){
     if(!d?.id || seen.has(d.id)) continue;
+    if(d['Is Archived']) continue;
     seen.add(d.id);
     candidates.push({ id: d.id, address: d['Address'] || '', agent: d['Assigned Agent'] || '' });
   }
   for(const [id, d] of window._emailTplsExtraProps.entries()){
     if(seen.has(id)) continue;
+    if(d && d['Is Archived']) continue;
     seen.add(id);
     candidates.push({ id, address: d['Address'] || '', agent: d['Assigned Agent'] || '' });
   }

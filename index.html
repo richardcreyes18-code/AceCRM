@@ -13999,7 +13999,15 @@ const EMAIL_TPL_FIELDS = [
       const gri = Number(d['Gross Revenue Yearly']) || (Number(d['Gross Rental Income (Monthly)'])*12) || 0;
       const exp = Number(d['Expenses Yearly'])       || (Number(d['Expenses Monthly'])*12)             || 0;
       const noi = gri - exp;
-      return (gri && exp && noi>0) ? '$'+Math.round(noi).toLocaleString() : '';
+      if(gri && exp && noi > 0) return '$'+Math.round(noi).toLocaleString();
+      // v185.1: derive from Cap Rate (CRM) × Asking Price as a final fallback.
+      // The Financial Analysis tab shows a live-computed NOI built this way when
+      // gross/expenses aren't separately stored — so the email check should
+      // recognize it as "filled" too.
+      const cap = Number(d['Cap Rate (CRM)']);
+      const ask = Number(d['Asking Price']);
+      if(cap > 0 && ask > 0) return '$'+Math.round(ask * cap).toLocaleString();
+      return '';
   } },
   { k:'capRate',       group:'Financials',   label:'Cap Rate',              token:'{cap rate}',         get:d=>{ const v=d['Cap Rate (CRM)']; return (v!=null&&v!=='')? (Number(v)*100).toFixed(2)+'%':''; } },
   { k:'expenseRatio',  group:'Financials',   label:'Expense Ratio',         token:'{expense ratio}',    get:d=>{ const v=d['Actual Expense Ratio %']; return (v!=null&&v!=='')? Number(v).toFixed(1)+'%':''; } },
@@ -14193,7 +14201,18 @@ const EMAIL_TPL_PLACEHOLDERS = [
       label: f.label,
       resolve: () => {
         try {
-          const v = f.get(currentDeal || {});
+          const d = currentDeal || {};
+          // v185.1: explicit N/A → resolve to literal "N/A" so the rendered
+          // email reflects the agent's choice ("Ceiling Height: N/A") instead
+          // of leaving an empty placeholder.
+          const naCol = (typeof _ATPL_NA_COL_BY_KEY === 'object') ? _ATPL_NA_COL_BY_KEY[f.k] : null;
+          if(naCol){
+            const raw = d['NA Fields'];
+            const naList = Array.isArray(raw) ? raw
+                         : (typeof raw === 'string' ? (function(){ try{ const a = JSON.parse(raw); return Array.isArray(a)?a:[]; }catch(_){ return []; } })() : []);
+            if(naList.includes(naCol)) return 'N/A';
+          }
+          const v = f.get(d);
           return (v == null || v === '') ? '' : String(v).trim();
         } catch(_e){ return ''; }
       }
@@ -14745,12 +14764,46 @@ function _getAssetTemplate(slug){
 
 // Compute which required fields are empty for this deal. Returns an array of
 // EMAIL_TPL_FIELDS objects (label / token) so the caller can render a list.
+// v185.1: skip fields the user has explicitly marked N/A (stored in
+// d['NA Fields'] as snake_case column names). N/A is a valid answer ("we
+// don't have it / not applicable") and shouldn't appear as missing.
+const _ATPL_NA_COL_BY_KEY = {
+  ceilingHeight: 'ceiling_height_ft',
+  numTenants:    'num_tenants',
+  units:         'no_of_units',
+  yearBuilt:     'year_built',
+  yearRenovated: 'year_renovated',
+  occupancy:     'occupancy_pct',
+  lotSize:       'total_lot_size',
+  noOfBuildings: 'no_of_buildings',
+  noOfStories:   'no_of_stories',
+  parking:       'no_of_parking_spaces',
+  netRentableSF: 'net_rentable_sf',
+  sqft:          'square_footage',
+  capRate:       'cap_rate_crm',
+  pfCapRate:     'cap_rate_proforma_crm',
+  vacancyRate:   'vacancy_rate_pct',
+  annualDebtSvc: 'annual_debt_service',
+  dscr:          'dscr_manual',
+  expenseRatio:  'actual_expense_ratio_pct',
+  pfExpRatio:    'proforma_expense_ratio_pct',
+  county:        'county',
+  propClass:     'property_class',
+  propCondition: 'property_condition',
+  ownerOcc:      'owner_occupied',
+};
 function _missingRequiredFields(d, requiredKeys){
   if(!Array.isArray(requiredKeys) || !d) return [];
+  const naList = Array.isArray(d['NA Fields']) ? d['NA Fields']
+               : (typeof d['NA Fields'] === 'string'
+                    ? (function(){ try { const a = JSON.parse(d['NA Fields']); return Array.isArray(a)?a:[]; } catch(_){ return []; } })()
+                    : []);
   const out = [];
   for(const key of requiredKeys){
     const f = EMAIL_TPL_FIELDS.find(x => x.k === key);
     if(!f) continue;
+    const naCol = _ATPL_NA_COL_BY_KEY[key];
+    if(naCol && naList.includes(naCol)) continue; // explicitly N/A — counts as filled
     let v = '';
     try { v = f.get(d); } catch(_e){}
     if(v == null || String(v).trim() === '') out.push(f);

@@ -2053,6 +2053,7 @@ const SB_TASK_MAP = {
   property_id:'Property ID', contact_id:'Contact ID',
   buyer_criteria_id:'Buyer Criteria ID',
   task_type:'Task Type',
+  communication_type:'Communication Type',
   assigned_to_user_id:'Assigned To', assigned_by_user_id:'Assigned By',
   assigned_at:'Assigned At',
   sort_order:'Sort Order',
@@ -46859,6 +46860,8 @@ let _taskModalBuyerCritId=null, _taskModalBuyerCritLabel='';
 // v113.23: explicit task-type override. The modal's pill row writes here;
 // submit() falls back to _taskTypeFromSource() when null.
 let _taskModalTypeOverride = null;
+// v185: optional communication channel ('' | 'call' | 'email' | 'text' | 'other').
+let _taskModalCommType = '';
 // v113.23: assignee picker state. Defaults to the current user; the modal's
 // "Assign to" select writes here. Submit reads this to stamp
 // assigned_to_user_id (and assigned_by/at when it's a cross-agent handoff).
@@ -47129,6 +47132,28 @@ function _taskSetTypeOverride(v){
   if(pillsEl) pillsEl.innerHTML = _taskTypePillsHtml();
 }
 
+// v185: Communication Type pills (None / Call / Email / Text / Other).
+// Optional channel tag — defaults to None. Saved on ace_tasks.communication_type.
+function _taskCommTypePillsHtml(){
+  const TYPES = [
+    { k:'',      label:'— None' },
+    { k:'call',  label:'📞 Call' },
+    { k:'email', label:'✉ Email' },
+    { k:'text',  label:'💬 Text' },
+    { k:'other', label:'• Other' },
+  ];
+  const active = _taskModalCommType || '';
+  return TYPES.map(t => {
+    const on = (t.k === active);
+    return `<button type="button" onclick="_taskSetCommType('${t.k}')" style="background:${on?'#0ea5e9':'var(--surface)'};color:${on?'#fff':'var(--text2)'};border:1px solid ${on?'#0ea5e9':'var(--border)'};border-radius:99px;padding:5px 11px;font-size:11px;font-weight:600;cursor:pointer;">${t.label}</button>`;
+  }).join('') + `<input type="hidden" id="ctask_commType" value="${active}"/>`;
+}
+window._taskSetCommType = function(v){
+  _taskModalCommType = v || '';
+  const el = document.getElementById('ctask_commTypePills');
+  if(el) el.innerHTML = _taskCommTypePillsHtml();
+};
+
 // v113.23: async search for the link pickers. Each kind has its own
 // scoping + label format. Results render as clickable rows in the dropdown.
 let _taskLinkSearchTimers = {};
@@ -47224,6 +47249,7 @@ function openCreateTaskModal(dealId=null,address='',source='deal',contactId=null
   // buyer-criteria card's task button) — keep that, but always reset the
   // override + assignee so a stale prior selection doesn't leak.
   _taskModalTypeOverride = null;
+  _taskModalCommType     = '';
   _taskModalAssigneeId   = (_currentUser && _currentUser.id) || null;
   // v157: reset shared-task state. Default is single-assign mode with
   // current user. When user toggles to "multiple", the current user is
@@ -47274,6 +47300,11 @@ function openCreateTaskModal(dealId=null,address='',source='deal',contactId=null
           <div id="ctask_typePills" style="display:flex;gap:6px;flex-wrap:wrap;">${_taskTypePillsHtml()}</div>
           <div style="font-size:10px;color:var(--text3);margin-top:4px;">Auto-detects from links — pick a type to override.</div>
         </div>
+        <div style="margin-bottom:13px;">
+          <label style="font-size:12px;font-weight:600;color:var(--text2);display:block;margin-bottom:5px;">Communication Type</label>
+          <div id="ctask_commTypePills" style="display:flex;gap:6px;flex-wrap:wrap;">${_taskCommTypePillsHtml()}</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:4px;">Optional channel tag for this task.</div>
+        </div>
         <div style="border-top:1px solid var(--border);padding-top:13px;margin-bottom:13px;">
           <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:8px;">Linked Items (optional)</div>
           <div style="margin-bottom:8px;"><div style="font-size:11px;color:var(--text2);margin-bottom:3px;">Property / Deal</div><div id="ctask_dealRow">${_taskLinkRowHtml('deal')}</div></div>
@@ -47309,6 +47340,7 @@ function closeTaskModal(){
   _taskModalContactId=null; _taskModalContactName='';
   _taskModalBuyerCritId=null; _taskModalBuyerCritLabel='';
   _taskModalTypeOverride=null;
+  _taskModalCommType='';
   _taskModalAssigneeId=(_currentUser && _currentUser.id) || null;
   _taskModalEditing=null;
 }
@@ -47390,6 +47422,7 @@ async function openEditTaskModal(taskId, taskName, priority, dueDate, notes, sou
   _taskModalBuyerCritId  = (row && row.buyer_criteria_id) || null;
   _taskModalBuyerCritLabel = '';
   _taskModalTypeOverride = (row && row.task_type) || null;
+  _taskModalCommType = (row && row.communication_type) || '';
   _taskModalAssigneeId   = (row && row.assigned_to_user_id) || (_currentUser && _currentUser.id) || null;
   // v157/v175: pull assignees from cache when available — no extra fetch.
   _taskModalAssigneeIds = new Set();
@@ -47512,6 +47545,7 @@ async function submitEditTask(taskId, source){
   const prev = _taskModalEditing && _taskModalEditing.assigned_to_user_id;
   const isHandOff = primary && meId && primary !== meId && prev !== primary;
 
+  const commTypeChosen = (document.getElementById('ctask_commType')?.value ?? _taskModalCommType ?? '') || null;
   const patch = {
     task: name,
     priority: prio || null,
@@ -47521,6 +47555,7 @@ async function submitEditTask(taskId, source){
     contact_id:         contactId,
     buyer_criteria_id:  buyerCritId,
     task_type:          typeChosen,
+    communication_type: commTypeChosen,
     assigned_to_user_id: primary,
   };
 
@@ -47716,6 +47751,7 @@ async function submitCreateTask(){
         task:name, status:'Pending',
         priority: prio||null, due_date: due||null, notes: notes||null,
         task_type: taskType,
+        communication_type: (document.getElementById('ctask_commType')?.value || _taskModalCommType || null) || null,
         sort_order: sortOrder
       };
       if(_taskModalDealId&&!_taskModalDealId.startsWith('demo')) sbTask.property_id=_taskModalDealId;

@@ -6977,17 +6977,20 @@ function _equalizeTextareaGroup(groupName){
 let _finSubTab = 'financial'; // 'financial' | 'offers' | 'tenantmix' | 'comps'
 
 function _finSubTabBarHTML(){
+  // v168.1: same tab-btn underline style as the parent tab row, so the
+  // sub-bar visually attaches to the main bar. Tinted background +
+  // slightly indented so the user can still tell it's a sub-level.
   const subs = [
     ['financial', '📊 Financial Analysis'],
     ['offers',    '💰 Offers'],
     ['tenantmix', '🏪 Tenant Mix'],
     ['comps',     '🏘 Comps'],
   ];
-  return `<div class="fin-subtabs" style="display:flex;gap:0;border-bottom:1px solid #e2e8f0;margin:-4px -2px 14px;padding:0 2px;flex-wrap:wrap;">
+  return `<div class="tabs-row fin-subtabs" style="border-bottom:1px solid #e2e8f0;margin:-18px -18px 16px;padding:0 18px;background:#f8fafc;">
     ${subs.map(([k, label]) => {
       const active = _finSubTab === k;
-      return `<button onclick="switchTab('${k}', this)"
-        style="padding:9px 16px;background:${active?'#fff':'transparent'};border:1px solid ${active?'#e2e8f0':'transparent'};border-bottom:${active?'2px solid #2563eb':'2px solid transparent'};font-size:12px;font-weight:${active?'700':'600'};color:${active?'#0f172a':'#64748b'};cursor:pointer;font-family:inherit;border-radius:6px 6px 0 0;margin-bottom:-1px;">${label}</button>`;
+      const cls = 'tab-btn' + (active ? ' active' : '');
+      return `<button class="${cls}" onclick="switchTab('${k}', this)">${label}</button>`;
     }).join('')}
   </div>`;
 }
@@ -9286,11 +9289,9 @@ function renderOffersTab(d){
   const poVal   = d.pitch_out_markup_value != null ? Number(d.pitch_out_markup_value) : null;
   return `
     <div style="padding:4px 0 20px;">
+      <!-- v168.1: page-name header dropped — sub-tab bar already labels the tab. -->
       <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px;flex-wrap:wrap;gap:12px;">
-        <div>
-          <div class="section-hdr" style="margin-bottom:4px;"><span class="icon">💰</span> Offers & Negotiation</div>
-          <div style="font-size:11px;color:#64748b;">Track the full negotiation: seller asking → Ace starter → accepted → pitch out → buyer offers.</div>
-        </div>
+        <div style="font-size:11px;color:#64748b;">Track the full negotiation: seller asking → Ace starter → accepted → pitch out → buyer offers.</div>
         <button onclick="_openAddOfferModal('${dealId}')" class="save-btn" style="background:linear-gradient(180deg,#22c55e,#16a34a);color:#fff;border-color:#15803d;padding:7px 16px;">+ Add Offer</button>
       </div>
 
@@ -10978,12 +10979,10 @@ function renderFinancialTab(d){
 
   const _finMode = _summaryGetMode(d, 'financial');
   return `
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:8px;flex-wrap:wrap;">
-      <div class="section-hdr" style="margin-bottom:0;"><span class="icon">📊</span> Financial Analysis</div>
-      <div style="display:flex;align-items:center;gap:8px;">
-        <span style="font-size:10px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.04em;">View Mode:</span>
-        ${_sModeToggle('financial', _finMode)}
-      </div>
+    <!-- v168.1: page-name header dropped — sub-tab bar already labels the tab. -->
+    <div style="display:flex;align-items:center;justify-content:flex-end;gap:8px;margin-bottom:8px;flex-wrap:wrap;">
+      <span style="font-size:10px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.04em;">View Mode:</span>
+      ${_sModeToggle('financial', _finMode)}
     </div>
 
     <!-- TOOLTIP STYLES -->
@@ -47957,9 +47956,8 @@ let _tmTenants = [];   // cached tenant records for current deal
 function renderTenantMixTab(d){
   return `
     <div style="padding:16px;font-family:Tahoma,Arial,sans-serif;">
-      <!-- HEADER -->
+      <!-- v168.1: page-name dropped — sub-tab bar already labels the tab. -->
       <div style="display:flex;align-items:center;gap:10px;margin-bottom:12px;flex-wrap:wrap;">
-        <div style="font-size:15px;font-weight:bold;color:#1a3a6e;">🏪 Tenant Mix / Rent Roll</div>
         <div id="tmStatus" style="font-size:11px;color:#888;">Loading...</div>
         <button class="save-btn" style="margin-left:auto;padding:4px 14px;" onclick="loadTenantMixTab('${d?.id||''}')">↻ Refresh</button>
         <button onclick="tmOpenAIImport()" style="
@@ -51533,7 +51531,7 @@ function renderCompsTab(d){
     : `<tr><td colspan="7" style="text-align:center;color:#888;padding:12px;">No ${label} comparables in your pipeline</td></tr>`;
 
   return `
-    <div class="section-hdr"><span class="icon">📐</span> Comparables / Comps</div>
+    <!-- v168.1: page-name dropped — sub-tab bar already labels the tab. -->
     <div class="info-box">
       <div class="info-box-title">Subject Property</div>
       <div style="display:flex;gap:24px;font-size:12px;">

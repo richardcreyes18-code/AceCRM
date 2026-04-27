@@ -22373,6 +22373,25 @@ window._fubImportFromCsv = async function(opts){
   return { stats, samples, total: work.length };
 };
 
+// v141: Email Templates — declutter Unlinked + auto-link from text.
+//   (a) Templates from admin / marketing folders ("Follow Up Boss",
+//       "Sale Inquiry", "On Boarding", "2025 Cold Reach Out") no
+//       longer appear in the "Unlinked" bucket. They get a calmer
+//       "📎 No link needed" badge in row tags, and their "Link to
+//       property" button is replaced with a quiet em-dash. New
+//       virtual folder "📎 No Link Needed" lists them separately.
+//       The set of no-link folders lives in _EMAIL_TPL_NO_LINK_FOLDERS
+//       so it's easy to extend.
+//   (b) New "✦ Auto-link from text" button on the Unlinked folder
+//       header. Scans every unlinked template's subject + body for
+//       a US street-address pattern (digits + words + street suffix),
+//       normalizes, and matches against allDeals addresses. Unique
+//       match → links + auto-flips is_official when the property has
+//       no official yet. Ambiguous matches (>1 candidate) skip and
+//       stay unlinked for manual review.
+//   File: index.html:32328-32360 (folder helpers), 32378-32465
+//          (folder painter routing), 32483-32621 (row badges +
+//          button), 32673-32787 (auto-link worker)
 // v140: Merged properties no longer leak into search / pickers / sidebars.
 //   Rule from user: "merged properties should never be searchable in the
 //   user-facing CRM, only internally on Supabase by an admin." The merge
@@ -32275,6 +32294,96 @@ window._emailTplsLinkSearchInput = function(q){
   list.innerHTML = modal._renderList(q);
 };
 
+// v141: bulk auto-link unlinked templates by extracting an address from the
+// subject + body and matching against allDeals. Skips ambiguous matches
+// (multiple candidate properties) and templates from no-link folders.
+// On a unique match: sets property_id and auto-flips is_official=true if
+// the property has no other official template yet.
+window._emailTplsAutoLinkUnlinked = async function(){
+  const btn = document.getElementById('emailTplsAutoLinkBtn');
+  const candidates = (_emailTplsLibState.rows || []).filter(r => !r.property_id && !_emailTplIsNoLinkNeeded(r));
+  if(!candidates.length){ alert('No unlinked templates to auto-link.'); return; }
+  if(!confirm(`Scan ${candidates.length} unlinked template${candidates.length===1?'':'s'} for an address and auto-link to the matching property?\n\n• Templates whose body or subject contains a uniquely-matching property address get linked.\n• Ambiguous matches (multiple candidates) are skipped — left unlinked for manual review.\n• Admin / marketing folders are excluded.\n• Linked templates auto-set as official if the property has no official yet.`)) return;
+
+  if(btn){ btn.disabled = true; btn.textContent = 'Scanning…'; }
+  // Build a normalized address index from allDeals. Key = stripped address
+  // (lowercase, alphanumerics + spaces only). Value = array of {id, address}.
+  const norm = (s) => String(s||'').toLowerCase()
+    .replace(/[^a-z0-9 ]+/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+  const STREET_WORDS = '(?:st|street|ave|avenue|rd|road|blvd|boulevard|ln|lane|dr|drive|ct|court|way|pl|place|hwy|highway|pkwy|parkway|ter|terrace|cir|circle|sq|square|trl|trail|expy|expressway|loop)';
+  // Address regex: digits + 1-6 words + street suffix (case-insensitive).
+  const ADDR_RE = new RegExp('\\b(\\d{1,6}(?:\\s+[A-Za-z0-9.\\-]+){1,6}\\s+' + STREET_WORDS + '\\b\\.?)', 'gi');
+
+  // Index: for each deal, pre-compute the normalized "street + number" prefix
+  // we'll match against. Skip deals without a usable address.
+  const dealIndex = [];
+  for(const d of (allDeals||[])){
+    const a = String(d['Address'] || '').trim();
+    if(!a) continue;
+    const m = a.match(ADDR_RE);
+    if(!m || !m.length) continue;
+    dealIndex.push({ id: d.id, address: a, normFirst: norm(m[0]) });
+  }
+
+  let linked = 0, skippedAmbiguous = 0, skippedNoMatch = 0;
+  const failures = [];
+
+  for(let i = 0; i < candidates.length; i++){
+    const tpl = candidates[i];
+    if(btn) btn.textContent = `Scanning ${i+1}/${candidates.length}…`;
+    // Try subject first, then body. For each candidate address the AI/regex
+    // pulls out, look up which deals match.
+    const haystack = (String(tpl.subject||'') + '\n' + String(tpl.body||''));
+    const found = haystack.match(ADDR_RE) || [];
+    if(!found.length){ skippedNoMatch++; continue; }
+    // For each found address, find deals whose normalized first-line matches.
+    const candDealIds = new Set();
+    for(const raw of found){
+      const n = norm(raw);
+      // Prefix match — deal address must start with this normalized chunk
+      // (or vice versa, in case the source has more context like a unit).
+      for(const d of dealIndex){
+        if(d.normFirst === n || d.normFirst.startsWith(n) || n.startsWith(d.normFirst)){
+          candDealIds.add(d.id);
+        }
+      }
+      if(candDealIds.size > 1) break; // already ambiguous, no need to keep checking
+    }
+    if(candDealIds.size === 0){ skippedNoMatch++; continue; }
+    if(candDealIds.size > 1){ skippedAmbiguous++; continue; }
+    const propId = [...candDealIds][0];
+    try {
+      const existing = await _sbGet('ace_user_email_templates',
+        `user_email=eq.${encodeURIComponent(_currentUser?.email||'')}&property_id=eq.${propId}&is_official=eq.true&select=id&limit=1`);
+      const shouldBeOfficial = !(Array.isArray(existing) && existing.length > 0);
+      const patch = { property_id: propId };
+      if(shouldBeOfficial) patch.is_official = true;
+      await _sbPatch('ace_user_email_templates', tpl.id, patch);
+      tpl.property_id = propId;
+      if(shouldBeOfficial) tpl.is_official = true;
+      linked++;
+    } catch(e){
+      failures.push({ name: tpl.name, error: e.message });
+    }
+  }
+
+  // Refresh the missing-prop cache so newly-linked properties render.
+  if(typeof _emailTplsLoadMissingProps === 'function'){
+    try { await _emailTplsLoadMissingProps(); } catch(_){}
+  }
+  _emailTplsLibPaint();
+
+  const lines = [
+    `✓ Linked ${linked}`,
+    skippedAmbiguous ? `⚠ Skipped ${skippedAmbiguous} ambiguous (multiple candidate properties — left for manual review)` : '',
+    skippedNoMatch ? `· Skipped ${skippedNoMatch} (no address found / no matching property)` : '',
+    failures.length ? `✗ ${failures.length} failed` : '',
+  ].filter(Boolean);
+  alert('Auto-link complete:\n\n' + lines.join('\n') + (failures.length ? '\n\nFirst failure: ' + failures[0].error : ''));
+};
+
 window._emailTplsConfirmLink = async function(tplId, propertyId){
   const modal = document.getElementById('emailTplsLinkModal');
   if(modal) modal.remove();
@@ -32321,6 +32430,24 @@ function _emailTplsExtractFolder(name){
   return m[1] ? m[1].trim() : 'FUB Import (no folder)';
 }
 
+// v141: folders whose templates are admin / marketing / generic outreach and
+// don't need a property link. Templates in these folders are excluded from
+// the "Unlinked" bucket so it stops cluttering with stuff that has no
+// physical property to point to. They still appear in their own folder and
+// in "All Email Templates" — they just stop nagging for a link.
+const _EMAIL_TPL_NO_LINK_FOLDERS = new Set([
+  'Follow Up Boss',
+  'Sale Inquiry',
+  'On Boarding',
+  '2025 Cold Reach Out',
+]);
+
+function _emailTplIsNoLinkNeeded(row){
+  if(!row) return false;
+  const f = _emailTplsExtractFolder(row.name);
+  return !!(f && _EMAIL_TPL_NO_LINK_FOLDERS.has(f));
+}
+
 function _emailTplsLibPaint(){
   const root = document.getElementById('emailTplsTabRoot');
   if(!root) return;
@@ -32362,7 +32489,11 @@ function _emailTplsLibPaintFolders(){
 
   const total    = rows.length;
   const linked   = rows.filter(r => !!r.property_id).length;
-  const unlinked = total - linked;
+  // v141: Unlinked count excludes templates in admin/marketing folders that
+  // don't need a property link (Follow Up Boss, Sale Inquiry, etc.) so the
+  // bucket only counts templates that genuinely need attention.
+  const unlinked = rows.filter(r => !r.property_id && !_emailTplIsNoLinkNeeded(r)).length;
+  const noLinkNeeded = rows.filter(r => !r.property_id && _emailTplIsNoLinkNeeded(r)).length;
   const fubTotal = rows.filter(r => /^\(FUB IMPORT/.test(r.name||'')).length;
 
   // Sort FUB folders by count desc, then name asc.
@@ -32415,6 +32546,7 @@ function _emailTplsLibPaintFolders(){
           ${specialRow('📂', 'All Email Templates', total,    'all')}
           ${specialRow('🏢', 'Linked to a Property', linked,  'linked')}
           ${specialRow('🔗', 'Unlinked',             unlinked,'unlinked')}
+          ${noLinkNeeded ? specialRow('📎', 'No Link Needed (admin/marketing)', noLinkNeeded, 'nolink') : ''}
           ${userCreatedCount ? specialRow('✏️', 'User-Created (non-FUB)', userCreatedCount, 'usercreated') : ''}
           ${visibleFolders.map(([name, count]) => fubRow(name, count)).join('')}
           ${visibleFolders.length === 0 && q ? `<tr><td colspan="3" style="padding:18px;text-align:center;font-size:12px;color:#64748b;">No folders match "${safeQ}"</td></tr>` : ''}
@@ -32432,7 +32564,9 @@ function _emailTplsLibPaintTemplates(folder){
   let folderLabel;
   if(folder === 'all')              { rows = allRows.slice();                   folderLabel = 'All Email Templates'; }
   else if(folder === 'linked')      { rows = allRows.filter(r => !!r.property_id); folderLabel = '🏢 Linked to a Property'; }
-  else if(folder === 'unlinked')    { rows = allRows.filter(r => !r.property_id); folderLabel = '🔗 Unlinked'; }
+  // v141: Unlinked excludes no-link-needed admin/marketing templates.
+  else if(folder === 'unlinked')    { rows = allRows.filter(r => !r.property_id && !_emailTplIsNoLinkNeeded(r)); folderLabel = '🔗 Unlinked'; }
+  else if(folder === 'nolink')      { rows = allRows.filter(r => !r.property_id && _emailTplIsNoLinkNeeded(r)); folderLabel = '📎 No Link Needed (admin/marketing)'; }
   else if(folder === 'usercreated') { rows = allRows.filter(r => !_emailTplsExtractFolder(r.name)); folderLabel = '✏️ User-Created (non-FUB)'; }
   else if(folder.startsWith('fub:')){
     const f = folder.slice(4);
@@ -32473,11 +32607,18 @@ function _emailTplsLibPaintTemplates(folder){
 
     // v113.50: full chip set — Property, Owner, Agent, FUB, Unlinked, Official.
     let tags = '';
+    const isNoLinkNeeded = _emailTplIsNoLinkNeeded(r);
     if(prop){
       tags += `<span onclick="event.stopPropagation(); openDeal(allDeals.find(d=>d.id==='${prop.id}'))"
         title="${_ddEsc(prop['Address']||'')}"
         style="display:inline-block;background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;cursor:pointer;margin-right:4px;margin-bottom:3px;">
         🏢 ${_ddEsc((prop['Address']||'').slice(0, 40))}${(prop['Address']||'').length > 40 ? '…' : ''}
+      </span>`;
+    } else if(isNoLinkNeeded){
+      // v141: admin / marketing folders don't need a link — show a calmer
+      // badge that doesn't read like an action item.
+      tags += `<span style="display:inline-block;background:#f1f5f9;color:#475569;border:1px solid #e2e8f0;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;margin-right:4px;margin-bottom:3px;">
+        📎 No link needed
       </span>`;
     } else {
       tags += `<span style="display:inline-block;background:#fef3c7;color:#92400e;border:1px solid #fde68a;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;margin-right:4px;margin-bottom:3px;">
@@ -32527,12 +32668,17 @@ function _emailTplsLibPaintTemplates(folder){
           <div style="margin-top:3px;color:#64748b;font-size:10px;line-height:1.4;">${_ddEsc(bodyPreview)}${(r.body||'').length>120?'…':''}</div>
         </td>
         <td style="padding:9px 10px;vertical-align:top;text-align:right;white-space:nowrap;">
-          ${prop ? `<button onclick="event.stopPropagation(); _emailTplsOpenDealById('${prop.id}')" style="background:#1a3a6e;color:#fff;border:none;border-radius:5px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;">Open Deal →</button>`
-                 : `<button onclick="event.stopPropagation(); _emailTplsLinkPicker('${r.id}')" style="background:#fff;color:#1d4ed8;border:1px solid #93c5fd;border-radius:5px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;">🔗 Link to property…</button>`}
+          ${prop
+            ? `<button onclick="event.stopPropagation(); _emailTplsOpenDealById('${prop.id}')" style="background:#1a3a6e;color:#fff;border:none;border-radius:5px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;">Open Deal →</button>`
+            : (isNoLinkNeeded
+              ? `<span style="font-size:10px;color:#94a3b8;font-style:italic;">—</span>`
+              : `<button onclick="event.stopPropagation(); _emailTplsLinkPicker('${r.id}')" style="background:#fff;color:#1d4ed8;border:1px solid #93c5fd;border-radius:5px;padding:5px 10px;font-size:11px;font-weight:600;cursor:pointer;">🔗 Link to property…</button>`)}
         </td>
       </tr>`;
   }).join('');
 
+  // v141: show the auto-link bulk action only on the Unlinked folder.
+  const showAutoLink = (folder === 'unlinked' && rows.length > 0);
   root.innerHTML = `
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px;flex-wrap:wrap;gap:10px;">
       <div style="font-size:13px;color:#0f172a;">
@@ -32542,10 +32688,13 @@ function _emailTplsLibPaintTemplates(folder){
         <span style="font-weight:600;">${_ddEsc(folderLabel)}</span>
         <span style="color:#64748b;font-weight:400;font-size:12px;margin-left:8px;">${rows.length.toLocaleString()} template${rows.length===1?'':'s'}</span>
       </div>
-      <input type="text" id="emailTplsSearchInput" value="${safeQ}"
-        oninput="_emailTplsLibState.search=this.value; _emailTplsLibPaint();"
-        placeholder="Search this folder…"
-        style="width:260px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;outline:none;" />
+      <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        ${showAutoLink ? `<button id="emailTplsAutoLinkBtn" onclick="_emailTplsAutoLinkUnlinked()" style="background:#1a3a6e;color:#fff;border:none;border-radius:6px;padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer;" title="Scan body + subject for an address and auto-link to the matching property. Skips ambiguous matches.">✦ Auto-link from text</button>` : ''}
+        <input type="text" id="emailTplsSearchInput" value="${safeQ}"
+          oninput="_emailTplsLibState.search=this.value; _emailTplsLibPaint();"
+          placeholder="Search this folder…"
+          style="width:260px;padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;outline:none;" />
+      </div>
     </div>
     <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
       ${filtered.length === 0

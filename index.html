@@ -46498,16 +46498,45 @@ function closeTaskModal(){
   _taskModalEditing=null;
 }
 
+// v175: in-memory cache of the full task row + assigneeIds, populated by the
+// list renderers. Lets openEditTaskModal render synchronously instead of
+// blocking on fetch round-trips, and lets submitEditTask diff junction-row
+// changes without an extra GET.
+const _taskCache = new Map();
+function _taskCacheSet(taskId, row, assigneeIds){
+  if(!taskId) return;
+  _taskCache.set(taskId, {
+    row: row || {},
+    assigneeIds: assigneeIds instanceof Set ? new Set(assigneeIds) : new Set(assigneeIds||[]),
+    ts: Date.now()
+  });
+}
+function _taskCacheGet(taskId){ return _taskCache.get(taskId) || null; }
+function _taskCachePatchRow(taskId, partial){
+  const c = _taskCache.get(taskId);
+  if(!c) return;
+  c.row = Object.assign({}, c.row, partial);
+}
+function _taskCacheSetAssignees(taskId, ids){
+  const c = _taskCache.get(taskId);
+  const set = ids instanceof Set ? new Set(ids) : new Set(ids||[]);
+  if(c) c.assigneeIds = set;
+  else _taskCache.set(taskId, { row: {}, assigneeIds: set, ts: Date.now() });
+}
+
 async function openEditTaskModal(taskId, taskName, priority, dueDate, notes, source){
-  // v113.23: rebuild the modal with the same picker UX as Create. We
-  // still accept the legacy positional args (for existing call sites)
-  // but also fetch the full row from DB so we can pre-populate
-  // assignee + type + links accurately.
-  let row = null;
-  try {
-    const rows = await _sbGet(SB_TABLES.tasks, `id=eq.${taskId}&select=*&limit=1`);
-    row = Array.isArray(rows) && rows[0];
-  } catch(_e){ /* fall through — render with positional args only */ }
+  // v175: use the cache populated by the list renderers so this opens
+  // synchronously. Fall back to a row fetch only on cache miss (rare —
+  // someone deep-linking before the list rendered, or after a long idle).
+  const cached = _taskCacheGet(taskId);
+  let row = cached && cached.row;
+  if(!row || !row.id){
+    try {
+      const rows = await _sbGet(SB_TABLES.tasks, `id=eq.${taskId}&select=*&limit=1`);
+      row = Array.isArray(rows) && rows[0];
+      if(row) _taskCacheSet(taskId, row, row.assigned_to_user_id ? [row.assigned_to_user_id] : []);
+    } catch(_e){ /* fall through — render with positional args only */ }
+  }
 
   // Seed modal state from the row (or args, when fetch failed).
   _taskModalEditing      = row || { id: taskId };
@@ -46520,44 +46549,37 @@ async function openEditTaskModal(taskId, taskName, priority, dueDate, notes, sou
   _taskModalBuyerCritLabel = '';
   _taskModalTypeOverride = (row && row.task_type) || null;
   _taskModalAssigneeId   = (row && row.assigned_to_user_id) || (_currentUser && _currentUser.id) || null;
-  // v157: load existing junction rows so the multi-assign checkbox list
-  // pre-checks every current assignee. Mode flips to 'many' when the
-  // task is already shared (2+ rows), otherwise stays 'one'.
+  // v157/v175: pull assignees from cache when available — no extra fetch.
   _taskModalAssigneeIds = new Set();
   _taskModalAssignMode = 'one';
-  try {
-    const aRows = await _sbGet(SB_TABLES.taskAssignees, `task_id=eq.${taskId}&select=user_id`);
-    if(Array.isArray(aRows) && aRows.length){
-      aRows.forEach(r => { if(r.user_id) _taskModalAssigneeIds.add(r.user_id); });
-      if(aRows.length > 1) _taskModalAssignMode = 'many';
-    } else if(_taskModalAssigneeId){
-      _taskModalAssigneeIds.add(_taskModalAssigneeId);
-    }
-  } catch(_e){
-    if(_taskModalAssigneeId) _taskModalAssigneeIds.add(_taskModalAssigneeId);
+  if(cached && cached.assigneeIds && cached.assigneeIds.size){
+    cached.assigneeIds.forEach(id => _taskModalAssigneeIds.add(id));
+    if(cached.assigneeIds.size > 1) _taskModalAssignMode = 'many';
+  } else if(_taskModalAssigneeId){
+    _taskModalAssigneeIds.add(_taskModalAssigneeId);
   }
 
-  // Resolve display labels for the chips (best-effort).
+  // v175: resolve chip labels from in-memory caches first (instant); fall
+  // back to a fetch only when truly missing. Don't block the modal render
+  // on these — they just decorate the chip text.
   if(_taskModalContactId){
-    try {
-      const c = await _sbGet(SB_TABLES.contacts, `id=eq.${_taskModalContactId}&select=name&limit=1`);
-      _taskModalContactName = (Array.isArray(c) && c[0] && c[0].name) || 'Contact';
-    } catch(_e){ _taskModalContactName = 'Contact'; }
+    const fromCache = (typeof allContacts !== 'undefined' && allContacts)
+      ? allContacts.find(c => c.id === _taskModalContactId)
+      : null;
+    _taskModalContactName = (fromCache && fromCache.fields && fromCache.fields.Name) || 'Contact';
   }
   if(_taskModalBuyerCritId){
-    try {
-      const b = await _sbGet(SB_TABLES.buyerCriteria, `id=eq.${_taskModalBuyerCritId}&select=desired_property_types,ace_contacts(name)&limit=1`);
-      const r = Array.isArray(b) && b[0];
-      const cn = r && r.ace_contacts && r.ace_contacts.name;
-      const pt = r && r.desired_property_types;
+    const fromCache = (typeof allBuyerCriteria !== 'undefined' && Array.isArray(allBuyerCriteria))
+      ? allBuyerCriteria.find(b => b.id === _taskModalBuyerCritId)
+      : null;
+    if(fromCache && fromCache.fields){
+      const cid = (fromCache.fields['Buyer']||[])[0];
+      const cn = cid && typeof allBuyerContacts !== 'undefined' ? (allBuyerContacts[cid]?.Name) : '';
+      const pt = (fromCache.fields['Simple Text Desired Property Type']||'').replace(/[🔴🟠🟡🟢🔵🟣]/g,'').trim();
       _taskModalBuyerCritLabel = cn ? `${cn}${pt?' · '+pt:''}` : (pt || 'Buyer Criteria');
-    } catch(_e){ _taskModalBuyerCritLabel = 'Buyer Criteria'; }
-  }
-  if(!_taskModalDealAddr && _taskModalDealId){
-    try {
-      const p = await _sbGet(SB_TABLES.properties, `id=eq.${_taskModalDealId}&select=address&limit=1`);
-      _taskModalDealAddr = (Array.isArray(p) && p[0] && p[0].address) || '';
-    } catch(_e){}
+    } else {
+      _taskModalBuyerCritLabel = 'Buyer Criteria';
+    }
   }
 
   await _ensureUsersCache();
@@ -46625,71 +46647,106 @@ async function submitEditTask(taskId, source){
   const due   = document.getElementById('ctask_due')?.value;
   const notes = document.getElementById('ctask_notes')?.value?.trim();
   const errEl = document.getElementById('ctask_error');
-  const btn   = document.getElementById('ctask_submitBtn');
   if(!name){ if(errEl){errEl.textContent='Task name is required.';errEl.style.display='block';} return; }
   const cfg=getConfig(); if(!cfg.key){ if(errEl){errEl.textContent='Connect Supabase first.';errEl.style.display='block';} return; }
-  if(btn){btn.disabled=true;btn.textContent='Saving...';}
-  if(errEl) errEl.style.display='none';
-  try{
-    if(isSupabase()){
-      // v113.23 / v157: persist all field changes plus reconcile the
-      // ace_task_assignees junction. The mode toggle picks the source of
-      // truth: 'one' uses the dropdown's value; 'many' uses the checkbox
-      // set (current user always included).
-      const meId = _currentUser && _currentUser.id;
-      let assigneeIds = [];
-      if(_taskModalAssignMode === 'many'){
-        assigneeIds = Array.from(_taskModalAssigneeIds || new Set());
-        if(meId && !assigneeIds.includes(meId)) assigneeIds.push(meId);
-      } else {
-        const single = (document.getElementById('ctask_assignee')?.value) || _taskModalAssigneeId || meId;
-        if(single) assigneeIds = [single];
-      }
-      const primary = (meId && assigneeIds.includes(meId)) ? meId : (assigneeIds[0] || meId);
-      const typeChosen  = document.getElementById('ctask_type')?.value || _taskModalTypeOverride
-                        || _taskTypeFromSource(_taskModalSrc, _taskModalDealId, _taskModalContactId, _taskModalBuyerCritId);
 
-      const patch = {
-        task: name,
-        priority: prio || null,
-        due_date: due || null,
-        notes: notes || null,
-        property_id:        _taskModalDealId      || null,
-        contact_id:         _taskModalContactId   || null,
-        buyer_criteria_id:  _taskModalBuyerCritId || null,
-        task_type:          typeChosen,
-        assigned_to_user_id: primary,
-      };
+  // Snapshot all the picker state BEFORE closing the modal — once it closes,
+  // every field id (ctask_assignee, ctask_type, etc.) is gone.
+  const meId = _currentUser && _currentUser.id;
+  let assigneeIds = [];
+  if(_taskModalAssignMode === 'many'){
+    assigneeIds = Array.from(_taskModalAssigneeIds || new Set());
+    if(meId && !assigneeIds.includes(meId)) assigneeIds.push(meId);
+  } else {
+    const single = (document.getElementById('ctask_assignee')?.value) || _taskModalAssigneeId || meId;
+    if(single) assigneeIds = [single];
+  }
+  const primary = (meId && assigneeIds.includes(meId)) ? meId : (assigneeIds[0] || meId);
+  const typeChosen = document.getElementById('ctask_type')?.value || _taskModalTypeOverride
+                   || _taskTypeFromSource(_taskModalSrc, _taskModalDealId, _taskModalContactId, _taskModalBuyerCritId);
+  const dealId = _taskModalDealId || null;
+  const contactId = _taskModalContactId || null;
+  const buyerCritId = _taskModalBuyerCritId || null;
+  const prev = _taskModalEditing && _taskModalEditing.assigned_to_user_id;
+  const isHandOff = primary && meId && primary !== meId && prev !== primary;
 
-      const prev = _taskModalEditing && _taskModalEditing.assigned_to_user_id;
-      const isHandOff = primary && meId && primary !== meId && prev !== primary;
-      if(isHandOff){
-        patch.assigned_by_user_id = meId;
-        patch.assigned_at = new Date().toISOString();
-        try { patch.sort_order = await _tasksNextSortOrder(primary); } catch(_e){}
-      }
+  const patch = {
+    task: name,
+    priority: prio || null,
+    due_date: due || null,
+    notes: notes || null,
+    property_id:        dealId,
+    contact_id:         contactId,
+    buyer_criteria_id:  buyerCritId,
+    task_type:          typeChosen,
+    assigned_to_user_id: primary,
+  };
 
-      await _sbPatch(SB_TABLES.tasks, taskId, patch);
+  // v175: optimistic save. Close the modal, patch the in-memory cache,
+  // update the visible DOM row, then run the network calls in the
+  // background. On error we reload the source list to recover.
+  closeTaskModal();
+  showSaveConfirm('✓ Task updated');
+  _taskCachePatchRow(taskId, patch);
+  _taskCacheSetAssignees(taskId, assigneeIds);
+  // Patch the deal-tasks in-memory data so a re-render of the same deal
+  // shows the new values without a refetch.
+  if(_dealTasksData && Array.isArray(_dealTasksData.tasks)){
+    const t = _dealTasksData.tasks.find(x => x.id === taskId);
+    if(t){
+      t['Task'] = name;
+      t['Priority'] = prio || null;
+      t['Due Date'] = due || null;
+      t['Notes'] = notes || null;
+      t._assignedToUserId = primary;
+    }
+  }
+  // Patch the visible row in-place so the user sees the change immediately.
+  document.querySelectorAll(`[data-task-id="${taskId}"]`).forEach(el => {
+    const titleEl = el.querySelector('div[style*="font-weight:600"]');
+    if(titleEl && titleEl.firstChild && titleEl.firstChild.nodeType === 3) titleEl.firstChild.nodeValue = name;
+  });
 
-      // Reconcile junction rows: insert any newly-checked, delete any
-      // newly-unchecked. Existing rows keep their sort_order.
-      try {
-        const existing = await _sbGet(SB_TABLES.taskAssignees, `task_id=eq.${taskId}&select=id,user_id`);
-        const existingMap = new Map((existing||[]).map(r => [r.user_id, r.id]));
+  // Background network — survives the modal being gone.
+  (async () => {
+    try{
+      if(isSupabase()){
+        if(isHandOff){
+          patch.assigned_by_user_id = meId;
+          patch.assigned_at = new Date().toISOString();
+          try { patch.sort_order = await _tasksNextSortOrder(primary); } catch(_e){}
+        }
+        await _sbPatch(SB_TABLES.tasks, taskId, patch);
+
+        // Reconcile junction rows. We already cached the previous assignee
+        // set, so diff against that instead of fetching again.
+        const cached = _taskCacheGet(taskId);
+        const existingSet = (cached && cached.assigneeIds) || new Set();
         const wantedSet = new Set(assigneeIds);
-        const toAdd = assigneeIds.filter(uid => !existingMap.has(uid));
-        const toRemove = [...existingMap.entries()].filter(([uid]) => !wantedSet.has(uid));
-        for(const uid of toAdd){
+        const toAdd = assigneeIds.filter(uid => !existingSet.has(uid));
+        const toRemove = [...existingSet].filter(uid => !wantedSet.has(uid));
+
+        // Need junction row ids to delete. One scoped GET only when there's
+        // actually something to remove.
+        let removeRowIds = [];
+        if(toRemove.length){
+          try {
+            const existing = await _sbGet(SB_TABLES.taskAssignees, `task_id=eq.${taskId}&select=id,user_id`);
+            removeRowIds = (existing||[]).filter(r => toRemove.includes(r.user_id)).map(r => r.id);
+          } catch(_e){}
+        }
+
+        // Fan out the inserts in parallel — much faster than awaiting each.
+        const insertOps = toAdd.map(async (uid) => {
           let so;
           try { so = await _tasksNextSortOrder(uid); } catch(_e){}
-          await _sbPost(SB_TABLES.taskAssignees, {
-            task_id: taskId, user_id: uid,
-            sort_order: so || 0,
-            added_by_user_id: meId || null,
-          });
-          // Notify newly-added agents (other than the actor).
-          if(uid !== meId){
-            try {
+          try {
+            await _sbPost(SB_TABLES.taskAssignees, {
+              task_id: taskId, user_id: uid,
+              sort_order: so || 0,
+              added_by_user_id: meId || null,
+            });
+            if(uid !== meId){
               await _sbPost(SB_TABLES.taskNotifications, {
                 recipient_user_id: uid,
                 actor_user_id: meId,
@@ -46697,41 +46754,40 @@ async function submitEditTask(taskId, source){
                 type: 'assigned',
                 message: (_currentUser?.name || 'Someone') + ' added you to: ' + name
               });
-            } catch(_e){}
-          }
-        }
-        for(const [, rowId] of toRemove){
-          await _sbDelete(SB_TABLES.taskAssignees, rowId);
-        }
-      } catch(_e){ console.warn('Junction reconcile failed:', _e.message); }
+            }
+          } catch(_e){ console.warn('Assignee insert failed:', _e.message); }
+        });
+        const deleteOps = removeRowIds.map(rowId =>
+          _sbDelete(SB_TABLES.taskAssignees, rowId).catch(_e => console.warn('Assignee delete failed:', _e.message))
+        );
+        await Promise.all([...insertOps, ...deleteOps]);
 
-      if(isHandOff){
-        try {
-          await _sbPost(SB_TABLES.taskNotifications, {
+        if(isHandOff){
+          _sbPost(SB_TABLES.taskNotifications, {
             recipient_user_id: primary,
             actor_user_id: meId,
             task_id: taskId,
             type: 'assigned',
             message: (_currentUser?.name || 'Someone') + ' assigned you: ' + name
-          });
-        } catch(_e){ console.warn('Notification insert failed:', _e.message); }
+          }).catch(_e => console.warn('Hand-off notification failed:', _e.message));
+        }
+      } else {
+        const fields={'Task':name,'Priority':prio||null,'Due Date':due||null,'Notes':notes||null};
+        const res=await fetch(`https://api.airtable.com/v0/${cfg.base}/${TASKS_TABLE_ID}/${taskId}`,{
+          method:'PATCH', headers:{Authorization:`Bearer ${cfg.key}`,'Content-Type':'application/json'},
+          body:JSON.stringify({fields})
+        });
+        if(!res.ok) throw new Error(await res.text());
       }
-    } else {
-      const fields={'Task':name,'Priority':prio||null,'Due Date':due||null,'Notes':notes||null};
-      const res=await fetch(`https://api.airtable.com/v0/${cfg.base}/${TASKS_TABLE_ID}/${taskId}`,{
-        method:'PATCH', headers:{Authorization:`Bearer ${cfg.key}`,'Content-Type':'application/json'},
-        body:JSON.stringify({fields})
-      });
-      if(!res.ok) throw new Error(await res.text());
+    } catch(e){
+      console.error('Task save failed:', e);
+      if(typeof showSaveConfirm === 'function') showSaveConfirm('⚠ Save failed — refreshing');
+      // Reload the source list so the user sees the actual server state.
+      if(source==='deal' && currentDeal?.id) _loadAndRenderDealTasks(currentDeal.id, currentDeal['Address']||'');
+      else if(source==='contact' && _currentContactTasksId) _contactLoadLinkedTasks(_currentContactTasksId);
+      else if(source==='global') showTasksPage();
     }
-    closeTaskModal(); showSaveConfirm('✓ Task updated');
-    if(source==='deal'&&currentDeal?.id) _loadAndRenderDealTasks(currentDeal.id, currentDeal['Address']||'');
-    else if(source==='contact' && _currentContactTasksId) _contactLoadLinkedTasks(_currentContactTasksId);
-    else if(source==='global') showTasksPage();
-  }catch(e){
-    if(btn){btn.disabled=false;btn.textContent='Save Changes';}
-    if(errEl){errEl.textContent='Failed: '+e.message;errEl.style.display='block';}
-  }
+  })();
 }
 
 // v113.21: compute the next sort_order for a given assignee — one index per
@@ -46945,21 +47001,21 @@ async function _loadAndRenderDealTasks(dealId, address){
   _dealTasksSubTab = 'all';
   _dealTasksPrioFilter = '';
   try {
-    // Fetch tasks scoped to this property + their junction rows so we
-    // know who's assigned. Two parallel queries — no JOIN needed.
-    const [taskRows, junctionRows] = await Promise.all([
-      _sbGet(SB_TABLES.tasks, `property_id=eq.${dealId}&select=*&order=sort_order.asc.nullslast,due_date.asc.nullslast`),
-      (async () => {
-        try {
-          // Fetch ALL junction rows for this user's universe — cheap and
-          // we filter client-side. Alternative would be a second query
-          // after taskRows resolves with task_id=in.(…), but doing it in
-          // parallel is faster.
-          return await _sbGet(SB_TABLES.taskAssignees, `select=task_id,user_id&limit=10000`);
-        } catch(_e){ return []; }
-      })(),
-    ]);
-    const tasks = (taskRows || []).map(r => ({
+    // Fetch tasks scoped to this property first.
+    const taskRows = await _sbGet(SB_TABLES.tasks,
+      `property_id=eq.${dealId}&select=*&order=sort_order.asc.nullslast,due_date.asc.nullslast`);
+    const rawRows = Array.isArray(taskRows) ? taskRows : [];
+    // v175: scope the junction fetch to JUST these task ids instead of
+    // pulling 10k rows and filtering client-side. Skip when no tasks.
+    let junctionRows = [];
+    if(rawRows.length){
+      const ids = rawRows.map(r => r.id);
+      try {
+        junctionRows = await _sbGet(SB_TABLES.taskAssignees,
+          `task_id=in.(${ids.join(',')})&select=task_id,user_id`);
+      } catch(_e){ junctionRows = []; }
+    }
+    const tasks = rawRows.map(r => ({
       id: r.id, 'Task': r.task, 'Status': r.status, 'Priority': r.priority,
       'Due Date': r.due_date, 'Notes': r.notes, 'Related Property': [r.property_id],
       _sortOrder: r.sort_order || 0,
@@ -46980,6 +47036,11 @@ async function _loadAndRenderDealTasks(dealId, address){
         assignees.set(t.id, new Set([t._assignedToUserId]));
       }
     }
+    // v175: populate the open-modal cache so the edit modal can render
+    // synchronously without re-fetching the row + assignees.
+    rawRows.forEach(r => {
+      _taskCacheSet(r.id, r, assignees.get(r.id) || (r.assigned_to_user_id ? new Set([r.assigned_to_user_id]) : new Set()));
+    });
     _dealTasksData = { tasks, assignees, dealId, address };
     _renderDealTasksUI();
   } catch(e){
@@ -47979,6 +48040,32 @@ async function _renderGlobalTasks(){
     ]);
     const my  = Array.isArray(myRows)  ? myRows  : [];
     const out = Array.isArray(outRows) ? outRows : [];
+
+    // v175: populate the open-modal cache with the raw rows + their
+    // junction-row assignees so opening the edit modal doesn't round-trip.
+    // One scoped junction fetch covers every task we just rendered.
+    {
+      const allRows = [...my, ...out];
+      const ids = allRows.map(r => r.id);
+      let junction = [];
+      if(ids.length){
+        try {
+          junction = await _sbGet(SB_TABLES.taskAssignees,
+            `task_id=in.(${ids.join(',')})&select=task_id,user_id`);
+        } catch(_e){ junction = []; }
+      }
+      const byTask = new Map();
+      for(const j of (junction||[])){
+        if(!j.task_id) continue;
+        let s = byTask.get(j.task_id);
+        if(!s){ s = new Set(); byTask.set(j.task_id, s); }
+        s.add(j.user_id);
+      }
+      allRows.forEach(r => {
+        const fallback = r.assigned_to_user_id ? new Set([r.assigned_to_user_id]) : new Set();
+        _taskCacheSet(r.id, r, byTask.get(r.id) || fallback);
+      });
+    }
 
     // v158.2: "Assigned FROM Others" = tasks in my queue that someone else
     // assigned to me (assigned_by_user_id is set AND not me). Counterpart

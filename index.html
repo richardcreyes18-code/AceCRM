@@ -1383,6 +1383,10 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
           <div style="font-size:10px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;">Tags:</div>
           <div id="dsReviewChip" onclick="toggleDsReviewPicker()" style="cursor:pointer;"></div>
         </div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <div style="font-size:10px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;">Email:</div>
+          <div id="dsTemplateChip"></div>
+        </div>
       </div>
       <!-- Stage picker dropdown (hidden by default) -->
       <div id="dsStagePicker" style="display:none;margin-top:10px;background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:8px;max-height:220px;overflow-y:auto;"></div>
@@ -3261,6 +3265,9 @@ async function syncData(){
           }
         }
       }catch(e){ console.warn('workbench warm-cache failed:', e.message); }
+      // v149: warm the per-property template-link cache so the pipeline
+      // table + detail card show "📧 linked" badges immediately.
+      try { await _loadPropertyTemplateMap(); } catch(e){ console.warn('template map warm failed:', e.message); }
     }
 
     if(typeof _splashStep==='function') _splashStep('Building sidebar', 7, 8);
@@ -5328,6 +5335,8 @@ function openDealSnapshot(dealId){
   _renderDsReviewChip(d);
   const _rp = document.getElementById('dsReviewPicker');
   if(_rp) _rp.style.display = 'none';
+  // v149: email-template-linked indicator
+  _renderDsTemplateChip(d);
 
   // Stats grid
   const ask = Number(d['Asking Price']) || 0;
@@ -5427,6 +5436,26 @@ function _renderDsReviewChip(d){
       <div style="display:inline-flex;align-items:center;gap:6px;background:#f1f5f9;color:#64748b;border:1px dashed #cbd5e1;padding:4px 11px;border-radius:99px;font-size:11px;font-weight:600;">
         + Add tag
         <span style="font-size:9px;opacity:0.7;">▼</span>
+      </div>`;
+  }
+}
+
+// v149: render the "📧 Linked" / "📭 No template" chip in the snapshot
+// modal header. Reads from _propertyTemplateMap (loaded at sync time).
+// Clicking the chip jumps to the property's Settings → Email Templates tab.
+function _renderDsTemplateChip(d){
+  const chip = document.getElementById('dsTemplateChip');
+  if(!chip) return;
+  const count = _dealTemplateCount(d.id);
+  if(count > 0){
+    chip.innerHTML = `
+      <div style="display:inline-flex;align-items:center;gap:6px;background:#dcfce7;color:#15803d;border:1px solid #86efac;padding:4px 11px;border-radius:99px;font-size:11px;font-weight:700;">
+        📧 ${count} linked
+      </div>`;
+  } else {
+    chip.innerHTML = `
+      <div style="display:inline-flex;align-items:center;gap:6px;background:#fef3c7;color:#92400e;border:1px solid #fde68a;padding:4px 11px;border-radius:99px;font-size:11px;font-weight:600;">
+        📭 No template
       </div>`;
   }
 }
@@ -32478,6 +32507,51 @@ function _settingsSwitchTab(name){
 // see its templates. Mirrors the FUB email-template browser.
 let _emailTplsLibState = { rows: [], search: '', activeFolder: null };
 
+// v149: lightweight per-property template-link cache. Loaded once at app
+// boot from syncData (ids only, ~few hundred rows max), used by the
+// pipeline detail card and pipeline table to show "📧 linked" badges
+// without waiting for the full template library to load.
+const _propertyTemplateMap = new Map();
+let _propertyTemplateMapLoaded = false;
+
+async function _loadPropertyTemplateMap(){
+  if(!isSupabase() || !_currentUser?.email) return;
+  try {
+    const rows = await _sbGet('ace_user_email_templates',
+      `select=property_id&user_email=eq.${encodeURIComponent(_currentUser.email)}&property_id=not.is.null&limit=5000`);
+    _propertyTemplateMap.clear();
+    if(Array.isArray(rows)){
+      for(const r of rows){
+        if(!r.property_id) continue;
+        _propertyTemplateMap.set(r.property_id, (_propertyTemplateMap.get(r.property_id)||0) + 1);
+      }
+    }
+    _propertyTemplateMapLoaded = true;
+  } catch(e){ console.warn('property template map load failed:', e.message); }
+}
+
+function _dealTemplateCount(dealId){
+  if(!dealId) return 0;
+  return _propertyTemplateMap.get(dealId) || 0;
+}
+
+function _dealHasTemplate(dealId){
+  return _dealTemplateCount(dealId) > 0;
+}
+
+// Mutators — keep the map in sync after link/unlink/delete actions so
+// the indicators update without a full reload.
+function _ptmInc(propertyId){
+  if(!propertyId) return;
+  _propertyTemplateMap.set(propertyId, (_propertyTemplateMap.get(propertyId)||0) + 1);
+}
+function _ptmDec(propertyId){
+  if(!propertyId) return;
+  const cur = _propertyTemplateMap.get(propertyId) || 0;
+  if(cur <= 1) _propertyTemplateMap.delete(propertyId);
+  else _propertyTemplateMap.set(propertyId, cur - 1);
+}
+
 // Click handler used by both folder list rows and the breadcrumb
 // "← Folders" link. Resets search when navigating.
 window._emailTplsOpenFolder = function(folder){
@@ -32587,10 +32661,12 @@ window._emailTplsDeleteOne = async function(id){
   if(!confirm(`Delete template:\n\n${r.name}\n\nThis cannot be undone.`)) return;
   try {
     await _sbDelete('ace_user_email_templates', id);
+    if(r.property_id) _ptmDec(r.property_id);
     _emailTplsLibState.rows = (_emailTplsLibState.rows || []).filter(x => x.id !== id);
     if(typeof showSaveConfirm === 'function') showSaveConfirm('✓ Template deleted');
     document.getElementById('emailTplsEditorModal')?.remove();
     _emailTplsLibPaint();
+    if(typeof _refreshPipelineBody === 'function') _refreshPipelineBody();
   } catch(e){ alert('Delete failed: '+e.message); }
 };
 
@@ -32830,6 +32906,9 @@ window._emailTplsAutoLinkUnlinked = async function(){
       const patch = { property_id: propId };
       if(shouldBeOfficial) patch.is_official = true;
       await _sbPatch('ace_user_email_templates', tpl.id, patch);
+      const wasLinked = !!tpl.property_id;
+      if(wasLinked && tpl.property_id !== propId) _ptmDec(tpl.property_id);
+      _ptmInc(propId);
       tpl.property_id = propId;
       if(shouldBeOfficial) tpl.is_official = true;
       linked++;
@@ -32864,11 +32943,14 @@ window._emailTplsUnlink = async function(tplId){
               'It will appear in the Unlinked folder until you link it again or mark it as "no link needed".'))
     return;
   try {
+    const prevPropId = r.property_id;
     await _sbPatch('ace_user_email_templates', tplId, { property_id: null, is_official: false });
+    if(prevPropId) _ptmDec(prevPropId);
     r.property_id = null;
     r.is_official = false;
     document.getElementById('emailTplsEditorModal')?.remove();
     if(typeof _emailTplsLibPaint === 'function') _emailTplsLibPaint();
+    if(typeof _refreshPipelineBody === 'function') _refreshPipelineBody();
     if(typeof showSaveConfirm === 'function') showSaveConfirm('✓ Unlinked');
     // Re-open the editor so the user can immediately pick a new link.
     setTimeout(() => { if(typeof window._emailTplsOpenEditor === 'function') window._emailTplsOpenEditor(tplId); }, 50);
@@ -32890,13 +32972,17 @@ window._emailTplsConfirmLink = async function(tplId, propertyId){
     await _sbPatch('ace_user_email_templates', tplId, patch);
     // Update in-memory state + repaint.
     const r = (_emailTplsLibState.rows || []).find(x => x.id === tplId);
+    const prevPropId = r?.property_id;
     if(r){
       r.property_id = propertyId;
       if(shouldBeOfficial) r.is_official = true;
     }
+    if(prevPropId && prevPropId !== propertyId) _ptmDec(prevPropId);
+    if(propertyId !== prevPropId) _ptmInc(propertyId);
     // Make sure the property is in our lookup cache.
     if(typeof _emailTplsLoadMissingProps === 'function') await _emailTplsLoadMissingProps();
     if(typeof _emailTplsLibPaint === 'function') _emailTplsLibPaint();
+    if(typeof _refreshPipelineBody === 'function') _refreshPipelineBody();
     if(typeof showSaveConfirm === 'function') showSaveConfirm('✓ Linked' + (shouldBeOfficial ? ' + made official' : ''));
   } catch(e){
     alert('Link failed: ' + e.message);
@@ -50126,6 +50212,7 @@ function _refreshPipelineBody(){
 // ─── PIPELINE TABLE VIEW ─────────────────────────────────────────
 const TABLE_COLS = [
   {key:'address',   label:'Address',    align:'left',  sortable:false, getter:d => d['Address']||'Unnamed'},
+  {key:'tpl',       label:'Email',      align:'center',sortable:true,  getter:d => _dealTemplateCount(d.id)},
   {key:'stage',     label:'Stage',      align:'left',  sortable:true,  getter:d => getStage(d)},
   {key:'price',     label:'Price',      align:'left',  sortable:true,  getter:d => Number(d['Asking Price'])||0},
   {key:'assetType', label:'Asset Type', align:'left',  sortable:true,  getter:d => _dealAssetType(d)||''},
@@ -50276,8 +50363,13 @@ function _buildPipelineTableHTML(deals){
       const sf = d['Square Footage'] ? Number(d['Square Footage']).toLocaleString() : '—';
       const cap = _dealCapRate(d);
       const comm = _dealCommissionAmt(d);
+      const tplCount = _dealTemplateCount(d.id);
+      const tplCell = tplCount > 0
+        ? `<span title="${tplCount} linked email template${tplCount===1?'':'s'}" style="display:inline-block;background:#dcfce7;color:#15803d;border:1px solid #86efac;padding:1px 7px;border-radius:99px;font-size:10px;font-weight:700;">📧 ${tplCount}</span>`
+        : `<span title="No email template linked" style="display:inline-block;color:#cbd5e1;font-size:13px;">📭</span>`;
       return `<tr onclick="openDealSnapshot('${d.id}')" style="cursor:pointer;border-bottom:1px solid #e2e8f0;" onmouseenter="this.style.background='#f1f5f9'" onmouseleave="this.style.background=''">
         <td style="padding:8px 10px;font-weight:600;color:#0f172a;max-width:260px;">${d['Address']||'Unnamed'}</td>
+        <td style="padding:8px 10px;text-align:center;">${tplCell}</td>
         <td style="padding:8px 10px;"><span style="display:inline-block;padding:2px 10px;border-radius:99px;background:${stageColor};color:#fff;font-size:10px;font-weight:700;white-space:nowrap;">${stage}</span></td>
         <td style="padding:8px 10px;color:#b91c1c;font-weight:700;white-space:nowrap;">${fmtMoney(d['Asking Price'])}</td>
         <td style="padding:8px 10px;color:#334155;">${assetType}</td>

@@ -39334,9 +39334,12 @@ function _bcGetPillTexts(containerId){
 // no "you have unsaved changes" indicator, so users can easily make pill
 // edits, navigate away, and lose them. Piggy-backing the 1.2s debounced
 // autosave onto every sync means every add/remove persists automatically.
-function _bcSyncAssets(){ document.getElementById('bcf_assets_hidden').value = _bcGetPillTexts('bcf_asset_pills').join(', '); if(typeof _bcAutoSave==='function') _bcAutoSave(); }
-function _bcSyncCounties(){ document.getElementById('bcf_counties_hidden').value = _bcGetPillTexts('bcf_county_pills').join(', '); if(typeof _bcAutoSave==='function') _bcAutoSave(); }
-function _bcSyncCities(){ document.getElementById('bcf_cities_hidden').value = _bcGetPillTexts('bcf_city_pills').join(', '); if(typeof _bcAutoSave==='function') _bcAutoSave(); }
+// v183.1: skipAutosave guard — bcSaveExpanded calls these to write the hidden
+// inputs before serializing the form. Without the guard each call re-triggered
+// _bcAutoSave, which scheduled another save 1200ms later → infinite save loop.
+function _bcSyncAssets(skipAutosave){ document.getElementById('bcf_assets_hidden').value = _bcGetPillTexts('bcf_asset_pills').join(', '); if(!skipAutosave && typeof _bcAutoSave==='function') _bcAutoSave(); }
+function _bcSyncCounties(skipAutosave){ document.getElementById('bcf_counties_hidden').value = _bcGetPillTexts('bcf_county_pills').join(', '); if(!skipAutosave && typeof _bcAutoSave==='function') _bcAutoSave(); }
+function _bcSyncCities(skipAutosave){ document.getElementById('bcf_cities_hidden').value = _bcGetPillTexts('bcf_city_pills').join(', '); if(!skipAutosave && typeof _bcAutoSave==='function') _bcAutoSave(); }
 
 // v110.3: NJ Region quick-add for buyer criteria counties. Adds every
 // county in the named region as a pill. Dedupes against existing pills.
@@ -39977,10 +39980,10 @@ const _COUNTIES_BY_STATE = {
 };
 
 // State field helpers
-function _bcSyncStates(){
+function _bcSyncStates(skipAutosave){
   const h = document.getElementById('bcf_states_hidden');
   if(h) h.value = _bcGetPillTexts('bcf_state_pills').join(', ');
-  if(typeof _bcAutoSave==='function') _bcAutoSave();
+  if(!skipAutosave && typeof _bcAutoSave==='function') _bcAutoSave();
 }
 function _bcStateSearch(q){
   const dd = document.getElementById('bcf_state_dropdown');
@@ -40128,9 +40131,11 @@ async function bcSaveExpanded(recordId, isAuto=false){
   sv('Deals Sent Notes',                 gv('bcf_dealsnotes'));
   sv('Date Added Buyer',                 gv('bcf_dateadded'));
 
-  // Pill editor fields
-  _bcSyncAssets(); _bcSyncCounties(); _bcSyncCities();
-  if(typeof _bcSyncStates === 'function') _bcSyncStates();
+  // Pill editor fields. Pass skipAutosave=true so they only sync the hidden
+  // inputs without re-triggering _bcAutoSave (which would loop us back into
+  // bcSaveExpanded every 1200ms).
+  _bcSyncAssets(true); _bcSyncCounties(true); _bcSyncCities(true);
+  if(typeof _bcSyncStates === 'function') _bcSyncStates(true);
   sv('Simple Text Desired Property Type', gv('bcf_assets_hidden'));
   // v113.27: canonicalize the county CSV against _appLists.counties so saves
   // from this edit page can't reintroduce duplicates like "Monmouth County".
@@ -47541,11 +47546,18 @@ async function submitEditTask(taskId, source){
       t._assignedToUserId = primary;
     }
   }
-  // Patch the visible row in-place so the user sees the change immediately.
-  document.querySelectorAll(`[data-task-id="${taskId}"]`).forEach(el => {
-    const titleEl = el.querySelector('div[style*="font-weight:600"]');
-    if(titleEl && titleEl.firstChild && titleEl.firstChild.nodeType === 3) titleEl.firstChild.nodeValue = name;
-  });
+  // v183.1: re-render the source list using the patched in-memory cache.
+  // Cache is still valid (we patched it above) so this is a pure DOM
+  // repaint with no network round-trip — instant. Replaces the old in-place
+  // title-only DOM patch which left the date/priority/chips stale until
+  // the user manually re-rendered.
+  if(source === 'deal' && typeof _renderDealTasksUI === 'function'){
+    _renderDealTasksUI();
+  } else if(source === 'global' && typeof _renderGlobalTasks === 'function'){
+    _renderGlobalTasks();
+  } else if(source === 'contact' && typeof _contactRenderLinkedTasks === 'function'){
+    _contactRenderLinkedTasks();
+  }
 
   // Background network — survives the modal being gone.
   (async () => {

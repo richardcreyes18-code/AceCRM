@@ -33676,15 +33676,26 @@ window._emailTplsOpenEditor = function(templateId){
 
   const created = t.created_at ? new Date(t.created_at).toLocaleDateString() : '';
   const updated = t.updated_at && t.updated_at !== t.created_at ? new Date(t.updated_at).toLocaleDateString() : '';
+  // v166.1: shared library — surface the template owner so an agent
+  // browsing someone else's template knows whose it is, and visually
+  // disable the Save/Delete buttons when they can't mutate.
+  const _canMutate = _emailTplCanMutate(t);
+  const _ownerLine = t.user_email
+    ? `<span style="display:inline-block;background:${_canMutate?'#dcfce7':'#fef3c7'};color:${_canMutate?'#15803d':'#92400e'};border:1px solid ${_canMutate?'#86efac':'#fde68a'};border-radius:99px;padding:2px 9px;font-size:10px;font-weight:600;margin-left:6px;">✉ ${_ddEsc(t.user_email)}${_canMutate?' (you)':''}</span>`
+    : '';
+  const _readOnlyAttr = _canMutate ? '' : 'readonly';
+  const _saveBtnDisabled = _canMutate ? '' : 'disabled style="opacity:0.5;cursor:not-allowed;"';
+  const _deleteBtnDisabled = _canMutate ? '' : 'disabled style="opacity:0.5;cursor:not-allowed;"';
 
   modal.innerHTML = `
     <div style="background:#fff;border-radius:12px;width:100%;max-width:780px;max-height:90vh;overflow:hidden;display:flex;flex-direction:column;box-shadow:0 25px 60px rgba(0,0,0,0.25);">
       <div style="padding:16px 20px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;gap:12px;">
         <div>
-          <div style="font-size:15px;font-weight:700;color:#0f172a;">📧 Edit Email Template</div>
+          <div style="font-size:15px;font-weight:700;color:#0f172a;">📧 ${_canMutate?'Edit':'View'} Email Template${_ownerLine}</div>
           <div style="font-size:11px;color:#64748b;margin-top:3px;">
             ${created ? `Created ${created}` : ''}
             ${updated ? ` · Updated ${updated}` : ''}
+            ${!_canMutate ? ' · <span style="color:#92400e;">read-only — owned by another user</span>' : ''}
           </div>
           <div style="margin-top:6px;display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
             ${prop
@@ -33705,26 +33716,26 @@ window._emailTplsOpenEditor = function(templateId){
       </div>
       <div style="padding:16px 20px;overflow-y:auto;flex:1;">
         <div style="font-size:11px;font-weight:600;color:#475569;margin-bottom:5px;">Template Name</div>
-        <input id="_etplName" type="text" value="${_ddEsc(t.name||'')}"
-          style="width:100%;padding:8px 10px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;margin-bottom:14px;box-sizing:border-box;outline:none;" />
+        <input id="_etplName" type="text" value="${_ddEsc(t.name||'')}" ${_readOnlyAttr}
+          style="width:100%;padding:8px 10px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;margin-bottom:14px;box-sizing:border-box;outline:none;${_canMutate?'':'background:#f8fafc;color:#475569;'}" />
         <div style="font-size:11px;font-weight:600;color:#475569;margin-bottom:5px;">Subject</div>
-        <input id="_etplSubject" type="text" value="${_ddEsc(t.subject||'')}"
-          style="width:100%;padding:8px 10px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;margin-bottom:14px;box-sizing:border-box;outline:none;" />
+        <input id="_etplSubject" type="text" value="${_ddEsc(t.subject||'')}" ${_readOnlyAttr}
+          style="width:100%;padding:8px 10px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;margin-bottom:14px;box-sizing:border-box;outline:none;${_canMutate?'':'background:#f8fafc;color:#475569;'}" />
         <div style="font-size:11px;font-weight:600;color:#475569;margin-bottom:5px;">Body</div>
-        <textarea id="_etplBody" rows="16"
-          style="width:100%;padding:10px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;font-family:inherit;line-height:1.5;box-sizing:border-box;resize:vertical;outline:none;">${_ddEsc(t.body||'')}</textarea>
+        <textarea id="_etplBody" rows="16" ${_readOnlyAttr}
+          style="width:100%;padding:10px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;font-family:inherit;line-height:1.5;box-sizing:border-box;resize:vertical;outline:none;${_canMutate?'':'background:#f8fafc;color:#475569;'}">${_ddEsc(t.body||'')}</textarea>
         <div style="margin-top:8px;font-size:10px;color:#94a3b8;">
           Placeholders like %sender_name%, %contact_first_name% are filled at send-time.
         </div>
       </div>
       <div style="padding:12px 20px;border-top:1px solid #e2e8f0;display:flex;justify-content:space-between;gap:10px;flex-wrap:wrap;">
         <div style="display:flex;gap:8px;flex-wrap:wrap;">
-          <button onclick="_emailTplsDeleteOne('${t.id}')" style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:6px;padding:7px 14px;font-size:11px;font-weight:600;cursor:pointer;">🗑 Delete</button>
+          <button onclick="_emailTplsDeleteOne('${t.id}')" ${_deleteBtnDisabled} style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;border-radius:6px;padding:7px 14px;font-size:11px;font-weight:600;cursor:pointer;">🗑 Delete</button>
           ${!prop ? `<button onclick="_emailTplsToggleNoLink('${t.id}', ${!t.no_link_needed}); this.closest('#emailTplsEditorModal').remove();" title="${t.no_link_needed ? 'Move back to the Unlinked folder' : 'Remove this template from Unlinked — admin / marketing, no property needed'}" style="background:${t.no_link_needed ? '#fef3c7' : '#f1f5f9'};color:${t.no_link_needed ? '#92400e' : '#475569'};border:1px solid ${t.no_link_needed ? '#fde68a' : '#cbd5e1'};border-radius:6px;padding:7px 14px;font-size:11px;font-weight:600;cursor:pointer;">${t.no_link_needed ? '🔗 Mark as Unlinked' : '📎 Remove from Unlinked'}</button>` : ''}
         </div>
         <div style="display:flex;gap:8px;">
           <button onclick="this.closest('#emailTplsEditorModal').remove()" style="background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;padding:7px 14px;font-size:11px;font-weight:600;cursor:pointer;">Close</button>
-          <button onclick="_emailTplsSaveOne('${t.id}')" style="background:#1a3a6e;color:#fff;border:none;border-radius:6px;padding:7px 16px;font-size:11px;font-weight:700;cursor:pointer;">✓ Save</button>
+          <button onclick="_emailTplsSaveOne('${t.id}')" ${_saveBtnDisabled} style="background:#1a3a6e;color:#fff;border:none;border-radius:6px;padding:7px 16px;font-size:11px;font-weight:700;cursor:pointer;">${_canMutate?'✓ Save':'🔒 Read-only'}</button>
         </div>
       </div>
     </div>`;
@@ -33733,14 +33744,30 @@ window._emailTplsOpenEditor = function(templateId){
   requestAnimationFrame(() => document.getElementById('_etplName')?.focus());
 };
 
+// v166.1: shared library guard — only the template's owner or an admin
+// can edit / delete a template. Other agents can view and copy/use it
+// but never mutate it.
+function _emailTplCanMutate(row){
+  if(!row) return false;
+  const isAdmin = !!(_currentUser && _currentUser.role === 'admin');
+  if(isAdmin) return true;
+  const myEmail = (_currentUser && _currentUser.email || '').toLowerCase();
+  const owner   = String(row.user_email || '').toLowerCase();
+  return !!myEmail && myEmail === owner;
+}
+
 window._emailTplsSaveOne = async function(id){
+  const r = (_emailTplsLibState.rows || []).find(x => x.id === id);
+  if(!_emailTplCanMutate(r)){
+    alert('You can only edit your own templates. Ask the owner ('+(r?.user_email || '?')+') or an admin to make changes.');
+    return;
+  }
   const name    = document.getElementById('_etplName')?.value || '';
   const subject = document.getElementById('_etplSubject')?.value || '';
   const body    = document.getElementById('_etplBody')?.value || '';
   if(!name.trim()){ alert('Name is required.'); return; }
   try {
     await _sbPatch('ace_user_email_templates', id, { name, subject, body });
-    const r = (_emailTplsLibState.rows || []).find(x => x.id === id);
     if(r){ r.name = name; r.subject = subject; r.body = body; r.updated_at = new Date().toISOString(); }
     if(typeof showSaveConfirm === 'function') showSaveConfirm('✓ Template saved');
     document.getElementById('emailTplsEditorModal')?.remove();
@@ -33751,6 +33778,10 @@ window._emailTplsSaveOne = async function(id){
 window._emailTplsDeleteOne = async function(id){
   const r = (_emailTplsLibState.rows || []).find(x => x.id === id);
   if(!r) return;
+  if(!_emailTplCanMutate(r)){
+    alert('You can only delete your own templates. Ask the owner ('+(r.user_email || '?')+') or an admin to remove this one.');
+    return;
+  }
   if(!confirm(`Delete template:\n\n${r.name}\n\nThis cannot be undone.`)) return;
   try {
     await _sbDelete('ace_user_email_templates', id);
@@ -33774,8 +33805,12 @@ async function _emailTplsTabRender(){
   }
   let rows;
   try {
+    // v166.1: shared template library — pull every user's templates so
+    // agents see the same folder/template tree the admin sees. Editing
+    // and deleting is still locked to template owner + admin (handled in
+    // _emailTplsSaveOne / _emailTplsDeleteOne).
     rows = await _sbGet('ace_user_email_templates',
-      `select=*&user_email=eq.${encodeURIComponent(userEmail)}&order=created_at.desc&limit=2000`);
+      `select=*&order=created_at.desc&limit=5000`);
   } catch(e){
     root.innerHTML = `<div style="padding:30px;color:#b91c1c;">Failed to load: ${_ddEsc(e.message)}</div>`;
     return;

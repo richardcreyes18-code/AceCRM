@@ -50098,6 +50098,9 @@ function _defaultPipelineFilters(){
     // this list. Supports 'deal_reviewed' | 'agent_reviewed' | 'untagged'
     // (the third matches deals with no review tag set).
     includeReviewTags: [],
+    // v155: email-template-link filter — 'any' | 'linked' | 'unlinked'.
+    // Reads from _propertyTemplateMap (loaded at sync time).
+    templateLink: 'any',
   };
 }
 
@@ -50290,6 +50293,9 @@ function applyPipelineFilters(deals){
       const key = tag || 'untagged';
       if(!f.includeReviewTags.includes(key)) return false;
     }
+    // v155: email-template-link filter
+    if(f.templateLink === 'linked' && !_dealHasTemplate(d.id)) return false;
+    if(f.templateLink === 'unlinked' && _dealHasTemplate(d.id)) return false;
     // Phase A: Region chips — OR semantics (deal passes if ANY chip matches)
     if(f.regionChipIds && f.regionChipIds.length){
       const county = d['Simple County'] || '';
@@ -50425,6 +50431,9 @@ function removePipelineFilterChip(type, val){
     const i = list.indexOf(val);
     if(i >= 0) list.splice(i, 1);
     f.includeReviewTags = list;
+  }
+  else if(type === 'templateLink'){
+    f.templateLink = 'any';
   }
   else if(Array.isArray(f[type])){
     const idx = f[type].indexOf(val);
@@ -50789,6 +50798,9 @@ function _buildPipelineFilterChipsHTML(){
       chips.push(chip('includeReviewTag', tag, label));
     });
   }
+  // v155: email-template-link chip
+  if(f.templateLink === 'linked')   chips.push(chip('templateLink', 'linked', '📧 Linked'));
+  if(f.templateLink === 'unlinked') chips.push(chip('templateLink', 'unlinked', '📭 Not linked'));
   return chips.join(' ');
 }
 
@@ -50991,6 +51003,25 @@ function _buildPipelineFilterPanelHTML(){
       <div style="font-size:10px;color:#94a3b8;margin-top:4px;">Show only deals with these tags. Leave empty for all.</div>
     </div>`;
 
+  // v155: email-template-link filter — three radio-style pills.
+  // Selecting "Any" clears the filter; "Linked" shows only deals with at
+  // least one ace_user_email_templates row; "Unlinked" shows only deals
+  // with none. Uses the same _propertyTemplateMap loaded at sync time.
+  const tplLink = f.templateLink || 'any';
+  const tplLinkPill = (key, label) => {
+    const on = tplLink === key;
+    return `<span onclick="setPipelineTemplateLink('${key}')" style="display:inline-block;padding:6px 12px;border-radius:99px;font-size:11px;font-weight:600;cursor:pointer;border:1px solid ${on?'#7c3aed':'#cbd5e1'};background:${on?'#7c3aed':'#fff'};color:${on?'#fff':'#475569'};margin-right:6px;margin-bottom:5px;">
+      ${label}
+    </span>`;
+  };
+  const templateLinkHTML = `
+    <div style="margin-bottom:14px;">
+      <div style="font-size:10px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Email template</div>
+      ${tplLinkPill('any',      'Any')}
+      ${tplLinkPill('linked',   '📧 Linked')}
+      ${tplLinkPill('unlinked', '📭 Not linked')}
+    </div>`;
+
   // v132: count helper for per-card "N filters" badges so each section
   // surfaces its own active count (mirrors the mockup).
   const countOf = keys => keys.reduce((n, k) => {
@@ -51037,8 +51068,8 @@ function _buildPipelineFilterPanelHTML(){
         + rangeInput('Cap Rate', 'capMin', 'capMax', '%', '%')
         + rangeInput('Commission Amount', 'commMin', 'commMax', '$', ''))}
       ${card('#f59e0b', 'Pipeline & Status',
-        (f.stages && f.stages.length?1:0) + (f.agents && f.agents.length?1:0) + (f.needsReviewOnly?1:0) + (incl.length?1:0),
-        stageCombo + agentCombo + includeReviewHTML + reviewToggleHTML)}
+        (f.stages && f.stages.length?1:0) + (f.agents && f.agents.length?1:0) + (f.needsReviewOnly?1:0) + (incl.length?1:0) + (tplLink !== 'any' ? 1 : 0),
+        stageCombo + agentCombo + includeReviewHTML + templateLinkHTML + reviewToggleHTML)}
       ${card('#dc2626', 'Do Not Include', excl.length,
         excludeReviewHTML)}
     </div>`;
@@ -51123,6 +51154,17 @@ function togglePipelineExcludeReviewTag(tag){
   if(Array.isArray(f.includeReviewTags) && f.includeReviewTags.includes(tag)){
     f.includeReviewTags = f.includeReviewTags.filter(t => t !== tag);
   }
+  savePipelineFilters();
+  showPipelineView();
+}
+
+// v155: email-template-link filter setter. Three states: 'any' | 'linked'
+// | 'unlinked'. Clicking the active pill toggles back to 'any' so the
+// user can clear the filter without hunting for a separate clear button.
+function setPipelineTemplateLink(val){
+  const f = getPipelineFilters();
+  const cur = f.templateLink || 'any';
+  f.templateLink = (cur === val) ? 'any' : val;
   savePipelineFilters();
   showPipelineView();
 }

@@ -15373,6 +15373,193 @@ async function _rejectCountyRequest(id){
   }
 }
 
+// v165: list every distinct non-canonical county value currently in use
+// on ace_properties.simple_county (across all deals, ignoring soft-deletes)
+// + their counts, with an Add button to push the value straight into
+// canonical app_lists. The companion query also flags state samples so
+// the admin can verify legitimacy before adding (e.g. "Nassau" used in NY
+// vs. dirty data in NJ).
+async function _loadNonCanonCounties(){
+  const listEl  = document.getElementById('countyNonCanonList');
+  const countEl = document.getElementById('countyNonCanonCount');
+  if(!listEl) return;
+  if(!isSupabase()){
+    listEl.innerHTML = '<div style="color:#94a3b8;">Supabase required.</div>';
+    return;
+  }
+  listEl.innerHTML = '<div style="color:#94a3b8;">Loading…</div>';
+  try {
+    // Pull in pages so we can see every distinct value, not just the first 1000.
+    // _proxyCall directly (not _sbGet) so the My-Deals agent filter doesn't apply.
+    const rows = [];
+    let from = 0, batch = 1000;
+    while(true){
+      const page = await _proxyCall({
+        table: SB_TABLES.properties,
+        method: 'GET',
+        select: 'id,simple_county,state',
+        'deleted_at': 'is.null',
+        'simple_county': 'not.is.null',
+        order: 'id.asc',
+        limit: batch,
+        offset: from,
+      });
+      if(!Array.isArray(page) || !page.length) break;
+      rows.push(...page);
+      if(page.length < batch) break;
+      from += batch;
+    }
+    const canon = new Set((_appLists.counties || []).map(c => String(c).toLowerCase()));
+    // group by exact value (preserving case so admins see "philadelphia" vs "Philadelphia").
+    const grouped = new Map();
+    rows.forEach(r => {
+      const v = (r.simple_county || '').trim();
+      if(!v) return;
+      if(canon.has(v.toLowerCase())) return; // skip canonical
+      const k = v;
+      if(!grouped.has(k)) grouped.set(k, { count:0, states:new Set() });
+      const g = grouped.get(k);
+      g.count++;
+      if(r.state) g.states.add(r.state);
+    });
+    const arr = [...grouped.entries()]
+      .map(([value, info]) => ({ value, count: info.count, states: [...info.states].sort().join(', ') }))
+      .sort((a,b) => b.count - a.count || a.value.localeCompare(b.value));
+    if(countEl) countEl.textContent = arr.length ? `(${arr.length} distinct, ${arr.reduce((s,x)=>s+x.count,0)} rows)` : '';
+    if(!arr.length){
+      listEl.innerHTML = '<div style="color:#94a3b8;padding:8px;">All counties match the canonical list. ✓</div>';
+      return;
+    }
+    listEl.innerHTML = arr.map(x => {
+      const safeVal = String(x.value).replace(/'/g,"\\'").replace(/</g,'&lt;');
+      return `<div style="background:#fff;border:1px solid #fde68a;border-radius:5px;padding:6px 10px;margin-bottom:5px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+        <div style="flex:1;min-width:0;">
+          <span style="font-weight:700;color:#0f172a;">${String(x.value).replace(/</g,'&lt;')}</span>
+          <span style="margin-left:8px;background:#fde68a;color:#78350f;padding:1px 7px;border-radius:99px;font-size:10px;font-weight:700;">${x.count}</span>
+          ${x.states?`<span style="margin-left:8px;font-size:10px;color:#94a3b8;">${String(x.states).replace(/</g,'&lt;')}</span>`:''}
+        </div>
+        <button onclick="_addNonCanonToList('${safeVal}')" style="background:#16a34a;color:#fff;border:none;padding:4px 12px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;">+ Add to canonical</button>
+      </div>`;
+    }).join('');
+  } catch(e){
+    listEl.innerHTML = `<div style="color:#b91c1c;">Error loading: ${e.message||e}</div>`;
+  }
+}
+
+async function _addNonCanonToList(value){
+  if(!confirm(`Add "${value}" to the canonical counties list?`)) return;
+  try {
+    const existing = await _sbGet(SB_TABLES.appLists,
+      `list_key=eq.counties&value=eq.${encodeURIComponent(value)}&limit=1`);
+    if(!Array.isArray(existing) || !existing.length){
+      await _sbPost(SB_TABLES.appLists, {
+        list_key: 'counties', value, sort_order: 9999, is_active: true,
+      });
+    }
+    if(typeof _loadAppLists === 'function') await _loadAppLists();
+    // Clear the review flag on rows whose simple_county now matches canonical.
+    // Find the affected rows then PATCH each (no bulk-by-filter PATCH in our proxy).
+    const affected = await _proxyCall({
+      table: SB_TABLES.properties,
+      method: 'GET',
+      select: 'id',
+      'simple_county': 'eq.' + value,
+      'deleted_at': 'is.null',
+      'needs_county_review': 'eq.true',
+      limit: 5000,
+    });
+    for(const r of (affected || [])){
+      try { await _sbPatch(SB_TABLES.properties, r.id, { needs_county_review: false }); } catch(_e){}
+    }
+    showSaveConfirm(`✓ Added "${value}" to canonical (${(affected||[]).length} deals unflagged)`);
+    _loadNonCanonCounties();
+  } catch(e){
+    alert('Add failed: ' + (e.message || 'unknown error'));
+  }
+}
+
+// v165: backfill latitude/longitude on priority-stage deals that don't
+// have them yet, so they show up on the map. Loops through one address
+// at a time so we respect Google's geocoding rate limits and the user
+// can watch progress live. Uses the same googleGeocodeAddress helper
+// that the address autocomplete uses.
+const _BACKFILL_PRIORITY_STAGES = [
+  'Hot Active Listing','Active Listing','Market Price Active',
+  'In Negotiations','Negotiating','Attorney Review',
+  'Under Contract','Closed','Closed 2025','Closed 2026','CLOSED 2025',
+];
+async function _backfillCoordsPriorityStages(){
+  if(!isSupabase()){ alert('Supabase required.'); return; }
+  if(!_store.get('google_places_key')){
+    alert('Google Places API key not configured. Open Settings → API Keys to add one before running this.');
+    return;
+  }
+  const btn = document.getElementById('coordBackfillBtn');
+  const log = document.getElementById('coordBackfillLog');
+  if(btn){ btn.disabled = true; btn.style.opacity = '0.6'; }
+  if(log){ log.style.display = 'block'; log.innerHTML = '⏳ Loading deals…'; }
+  try {
+    // Pull every deal in the priority stages that has no coords. Use the
+    // PostgREST 'in.()' filter for the stage list and 'or=()' for the
+    // null-coords condition. _proxyCall directly to skip My-Deals filter.
+    const stageFilter = _BACKFILL_PRIORITY_STAGES
+      .map(s => `"${s.replace(/"/g,'\\"')}"`).join(',');
+    const deals = [];
+    let from = 0, batch = 500;
+    while(true){
+      const page = await _proxyCall({
+        table: SB_TABLES.properties,
+        method: 'GET',
+        select: 'id,address,pipeline_stage,latitude,longitude,simple_county',
+        'deleted_at': 'is.null',
+        'pipeline_stage': `in.(${stageFilter})`,
+        or: '(latitude.is.null,longitude.is.null)',
+        order: 'id.asc',
+        limit: batch,
+        offset: from,
+      });
+      if(!Array.isArray(page) || !page.length) break;
+      deals.push(...page);
+      if(page.length < batch) break;
+      from += batch;
+    }
+    if(log) log.innerHTML = `Geocoding ${deals.length} deals…<br/>`;
+    if(!deals.length){
+      if(log) log.innerHTML = '<span style="color:#16a34a;">✓ No deals need geocoding — every priority listing already has coordinates.</span>';
+      return;
+    }
+    let ok = 0, fail = 0, skip = 0;
+    for(let i = 0; i < deals.length; i++){
+      const d = deals[i];
+      if(!d.address || d.address.length < 5){ skip++; continue; }
+      try {
+        const geo = await googleGeocodeAddress(d.address);
+        if(geo && geo.ok && geo.lat && geo.lng){
+          const upd = { latitude: geo.lat, longitude: geo.lng };
+          // Only fill county if it was empty — never overwrite
+          if(!d.simple_county && geo.county){
+            const c = (typeof _canonicalCounty === 'function') ? _canonicalCounty(geo.county) : geo.county;
+            upd.simple_county = c;
+          }
+          await _sbPatch(SB_TABLES.properties, d.id, upd);
+          ok++;
+        } else {
+          fail++;
+        }
+      } catch(e){ fail++; }
+      if(log && (i % 5 === 4 || i === deals.length - 1)){
+        log.innerHTML = `Geocoding… ${i+1}/${deals.length} <span style="color:#16a34a;">(${ok} ok</span>, <span style="color:#b91c1c;">${fail} failed</span>, <span style="color:#94a3b8;">${skip} skipped)</span>`;
+      }
+    }
+    if(log) log.innerHTML = `<span style="color:#16a34a;">✓ Done.</span> ${ok} updated, ${fail} failed, ${skip} skipped (missing address).`;
+    showSaveConfirm(`✓ Coords backfilled for ${ok} deals`);
+  } catch(e){
+    if(log) log.innerHTML = `<span style="color:#b91c1c;">Error: ${e.message||e}</span>`;
+  } finally {
+    if(btn){ btn.disabled = false; btn.style.opacity = '1'; }
+  }
+}
+
 async function _adminNormalizeCounties(){
   if(!isSupabase()){
     alert('Supabase required for this operation.');
@@ -33054,6 +33241,30 @@ function showSettingsPage(){
               </div>
               <div style="font-size:11px;color:#4338ca;line-height:1.5;margin-bottom:8px;">Users can request a new county from the Edit Property modal when their entry isn't in the standard list. Approving here inserts the value into the canonical list immediately.</div>
               <div id="countyReqList" style="font-size:12px;max-height:260px;overflow-y:auto;">Click ↻ Refresh to load.</div>
+            </div>
+            <!-- v165: Non-canonical counties currently in use across all
+                 deals — the admin can scan the list, see counts + which
+                 states they appear in, and one-click add legitimate
+                 ones to the canonical list. -->
+            <div style="background:#fef3c7;border:1px solid #fbbf24;border-radius:6px;padding:10px 12px;margin-bottom:10px;">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                <div style="font-size:12px;font-weight:700;color:#78350f;">⚠ Non-canonical counties in use <span id="countyNonCanonCount" style="margin-left:6px;color:#b45309;"></span></div>
+                <button onclick="_loadNonCanonCounties()" style="background:#fff;color:#78350f;border:1px solid #fbbf24;padding:4px 10px;border-radius:5px;font-size:11px;font-weight:600;cursor:pointer;">↻ Scan deals</button>
+              </div>
+              <div style="font-size:11px;color:#92400e;line-height:1.5;margin-bottom:8px;">Counties currently set on deals that aren't in the canonical list. Click "+ Add to canonical" on any legitimate one to add it (and clear the review flag on those deals automatically).</div>
+              <div id="countyNonCanonList" style="font-size:12px;max-height:260px;overflow-y:auto;">Click ↻ Scan deals to load.</div>
+            </div>
+            <!-- v165: Geocode backfill — fills latitude/longitude on
+                 priority-stage deals that don't have coordinates so they
+                 show up on the map. Pays a Google geocoding call per
+                 deal — only run when needed. -->
+            <div style="background:#ecfeff;border:1px solid #67e8f9;border-radius:6px;padding:10px 12px;margin-bottom:10px;">
+              <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:6px;">
+                <div style="font-size:12px;font-weight:700;color:#155e75;">🗺 Backfill coordinates for priority listings</div>
+                <button id="coordBackfillBtn" onclick="_backfillCoordsPriorityStages()" style="background:#0891b2;color:#fff;border:none;padding:5px 14px;border-radius:5px;font-size:11px;font-weight:700;cursor:pointer;">▶ Run backfill</button>
+              </div>
+              <div style="font-size:11px;color:#0e7490;line-height:1.5;margin-bottom:6px;">Geocodes every deal in <i>Hot Active Listing / Active Listing / Market Price Active / In Negotiations / Negotiating / Attorney Review / Under Contract / Closed</i> that's missing latitude or longitude, so they appear on the map. One Google geocode call per deal.</div>
+              <div id="coordBackfillLog" style="display:none;font-size:11px;color:#0e7490;background:#fff;border:1px solid #67e8f9;border-radius:5px;padding:6px 10px;font-family:'SFMono-Regular',Consolas,monospace;"></div>
             </div>
             <div id="alListCounties" style="max-height:520px;overflow-y:auto;font-size:12px;">Loading…</div>
           </div>

@@ -32950,6 +32950,53 @@ async function _contactNoteSave(contactId, btnEl){
 }
 window._contactNoteSave = _contactNoteSave;
 
+// v197: Inline-edit a contact note. Swaps the card body with a textarea + Save/Cancel.
+function _contactNoteEdit(noteId, contactId, escapedBody){
+  const card = document.querySelector(`[data-our-note-id="${noteId}"]`);
+  if(!card) return;
+  // Decode the attribute-escaped body
+  const body = String(escapedBody||'')
+    .replace(/&#10;/g,'\n').replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/&amp;/g,'&');
+  const editId = `ccnEditBody_${noteId}`;
+  // Hide the existing rendered body + replace the action buttons inline
+  const bodyEl = card.querySelector(`[data-our-note-body="${noteId}"]`);
+  if(bodyEl){
+    bodyEl.outerHTML = `
+      <div style="padding-left:22px;">
+        <textarea id="${editId}" style="width:100%;box-sizing:border-box;padding:8px 10px;font-size:13px;border:1px solid #cbd5e1;border-radius:6px;font-family:inherit;line-height:1.5;outline:none;resize:vertical;min-height:90px;">${body.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</textarea>
+        <div style="display:flex;justify-content:flex-end;gap:6px;margin-top:6px;">
+          <button onclick="_contactNoteCancelEdit('${contactId}')" style="background:#fff;border:1px solid #cbd5e1;color:#475569;padding:5px 12px;font-size:11px;font-weight:600;border-radius:5px;cursor:pointer;">Cancel</button>
+          <button onclick="_contactNoteSaveEdit('${noteId}','${contactId}','${editId}',this)" style="background:#7c3aed;color:#fff;border:none;padding:5px 14px;font-size:11px;font-weight:700;border-radius:5px;cursor:pointer;">Save</button>
+        </div>
+      </div>`;
+  }
+  setTimeout(() => document.getElementById(editId)?.focus(), 30);
+}
+window._contactNoteEdit = _contactNoteEdit;
+
+async function _contactNoteSaveEdit(noteId, contactId, editId, btnEl){
+  const ta = document.getElementById(editId);
+  const newBody = (ta?.value || '').trim();
+  if(!newBody){ alert('Note cannot be empty. Use Delete to remove it.'); return; }
+  if(btnEl){ btnEl.disabled = true; btnEl.textContent = 'Saving…'; }
+  try {
+    await _sbPatch('ace_contact_notes', noteId, { body: newBody, updated_at: new Date().toISOString() });
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('Note updated ✓');
+    await _contactLoadCommunication(contactId);
+  } catch(e){
+    alert('Save failed: ' + (e.message||'unknown'));
+    if(btnEl){ btnEl.disabled = false; btnEl.textContent = 'Save'; }
+  }
+}
+window._contactNoteSaveEdit = _contactNoteSaveEdit;
+
+function _contactNoteCancelEdit(contactId){
+  if(typeof _contactLoadCommunication === 'function'){
+    _contactLoadCommunication(contactId);
+  }
+}
+window._contactNoteCancelEdit = _contactNoteCancelEdit;
+
 // v195: Delete one of our own contact notes (soft-delete via deleted_at).
 async function _contactNoteDelete(noteId, contactId, btnEl){
   if(!noteId || !contactId) return;
@@ -33201,20 +33248,25 @@ async function _contactLoadCommunication(contactId){
         const truncated = body.length > 800 ? body.substring(0,800)+'…' : body;
         const author = n.created_by_user_id ? (aceUserNameById.get(n.created_by_user_id) || null) : null;
         const isMine = !!(n.created_by_user_id && _currentUser && n.created_by_user_id === _currentUser.id);
+        const escForAttr = body.replace(/&/g,'&amp;').replace(/'/g,'&#39;').replace(/"/g,'&quot;').replace(/\n/g,'&#10;');
         html += `
-          <div style="background:#f5f3ff;padding:12px 16px;position:relative;">
+          <div data-our-note-id="${n.id}" style="background:#f5f3ff;padding:12px 16px;position:relative;">
             <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
               <div style="font-size:14px;">${meta.icon}</div>
               <div style="font-size:11px;font-weight:700;color:${meta.color};letter-spacing:0.5px;">${meta.label}</div>
               ${n.subject ? `<div style="font-size:11px;color:#64748b;">${escapeHtml(n.subject)}</div>` : ''}
               ${author ? `<div style="font-size:11px;color:#64748b;">by ${escapeHtml(author)}</div>` : ''}
               <div style="margin-left:auto;font-size:11px;color:#94a3b8;">${fmtDate(item.date)}</div>
-              ${isMine ? `<button onclick="_contactNoteDelete('${n.id}','${contactId}',this)" title="Delete this note"
-                style="background:#fff;border:1px solid #ddd6fe;color:#7c3aed;font-size:10px;padding:3px 8px;border-radius:5px;cursor:pointer;font-weight:600;"
-                onmouseenter="this.style.background='#fee2e2';this.style.color='#b91c1c';this.style.borderColor='#fca5a5';"
-                onmouseleave="this.style.background='#fff';this.style.color='#7c3aed';this.style.borderColor='#ddd6fe';">✕ Delete</button>` : ''}
+              ${isMine ? `
+                <button onclick="_contactNoteEdit('${n.id}','${contactId}','${escForAttr}')" title="Edit this note"
+                  style="background:#fff;border:1px solid #ddd6fe;color:#7c3aed;font-size:10px;padding:3px 8px;border-radius:5px;cursor:pointer;font-weight:600;">✎ Edit</button>
+                <button onclick="_contactNoteDelete('${n.id}','${contactId}',this)" title="Delete this note"
+                  style="background:#fff;border:1px solid #ddd6fe;color:#7c3aed;font-size:10px;padding:3px 8px;border-radius:5px;cursor:pointer;font-weight:600;"
+                  onmouseenter="this.style.background='#fee2e2';this.style.color='#b91c1c';this.style.borderColor='#fca5a5';"
+                  onmouseleave="this.style.background='#fff';this.style.color='#7c3aed';this.style.borderColor='#ddd6fe';">✕ Delete</button>
+              ` : ''}
             </div>
-            <div style="font-size:13px;color:#1e293b;white-space:pre-wrap;line-height:1.55;padding-left:22px;">${escapeHtml(truncated)}</div>
+            <div data-our-note-body="${n.id}" style="font-size:13px;color:#1e293b;white-space:pre-wrap;line-height:1.55;padding-left:22px;">${escapeHtml(truncated)}</div>
           </div>`;
       } else if(item.type === 'outreach'){
         const o = item.data;
@@ -53798,13 +53850,24 @@ function renderNotesTab(d){
     return flat.slice().reverse();
   };
 
-  // Next Steps section (current + collapsible history) — unchanged
+  // Next Steps section. v197: each entry (current + history) gets ✎/✕ buttons.
+  // Entries are indexed using the same flattening as _parseBlob → newest first.
+  const _nsBtns = (idx) => `
+    <div style="display:flex;gap:4px;flex-shrink:0;">
+      <button onclick="_editNoteEntry('ns', ${idx})" title="Edit"
+        style="background:#fff;border:1px solid #e2e8f0;color:#64748b;font-size:10px;line-height:1;padding:3px 7px;border-radius:5px;cursor:pointer;font-weight:600;">✎ Edit</button>
+      <button onclick="_deleteNoteEntry('ns', ${idx}, this)" title="Delete"
+        style="background:#fff;border:1px solid #e2e8f0;color:#94a3b8;font-size:10px;line-height:1;padding:3px 7px;border-radius:5px;cursor:pointer;font-weight:600;">✕</button>
+    </div>`;
   const nsSection = (ns.current || ns.history.length) ? `
     <div style="background:#fff;border:1px solid #bbf7d0;border-left:4px solid #408040;border-radius:8px;padding:14px 16px;margin-bottom:12px;">
-      <div style="font-size:11px;font-weight:700;color:#408040;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">
-        Current Next Steps${ns.current && ns.current.date ? ` <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">· ${ns.current.date}</span>` : ''}
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:8px;margin-bottom:6px;">
+        <div style="font-size:11px;font-weight:700;color:#408040;text-transform:uppercase;letter-spacing:.05em;">
+          Current Next Steps${ns.current && ns.current.date ? ` <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">· ${ns.current.date}</span>` : ''}
+        </div>
+        ${ns.current ? _nsBtns(0) : ''}
       </div>
-      <div style="font-size:13px;color:#0f172a;white-space:pre-wrap;line-height:1.5;">
+      <div data-note-key="ns" data-note-idx="0" style="font-size:13px;color:#0f172a;white-space:pre-wrap;line-height:1.5;">
         ${ns.current ? ns.current.body.replace(/</g,'&lt;') : '<span style="color:#94a3b8;font-style:italic;">No current next steps.</span>'}
       </div>
       ${ns.history.length ? `
@@ -53814,10 +53877,11 @@ function renderNotesTab(d){
             History (${ns.history.length})
           </div>
           <div class="ns-hist-body" style="display:none;margin-top:10px;">
-            ${ns.history.map(h => `
-              <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px;margin-bottom:6px;">
-                ${h.date ? `<div style="font-size:10px;color:#94a3b8;font-weight:600;margin-bottom:3px;">${h.date}</div>` : ''}
-                <div style="font-size:12px;color:#475569;white-space:pre-wrap;line-height:1.5;">${h.body.replace(/</g,'&lt;')}</div>
+            ${ns.history.map((h, hi) => `
+              <div data-note-key="ns" data-note-idx="${hi+1}" style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px;margin-bottom:6px;position:relative;">
+                <div style="position:absolute;top:6px;right:6px;">${_nsBtns(hi+1)}</div>
+                ${h.date ? `<div style="font-size:10px;color:#94a3b8;font-weight:600;margin-bottom:3px;padding-right:120px;">${h.date}</div>` : ''}
+                <div style="font-size:12px;color:#475569;white-space:pre-wrap;line-height:1.5;padding-right:120px;">${h.body.replace(/</g,'&lt;')}</div>
               </div>
             `).join('')}
           </div>
@@ -53827,7 +53891,7 @@ function renderNotesTab(d){
   ` : '';
 
   // v102.30: Deal Notes and General Property Notes render as stacked cards
-  // v194: each card now has a ✕ delete button — handler in _deleteNoteEntry.
+  // v194: ✕ delete button per card. v197: ✎ edit button alongside it.
   const _renderBlobCards = (label, raw, accent, fieldKey) => {
     const entries = _parseBlob(raw);
     if(entries.length === 0) return '';
@@ -53835,13 +53899,19 @@ function renderNotesTab(d){
       <div style="margin-bottom:12px;">
         <div style="font-size:11px;font-weight:700;color:${accent};text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">${label} <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">· ${entries.length} ${entries.length===1?'entry':'entries'}</span></div>
         ${entries.map((e, i) => `
-          <div style="background:#fff;border:1px solid #e2e8f0;border-left:3px solid ${accent};border-radius:6px;padding:10px 14px;margin-bottom:6px;position:relative;">
-            <button onclick="_deleteNoteEntry('${fieldKey}', ${i}, this)" title="Delete this entry"
-              style="position:absolute;top:6px;right:6px;background:#fff;border:1px solid #e2e8f0;color:#94a3b8;font-size:11px;line-height:1;padding:3px 7px;border-radius:5px;cursor:pointer;font-weight:600;"
-              onmouseenter="this.style.background='#fee2e2';this.style.color='#b91c1c';this.style.borderColor='#fca5a5';"
-              onmouseleave="this.style.background='#fff';this.style.color='#94a3b8';this.style.borderColor='#e2e8f0';">✕</button>
-            ${e.date ? `<div style="font-size:10px;color:#94a3b8;font-weight:600;margin-bottom:4px;padding-right:24px;">${e.date}</div>` : ''}
-            <div style="font-size:12px;color:#334155;white-space:pre-wrap;line-height:1.5;padding-right:24px;">${e.body.replace(/</g,'&lt;')}</div>
+          <div data-note-key="${fieldKey}" data-note-idx="${i}" style="background:#fff;border:1px solid #e2e8f0;border-left:3px solid ${accent};border-radius:6px;padding:10px 14px;margin-bottom:6px;position:relative;">
+            <div style="position:absolute;top:6px;right:6px;display:flex;gap:4px;">
+              <button onclick="_editNoteEntry('${fieldKey}', ${i})" title="Edit this entry"
+                style="background:#fff;border:1px solid #e2e8f0;color:#64748b;font-size:11px;line-height:1;padding:3px 7px;border-radius:5px;cursor:pointer;font-weight:600;"
+                onmouseenter="this.style.background='#eff6ff';this.style.color='#1d4ed8';this.style.borderColor='#bfdbfe';"
+                onmouseleave="this.style.background='#fff';this.style.color='#64748b';this.style.borderColor='#e2e8f0';">✎ Edit</button>
+              <button onclick="_deleteNoteEntry('${fieldKey}', ${i}, this)" title="Delete this entry"
+                style="background:#fff;border:1px solid #e2e8f0;color:#94a3b8;font-size:11px;line-height:1;padding:3px 7px;border-radius:5px;cursor:pointer;font-weight:600;"
+                onmouseenter="this.style.background='#fee2e2';this.style.color='#b91c1c';this.style.borderColor='#fca5a5';"
+                onmouseleave="this.style.background='#fff';this.style.color='#94a3b8';this.style.borderColor='#e2e8f0';">✕</button>
+            </div>
+            ${e.date ? `<div style="font-size:10px;color:#94a3b8;font-weight:600;margin-bottom:4px;padding-right:120px;">${e.date}</div>` : ''}
+            <div style="font-size:12px;color:#334155;white-space:pre-wrap;line-height:1.5;padding-right:120px;">${e.body.replace(/</g,'&lt;')}</div>
           </div>
         `).join('')}
       </div>`;
@@ -60908,50 +60978,110 @@ function showSaveConfirm(msg){
   toast._timer = setTimeout(()=>{ toast.style.opacity='0'; setTimeout(()=>toast.style.display='none',400); },2500);
 }
 
-// v194: delete a single entry from Deal Notes / General Property Notes.
-// fieldKey: 'deal' | 'gen'. index is the 0-based position in the rendered list
-// (matches the order returned by _parseBlob — newest-first after the v102.30 sort).
+// v194/v197: edit + delete entries from Deal Notes / General Property Notes / Next Steps.
+// fieldKey: 'deal' | 'gen' | 'ns'. index is 0-based into the rendered (newest-first) list.
+function _notesFieldName(fieldKey){
+  if(fieldKey === 'deal') return 'Deal Notes';
+  if(fieldKey === 'gen')  return 'General Property Notes';
+  if(fieldKey === 'ns')   return 'Next Steps';
+  return 'Deal Notes';
+}
+function _parseNotesBlob(raw){
+  const parsed = _parseNextSteps(raw);
+  const flat = [];
+  if(parsed.current) flat.push(parsed.current);
+  parsed.history.forEach(h => flat.push(h));
+  if(flat.length <= 1) return flat;
+  const first = _tryParseDate(flat[0].date);
+  const last  = _tryParseDate(flat[flat.length-1].date);
+  if(first && last && first >= last) return flat;
+  return flat.slice().reverse();
+}
+window._parseNotesBlob = _parseNotesBlob;
+
+function _rebuildNotesBlob(entries){
+  return entries.map(e => e.date ? `[${e.date}] ${e.body}` : e.body).join('\n\n').trim();
+}
+
+function _refreshNotesTab(){
+  const activeTab = document.querySelector('.tab-btn.active');
+  if(typeof switchTab === 'function' && activeTab){
+    switchTab('notes', activeTab);
+  }
+}
+
 async function _deleteNoteEntry(fieldKey, index, btnEl){
   if(!currentDeal) return;
-  const fieldName = fieldKey === 'deal' ? 'Deal Notes' : 'General Property Notes';
+  const fieldName = _notesFieldName(fieldKey);
   const raw = currentDeal[fieldName] || '';
   if(!raw.trim()) return;
   if(!confirm('Delete this entry from '+fieldName+'? This cannot be undone.')) return;
-  // Re-parse using the same logic _renderBlobCards uses, so indices match.
-  const _parseBlobLocal = (raw) => {
-    const parsed = _parseNextSteps(raw);
-    const flat = [];
-    if(parsed.current) flat.push(parsed.current);
-    parsed.history.forEach(h => flat.push(h));
-    if(flat.length <= 1) return flat;
-    const first = _tryParseDate(flat[0].date);
-    const last  = _tryParseDate(flat[flat.length-1].date);
-    if(first && last && first >= last) return flat;
-    return flat.slice().reverse();
-  };
-  const entries = _parseBlobLocal(raw);
+  const entries = _parseNotesBlob(raw);
   if(index < 0 || index >= entries.length){ alert('Entry not found.'); return; }
   entries.splice(index, 1);
-  // Rebuild blob in the same shape saveNoteEntry produces (newest-first, blank
-  // line between entries). Untagged entries are kept verbatim without a header.
-  const rebuilt = entries.map(e => e.date ? `[${e.date}] ${e.body}` : e.body).join('\n\n').trim();
+  const rebuilt = _rebuildNotesBlob(entries);
   if(btnEl){ btnEl.disabled = true; btnEl.style.opacity = '0.5'; }
   try {
     const ok = await airtableUpdate(currentDeal.id, { [fieldName]: rebuilt });
     if(!ok){ alert('Save failed.'); return; }
     currentDeal[fieldName] = rebuilt;
     showSaveConfirm(fieldName + ' entry deleted ✓');
-    // Refresh the Notes tab to reflect the deletion.
-    const activeTab = document.querySelector('.tab-btn.active');
-    if(typeof switchTab === 'function' && activeTab){
-      switchTab('notes', activeTab);
-    }
+    _refreshNotesTab();
   } catch(e){
     alert('Delete failed: ' + (e.message||'unknown'));
     if(btnEl){ btnEl.disabled = false; btnEl.style.opacity = '1'; }
   }
 }
 window._deleteNoteEntry = _deleteNoteEntry;
+
+// v197: inline edit. Swap the entry card's content with a textarea + Save/Cancel.
+function _editNoteEntry(fieldKey, index){
+  if(!currentDeal) return;
+  const fieldName = _notesFieldName(fieldKey);
+  const entries = _parseNotesBlob(currentDeal[fieldName] || '');
+  if(index < 0 || index >= entries.length) return;
+  const entry = entries[index];
+  const card = document.querySelector(`[data-note-key="${fieldKey}"][data-note-idx="${index}"]`);
+  if(!card) return;
+  const editId = `noteEdit_${fieldKey}_${index}`;
+  const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;');
+  card.innerHTML = `
+    ${entry.date ? `<div style="font-size:10px;color:#94a3b8;font-weight:600;margin-bottom:6px;">${entry.date}</div>` : ''}
+    <textarea id="${editId}" style="width:100%;box-sizing:border-box;padding:8px 10px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;font-family:inherit;line-height:1.5;outline:none;resize:vertical;min-height:90px;">${esc(entry.body)}</textarea>
+    <div style="display:flex;justify-content:flex-end;gap:6px;margin-top:6px;">
+      <button onclick="_cancelNoteEdit()" style="background:#fff;border:1px solid #cbd5e1;color:#475569;padding:5px 12px;font-size:11px;font-weight:600;border-radius:5px;cursor:pointer;">Cancel</button>
+      <button onclick="_saveNoteEdit('${fieldKey}', ${index}, '${editId}', this)" style="background:#1a3a6e;color:#fff;border:none;padding:5px 14px;font-size:11px;font-weight:700;border-radius:5px;cursor:pointer;">Save</button>
+    </div>`;
+  setTimeout(() => document.getElementById(editId)?.focus(), 30);
+}
+window._editNoteEntry = _editNoteEntry;
+
+function _cancelNoteEdit(){ _refreshNotesTab(); }
+window._cancelNoteEdit = _cancelNoteEdit;
+
+async function _saveNoteEdit(fieldKey, index, editId, btnEl){
+  if(!currentDeal) return;
+  const fieldName = _notesFieldName(fieldKey);
+  const ta = document.getElementById(editId);
+  const newBody = (ta?.value || '').trim();
+  if(!newBody){ alert('Note cannot be empty. Use Delete to remove it.'); return; }
+  const entries = _parseNotesBlob(currentDeal[fieldName] || '');
+  if(index < 0 || index >= entries.length){ alert('Entry not found.'); return; }
+  entries[index] = { date: entries[index].date, body: newBody };
+  const rebuilt = _rebuildNotesBlob(entries);
+  if(btnEl){ btnEl.disabled = true; btnEl.textContent = 'Saving…'; }
+  try {
+    const ok = await airtableUpdate(currentDeal.id, { [fieldName]: rebuilt });
+    if(!ok){ alert('Save failed.'); return; }
+    currentDeal[fieldName] = rebuilt;
+    showSaveConfirm(fieldName + ' updated ✓');
+    _refreshNotesTab();
+  } catch(e){
+    alert('Save failed: ' + (e.message||'unknown'));
+    if(btnEl){ btnEl.disabled = false; btnEl.textContent = 'Save'; }
+  }
+}
+window._saveNoteEdit = _saveNoteEdit;
 
 function saveNoteEntry(){
   if(!currentDeal) return;

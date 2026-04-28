@@ -11616,7 +11616,13 @@ function renderFinancialTab(d){
       .fin-results-table{width:100%;border-collapse:collapse;font-size:11px;}
       .fin-results-table td{padding:3px 8px;border-bottom:1px solid #e8e4d8;vertical-align:top;}
       .fin-results-table .row-label{font-weight:bold;color:#333;width:70px;white-space:nowrap;}
-      .fin-metrics-table{width:100%;border-collapse:collapse;font-size:11px;}
+      /* v193: align Key Metrics, Cash Flow & NOI, and Purchase Price & Down
+         Payment so the blue/purple/green column bands stack vertically.
+         Label column is fixed at 220px; the 3 data column groups split the
+         remaining width equally. PPDP grid mirrors this with a 220px gutter. */
+      .fin-metrics-table{width:100%;border-collapse:collapse;font-size:11px;table-layout:fixed;}
+      .fin-cf-table{table-layout:fixed;}
+      .fin-3col-align{display:grid;grid-template-columns:220px 1fr 1fr 1fr;gap:0;}
       .fin-metrics-table th{background:linear-gradient(180deg,#4a90d9,#2060b0);color:#fff;padding:5px 10px;text-align:center;border:1px solid #1a50a0;}
       .fin-metrics-table td{padding:5px 10px;border:1px solid #ccc;text-align:center;}
       .fin-metrics-table tr:nth-child(even) td{background:#f0f4ff;}
@@ -11696,10 +11702,13 @@ function renderFinancialTab(d){
       </table>
     </div>
 
-    <!-- KEY METRICS (v192: 3 columns — Asking | Pitch Out actual | Pitch Out proforma) -->
+    <!-- KEY METRICS (v192/v193: 3 data columns aligned to PPDP grid) -->
     <div class="info-box">
       <div class="info-box-title">📈 Key Metrics</div>
       <table class="fin-metrics-table">
+        <colgroup>
+          <col style="width:220px;"/><col/><col/><col/>
+        </colgroup>
         <thead>
           <tr>
             <th style="text-align:left;">Metric</th>
@@ -11749,13 +11758,19 @@ function renderFinancialTab(d){
       </table>
     </div>
 
-    <!-- CASH FLOW TABLE (v192: 3 column groups) -->
+    <!-- CASH FLOW TABLE (v192/v193: 3 column groups, aligned to PPDP grid) -->
     <div class="info-box">
       <div class="info-box-title">💵 Cash Flow &amp; NOI</div>
-      <table class="fin-cf-table">
+      <table class="fin-cf-table" style="width:100%;">
+        <colgroup>
+          <col style="width:220px;"/>
+          <col/><col/><col/>
+          <col/><col/><col/>
+          <col/><col/><col/>
+        </colgroup>
         <thead>
           <tr>
-            <th style="text-align:left;width:180px;">Item</th>
+            <th style="text-align:left;">Item</th>
             <th colspan="3" style="background:linear-gradient(180deg,#5599cc,#2060b0);">Asking Price (actual)</th>
             <th colspan="3" style="background:linear-gradient(180deg,#a78bfa,#7c3aed);">Pitch Out Price (actual)</th>
             <th colspan="3" style="background:linear-gradient(180deg,#60a060,#306030);">Pitch Out Price (proforma)</th>
@@ -11809,10 +11824,14 @@ function renderFinancialTab(d){
     <!-- v113.77: Custom NOI Override panel moved DOWN to just above Cash
          Flow (per user) — see further down. -->
 
-    <!-- PURCHASE PRICE & DOWN PAYMENT (v191: 3 columns — Asking | Pitch Out Actual | Pitch Out Proforma) ── -->
+    <!-- PURCHASE PRICE & DOWN PAYMENT (v191: 3 columns; v193: 220px gutter so
+         columns line up with the Key Metrics + Cash Flow tables above) -->
     <div class="info-box">
       <div class="info-box-title">Purchase Price &amp; Down Payment</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;font-size:11px;">
+      <div style="display:grid;grid-template-columns:220px 1fr 1fr 1fr;gap:0;font-size:11px;">
+        <!-- 220px gutter aligns these 3 cards under the corresponding columns
+             of Key Metrics + Cash Flow tables (which use a 220px label column). -->
+        <div></div>
 
         <!-- LEFT: ASKING / ACCEPTED FROM SELLER (Actual CoC, asking-price scenario) -->
         <div style="padding:12px 14px 12px 0;border-right:2px solid #ddd;">

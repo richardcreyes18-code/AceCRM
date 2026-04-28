@@ -41280,44 +41280,49 @@ function _bcAiRenderReviewModal(bcId, resp, hostModal){
     let valCell = '';
     let editorCell = '';
     let acceptCell = '';
+
+    // v208: every row gets an editor + Apply checkbox so the user can
+    // override even rows the AI returned no info for. Resolve the option
+    // list / kind once and pass into the shared editor builder.
+    const editType = f.type || 'text';
+    let resolvedOptions = Array.isArray(f.options) ? f.options : null;
+    let resolvedKind = editType;
+    if(col === 'preferred_states' && !resolvedOptions){
+      resolvedOptions = _BC_AI_US_STATES;
+      resolvedKind = 'multienum';
+    }
+
     if(propEntry){
       stateLabel = '<span style="font-size:9px;color:#15803d;background:#dcfce7;border:1px solid #86efac;border-radius:99px;padding:1px 6px;">applied</span>';
       const propVal = propEntry.proposed;
-      const editType = f.type || 'text';
-      // v207: client-side option list. Server sends `options` for true
-      // enum/multienum fields. For preferred_states we treat as a
-      // multi-select against the standard US state list even though the
-      // server keeps it as csv. preferred_counties / preferred_cities
-      // are kept as text (lists too big for an inline picker — user can
-      // refine on the BC page itself, which has a chip picker).
-      let resolvedOptions = Array.isArray(f.options) ? f.options : null;
-      let resolvedKind = editType;
-      if(col === 'preferred_states' && !resolvedOptions){
-        resolvedOptions = _BC_AI_US_STATES;
-        resolvedKind = 'multienum';
-      }
-      const inputHtml = _bcAiBuildEditor(col, propVal, resolvedKind, resolvedOptions);
       valCell = `<div style="font-size:11px;color:#0f172a;font-weight:600;">${fmtVal(propVal)}</div>`;
-      editorCell = inputHtml;
+      editorCell = _bcAiBuildEditor(col, propVal, resolvedKind, resolvedOptions);
       acceptCell = `<input type="checkbox" data-kind="value" id="aiAccept_${col}" checked style="margin:0;cursor:pointer;"/>`;
     } else if(naEntry){
-      stateLabel = '<span style="font-size:9px;color:#7c3aed;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:99px;padding:1px 6px;">N/A</span>';
+      stateLabel = '<span style="font-size:9px;color:#7c3aed;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:99px;padding:1px 6px;">N/A or override</span>';
       valCell = `<span style="font-size:11px;color:#7c3aed;font-style:italic;">No preference</span>`;
-      editorCell = `<span style="font-size:10px;color:#94a3b8;">— mark as N/A —</span>`;
+      // v208: even when AI proposes N/A, give the user an editor to put a
+      // value in. The Apply checkbox kind switches based on whether they
+      // type something — handled at apply time by checking the editor.
+      editorCell = _bcAiBuildEditor(col, before, resolvedKind, resolvedOptions);
       acceptCell = `<input type="checkbox" data-kind="na" id="aiAccept_${col}" checked style="margin:0;cursor:pointer;"/>`;
     } else if(isCurrentNa){
-      stateLabel = '<span style="font-size:9px;color:#94a3b8;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:99px;padding:1px 6px;">already N/A</span>';
+      stateLabel = '<span style="font-size:9px;color:#94a3b8;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:99px;padding:1px 6px;">already N/A — override</span>';
       valCell = `<span style="font-size:11px;color:#94a3b8;font-style:italic;">N/A</span>`;
-      editorCell = `<span style="font-size:10px;color:#cbd5e1;">— locked —</span>`;
-      acceptCell = '';
+      // v208: was locked. Now an editor — applying clears the N/A flag.
+      editorCell = _bcAiBuildEditor(col, before, resolvedKind, resolvedOptions);
+      acceptCell = `<input type="checkbox" data-kind="value" id="aiAccept_${col}" style="margin:0;cursor:pointer;"/>`;
     } else {
-      stateLabel = '<span style="font-size:9px;color:#cbd5e1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:99px;padding:1px 6px;">no info</span>';
+      stateLabel = '<span style="font-size:9px;color:#475569;background:#f8fafc;border:1px solid #e2e8f0;border-radius:99px;padding:1px 6px;">manual</span>';
       valCell = '<span style="color:#cbd5e1;">—</span>';
-      editorCell = '<span style="color:#cbd5e1;">—</span>';
-      acceptCell = '';
+      // v208: AI had no info. Give the user an editor + an unchecked
+      // Apply checkbox so they can fill in just this row by hand.
+      editorCell = _bcAiBuildEditor(col, before, resolvedKind, resolvedOptions);
+      acceptCell = `<input type="checkbox" data-kind="value" id="aiAccept_${col}" style="margin:0;cursor:pointer;" title="Check to apply your manually-typed value for this row."/>`;
     }
     const explanation = (propEntry && propEntry.explanation) || (naEntry && naEntry.explanation) || '';
-    return `<tr style="border-top:1px solid #f1f5f9;${(propEntry||naEntry)?'':'opacity:0.5;'}">
+    // v208: all rows are at full opacity now since they're all editable.
+    return `<tr style="border-top:1px solid #f1f5f9;">
       <td style="padding:7px 8px;font-size:11px;color:#0f172a;font-weight:500;vertical-align:top;width:160px;">
         ${esc(f.label || col)}<br>
         <span style="font-size:9px;color:#94a3b8;font-family:ui-monospace,Menlo,monospace;">${esc(col)}</span>
@@ -41428,17 +41433,19 @@ window._bcAiAutoFillApply = async function(bcId, btn){
   const acceptedValueCols = new Set();
   const acceptedNaCols = new Set();
   const userOverrides = {};
+  const userOnlyCols = new Set();   // v208: rows the AI didn't propose, where the user typed something + checked Apply
   for(const cb of modal.querySelectorAll('input[type=checkbox][data-kind]')){
     if(!cb.checked) continue;
     const col = (cb.id || '').replace(/^aiAccept_/, '');
     if(!col) continue;
-    if(cb.dataset.kind === 'value' && proposed[col]){
-      acceptedValueCols.add(col);
+    if(cb.dataset.kind === 'value'){
+      // v208: read the editor regardless of whether the AI had a proposal —
+      // user can fill in any row manually. Empty value = nothing to apply.
       const editEl = document.getElementById('aiVal_' + col);
+      let parsed = null;
       if(editEl){
         const editType = editEl.dataset.editType || 'text';
         const raw = String(editEl.value ?? '').trim();
-        let parsed;
         if(editType === 'boolean'){
           parsed = raw === 'true';
         } else if(editType === 'number'){
@@ -41450,8 +41457,12 @@ window._bcAiAutoFillApply = async function(bcId, btn){
         } else {
           parsed = raw === '' ? null : raw;
         }
-        userOverrides[col] = parsed;
       }
+      // Skip rows where Apply is checked but the editor is empty — nothing to write.
+      if(parsed === null || parsed === undefined || parsed === '') continue;
+      acceptedValueCols.add(col);
+      userOverrides[col] = parsed;
+      if(!proposed[col]) userOnlyCols.add(col);
     } else if(cb.dataset.kind === 'na'){
       acceptedNaCols.add(col);
     }
@@ -41467,29 +41478,48 @@ window._bcAiAutoFillApply = async function(bcId, btn){
   const valuePatch = {};
   const overrideFlags = {};
   for(const col of acceptedValueCols){
-    if(!proposed[col]) continue;
-    let v = proposed[col].proposed;
-    if(Object.prototype.hasOwnProperty.call(userOverrides, col)){
-      const ov = userOverrides[col];
-      if(ov !== v && !(ov == null && v == null)){
-        overrideFlags[col] = true;
-        v = ov;
+    let v;
+    if(proposed[col]){
+      v = proposed[col].proposed;
+      if(Object.prototype.hasOwnProperty.call(userOverrides, col)){
+        const ov = userOverrides[col];
+        if(ov !== v && !(ov == null && v == null)){
+          overrideFlags[col] = true;
+          v = ov;
+        }
       }
+    } else {
+      // v208: AI had no proposal — user typed in. Always counts as override.
+      v = userOverrides[col];
+      overrideFlags[col] = true;
     }
     if(v === null || v === undefined || v === '') continue;
     valuePatch[col] = v;
+    // v208: clear any pre-existing N/A flag for a column the user is now
+    // writing a value into. Otherwise field_status keeps marking it N/A
+    // and the BC page renders it as "no preference" alongside the value.
+    if(currentNa.includes(col)){
+      // The flag merge runs below; signal that this col should be unset.
+      overrideFlags['__clearNa__' + col] = true;
+    }
   }
   const acceptedNa = [...acceptedNaCols];
   const patch = { ...valuePatch };
 
   // BC has no na_fields column — N/A flags live in field_status JSONB.
   // Merge accepted N/A cols into field_status as 'no_preference'.
-  if(acceptedNa.length){
+  // v208: also CLEAR any field_status entries for cols the user is now
+  // writing a value into (override of an existing N/A flag).
+  const clearNaCols = Object.keys(overrideFlags)
+    .filter(k => k.startsWith('__clearNa__'))
+    .map(k => k.slice('__clearNa__'.length));
+  if(acceptedNa.length || clearNaCols.length){
     try {
       const cur = await _sbGet(SB_TABLES.buyerCriteria, `id=eq.${bcId}&select=field_status&limit=1`);
       const existing = (Array.isArray(cur) && cur[0]?.field_status) || {};
       const merged = { ...(typeof existing === 'object' && existing ? existing : {}) };
       for(const c of acceptedNa){ merged[c] = 'no_preference'; }
+      for(const c of clearNaCols){ delete merged[c]; }
       patch.field_status = merged;
     } catch(e){ console.warn('[bc-ai] field_status merge failed:', e.message); }
   }
@@ -41503,9 +41533,11 @@ window._bcAiAutoFillApply = async function(bcId, btn){
     for(const f of allFields){
       const propEntry = proposed[f.col];
       const naEntry = (naProposals || []).find(p => p.col === f.col);
-      if(!propEntry && !naEntry) continue;
       const applied = appliedSet.has(f.col);
       const appliedNa = naSet.has(f.col);
+      // v208: also log rows the user filled in manually (no AI proposal).
+      const userOnly = userOnlyCols.has(f.col);
+      if(!propEntry && !naEntry && !applied && !appliedNa) continue;
       changes.push({
         col: f.col,
         label: f.label || f.col.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
@@ -41514,7 +41546,7 @@ window._bcAiAutoFillApply = async function(bcId, btn){
         applied: applied ? (valuePatch[f.col] ?? null) : null,
         applied_na: appliedNa,
         skipped: !applied && !appliedNa,
-        explanation: (propEntry && propEntry.explanation) || (naEntry && naEntry.explanation) || null,
+        explanation: (propEntry && propEntry.explanation) || (naEntry && naEntry.explanation) || (userOnly ? 'User-entered (AI returned no info)' : null),
         user_override: !!overrideFlags[f.col],
       });
     }

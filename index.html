@@ -50081,29 +50081,10 @@ async function _renderGlobalTasks(force){
       }
     }
 
-    // Empty state — render the toolbar so the user can still switch agents.
-    if(!tasks.length){
-      const headline = q
-        ? `No tasks match "${String(_tasksSearch).replace(/</g,'&lt;')}"`
-        : isAssignedToOthersTab ? "You haven't assigned any tasks to other agents yet."
-        : filterVal==='done' ? 'No completed tasks yet'
-        : 'All clear — no pending tasks in this tab!';
-      const sub = q
-        ? 'Try a different search term or clear the search.'
-        : 'Create tasks to track follow-ups, deadlines, and action items.';
-      const cta = q
-        ? `<button onclick="_tasksClearSearch()" style="background:#7c3aed;color:#fff;border:none;padding:9px 22px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">✕ Clear Search</button>`
-        : `<button onclick="openCreateTaskModal(null,'','global')" style="background:#7c3aed;color:#fff;border:none;padding:9px 22px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">+ Create Task</button>`;
-      el.innerHTML = extraToolbar + `<div style="text-align:center;padding:48px;color:var(--text3);">
-        <div style="font-size:40px;margin-bottom:10px;">${q?'🔍':'☑'}</div>
-        <div style="font-size:14px;font-weight:600;margin-bottom:6px;">${headline}</div>
-        <div style="font-size:12px;margin-bottom:16px;">${sub}</div>
-        ${cta}
-      </div>`;
-      return;
-    }
-
-    // Bucket by section (overdue/today/future/nodate/done).
+    // v198 fix: bucket BEFORE the empty-state check so the filter chips can
+    // render even when the active comm/section/priority combo has zero tasks.
+    // (Otherwise picking "Other" with no Other-tagged tasks wiped the chips
+    // and stranded the user on an empty screen with no way to change filter.)
     const today = new Date(); today.setHours(0,0,0,0);
     const sections = {
       overdue: { key:'overdue', label:'Overdue',       color:'#dc2626',       tasks:[] },
@@ -50162,6 +50143,33 @@ async function _renderGlobalTasks(force){
           ${commChipOpts.map(o => chip(o.k===_tasksCommFilter, o.label, `_tasksSetCommFilter('${o.k}')`)).join('')}
         </div>
       </div>`;
+
+    // v198 fix: empty-state path now renders AFTER filtersHtml is built so
+    // the chip rows stay visible and the user can change/clear the filter.
+    if(!tasks.length){
+      const headline = q
+        ? `No tasks match "${String(_tasksSearch).replace(/</g,'&lt;')}"`
+        : (_tasksCommFilter !== 'all' || _tasksPriorityFilter !== 'all' || _tasksSectionFilter !== 'all')
+          ? 'No tasks match the current filters.'
+          : isAssignedToOthersTab ? "You haven't assigned any tasks to other agents yet."
+          : filterVal==='done' ? 'No completed tasks yet'
+          : 'All clear — no pending tasks in this tab!';
+      const sub = q
+        ? 'Try a different search term or clear the search.'
+        : (_tasksCommFilter !== 'all' || _tasksPriorityFilter !== 'all' || _tasksSectionFilter !== 'all')
+          ? 'Adjust the chips above or pick "All" to see every task.'
+          : 'Create tasks to track follow-ups, deadlines, and action items.';
+      const cta = q
+        ? `<button onclick="_tasksClearSearch()" style="background:#7c3aed;color:#fff;border:none;padding:9px 22px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">✕ Clear Search</button>`
+        : `<button onclick="openCreateTaskModal(null,'','global')" style="background:#7c3aed;color:#fff;border:none;padding:9px 22px;border-radius:6px;font-size:13px;font-weight:600;cursor:pointer;">+ Create Task</button>`;
+      el.innerHTML = extraToolbar + filtersHtml + `<div style="text-align:center;padding:48px;color:var(--text3);">
+        <div style="font-size:40px;margin-bottom:10px;">${q?'🔍':'☑'}</div>
+        <div style="font-size:14px;font-weight:600;margin-bottom:6px;">${headline}</div>
+        <div style="font-size:12px;margin-bottom:16px;">${sub}</div>
+        ${cta}
+      </div>`;
+      return;
+    }
 
     // Which sections to render.
     //   - sectionFilter='all': show any section that has tasks, but hide

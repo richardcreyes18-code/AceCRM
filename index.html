@@ -11515,13 +11515,19 @@ function renderFinancialTab(d){
   const mReno     = Number(fi.mRenovation) || 0;
   const mTotalCash = mDown + mReno;
 
-  // Monthly mortgage payment
+  // v192: per-scenario loan + debt service. Each column uses its own price
+  // and down-payment to compute the loan amount; the same interest rate +
+  // amortization apply across all three (no per-scenario mortgage UI).
+  const aScenLoan = leftPrice - aDown;
+  const mScenLoan = (pitchOut||leftPrice) - mDown;
   const aMoRate = aIntRate/100/12;
   const aNPer   = aAmort*12;
-  const aMoPmt  = aMoRate>0 && aNPer>0
-    ? aLoan * aMoRate * Math.pow(1+aMoRate,aNPer) / (Math.pow(1+aMoRate,aNPer)-1)
+  const _moPmt  = (loan) => (aMoRate>0 && aNPer>0 && loan>0)
+    ? loan * aMoRate * Math.pow(1+aMoRate,aNPer) / (Math.pow(1+aMoRate,aNPer)-1)
     : 0;
+  const aMoPmt  = _moPmt(aScenLoan);
   const aAnnDebt = debt || aMoPmt*12;
+  const mAnnDebt = debt || _moPmt(mScenLoan)*12;
   window._aAnnDebt      = aAnnDebt;
   window._aPrice        = aPrice;
   window._capAskPrice   = capAskPrice;
@@ -11538,22 +11544,35 @@ function renderFinancialTab(d){
   const aCFPSF    = aNetRentSF>0 ? aCashFlow/aNetRentSF : 0;
   const aPPU      = aUnits>0 ? aPrice/aUnits : 0;
 
+  // ── Middle column metrics (Pitch Out at actual income/expenses) ──
+  const mPriceForCalcs = pitchOut || leftPrice;
+  const mCashFlow = aNOI - mAnnDebt;
+  const mCapRate  = aNOI>0 && mPriceForCalcs>0 ? aNOI/mPriceForCalcs : 0;
+  const mCoC      = mTotalCash>0 ? mCashFlow/mTotalCash : 0;
+  const mDCR      = mAnnDebt>0 ? aNOI/mAnnDebt : 0;
+  const mGRM      = aGrossRent>0 ? mPriceForCalcs/aGrossRent : 0;
+  const mBreakEven= aGrossRent>0 ? (aExpenses+mAnnDebt)/aGrossRent*100 : 0;
+  const mPSF      = aNetRentSF>0 ? aNOI/aNetRentSF : 0;
+  const mCFPSF    = aNetRentSF>0 ? mCashFlow/aNetRentSF : 0;
+
   // ── Proforma calculations ──────────────────────────────────
   const pEGI      = pGrossRent * (1 - pVacancy/100) + pOtherInc;
   const pNOI      = (pEGI - pExpenses) > 0 ? (pEGI - pExpenses) : 0;
-  const pCashFlow = pNOI - aAnnDebt;
   // Proforma down payment — Right column / Pitch Out (proforma income) for Proforma CoC
   const pDpType   = fi.pDpType || 'percent';
   const pDpVal    = Number(fi.pDownPct) || aDownPct;
   const pDown     = pDpType==='amount' ? pDpVal : (pitchOut||offer||ask) * pDpVal/100;
   const pReno     = Number(fi.renovation) || 0;
   const pTotalCash = pDown + pReno;
+  const pScenLoan = (pitchOut||offer||ask) - pDown;
+  const pAnnDebt  = debt || _moPmt(pScenLoan)*12;
+  const pCashFlow = pNOI - pAnnDebt;
   const pCapRate  = pNOI>0 && capOfferPrice>0 ? pNOI/capOfferPrice : 0;
   // Proforma CoC = Proforma Cash Flow ÷ Offer Total Cash Required
   const pCoC      = pTotalCash>0 ? pCashFlow/pTotalCash : 0;
-  const pDCR      = aAnnDebt>0 ? pNOI/aAnnDebt : 0;
+  const pDCR      = pAnnDebt>0 ? pNOI/pAnnDebt : 0;
   const pGRM      = pGrossRent>0 ? capOfferPrice/pGrossRent : 0;
-  const pBreakEven= pGrossRent>0 ? (pExpenses+aAnnDebt)/pGrossRent*100 : 0;
+  const pBreakEven= pGrossRent>0 ? (pExpenses+pAnnDebt)/pGrossRent*100 : 0;
   const pPSF      = aNetRentSF>0 ? pNOI/aNetRentSF : 0;
   const pCFPSF    = aNetRentSF>0 ? pCashFlow/aNetRentSF : 0;
 
@@ -11616,7 +11635,7 @@ function renderFinancialTab(d){
       /* Simple mode hides advanced sections — inputs stay in DOM so calcs work */
       .fin-simple .fin-hide-simple{display:none !important;}
       .fin-simple .fin-simplify-grid{grid-template-columns:1fr !important;}
-      /* v106: NO FINANCIALS stamp overlay — always in DOM, toggled via JS */
+      /* v192: NO FINANCIALS stamp retired (Deal Tag now). Class kept for legacy. */
       .fin-no-financials-stamp{
         position:absolute;top:50%;left:50%;transform:translate(-50%,-50%) rotate(-18deg);
         font-size:64px;font-weight:900;color:rgba(220,38,38,0.35);
@@ -11630,10 +11649,11 @@ function renderFinancialTab(d){
 
     <div class="fin-${_finMode}">
 
-    <!-- v106/v107.2: NO FINANCIALS stamp — always rendered, visibility set by initial state + toggled live -->
-    <div id="finStampWrap" style="position:relative;">
-      <div id="finStampLabel" class="fin-no-financials-stamp" style="display:${(!aGrossRent && !noiAt && !aExpenses)?'':'none'};">No Financials</div>
-      <div id="finStampTarget" style="${(!aGrossRent && !noiAt && !aExpenses)?'opacity:0.3;pointer-events:none;filter:grayscale(0.5);':''}">
+    <!-- v192: NO FINANCIALS stamp removed — replaced by a "No Financials" Deal Tag.
+         Wrapper + label kept as empty div for any leftover JS/CSS reference safety. -->
+    <div id="finStampWrap">
+      <div id="finStampLabel" style="display:none;"></div>
+      <div id="finStampTarget">
 
     <!-- RESULTS SUMMARY ──────────────────────────────────────── -->
     <div class="info-box">
@@ -11676,64 +11696,73 @@ function renderFinancialTab(d){
       </table>
     </div>
 
-    <!-- KEY METRICS ──────────────────────────────────────────── -->
+    <!-- KEY METRICS (v192: 3 columns — Asking | Pitch Out actual | Pitch Out proforma) -->
     <div class="info-box">
       <div class="info-box-title">📈 Key Metrics</div>
       <table class="fin-metrics-table">
         <thead>
           <tr>
             <th style="text-align:left;">Metric</th>
-            <th>Actual (current)</th>
-            <th>Proforma (projected)</th>
+            <th style="background:linear-gradient(180deg,#5599cc,#2060b0);">Asking Price (actual)</th>
+            <th style="background:linear-gradient(180deg,#a78bfa,#7c3aed);">Pitch Out Price (actual)</th>
+            <th style="background:linear-gradient(180deg,#60a060,#306030);">Pitch Out Price (proforma)</th>
           </tr>
         </thead>
         <tbody>
           <tr>
             <td class="metric-label">CAP Rate ${tip('cap',tooltips.cap)}</td>
-            <td id="top_caprate_a" style="color:${aNOI&&aPrice?'#000':'#aaa'};font-weight:${aNOI&&aPrice?'bold':'normal'};">${aNOI&&aPrice?pct(aCapRate):'Enter NOI + Price below'}</td>
-            <td id="top_caprate_p" style="color:${pNOI&&aPrice?'#000':'#aaa'};font-weight:${pNOI&&aPrice?'bold':'normal'};">${pNOI&&aPrice?pct(pCapRate):'Enter Proforma NOI below'}</td>
+            <td id="top_caprate_a" style="color:${aNOI&&capAskPrice?'#000':'#aaa'};font-weight:${aNOI&&capAskPrice?'bold':'normal'};">${aNOI&&capAskPrice?pct(aCapRate):'Enter NOI + Price below'}</td>
+            <td id="top_caprate_m" style="color:${aNOI&&mPriceForCalcs?'#000':'#aaa'};font-weight:${aNOI&&mPriceForCalcs?'bold':'normal'};">${aNOI&&mPriceForCalcs?pct(mCapRate):'—'}</td>
+            <td id="top_caprate_p" style="color:${pNOI&&capOfferPrice?'#000':'#aaa'};font-weight:${pNOI&&capOfferPrice?'bold':'normal'};">${pNOI&&capOfferPrice?pct(pCapRate):'Enter Proforma NOI below'}</td>
           </tr>
           <tr>
             <td class="metric-label">Cash On Cash Return ${tip('coc',tooltips.coc)}</td>
             <td id="top_coc_a">${aCashFlow&&aTotalCash?pct(aCoC):'—'}</td>
+            <td id="top_coc_m">${mCashFlow&&mTotalCash?pct(mCoC):'—'}</td>
             <td id="top_coc_p">${pCashFlow&&pTotalCash?pct(pCoC):'—'}</td>
           </tr>
           <tr>
             <td class="metric-label">Debt Coverage Ratio (DCR) ${tip('dcr',tooltips.dcr)}</td>
             <td id="top_dcr_a">${aNOI&&aAnnDebt?fix2(aDCR):'—'}</td>
-            <td id="top_dcr_p">${pNOI&&aAnnDebt?fix2(pDCR):'—'}</td>
+            <td id="top_dcr_m">${aNOI&&mAnnDebt?fix2(mDCR):'—'}</td>
+            <td id="top_dcr_p">${pNOI&&pAnnDebt?fix2(pDCR):'—'}</td>
           </tr>
           <tr>
             <td class="metric-label">Gross Rent Multiplier ${tip('grm',tooltips.grm)}</td>
             <td id="top_grm_a">${aGrossRent&&capAskPrice?fix2(aGRM):'—'}</td>
+            <td id="top_grm_m">${aGrossRent&&mPriceForCalcs?fix2(mGRM):'—'}</td>
             <td id="top_grm_p">${pGrossRent&&capOfferPrice?fix2(pGRM):'—'}</td>
           </tr>
           <tr>
             <td class="metric-label">Occupancy Break Even Point ${tip('bep',tooltips.bep)}</td>
             <td id="top_be_a">${aBreakEven?pct(aBreakEven/100):'—'}</td>
+            <td id="top_be_m">${mBreakEven?pct(mBreakEven/100):'—'}</td>
             <td id="top_be_p">${pBreakEven?pct(pBreakEven/100):'—'}</td>
           </tr>
           <tr>
             <td class="metric-label">Price Per Foot ${tip('ppf',tooltips.ppf)}</td>
-            <td id="top_ppf_a">${aTotalSF>0 && capAskPrice>0   ? dol(capAskPrice  /aTotalSF) : '—'}</td>
-            <td id="top_ppf_p">${aTotalSF>0 && capOfferPrice>0 ? dol(capOfferPrice/aTotalSF) : '—'}</td>
+            <td id="top_ppf_a">${aTotalSF>0 && capAskPrice>0     ? dol(capAskPrice    /aTotalSF) : '—'}</td>
+            <td id="top_ppf_m">${aTotalSF>0 && mPriceForCalcs>0  ? dol(mPriceForCalcs /aTotalSF) : '—'}</td>
+            <td id="top_ppf_p">${aTotalSF>0 && capOfferPrice>0   ? dol(capOfferPrice  /aTotalSF) : '—'}</td>
           </tr>
         </tbody>
       </table>
     </div>
 
-    <!-- CASH FLOW TABLE ──────────────────────────────────────── -->
+    <!-- CASH FLOW TABLE (v192: 3 column groups) -->
     <div class="info-box">
       <div class="info-box-title">💵 Cash Flow &amp; NOI</div>
       <table class="fin-cf-table">
         <thead>
           <tr>
             <th style="text-align:left;width:180px;">Item</th>
-            <th colspan="3" style="background:linear-gradient(180deg,#5599cc,#2060b0);">Actual (current)</th>
-            <th colspan="3" style="background:linear-gradient(180deg,#60a060,#306030);">Proforma (projected)</th>
+            <th colspan="3" style="background:linear-gradient(180deg,#5599cc,#2060b0);">Asking Price (actual)</th>
+            <th colspan="3" style="background:linear-gradient(180deg,#a78bfa,#7c3aed);">Pitch Out Price (actual)</th>
+            <th colspan="3" style="background:linear-gradient(180deg,#60a060,#306030);">Pitch Out Price (proforma)</th>
           </tr>
           <tr>
             <th style="text-align:left;"></th>
+            <th>Monthly</th><th>Yearly</th><th>Yearly PSF</th>
             <th>Monthly</th><th>Yearly</th><th>Yearly PSF</th>
             <th>Monthly</th><th>Yearly</th><th>Yearly PSF</th>
           </tr>
@@ -11743,19 +11772,25 @@ function renderFinancialTab(d){
             <td class="cf-label">Cash Flow ${tip('cf',tooltips.cf)}</td>
             <td id="top_cf_mo">${aCashFlow?dol(aCashFlow/12):'—'}</td>
             <td id="top_cf_yr">${aCashFlow?dol(aCashFlow):'—'}</td>
-            <td>${aCFPSF?'$'+aCFPSF.toFixed(2):'—'}</td>
+            <td id="top_cf_psf">${aCFPSF?'$'+aCFPSF.toFixed(2):'—'}</td>
+            <td id="top_mcf_mo">${mCashFlow?dol(mCashFlow/12):'—'}</td>
+            <td id="top_mcf_yr">${mCashFlow?dol(mCashFlow):'—'}</td>
+            <td id="top_mcf_psf">${mCFPSF?'$'+mCFPSF.toFixed(2):'—'}</td>
             <td id="top_pcf_mo">${pCashFlow?dol(pCashFlow/12):'—'}</td>
             <td id="top_pcf_yr">${pCashFlow?dol(pCashFlow):'—'}</td>
-            <td>${pCFPSF?'$'+pCFPSF.toFixed(2):'—'}</td>
+            <td id="top_pcf_psf">${pCFPSF?'$'+pCFPSF.toFixed(2):'—'}</td>
           </tr>
           <tr>
             <td class="cf-label">Net Operating Income ${tip('noi',tooltips.noi)}</td>
             <td id="top_noi_mo">${aNOI?dol(aNOI/12):'—'}</td>
             <td id="top_noi_yr">${aNOI?dol(aNOI):'—'}</td>
-            <td>${aPSF?'$'+aPSF.toFixed(2):'—'}</td>
+            <td id="top_noi_psf">${aPSF?'$'+aPSF.toFixed(2):'—'}</td>
+            <td id="top_mnoi_mo">${aNOI?dol(aNOI/12):'—'}</td>
+            <td id="top_mnoi_yr">${aNOI?dol(aNOI):'—'}</td>
+            <td id="top_mnoi_psf">${mPSF?'$'+mPSF.toFixed(2):'—'}</td>
             <td id="top_pnoi_mo">${pNOI?dol(pNOI/12):'—'}</td>
             <td id="top_pnoi_yr">${pNOI?dol(pNOI):'—'}</td>
-            <td>${pPSF?'$'+pPSF.toFixed(2):'—'}</td>
+            <td id="top_pnoi_psf">${pPSF?'$'+pPSF.toFixed(2):'—'}</td>
           </tr>
         </tbody>
       </table>
@@ -53159,6 +53194,8 @@ function renderDealStatusTab(d){
     {key:'Active Deal',        label:'✓ Active',     bg:'#f0fdf4', color:'#16a34a', border:'#86efac'},
     {key:'Overpriced',         label:'💸 Overpriced',bg:'#fffbeb', color:'#d97706', border:'#fde68a'},
     {key:'Not Motivated',      label:'😐 Not Motivated', bg:'#f8fafc', color:'#64748b', border:'#cbd5e1'},
+    {key:'No Financials',      label:'📊 No Financials', bg:'#f0f9ff', color:'#0369a1', border:'#7dd3fc'},
+    {key:'Owner Occupied',     label:'🏠 Owner Occupied', bg:'#faf5ff', color:'#7e22ce', border:'#d8b4fe'},
     {key:'Dead Deal',          label:'💀 Dead',      bg:'#fef2f2', color:'#991b1b', border:'#fca5a5'},
   ];
   // v124: separate single-select Review Tag (deal_reviewed | agent_reviewed)
@@ -57147,9 +57184,38 @@ function _finUpdateKeyMetrics(){
 
   // ── Cash totals (set live by liveDownCalc) ────────────────────
   const aTotalCash = window._aTotalCash || 0;
+  const mTotalCash = window._mTotalCash || 0;
   const pTotalCash = window._pTotalCash || 0;
-  const aCashFlow  = aNOI_yr - aAnnDebt;
-  const pCashFlow  = pNOI_yr - aAnnDebt;
+
+  // v192: per-scenario debt service (drives Cash Flow + DCR + BEP per column).
+  // For now use the same itemized aAnnDebt across scenarios when itemized
+  // mortgages exist; otherwise derive each from its own price/down combo.
+  const ratePct  = v('fin_intRate') || 7;
+  const amortYrs = v('fin_amort')   || 30;
+  const _moPmt = (loan) => {
+    const r = ratePct/100/12, n = amortYrs*12;
+    return (r>0 && n>0 && loan>0) ? loan*r*Math.pow(1+r,n)/(Math.pow(1+r,n)-1) : 0;
+  };
+  const aDpType = document.querySelector('input[name="aDP"]:checked')?.value||'percent';
+  const mDpType = document.querySelector('input[name="mDP"]:checked')?.value||'percent';
+  const pDpType = document.querySelector('input[name="pDP"]:checked')?.value||'percent';
+  const aDpVal_  = v('fin_a_downPct');
+  const mDpVal_  = v('fin_m_downPct');
+  const pDpVal_  = v('fin_p_downPct');
+  const aPriceL  = v('fin_askPrice');
+  const mPriceL  = v('fin_m_price') || v('fin_p_price');
+  const pPriceL  = v('fin_p_price') || v('fin_m_price');
+  const aDownL   = aDpType==='amount' ? aDpVal_ : aPriceL*(aDpVal_/100);
+  const mDownL   = mDpType==='amount' ? mDpVal_ : mPriceL*(mDpVal_/100);
+  const pDownL   = pDpType==='amount' ? pDpVal_ : pPriceL*(pDpVal_/100);
+  // If itemized mortgages already provided aAnnDebt, use it across the board;
+  // otherwise compute per-scenario.
+  const mAnnDebt = aAnnDebt || _moPmt(mPriceL - mDownL)*12;
+  const pAnnDebt = aAnnDebt || _moPmt(pPriceL - pDownL)*12;
+
+  const aCashFlow = aNOI_yr - aAnnDebt;
+  const mCashFlow = aNOI_yr - mAnnDebt;
+  const pCashFlow = pNOI_yr - pAnnDebt;
 
   // ── Write Key Metrics cells ───────────────────────────────────
   if(el('top_caprate_a')){
@@ -57157,19 +57223,61 @@ function _finUpdateKeyMetrics(){
     el('top_caprate_a').style.color      = (aNOI_yr>0 && capAsk>0) ? '#000' : '#aaa';
     el('top_caprate_a').style.fontWeight = (aNOI_yr>0 && capAsk>0) ? 'bold' : 'normal';
   }
+  if(el('top_caprate_m')){
+    el('top_caprate_m').textContent = (aNOI_yr>0 && mPriceL>0) ? fmtP(aNOI_yr/mPriceL) : '—';
+    el('top_caprate_m').style.color      = (aNOI_yr>0 && mPriceL>0) ? '#000' : '#aaa';
+    el('top_caprate_m').style.fontWeight = (aNOI_yr>0 && mPriceL>0) ? 'bold' : 'normal';
+  }
   if(el('top_caprate_p')){
     el('top_caprate_p').textContent = (pNOI_yr>0 && capOffer>0) ? fmtP(pNOI_yr/capOffer) : 'Enter Proforma NOI below';
     el('top_caprate_p').style.color      = (pNOI_yr>0 && capOffer>0) ? '#000' : '#aaa';
     el('top_caprate_p').style.fontWeight = (pNOI_yr>0 && capOffer>0) ? 'bold' : 'normal';
   }
   if(el('top_coc_a')) el('top_coc_a').textContent = (aCashFlow && aTotalCash) ? fmtP(aCashFlow/aTotalCash) : '—';
+  if(el('top_coc_m')) el('top_coc_m').textContent = (mCashFlow && mTotalCash) ? fmtP(mCashFlow/mTotalCash) : '—';
   if(el('top_coc_p')) el('top_coc_p').textContent = (pCashFlow && pTotalCash) ? fmtP(pCashFlow/pTotalCash) : '—';
-  if(el('top_dcr_a')) el('top_dcr_a').textContent = (aNOI_yr && aAnnDebt)     ? fix2(aNOI_yr/aAnnDebt)    : '—';
-  if(el('top_dcr_p')) el('top_dcr_p').textContent = (pNOI_yr && aAnnDebt)     ? fix2(pNOI_yr/aAnnDebt)    : '—';
-  if(el('top_grm_a')) el('top_grm_a').textContent = (aGRI_yr && capAsk)       ? fix2(capAsk/aGRI_yr)      : '—';
-  if(el('top_grm_p')) el('top_grm_p').textContent = (pGRI_yr && capOffer)     ? fix2(capOffer/pGRI_yr)    : '—';
-  if(el('top_be_a'))  el('top_be_a').textContent  = (aGRI_yr)                 ? ((aOpEx_yr+aAnnDebt)/aGRI_yr*100).toFixed(2)+'%' : '—';
-  if(el('top_be_p'))  el('top_be_p').textContent  = (pGRI_yr)                 ? ((pOpEx_yr+aAnnDebt)/pGRI_yr*100).toFixed(2)+'%' : '—';
+  if(el('top_dcr_a')) el('top_dcr_a').textContent = (aNOI_yr && aAnnDebt) ? fix2(aNOI_yr/aAnnDebt) : '—';
+  if(el('top_dcr_m')) el('top_dcr_m').textContent = (aNOI_yr && mAnnDebt) ? fix2(aNOI_yr/mAnnDebt) : '—';
+  if(el('top_dcr_p')) el('top_dcr_p').textContent = (pNOI_yr && pAnnDebt) ? fix2(pNOI_yr/pAnnDebt) : '—';
+  if(el('top_grm_a')) el('top_grm_a').textContent = (aGRI_yr && capAsk)   ? fix2(capAsk/aGRI_yr)  : '—';
+  if(el('top_grm_m')) el('top_grm_m').textContent = (aGRI_yr && mPriceL)  ? fix2(mPriceL/aGRI_yr) : '—';
+  if(el('top_grm_p')) el('top_grm_p').textContent = (pGRI_yr && capOffer) ? fix2(capOffer/pGRI_yr): '—';
+  if(el('top_be_a'))  el('top_be_a').textContent  = (aGRI_yr) ? ((aOpEx_yr+aAnnDebt)/aGRI_yr*100).toFixed(2)+'%' : '—';
+  if(el('top_be_m'))  el('top_be_m').textContent  = (aGRI_yr) ? ((aOpEx_yr+mAnnDebt)/aGRI_yr*100).toFixed(2)+'%' : '—';
+  if(el('top_be_p'))  el('top_be_p').textContent  = (pGRI_yr) ? ((pOpEx_yr+pAnnDebt)/pGRI_yr*100).toFixed(2)+'%' : '—';
+
+  // Price Per Foot (3 columns, m & p share Pitch Out price)
+  const aTotalSF = v('fin_aTotalSF');
+  const dol = n => n ? '$'+n.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2}) : '—';
+  if(el('top_ppf_a')) el('top_ppf_a').textContent = (aTotalSF>0 && capAsk>0)   ? dol(capAsk/aTotalSF)   : '—';
+  if(el('top_ppf_m')) el('top_ppf_m').textContent = (aTotalSF>0 && mPriceL>0)  ? dol(mPriceL/aTotalSF)  : '—';
+  if(el('top_ppf_p')) el('top_ppf_p').textContent = (aTotalSF>0 && capOffer>0) ? dol(capOffer/aTotalSF) : '—';
+
+  // ── Cash Flow & NOI table cells (live refresh — v192) ─────────
+  const aNetRentSF = v('fin_aNetRentSF');
+  const aPSF_v   = aNetRentSF>0 ? aNOI_yr/aNetRentSF : 0;
+  const pPSF_v   = aNetRentSF>0 ? pNOI_yr/aNetRentSF : 0;
+  const aCFPSF_v = aNetRentSF>0 ? aCashFlow/aNetRentSF : 0;
+  const mCFPSF_v = aNetRentSF>0 ? mCashFlow/aNetRentSF : 0;
+  const pCFPSF_v = aNetRentSF>0 ? pCashFlow/aNetRentSF : 0;
+  if(el('top_cf_mo'))  el('top_cf_mo').textContent  = aCashFlow ? dol(aCashFlow/12) : '—';
+  if(el('top_cf_yr'))  el('top_cf_yr').textContent  = aCashFlow ? dol(aCashFlow)    : '—';
+  if(el('top_cf_psf')) el('top_cf_psf').textContent = aCFPSF_v  ? '$'+aCFPSF_v.toFixed(2) : '—';
+  if(el('top_mcf_mo')) el('top_mcf_mo').textContent = mCashFlow ? dol(mCashFlow/12) : '—';
+  if(el('top_mcf_yr')) el('top_mcf_yr').textContent = mCashFlow ? dol(mCashFlow)    : '—';
+  if(el('top_mcf_psf'))el('top_mcf_psf').textContent= mCFPSF_v  ? '$'+mCFPSF_v.toFixed(2) : '—';
+  if(el('top_pcf_mo')) el('top_pcf_mo').textContent = pCashFlow ? dol(pCashFlow/12) : '—';
+  if(el('top_pcf_yr')) el('top_pcf_yr').textContent = pCashFlow ? dol(pCashFlow)    : '—';
+  if(el('top_pcf_psf'))el('top_pcf_psf').textContent= pCFPSF_v  ? '$'+pCFPSF_v.toFixed(2) : '—';
+  if(el('top_noi_mo')) el('top_noi_mo').textContent = aNOI_yr ? dol(aNOI_yr/12) : '—';
+  if(el('top_noi_yr')) el('top_noi_yr').textContent = aNOI_yr ? dol(aNOI_yr)    : '—';
+  if(el('top_noi_psf'))el('top_noi_psf').textContent= aPSF_v  ? '$'+aPSF_v.toFixed(2) : '—';
+  if(el('top_mnoi_mo'))el('top_mnoi_mo').textContent= aNOI_yr ? dol(aNOI_yr/12) : '—';
+  if(el('top_mnoi_yr'))el('top_mnoi_yr').textContent= aNOI_yr ? dol(aNOI_yr)    : '—';
+  if(el('top_mnoi_psf'))el('top_mnoi_psf').textContent= aPSF_v ? '$'+aPSF_v.toFixed(2) : '—';
+  if(el('top_pnoi_mo'))el('top_pnoi_mo').textContent= pNOI_yr ? dol(pNOI_yr/12) : '—';
+  if(el('top_pnoi_yr'))el('top_pnoi_yr').textContent= pNOI_yr ? dol(pNOI_yr)    : '—';
+  if(el('top_pnoi_psf'))el('top_pnoi_psf').textContent= pPSF_v ? '$'+pPSF_v.toFixed(2) : '—';
 }
 
 function toggleExpCat(catId){
@@ -60612,22 +60720,9 @@ async function _fubAuditUnlink(aceId, fubId){
   }
 }
 
-// v107.2: dynamically toggle the NO FINANCIALS stamp.
-// Reads live DOM input values so it works immediately after typing/saving.
-function _finUpdateStamp(){
-  const stamp = document.getElementById('finStampLabel');
-  const target = document.getElementById('finStampTarget');
-  if(!stamp || !target) return;
-  const griMo = Number(String(document.getElementById('fin_aGrossRent_mo')?.value||'').replace(/,/g,''))||0;
-  const noiVal = Number(currentDeal?.['NOI']||0);
-  const expEl = document.getElementById('exp_totalOpEx_a_yr');
-  const expVal = expEl ? Number(String(expEl.textContent||'').replace(/[$,]/g,''))||0 : 0;
-  const hasData = !!(griMo || noiVal || expVal);
-  stamp.style.display = hasData ? 'none' : '';
-  target.style.opacity = hasData ? '1' : '0.3';
-  target.style.pointerEvents = hasData ? 'auto' : 'none';
-  target.style.filter = hasData ? 'none' : 'grayscale(0.5)';
-}
+// v192: NO FINANCIALS stamp retired in favor of a Deal Tag. Stub kept so
+// existing call sites (recalcFinancials, saveFinInputs, etc.) don't crash.
+function _finUpdateStamp(){ /* no-op v192 */ }
 
 function saveNotes(dealId){
   if(!currentDeal) return;

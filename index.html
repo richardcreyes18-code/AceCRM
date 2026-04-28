@@ -35654,6 +35654,18 @@ function showSettingsPage(){
           <button onclick="_aiCatalogOpen()" style="background:#7c3aed;color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Open catalog →</button>
         </section>
 
+        <!-- v210: AI Guardrails editor — append rules to the BC AI prompt without redeploying. -->
+        <section data-settings-tab="tools" style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
+          <div style="font-size:28px;flex-shrink:0;">🛡</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:15px;font-weight:700;color:#0f172a;">AI Auto-Fill guardrails — Buyer Criteria</div>
+            <div style="font-size:12px;color:#64748b;margin-top:3px;line-height:1.5;">
+              Add custom rules the AI must follow when filling out buyer criteria. Each rule is appended verbatim to the system prompt. Example: "If the buyer mentions $X per square foot for land, that goes in other_requirements, not min/max purchase price."
+            </div>
+          </div>
+          <button onclick="_bcGuardrailsOpen()" style="background:#0f172a;color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Open editor →</button>
+        </section>
+
         <!-- v150: Bulk AI Auto-Fill tile -->
         <section data-settings-tab="tools" style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
           <div style="font-size:28px;flex-shrink:0;">⚡</div>
@@ -41283,6 +41295,108 @@ window._bcAiSyncMulti = function(col){
   }
   const hidden = document.getElementById('aiVal_' + col);
   if(hidden) hidden.value = vals.join(', ');
+};
+
+// v210: AI guardrails editor for Buyer Criteria. Reads / writes
+// ace_ai_settings row where key='bc_guardrails'. The edge function
+// appends these rules to the system prompt at request time, so updates
+// take effect on the next AI Auto-Fill run — no redeploy needed.
+window._bcGuardrailsOpen = async function(){
+  const modal = document.createElement('div');
+  modal.id = 'bcGuardrailsModal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:99998;display:flex;align-items:center;justify-content:center;padding:20px;';
+  modal.onclick = (e) => { if(e.target === modal) modal.remove(); };
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;padding:0;max-width:760px;width:96%;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 25px 60px rgba(0,0,0,0.25);font-family:'Inter',system-ui,sans-serif;">
+      <div style="padding:18px 22px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;gap:12px;">
+        <div>
+          <div style="font-size:16px;font-weight:700;color:#0f172a;">🛡 AI Auto-Fill guardrails — Buyer Criteria</div>
+          <div style="font-size:11px;color:#64748b;margin-top:2px;">One rule per line. Appended verbatim to the AI's system prompt on every run.</div>
+        </div>
+        <button onclick="document.getElementById('bcGuardrailsModal')?.remove()"
+          style="background:none;border:none;color:#94a3b8;font-size:22px;cursor:pointer;padding:4px 10px;">×</button>
+      </div>
+      <div id="bcGuardrailsBody" style="overflow:auto;padding:18px 22px;background:#f8fafc;flex:1;">
+        <div style="text-align:center;padding:40px;color:#94a3b8;font-size:12px;">⏳ Loading…</div>
+      </div>
+      <div style="padding:14px 22px;border-top:1px solid #e2e8f0;display:flex;justify-content:flex-end;gap:10px;background:#fff;">
+        <button onclick="document.getElementById('bcGuardrailsModal')?.remove()"
+          style="background:transparent;border:1px solid #cbd5e1;color:#64748b;padding:8px 14px;font-size:12px;border-radius:8px;cursor:pointer;font-family:inherit;">Cancel</button>
+        <button onclick="_bcGuardrailsSave(this)"
+          style="background:#0f172a;color:#fff;border:none;padding:8px 18px;font-size:12px;font-weight:700;border-radius:8px;cursor:pointer;font-family:inherit;">✓ Save guardrails</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+  // Fetch the current value.
+  try {
+    const rows = await _sbGet('ace_ai_settings', 'key=eq.bc_guardrails&select=value&limit=1');
+    const arr = (Array.isArray(rows) && rows[0]?.value && Array.isArray(rows[0].value)) ? rows[0].value : [];
+    _bcGuardrailsRender(arr);
+  } catch(e){
+    const body = document.getElementById('bcGuardrailsBody');
+    if(body) body.innerHTML = `<div style="color:#dc2626;font-size:12px;">Failed to load guardrails: ${e.message || e}</div>`;
+  }
+};
+
+function _bcGuardrailsRender(rules){
+  const body = document.getElementById('bcGuardrailsBody');
+  if(!body) return;
+  const esc = s => String(s==null?'':s).replace(/[<&>"]/g, c => ({'<':'&lt;','&':'&amp;','>':'&gt;','"':'&quot;'}[c]));
+  const items = rules.map((r, i) => `
+    <div data-bc-guard-row="${i}" style="display:flex;gap:8px;align-items:flex-start;background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:10px;margin-bottom:8px;">
+      <div style="font-size:11px;color:#94a3b8;font-weight:700;width:20px;text-align:center;padding-top:6px;flex-shrink:0;">${i + 1}.</div>
+      <textarea data-bc-guard-text style="flex:1;min-height:48px;font-size:12px;font-family:inherit;border:1px solid #cbd5e1;border-radius:6px;padding:7px 10px;resize:vertical;line-height:1.5;">${esc(r)}</textarea>
+      <button type="button" onclick="this.closest('[data-bc-guard-row]').remove()"
+        style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;padding:5px 9px;font-size:11px;border-radius:6px;cursor:pointer;flex-shrink:0;font-family:inherit;">Remove</button>
+    </div>`).join('');
+  body.innerHTML = `
+    <div id="bcGuardrailsList">${items || '<div style="color:#94a3b8;font-size:12px;text-align:center;padding:30px;">No guardrails yet. Click "Add rule" below.</div>'}</div>
+    <button type="button" onclick="_bcGuardrailsAddRow()"
+      style="background:#7c3aed;color:#fff;border:none;padding:8px 16px;font-size:12px;font-weight:600;border-radius:8px;cursor:pointer;margin-top:6px;font-family:inherit;">+ Add rule</button>
+    <div style="font-size:11px;color:#64748b;margin-top:14px;line-height:1.5;background:#fef3c7;border:1px solid #fde68a;border-radius:8px;padding:10px 12px;">
+      <strong>Tip:</strong> write rules in the imperative — "Treat X as Y", "If the notes say Z, put it in field W". Up to 20 rules, 500 chars each.
+    </div>`;
+}
+
+window._bcGuardrailsAddRow = function(){
+  const list = document.getElementById('bcGuardrailsList');
+  if(!list) return;
+  const empty = list.querySelector('div[style*="No guardrails yet"]');
+  if(empty) empty.remove();
+  const idx = list.querySelectorAll('[data-bc-guard-row]').length;
+  const div = document.createElement('div');
+  div.setAttribute('data-bc-guard-row', String(idx));
+  div.style.cssText = 'display:flex;gap:8px;align-items:flex-start;background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:10px;margin-bottom:8px;';
+  div.innerHTML = `
+    <div style="font-size:11px;color:#94a3b8;font-weight:700;width:20px;text-align:center;padding-top:6px;flex-shrink:0;">${idx + 1}.</div>
+    <textarea data-bc-guard-text style="flex:1;min-height:48px;font-size:12px;font-family:inherit;border:1px solid #cbd5e1;border-radius:6px;padding:7px 10px;resize:vertical;line-height:1.5;" placeholder="e.g. If the buyer mentions $X per square foot for land, put it in other_requirements, not min/max purchase price."></textarea>
+    <button type="button" onclick="this.closest('[data-bc-guard-row]').remove()"
+      style="background:#fee2e2;color:#b91c1c;border:1px solid #fecaca;padding:5px 9px;font-size:11px;border-radius:6px;cursor:pointer;flex-shrink:0;font-family:inherit;">Remove</button>`;
+  list.appendChild(div);
+  div.querySelector('textarea')?.focus();
+};
+
+window._bcGuardrailsSave = async function(btn){
+  const list = document.getElementById('bcGuardrailsList');
+  if(!list){ alert('Editor not loaded.'); return; }
+  const rules = [];
+  for(const ta of list.querySelectorAll('textarea[data-bc-guard-text]')){
+    const v = String(ta.value || '').trim();
+    if(v) rules.push(v.slice(0, 500));
+  }
+  if(rules.length > 20){
+    alert('Max 20 guardrails. Trim some and try again.');
+    return;
+  }
+  if(btn){ btn.disabled = true; btn.textContent = '⏳ Saving…'; }
+  try {
+    await _sbRpc('upsert_bc_guardrails', { rules });
+    if(typeof showSaveConfirm === 'function') showSaveConfirm(`✓ Saved ${rules.length} guardrail${rules.length===1?'':'s'}`);
+    document.getElementById('bcGuardrailsModal')?.remove();
+  } catch(e){
+    if(btn){ btn.disabled = false; btn.textContent = '✓ Save guardrails'; }
+    alert('Save failed: ' + (e.message || e));
+  }
 };
 
 // v204: AI Auto-Fill for Buyer Criteria — mirror of _aiAutoFillDeal but

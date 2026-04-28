@@ -48362,6 +48362,11 @@ async function openEditTaskModal(taskId, taskName, priority, dueDate, notes, sou
           <label style="font-size:12px;font-weight:600;color:var(--text2);display:block;margin-bottom:5px;">Task Type</label>
           <div id="ctask_typePills" style="display:flex;gap:6px;flex-wrap:wrap;">${_taskTypePillsHtml()}</div>
         </div>
+        <div style="margin-bottom:13px;">
+          <label style="font-size:12px;font-weight:600;color:var(--text2);display:block;margin-bottom:5px;">Communication Type</label>
+          <div id="ctask_commTypePills" style="display:flex;gap:6px;flex-wrap:wrap;">${_taskCommTypePillsHtml()}</div>
+          <div style="font-size:10px;color:var(--text3);margin-top:4px;">Optional channel tag for this task.</div>
+        </div>
         <div style="border-top:1px solid var(--border);padding-top:13px;margin-bottom:13px;">
           <div style="font-size:11px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);margin-bottom:8px;">Linked Items</div>
           <div style="margin-bottom:8px;"><div style="font-size:11px;color:var(--text2);margin-bottom:3px;">Property / Deal</div><div id="ctask_dealRow">${_taskLinkRowHtml('deal')}</div></div>
@@ -49232,6 +49237,7 @@ async function deleteTaskRecord(taskId, source){
 // since ace_tasks has no sort_order column — order is device-local.
 let _tasksSectionFilter  = 'all';   // 'all' | 'overdue' | 'today' | 'future'
 let _tasksPriorityFilter = 'all';   // 'all' | 'Top' | 'High' | 'Medium' | 'Low' | 'None'
+let _tasksCommFilter     = 'all';   // 'all' | 'none' | 'Call' | 'Email' | 'Text' | 'Other'  (v198)
 let _tasksSearch         = '';      // v179: free-text search within the active tab
 // v113.22: new tab + view state for the Tasks page rebuild.
 //   _taskTabFilter: which top-level tab is active.
@@ -49715,6 +49721,7 @@ async function _tasksPersistOrder(idsInOrder){
 
 function _tasksSetSectionFilter(v){ _tasksSectionFilter = v; _renderGlobalTasks(); }
 function _tasksSetPriorityFilter(v){ _tasksPriorityFilter = v; _renderGlobalTasks(); }
+function _tasksSetCommFilter(v){ _tasksCommFilter = v; _renderGlobalTasks(); } // v198
 // v113.22: primary tab setter. Each tab scopes the query differently:
 //   all/deal/buyer/contact/admin → assigned_to_user_id = me, type filter
 //   assigned_to_others           → assigned_by_user_id = me (see fetch)
@@ -50002,12 +50009,22 @@ async function _renderGlobalTasks(force){
       _contact_id: r.contact_id || null,
       _buyer_crit_id: r.buyer_criteria_id || null,
       _task_type: r.task_type || 'admin',
+      _comm_type: (r.communication_type || '').trim(), // v198
       _assigned_to: r.assigned_to_user_id || null,
       _assigned_by: r.assigned_by_user_id || null,
       _assigned_at: r.assigned_at || null,
       _sort_order: r.sort_order || 0,
       _overdue_plan: r.overdue_plan || null,
     }));
+
+    // v198: communication-type filter
+    if(_tasksCommFilter && _tasksCommFilter !== 'all'){
+      tasks = tasks.filter(t => {
+        const ct = (t._comm_type || '').toLowerCase();
+        if(_tasksCommFilter === 'none') return !ct;
+        return ct === _tasksCommFilter.toLowerCase();
+      });
+    }
 
     // v176: chip labels come from the cached lookup maps populated by
     // _globalTasksFetchAndCache — no per-render network work.
@@ -50121,15 +50138,28 @@ async function _renderGlobalTasks(force){
       { k:'None',   label:'— No Priority' },
     ];
     const chip = (active, label, onclick) => `<button onclick="${onclick}" style="background:${active?'#7c3aed':'var(--surface)'};color:${active?'#fff':'var(--text2)'};border:1px solid ${active?'#7c3aed':'var(--border)'};border-radius:99px;padding:5px 11px;font-size:11px;font-weight:600;cursor:pointer;margin-right:6px;margin-bottom:6px;">${label}</button>`;
+    // v198: communication-type filter chips
+    const commChipOpts = [
+      { k:'all',   label:'All' },
+      { k:'none',  label:'— None' },
+      { k:'Call',  label:'📞 Call' },
+      { k:'Email', label:'✉ Email' },
+      { k:'Text',  label:'💬 Text' },
+      { k:'Other', label:'⋯ Other' },
+    ];
     const filtersHtml = isAssignedToOthersTab ? '' : `
       <div style="margin-bottom:14px;">
         <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px;flex-wrap:wrap;">
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);min-width:62px;">Section</div>
           ${sectionChipOpts.map(o => chip(o.k===_tasksSectionFilter, o.label, `_tasksSetSectionFilter('${o.k}')`)).join('')}
         </div>
-        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px;flex-wrap:wrap;">
           <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);min-width:62px;">Priority</div>
           ${prioChipOpts.map(o => chip(o.k===_tasksPriorityFilter, o.label, `_tasksSetPriorityFilter('${o.k}')`)).join('')}
+        </div>
+        <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.06em;color:var(--text3);min-width:62px;">Comm Type</div>
+          ${commChipOpts.map(o => chip(o.k===_tasksCommFilter, o.label, `_tasksSetCommFilter('${o.k}')`)).join('')}
         </div>
       </div>`;
 
@@ -50174,6 +50204,19 @@ async function _renderGlobalTasks(force){
       const generalChip = (!linkedDeal && !t._contact_id && !t._buyer_crit_id)
         ? `<span style="background:var(--bg);color:var(--text3);border-radius:4px;padding:2px 7px;font-size:10px;text-transform:capitalize;">${t._task_type||'admin'}</span>`
         : '';
+      // v198: communication-type chip — only when set on the task
+      const _commMeta = {
+        call:  { icon:'📞', label:'Call',  bg:'#dbeafe', color:'#1e40af', border:'#93c5fd' },
+        email: { icon:'✉',  label:'Email', bg:'#fef3c7', color:'#92400e', border:'#fde68a' },
+        text:  { icon:'💬', label:'Text',  bg:'#dcfce7', color:'#166534', border:'#86efac' },
+        other: { icon:'⋯',  label:'Other', bg:'#f1f5f9', color:'#475569', border:'#cbd5e1' },
+      };
+      const commTypeChip = (() => {
+        const ct = (t._comm_type || '').toLowerCase();
+        if(!ct) return '';
+        const meta = _commMeta[ct] || _commMeta.other;
+        return `<span style="background:${meta.bg};color:${meta.color};border:1px solid ${meta.border};border-radius:4px;padding:2px 7px;font-size:10px;font-weight:600;white-space:nowrap;">${meta.icon} ${meta.label}</span>`;
+      })();
       const fromChip = (!isAssignedToOthersTab && t._assigned_by && t._assigned_by !== userId)
         ? `<span style="display:inline-flex;align-items:center;gap:4px;background:#f5f3ff;color:#6d28d9;border:1px solid #ddd6fe;border-radius:4px;padding:2px 7px;font-size:10px;font-weight:500;">
               ${_userAvatarHtml(t._assigned_by, 'Assigned by '+_userName(t._assigned_by,''))}
@@ -50224,7 +50267,7 @@ async function _renderGlobalTasks(force){
         <div style="flex:1;min-width:0;">
           <div style="font-size:13px;font-weight:600;${isDone?'text-decoration:line-through;':''}margin-bottom:4px;">${t['Task']||'Untitled'}</div>
           ${t['Notes']?`<div style="font-size:12px;color:var(--text2);margin-bottom:5px;">${t['Notes']}</div>`:''}
-          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">${prio}${dealChip}${contactChip}${buyerChip}${generalChip}<span style="font-size:11px;color:${due.color};font-weight:500;">${due.text}</span>${fromChip}${toChip}${queueChip}${planChip}${writePlanBtn}</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">${prio}${dealChip}${contactChip}${buyerChip}${generalChip}${commTypeChip}<span style="font-size:11px;color:${due.color};font-weight:500;">${due.text}</span>${fromChip}${toChip}${queueChip}${planChip}${writePlanBtn}</div>
         </div>
         <button onclick="event.stopPropagation();openEditTaskModal('${t.id}','${(t['Task']||'').replace(/'/g,"\\'")}','${(t['Priority']||'').trim()}','${t['Due Date']||''}','${(t['Notes']||'').replace(/'/g,"\\'").replace(/\n/g,' ')}','global')" title="Edit" style="background:none;border:none;color:var(--text3);font-size:14px;cursor:pointer;padding:0 4px;flex-shrink:0;" onmouseover="this.style.color='#7c3aed'" onmouseout="this.style.color='var(--text3)'">✏️</button>
         <button onclick="event.stopPropagation();deleteTaskRecord('${t.id}','global')" title="Delete" style="background:none;border:none;color:var(--text3);font-size:16px;cursor:pointer;padding:0 4px;flex-shrink:0;" onmouseover="this.style.color='#dc2626'" onmouseout="this.style.color='var(--text3)'">✕</button>

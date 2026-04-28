@@ -8,6 +8,20 @@
 <style>
 /* ── RESET & BASE ───────────────────────────────────────────── */
 *{box-sizing:border-box;margin:0;padding:0;}
+
+/* v189: Rich-text editor — bullets / numbers were rendering off the left
+   edge because the global *{padding:0} reset stripped <ul>/<ol> indentation.
+   Restore enough padding so bullets/numbers sit inside the editor. */
+.rt-wrap [contenteditable] ul,
+.rt-wrap [contenteditable] ol {
+  padding-left: 28px;
+  margin: 4px 0;
+  list-style-position: outside;
+}
+.rt-wrap [contenteditable] ul { list-style-type: disc; }
+.rt-wrap [contenteditable] ol { list-style-type: decimal; }
+.rt-wrap [contenteditable] li { margin: 2px 0; padding-left: 2px; }
+.rt-wrap [contenteditable] a { color: #2563eb; text-decoration: underline; }
 :root{
   --bg:#f1f5f9;
   --surface:#ffffff;
@@ -14276,18 +14290,19 @@ function _rtSanitizePaste(html){
 function _rtBuildToolbar(){
   const btn = 'background:#fff;border:1px solid #cbd5e1;color:#475569;padding:4px 8px;font-size:12px;font-weight:600;border-radius:4px;cursor:pointer;line-height:1;height:28px;display:inline-flex;align-items:center;justify-content:center;min-width:28px;';
   const sep = '<span style="width:1px;background:#cbd5e1;margin:0 2px;align-self:stretch;"></span>';
+  // v189: replaced font-size <select> with 4 size buttons. The select-change
+  // approach skipped clicks on the already-selected option (no change event)
+  // so "Normal" did nothing if Normal was the active value.
   return `
     <div class="rt-toolbar" style="display:flex;flex-wrap:wrap;gap:4px;align-items:stretch;padding:6px 8px;background:#f1f5f9;border:1px solid #cbd5e1;border-bottom:none;border-top-left-radius:6px;border-top-right-radius:6px;">
       <button type="button" data-rt-cmd="bold"      title="Bold (⌘B)"      style="${btn}"><b>B</b></button>
       <button type="button" data-rt-cmd="italic"    title="Italic (⌘I)"    style="${btn}"><i>I</i></button>
       <button type="button" data-rt-cmd="underline" title="Underline (⌘U)" style="${btn}"><u>U</u></button>
       ${sep}
-      <select data-rt-cmd="fontSize" title="Font size" style="${btn}padding:2px 6px;font-weight:500;cursor:pointer;">
-        <option value="2">Small</option>
-        <option value="3" selected>Normal</option>
-        <option value="5">Large</option>
-        <option value="6">XL</option>
-      </select>
+      <button type="button" data-rt-cmd="fontSize" data-rt-arg="2" title="Small"  style="${btn}font-size:10px;">A</button>
+      <button type="button" data-rt-cmd="fontSize" data-rt-arg="3" title="Normal" style="${btn}">A</button>
+      <button type="button" data-rt-cmd="fontSize" data-rt-arg="5" title="Large"  style="${btn}font-size:14px;">A</button>
+      <button type="button" data-rt-cmd="fontSize" data-rt-arg="6" title="XL"     style="${btn}font-size:16px;">A</button>
       ${sep}
       <button type="button" data-rt-cmd="insertUnorderedList" title="Bullet list"   style="${btn}">• List</button>
       <button type="button" data-rt-cmd="insertOrderedList"   title="Numbered list" style="${btn}">1. List</button>
@@ -14335,25 +14350,24 @@ function _rtMount(textareaId, opts){
   // Wire toolbar buttons
   toolbar.querySelectorAll('[data-rt-cmd]').forEach(el => {
     el.addEventListener('mousedown', e => e.preventDefault()); // keep editor focus
-    if(el.tagName === 'SELECT'){
-      el.addEventListener('change', () => {
-        try { document.execCommand('fontSize', false, el.value); } catch(_e){}
-        div.dispatchEvent(new Event('input', { bubbles:true }));
-      });
-    } else {
-      el.addEventListener('click', () => {
-        const cmd = el.dataset.rtCmd;
-        try {
-          if(cmd === 'createLink'){
-            const url = prompt('Enter URL (https://...):', 'https://');
-            if(url) document.execCommand('createLink', false, url);
-          } else {
-            document.execCommand(cmd, false, null);
-          }
-        } catch(_e){}
-        div.dispatchEvent(new Event('input', { bubbles:true }));
-      });
-    }
+    el.addEventListener('click', () => {
+      const cmd = el.dataset.rtCmd;
+      const arg = el.dataset.rtArg || null;
+      try {
+        if(cmd === 'createLink'){
+          const url = prompt('Enter URL (https://...):', 'https://');
+          if(url) document.execCommand('createLink', false, url);
+        } else if(cmd === 'fontSize'){
+          // v189: ensure focus is in the editor before applying. Without this,
+          // execCommand silently no-ops if focus is on the toolbar button.
+          if(document.activeElement !== div) div.focus();
+          document.execCommand('fontSize', false, arg || '3');
+        } else {
+          document.execCommand(cmd, false, null);
+        }
+      } catch(_e){}
+      div.dispatchEvent(new Event('input', { bubbles:true }));
+    });
   });
   // Paste cleanup
   div.addEventListener('paste', (e) => {

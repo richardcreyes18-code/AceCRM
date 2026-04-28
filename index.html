@@ -40930,6 +40930,9 @@ const _NJ_MUNICIPALITIES = [
   'Wharton','Wildwood','Williamstown','Woodbridge','Woodbury','Woodbury Heights','Woodcliff Lake','Wood-Ridge',
   'Woodstown','Wyckoff'
 ];
+// v209: expose on window so the AI review modal's typeahead picker can
+// read the same canonical NJ municipality list the BC edit form uses.
+if(typeof window !== 'undefined') window._NJ_MUNICIPALITIES = _NJ_MUNICIPALITIES;
 
 function _bcCitySearch(q){
   const dd = document.getElementById('bcf_city_dropdown');
@@ -41139,6 +41142,13 @@ function _bcAiBuildEditor(col, propVal, kind, options){
   if(kind === 'multienum' && Array.isArray(options) && options.length){
     const propStr = String(propVal == null ? '' : propVal);
     const selected = new Set(propStr.split(/[,;]/).map(s => s.trim()).filter(Boolean));
+    // v209: when the option list is large (>30), switch to a chip+typeahead
+    // pattern instead of showing every option as a chip. Same UX the BC
+    // edit form uses for cities. The all-chips form stays for small enums
+    // like asset types and US states.
+    if(options.length > 30){
+      return _bcAiBuildTypeaheadEditor(col, [...selected], options);
+    }
     const chips = options.map(o => {
       const isSel = selected.has(o);
       return `<label style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;font-size:10px;border:1px solid ${isSel?'#7c3aed':'#cbd5e1'};background:${isSel?'#ede9fe':'#fff'};color:${isSel?'#5b21b6':'#475569'};border-radius:99px;cursor:pointer;user-select:none;font-weight:${isSel?'600':'500'};">
@@ -41151,9 +41161,106 @@ function _bcAiBuildEditor(col, propVal, kind, options){
     </div>
     <input type="hidden" id="aiVal_${col}" data-edit-type="text" value="${esc([...selected].join(', '))}"/>`;
   }
+  // v209: preferred_cities — the server keeps it as csv text, but on the
+  // client we render the same chip+typeahead picker the BC edit form uses.
+  // Reads from window._NJ_MUNICIPALITIES (loaded with the BC page).
+  if(col === 'preferred_cities' && Array.isArray(window._NJ_MUNICIPALITIES) && window._NJ_MUNICIPALITIES.length){
+    const propStr = String(propVal == null ? '' : propVal);
+    const selected = propStr.split(/[,;]/).map(s => s.trim()).filter(Boolean);
+    return _bcAiBuildTypeaheadEditor(col, selected, window._NJ_MUNICIPALITIES);
+  }
   // text / csv / fallback
   return `<input id="aiVal_${col}" data-edit-type="text" value="${esc(propVal)}" style="width:100%;padding:5px 8px;font-size:11px;border:1px solid #cbd5e1;border-radius:5px;"/>`;
 }
+
+// v209: chip + typeahead editor for fields with a large canonical list
+// (cities, large county lists, etc). Renders selected values as removable
+// chips at the top, an input below filters the option list. Click a match
+// to add a chip; click × to remove. Hidden #aiVal_<col> input keeps the
+// comma-joined value for the apply path.
+function _bcAiBuildTypeaheadEditor(col, selected, options){
+  const esc = s => String(s==null?'':s).replace(/[<&>"]/g, c => ({'<':'&lt;','&':'&amp;','>':'&gt;','"':'&quot;'}[c]));
+  const cleanSel = (selected || []).map(s => String(s).trim()).filter(Boolean);
+  // Stash the option list so the search handler can find it without a
+  // closure (it's invoked from inline oninput=).
+  window._bcAiTypeaheadOptions = window._bcAiTypeaheadOptions || {};
+  window._bcAiTypeaheadOptions[col] = options;
+  const chipsHtml = cleanSel.map(v => `
+    <span data-bc-ai-chip="${esc(col)}" data-val="${esc(v)}" style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;font-size:10px;border:1px solid #7c3aed;background:#ede9fe;color:#5b21b6;border-radius:99px;font-weight:600;">
+      ${esc(v)}
+      <button type="button" onclick="_bcAiTypeaheadRemove('${esc(col)}','${esc(v).replace(/'/g,'\\\'')}')" style="background:none;border:none;color:#7c3aed;cursor:pointer;font-size:11px;padding:0;line-height:1;">×</button>
+    </span>`).join('');
+  return `
+    <div data-bc-ai-typeahead="${esc(col)}" style="position:relative;">
+      <div id="bcAiChips_${esc(col)}" style="display:flex;flex-wrap:wrap;gap:4px;margin-bottom:4px;min-height:18px;">${chipsHtml}</div>
+      <input id="bcAiSearch_${esc(col)}" type="text" autocomplete="off" placeholder="Type to search…"
+        oninput="_bcAiTypeaheadSearch('${esc(col)}', this.value)"
+        onfocus="_bcAiTypeaheadSearch('${esc(col)}', this.value)"
+        onblur="setTimeout(()=>{const dd=document.getElementById('bcAiDD_${esc(col)}');if(dd)dd.style.display='none';},150)"
+        style="width:100%;padding:5px 8px;font-size:11px;border:1px solid #cbd5e1;border-radius:5px;"/>
+      <div id="bcAiDD_${esc(col)}" style="display:none;position:absolute;top:100%;left:0;right:0;z-index:50;background:#fff;border:1px solid #cbd5e1;border-radius:0 0 6px 6px;max-height:180px;overflow-y:auto;box-shadow:0 4px 10px rgba(0,0,0,0.12);"></div>
+      <input type="hidden" id="aiVal_${esc(col)}" data-edit-type="text" value="${esc(cleanSel.join(', '))}"/>
+    </div>`;
+}
+
+window._bcAiTypeaheadSearch = function(col, q){
+  const dd = document.getElementById('bcAiDD_' + col);
+  if(!dd) return;
+  const opts = (window._bcAiTypeaheadOptions || {})[col] || [];
+  const hidden = document.getElementById('aiVal_' + col);
+  const sel = new Set((hidden?.value || '').split(/[,;]/).map(s => s.trim()).filter(Boolean));
+  const ql = (q || '').toLowerCase().trim();
+  let matches;
+  if(!ql){
+    matches = opts.filter(o => !sel.has(o)).slice(0, 12);
+  } else {
+    matches = opts.filter(o => o.toLowerCase().includes(ql) && !sel.has(o)).slice(0, 12);
+  }
+  if(!matches.length){
+    dd.style.display = 'none';
+    return;
+  }
+  const esc = s => String(s).replace(/[<&>"]/g, c => ({'<':'&lt;','&':'&amp;','>':'&gt;','"':'&quot;'}[c]));
+  dd.innerHTML = matches.map(m => `
+    <div onmousedown="_bcAiTypeaheadAdd('${col}','${esc(m).replace(/'/g,'\\\'')}')"
+      style="padding:6px 10px;font-size:11px;cursor:pointer;color:#0f172a;"
+      onmouseenter="this.style.background='#eef2ff'" onmouseleave="this.style.background=''">
+      📍 ${esc(m)}
+    </div>`).join('');
+  dd.style.display = 'block';
+};
+
+window._bcAiTypeaheadAdd = function(col, value){
+  const hidden = document.getElementById('aiVal_' + col);
+  const chipsBox = document.getElementById('bcAiChips_' + col);
+  const search = document.getElementById('bcAiSearch_' + col);
+  const dd = document.getElementById('bcAiDD_' + col);
+  if(!hidden || !chipsBox) return;
+  const sel = (hidden.value || '').split(/[,;]/).map(s => s.trim()).filter(Boolean);
+  if(sel.includes(value)) return;
+  sel.push(value);
+  hidden.value = sel.join(', ');
+  const esc = s => String(s).replace(/[<&>"]/g, c => ({'<':'&lt;','&':'&amp;','>':'&gt;','"':'&quot;'}[c]));
+  const chip = document.createElement('span');
+  chip.setAttribute('data-bc-ai-chip', col);
+  chip.setAttribute('data-val', value);
+  chip.style.cssText = 'display:inline-flex;align-items:center;gap:4px;padding:3px 8px;font-size:10px;border:1px solid #7c3aed;background:#ede9fe;color:#5b21b6;border-radius:99px;font-weight:600;';
+  chip.innerHTML = `${esc(value)} <button type="button" onclick="_bcAiTypeaheadRemove('${col}','${value.replace(/'/g,"\\'")}')" style="background:none;border:none;color:#7c3aed;cursor:pointer;font-size:11px;padding:0;line-height:1;">×</button>`;
+  chipsBox.appendChild(chip);
+  if(search){ search.value = ''; search.focus(); }
+  if(dd) dd.style.display = 'none';
+};
+
+window._bcAiTypeaheadRemove = function(col, value){
+  const hidden = document.getElementById('aiVal_' + col);
+  const chipsBox = document.getElementById('bcAiChips_' + col);
+  if(!hidden || !chipsBox) return;
+  const sel = (hidden.value || '').split(/[,;]/).map(s => s.trim()).filter(Boolean).filter(v => v !== value);
+  hidden.value = sel.join(', ');
+  for(const chip of [...chipsBox.querySelectorAll('[data-bc-ai-chip="' + col + '"]')]){
+    if(chip.getAttribute('data-val') === value){ chip.remove(); break; }
+  }
+};
 
 // v207: keep the hidden #aiVal_<col> in sync as the user toggles chips
 // in the multienum picker. Apply path reads only the hidden input, so

@@ -2064,7 +2064,10 @@ const SB_BC_MAP = {
   // v102.17: agent attribution for dashboard scoping
   fub_assigned_to:'Assigned Agent',
   // v111: per-field status JSONB (Collected / No Preference / Not Available)
-  field_status:'Field Status'
+  field_status:'Field Status',
+  // v203: AI Auto-Fill log (mirrors ace_properties.ai_autofill_log) —
+  // append-only array of snapshots, one per AI run on this buyer.
+  ai_autofill_log:'AI Autofill Log'
 };
 
 // Tasks map (ace_tasks) — v113.21 adds multi-agent assignment, buyer link,
@@ -40106,6 +40109,27 @@ async function bcOpenExpanded(recordId){
         <!-- v111: Field Status Checklist — auto-populated, only shows currently-visible fields -->
         <div id="bcFieldStatusSection"></div>
 
+        <!-- v203: AI Auto-Fill Notes — same renderer as the deal Notes tab.
+             Reads f['AI Autofill Log'] (SB_BC_MAP entry) and renders nothing
+             when empty. Wrapped in a collapsible card so it stays out of the
+             way when the buyer has no AI runs yet. -->
+        ${(() => {
+          const log = f['AI Autofill Log'];
+          const hasEntries = (Array.isArray(log) && log.length) ||
+                             (typeof log === 'string' && log.trim().startsWith('[') && log.length > 2);
+          if(!hasEntries) return '';
+          return `
+            <div style="margin-top:24px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:14px 16px;">
+              <details open>
+                <summary style="cursor:pointer;font-size:11px;font-weight:700;color:#7c3aed;text-transform:uppercase;letter-spacing:.05em;display:flex;align-items:center;gap:6px;user-select:none;">
+                  ✦ AI Auto-Fill Notes
+                  <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">— history of AI runs on this buyer</span>
+                </summary>
+                <div style="margin-top:12px;">${_renderAiAutofillLog(log)}</div>
+              </details>
+            </div>`;
+        })()}
+
       </div>
     </div>`;
   // v113.7: set the record id HERE (not via an embedded <script> tag,
@@ -53946,6 +53970,78 @@ function _parseNextSteps(raw){
   return { current: entries[0], history: entries.slice(1) };
 }
 
+// v128/v203: Top-level helper that renders the AI Auto-Fill log for any
+// table (deals, buyer criteria) with an `ai_autofill_log` JSONB column.
+// Each entry is a snapshot of one apply session with per-field rows for
+// before / proposed / applied / explanation / state. Returns '' when the
+// log is empty so callers can concat unconditionally.
+function _renderAiAutofillLog(raw){
+  let entries = [];
+  if(Array.isArray(raw)) entries = raw;
+  else if(typeof raw === 'string'){
+    try { const a = JSON.parse(raw); if(Array.isArray(a)) entries = a; } catch(_){}
+  }
+  if(!entries.length) return '';
+  const fmtCell = (v) => {
+    if(v === null || v === undefined || v === '') return '<span style="color:#cbd5e1;">—</span>';
+    if(typeof v === 'boolean') return v ? '✓ Yes' : '✗ No';
+    if(typeof v === 'number') return Number.isInteger(v) ? v.toLocaleString() : String(v);
+    const s = String(v);
+    return s.length > 70 ? s.slice(0, 70).replace(/[<&]/g, c => c==='<'?'&lt;':'&amp;') + '…' : s.replace(/[<&]/g, c => c==='<'?'&lt;':'&amp;');
+  };
+  const rendered = entries.slice().reverse().map(e => {
+    const at = e.at ? new Date(e.at) : null;
+    const dateStr = at ? at.toLocaleString(undefined,{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'}) : '—';
+    const changes = Array.isArray(e.changes) ? e.changes : [];
+    const rows = changes.map(c => {
+      const stateBadge = c.skipped
+        ? '<span style="font-size:9px;color:#94a3b8;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:99px;padding:1px 6px;">skipped</span>'
+        : (c.applied_na
+          ? '<span style="font-size:9px;color:#7c3aed;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:99px;padding:1px 6px;">N/A</span>'
+          : (c.user_override
+            ? '<span style="font-size:9px;color:#1d4ed8;background:#dbeafe;border:1px solid #93c5fd;border-radius:99px;padding:1px 6px;">user-edited</span>'
+            : '<span style="font-size:9px;color:#15803d;background:#dcfce7;border:1px solid #86efac;border-radius:99px;padding:1px 6px;">applied</span>'));
+      return `<tr style="border-top:1px solid #f1f5f9;">
+        <td style="padding:6px 8px;font-size:11px;color:#0f172a;font-weight:500;vertical-align:top;">${(c.label||c.col||'').replace(/[<&]/g,x=>x==='<'?'&lt;':'&amp;')}<br><span style="font-size:9px;color:#94a3b8;font-family:ui-monospace,Menlo,monospace;">${(c.col||'').replace(/[<&]/g,x=>x==='<'?'&lt;':'&amp;')}</span></td>
+        <td style="padding:6px 8px;font-size:11px;color:#475569;vertical-align:top;max-width:140px;word-break:break-word;">${fmtCell(c.before)}</td>
+        <td style="padding:6px 8px;font-size:11px;color:#0f172a;font-weight:600;vertical-align:top;max-width:160px;word-break:break-word;">${fmtCell(c.proposed)}</td>
+        <td style="padding:6px 8px;font-size:11px;color:#1d4ed8;font-weight:600;vertical-align:top;max-width:160px;word-break:break-word;">${c.applied!=null?fmtCell(c.applied):'<span style="color:#cbd5e1;">—</span>'}</td>
+        <td style="padding:6px 8px;font-size:10px;color:#475569;font-style:italic;vertical-align:top;line-height:1.5;max-width:240px;word-break:break-word;">${c.explanation?String(c.explanation).replace(/[<&]/g,x=>x==='<'?'&lt;':'&amp;'):'<span style="color:#cbd5e1;font-style:normal;">—</span>'}</td>
+        <td style="padding:6px 8px;text-align:center;vertical-align:top;">${stateBadge}</td>
+      </tr>`;
+    }).join('');
+    return `<details ${entries.indexOf(e) === entries.length - 1 ? 'open' : ''} style="background:#fff;border:1px solid #c4b5fd;border-left:3px solid #7c3aed;border-radius:6px;padding:0;margin-bottom:8px;overflow:hidden;">
+      <summary style="padding:10px 14px;cursor:pointer;font-size:12px;color:#5b21b6;font-weight:700;display:flex;align-items:center;justify-content:space-between;background:#f5f3ff;">
+        <span>✦ ${dateStr}</span>
+        <span style="font-size:10px;color:#7c3aed;font-weight:500;">${e.applied_count||0} applied${e.na_count?` · ${e.na_count} N/A`:''} · ${changes.length} field${changes.length===1?'':'s'}</span>
+      </summary>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:11px;min-width:900px;">
+          <thead>
+            <tr style="background:#fafbfc;font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;">
+              <th style="padding:7px 8px;text-align:left;border-bottom:1px solid #e2e8f0;">Field</th>
+              <th style="padding:7px 8px;text-align:left;border-bottom:1px solid #e2e8f0;">Before</th>
+              <th style="padding:7px 8px;text-align:left;border-bottom:1px solid #e2e8f0;">AI Suggestion</th>
+              <th style="padding:7px 8px;text-align:left;border-bottom:1px solid #e2e8f0;">Applied</th>
+              <th style="padding:7px 8px;text-align:left;border-bottom:1px solid #e2e8f0;">Explanation</th>
+              <th style="padding:7px 8px;text-align:center;border-bottom:1px solid #e2e8f0;width:90px;">Status</th>
+            </tr>
+          </thead>
+          <tbody>${rows || `<tr><td colspan="6" style="padding:12px;text-align:center;color:#94a3b8;font-size:11px;">No changes recorded for this run.</td></tr>`}</tbody>
+        </table>
+      </div>
+    </details>`;
+  }).join('');
+  return `
+    <div style="margin-bottom:12px;">
+      <div style="font-size:11px;font-weight:700;color:#7c3aed;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">
+        ✦ AI Auto-Fill Notes
+        <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">· ${entries.length} run${entries.length===1?'':'s'}</span>
+      </div>
+      ${rendered}
+    </div>`;
+}
+
 function renderNotesTab(d){
   const ns = _parseNextSteps(d['Next Steps']);
 
@@ -54047,75 +54143,9 @@ function renderNotesTab(d){
   const dealNotesSection = _renderBlobCards('Deal Notes',             d['Deal Notes'],             '#1a3a6e', 'deal');
   const genNotesSection  = _renderBlobCards('General Property Notes', d['General Property Notes'], '#1a3a6e', 'gen');
 
-  // v128: AI Auto Fill Notes — JSONB array on ace_properties.ai_autofill_log
-  // populated by every AI Auto-Fill apply. Each entry is one full snapshot
-  // of the diff. Render newest-first as a card with a column-aligned table.
-  const _renderAiAutofillLog = (raw) => {
-    let entries = [];
-    if(Array.isArray(raw)) entries = raw;
-    else if(typeof raw === 'string'){
-      try { const a = JSON.parse(raw); if(Array.isArray(a)) entries = a; } catch(_){}
-    }
-    if(!entries.length) return '';
-    const fmtCell = (v) => {
-      if(v === null || v === undefined || v === '') return '<span style="color:#cbd5e1;">—</span>';
-      if(typeof v === 'boolean') return v ? '✓ Yes' : '✗ No';
-      if(typeof v === 'number') return Number.isInteger(v) ? v.toLocaleString() : String(v);
-      const s = String(v);
-      return s.length > 70 ? s.slice(0, 70).replace(/[<&]/g, c => c==='<'?'&lt;':'&amp;') + '…' : s.replace(/[<&]/g, c => c==='<'?'&lt;':'&amp;');
-    };
-    const rendered = entries.slice().reverse().map(e => {
-      const at = e.at ? new Date(e.at) : null;
-      const dateStr = at ? at.toLocaleString(undefined,{month:'short',day:'numeric',year:'numeric',hour:'numeric',minute:'2-digit'}) : '—';
-      const changes = Array.isArray(e.changes) ? e.changes : [];
-      const rows = changes.map(c => {
-        const stateBadge = c.skipped
-          ? '<span style="font-size:9px;color:#94a3b8;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:99px;padding:1px 6px;">skipped</span>'
-          : (c.applied_na
-            ? '<span style="font-size:9px;color:#7c3aed;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:99px;padding:1px 6px;">N/A</span>'
-            : (c.user_override
-              ? '<span style="font-size:9px;color:#1d4ed8;background:#dbeafe;border:1px solid #93c5fd;border-radius:99px;padding:1px 6px;">user-edited</span>'
-              : '<span style="font-size:9px;color:#15803d;background:#dcfce7;border:1px solid #86efac;border-radius:99px;padding:1px 6px;">applied</span>'));
-        return `<tr style="border-top:1px solid #f1f5f9;">
-          <td style="padding:6px 8px;font-size:11px;color:#0f172a;font-weight:500;vertical-align:top;">${(c.label||c.col||'').replace(/[<&]/g,x=>x==='<'?'&lt;':'&amp;')}<br><span style="font-size:9px;color:#94a3b8;font-family:ui-monospace,Menlo,monospace;">${(c.col||'').replace(/[<&]/g,x=>x==='<'?'&lt;':'&amp;')}</span></td>
-          <td style="padding:6px 8px;font-size:11px;color:#475569;vertical-align:top;max-width:140px;word-break:break-word;">${fmtCell(c.before)}</td>
-          <td style="padding:6px 8px;font-size:11px;color:#0f172a;font-weight:600;vertical-align:top;max-width:160px;word-break:break-word;">${fmtCell(c.proposed)}</td>
-          <td style="padding:6px 8px;font-size:11px;color:#1d4ed8;font-weight:600;vertical-align:top;max-width:160px;word-break:break-word;">${c.applied!=null?fmtCell(c.applied):'<span style="color:#cbd5e1;">—</span>'}</td>
-          <td style="padding:6px 8px;font-size:10px;color:#475569;font-style:italic;vertical-align:top;line-height:1.5;max-width:240px;word-break:break-word;">${c.explanation?String(c.explanation).replace(/[<&]/g,x=>x==='<'?'&lt;':'&amp;'):'<span style="color:#cbd5e1;font-style:normal;">—</span>'}</td>
-          <td style="padding:6px 8px;text-align:center;vertical-align:top;">${stateBadge}</td>
-        </tr>`;
-      }).join('');
-      return `<details ${entries.indexOf(e) === entries.length - 1 ? 'open' : ''} style="background:#fff;border:1px solid #c4b5fd;border-left:3px solid #7c3aed;border-radius:6px;padding:0;margin-bottom:8px;overflow:hidden;">
-        <summary style="padding:10px 14px;cursor:pointer;font-size:12px;color:#5b21b6;font-weight:700;display:flex;align-items:center;justify-content:space-between;background:#f5f3ff;">
-          <span>✦ ${dateStr}</span>
-          <span style="font-size:10px;color:#7c3aed;font-weight:500;">${e.applied_count||0} applied${e.na_count?` · ${e.na_count} N/A`:''} · ${changes.length} field${changes.length===1?'':'s'}</span>
-        </summary>
-        <div style="overflow-x:auto;">
-          <table style="width:100%;border-collapse:collapse;font-size:11px;min-width:900px;">
-            <thead>
-              <tr style="background:#fafbfc;font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;">
-                <th style="padding:7px 8px;text-align:left;border-bottom:1px solid #e2e8f0;">Field</th>
-                <th style="padding:7px 8px;text-align:left;border-bottom:1px solid #e2e8f0;">Before</th>
-                <th style="padding:7px 8px;text-align:left;border-bottom:1px solid #e2e8f0;">AI Suggestion</th>
-                <th style="padding:7px 8px;text-align:left;border-bottom:1px solid #e2e8f0;">Applied</th>
-                <th style="padding:7px 8px;text-align:left;border-bottom:1px solid #e2e8f0;">Explanation</th>
-                <th style="padding:7px 8px;text-align:center;border-bottom:1px solid #e2e8f0;width:90px;">Status</th>
-              </tr>
-            </thead>
-            <tbody>${rows || `<tr><td colspan="6" style="padding:12px;text-align:center;color:#94a3b8;font-size:11px;">No changes recorded for this run.</td></tr>`}</tbody>
-          </table>
-        </div>
-      </details>`;
-    }).join('');
-    return `
-      <div style="margin-bottom:12px;">
-        <div style="font-size:11px;font-weight:700;color:#7c3aed;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">
-          ✦ AI Auto-Fill Notes
-          <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">· ${entries.length} run${entries.length===1?'':'s'}</span>
-        </div>
-        ${rendered}
-      </div>`;
-  };
+  // v128/v203: AI Auto Fill Notes — same renderer used for deals AND buyer
+  // criteria. _renderAiAutofillLog is a top-level helper; see definition
+  // below renderNotesTab.
   const aiAutofillSection = _renderAiAutofillLog(d['AI Autofill Log']);
 
   // v113.73: Property Description / Location / AI Clarifying — relocated

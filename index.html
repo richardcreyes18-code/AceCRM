@@ -32925,6 +32925,47 @@ async function _rpDeleteAddr(contactId, srcKey){
   }
 }
 
+// v195: Save a user-authored note from the Communication tab composer.
+async function _contactNoteSave(contactId, btnEl){
+  if(!contactId) return;
+  const ta = document.getElementById('ccnComposerBody');
+  const body = (ta?.value || '').trim();
+  if(!body){ alert('Type a note first.'); return; }
+  if(btnEl){ btnEl.disabled = true; btnEl.textContent = '⏳ Saving…'; }
+  try {
+    const created = await _sbPost('ace_contact_notes', {
+      contact_id: contactId,
+      body,
+      created_by_user_id: _currentUser?.id || null,
+    });
+    if(ta) ta.value = '';
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('Note saved ✓');
+    // v190: bump last_communicated_at on the agent-contact junction
+    if(typeof _relTouchActivity === 'function') _relTouchActivity(contactId, 'communicated');
+    await _contactLoadCommunication(contactId);
+  } catch(e){
+    alert('Save failed: ' + (e.message||'unknown'));
+    if(btnEl){ btnEl.disabled = false; btnEl.textContent = 'Save Note'; }
+  }
+}
+window._contactNoteSave = _contactNoteSave;
+
+// v195: Delete one of our own contact notes (soft-delete via deleted_at).
+async function _contactNoteDelete(noteId, contactId, btnEl){
+  if(!noteId || !contactId) return;
+  if(!confirm('Delete this note? This cannot be undone.')) return;
+  if(btnEl){ btnEl.disabled = true; btnEl.style.opacity = '0.5'; }
+  try {
+    await _sbPatch('ace_contact_notes', noteId, { deleted_at: new Date().toISOString() });
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('Note deleted ✓');
+    await _contactLoadCommunication(contactId);
+  } catch(e){
+    alert('Delete failed: ' + (e.message||'unknown'));
+    if(btnEl){ btnEl.disabled = false; btnEl.style.opacity = '1'; }
+  }
+}
+window._contactNoteDelete = _contactNoteDelete;
+
 // ─── COMMUNICATION HISTORY LOADER ─────────────────────────────────
 // Fetches all FUB calls, FUB notes, and our own outreach log for a contact,
 // merges them into one chronological timeline, and renders it.
@@ -32957,29 +32998,59 @@ async function _contactLoadCommunication(contactId){
     const fubIdsParam = fubIds.length ? `in.(${fubIds.join(',')})` : null;
 
     // Step 2: Fetch all data sources in parallel (incl. FUB user map for agent names)
-    const [callRows, noteRows, outreachRows, userMapRows] = await Promise.all([
+    // v195: also fetch ace_contact_notes (user-authored notes via the Add Note composer).
+    const [callRows, noteRows, outreachRows, userMapRows, ourNoteRows] = await Promise.all([
       fubIdsParam ? _sbGet('fub_calls', `person_id=${fubIdsParam}&select=id,created_at,direction,duration,outcome,note,phone,user_id&order=created_at.desc&limit=200`).catch(e=>{console.warn('calls fetch:',e.message);return[];}) : Promise.resolve([]),
       fubIdsParam ? _sbGet('fub_notes', `person_id=${fubIdsParam}&select=id,created_at,subject,body,created_by&order=created_at.desc&limit=200`).catch(e=>{console.warn('notes fetch:',e.message);return[];}) : Promise.resolve([]),
       _sbGet(SB_TABLES.buyerInterests, `contact_id=eq.${contactId}&select=id,date_sent,activity_type,response_status,response_notes,interest_notes,template_used,agent_name,property_id&order=date_sent.desc&limit=100`).catch(e=>{console.warn('outreach fetch:',e.message);return[];}),
-      _sbGet('ace_fub_user_map', `select=fub_user_id,display_name`).catch(e=>{console.warn('user map fetch:',e.message);return[];})
+      _sbGet('ace_fub_user_map', `select=fub_user_id,display_name`).catch(e=>{console.warn('user map fetch:',e.message);return[];}),
+      _sbGet('ace_contact_notes', `contact_id=eq.${contactId}&deleted_at=is.null&select=id,created_at,subject,body,created_by_user_id&order=created_at.desc&limit=200`).catch(e=>{console.warn('our notes fetch:',e.message);return[];})
     ]);
 
     const calls = callRows || [];
     const notes = noteRows || [];
     const outreach = outreachRows || [];
+    const ourNotes = ourNoteRows || [];
+    // v195: build a userId→display name lookup from the ace_users cache for our notes
+    const aceUserNameById = new Map();
+    if(Array.isArray(_usersCache)){
+      for(const u of _usersCache){
+        aceUserNameById.set(u.id, u.name || u.fub_name || u.email || null);
+      }
+    }
     const userMap = new Map();
     for(const u of (userMapRows||[])) userMap.set(u.fub_user_id, u.display_name);
-    const totalCount = calls.length + notes.length + outreach.length;
+    const totalCount = calls.length + notes.length + outreach.length + ourNotes.length;
 
     if(badgeEl) badgeEl.textContent = totalCount;
 
+    // v195: composer always renders (even when no history) so the user can
+    // add the FIRST note. The timeline below it renders only when there's
+    // history to show.
+    const composerHtml = `
+      <div id="ccnComposerWrap" style="background:#fff;border:2px dashed #cbd5e1;border-radius:10px;padding:14px 16px;margin-bottom:16px;">
+        <div style="display:flex;align-items:center;gap:8px;margin-bottom:8px;">
+          <span style="font-size:14px;">📝</span>
+          <strong style="font-size:12px;color:#0f172a;letter-spacing:.04em;">Add a note</strong>
+          <span style="font-size:11px;color:#94a3b8;font-style:italic;">Logged on this contact's timeline.</span>
+        </div>
+        <textarea id="ccnComposerBody" rows="3" placeholder="What did you learn? Conversation summary, deal context, follow-up flag…"
+          style="width:100%;box-sizing:border-box;padding:8px 10px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;font-family:inherit;line-height:1.45;outline:none;resize:vertical;min-height:60px;"></textarea>
+        <div style="display:flex;justify-content:flex-end;gap:8px;margin-top:8px;">
+          <button onclick="document.getElementById('ccnComposerBody').value='';"
+            style="background:#fff;border:1px solid #cbd5e1;color:#475569;padding:6px 14px;font-size:12px;font-weight:600;border-radius:5px;cursor:pointer;">Clear</button>
+          <button id="ccnComposerSave" onclick="_contactNoteSave('${contactId}', this)"
+            style="background:#1a3a6e;color:#fff;border:none;padding:6px 18px;font-size:12px;font-weight:700;border-radius:5px;cursor:pointer;">Save Note</button>
+        </div>
+      </div>`;
+
     if(totalCount === 0){
-      listEl.innerHTML = `
+      listEl.innerHTML = composerHtml + `
         <div style="text-align:center;padding:40px 20px;color:#94a3b8;font-size:12px;">
           <div style="font-size:32px;margin-bottom:10px;">📭</div>
           <div style="font-weight:600;color:#64748b;margin-bottom:6px;">No communication history yet</div>
           <div style="font-size:11px;">
-            ${fubContactId ? 'No calls, notes, or outreach logged for this contact.' : 'This contact is not linked to a FUB record. Calls and FUB notes will not appear here until the contact is matched by phone number in FUB.'}
+            ${fubContactId ? 'No calls, notes, or outreach logged for this contact yet — add the first one above.' : 'This contact is not linked to a FUB record. Calls and FUB notes will not appear here until matched by phone number in FUB. You can still add your own notes above.'}
           </div>
         </div>`;
       return;
@@ -33010,6 +33081,14 @@ async function _contactLoadCommunication(contactId){
         type: 'outreach',
         date: o.date_sent || o.created_at,
         data: o
+      });
+    }
+    // v195: our user-authored notes render alongside FUB notes
+    for(const n of ourNotes){
+      items.push({
+        type: 'our_note',
+        date: n.created_at,
+        data: n
       });
     }
 
@@ -33044,6 +33123,7 @@ async function _contactLoadCommunication(contactId){
     const TYPE_META = {
       call:     { icon: '📞', color: '#1e3a8a', bg: '#eff6ff', border: '#bfdbfe', label: 'CALL' },
       note:     { icon: '📝', color: '#78350f', bg: '#fffbeb', border: '#fde68a', label: 'NOTE' },
+      our_note: { icon: '📒', color: '#5b21b6', bg: '#f5f3ff', border: '#ddd6fe', label: 'NOTE (OURS)' },
       outreach: { icon: '📤', color: '#065f46', bg: '#ecfdf5', border: '#a7f3d0', label: 'OUTREACH (LOGGED BY US)' }
     };
 
@@ -33053,19 +33133,24 @@ async function _contactLoadCommunication(contactId){
     const callsWithNotes = calls.filter(c=>c.note&&c.note.length>0).length;
     const noteCount = notes.filter(n=>n.body&&n.body.length>=20).length;
 
-    let html = `
+    let html = composerHtml + `
       <div style="display:flex;gap:14px;margin-bottom:20px;flex-wrap:wrap;">
-        <div style="background:#fff;border:1px solid #e2e8f0;border-left:4px solid #2563eb;border-radius:10px;padding:14px 18px;flex:1;min-width:160px;">
+        <div style="background:#fff;border:1px solid #e2e8f0;border-left:4px solid #2563eb;border-radius:10px;padding:14px 18px;flex:1;min-width:150px;">
           <div style="font-size:11px;color:#1e40af;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:4px;">Calls</div>
           <div style="font-size:28px;font-weight:800;color:#0f172a;line-height:1;margin-bottom:4px;">${callCount}</div>
           <div style="font-size:11px;color:#64748b;">${substantiveCalls} substantive · ${callsWithNotes} with notes</div>
         </div>
-        <div style="background:#fffbeb;border:1px solid #fde68a;border-left:4px solid #d97706;border-radius:10px;padding:14px 18px;flex:1;min-width:160px;">
+        <div style="background:#fffbeb;border:1px solid #fde68a;border-left:4px solid #d97706;border-radius:10px;padding:14px 18px;flex:1;min-width:150px;">
           <div style="font-size:11px;color:#92400e;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:4px;">FUB Notes</div>
           <div style="font-size:28px;font-weight:800;color:#0f172a;line-height:1;margin-bottom:4px;">${noteCount}</div>
           <div style="font-size:11px;color:#64748b;">synced from FUB</div>
         </div>
-        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-left:4px solid #16a34a;border-radius:10px;padding:14px 18px;flex:1;min-width:160px;">
+        <div style="background:#f5f3ff;border:1px solid #ddd6fe;border-left:4px solid #7c3aed;border-radius:10px;padding:14px 18px;flex:1;min-width:150px;">
+          <div style="font-size:11px;color:#5b21b6;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:4px;">Our Notes</div>
+          <div style="font-size:28px;font-weight:800;color:#0f172a;line-height:1;margin-bottom:4px;">${ourNotes.length}</div>
+          <div style="font-size:11px;color:#64748b;">added in CRM</div>
+        </div>
+        <div style="background:#f0fdf4;border:1px solid #bbf7d0;border-left:4px solid #16a34a;border-radius:10px;padding:14px 18px;flex:1;min-width:150px;">
           <div style="font-size:11px;color:#065f46;font-weight:700;text-transform:uppercase;letter-spacing:0.6px;margin-bottom:4px;">Our Outreach</div>
           <div style="font-size:28px;font-weight:800;color:#0f172a;line-height:1;margin-bottom:4px;">${outreach.length}</div>
           <div style="font-size:11px;color:#64748b;">logged from CRM</div>
@@ -33106,6 +33191,27 @@ async function _contactLoadCommunication(contactId){
               ${n.subject ? `<div style="font-size:11px;color:#64748b;">${escapeHtml(n.subject)}</div>` : ''}
               ${n.created_by ? `<div style="font-size:11px;color:#64748b;">by ${escapeHtml(n.created_by)}</div>` : ''}
               <div style="margin-left:auto;font-size:11px;color:#94a3b8;">${fmtDate(item.date)}</div>
+            </div>
+            <div style="font-size:13px;color:#1e293b;white-space:pre-wrap;line-height:1.55;padding-left:22px;">${escapeHtml(truncated)}</div>
+          </div>`;
+      } else if(item.type === 'our_note'){
+        const n = item.data;
+        const body = (n.body||'').trim();
+        const truncated = body.length > 800 ? body.substring(0,800)+'…' : body;
+        const author = n.created_by_user_id ? (aceUserNameById.get(n.created_by_user_id) || null) : null;
+        const isMine = !!(n.created_by_user_id && _currentUser && n.created_by_user_id === _currentUser.id);
+        html += `
+          <div style="background:#f5f3ff;padding:12px 16px;position:relative;">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
+              <div style="font-size:14px;">${meta.icon}</div>
+              <div style="font-size:11px;font-weight:700;color:${meta.color};letter-spacing:0.5px;">${meta.label}</div>
+              ${n.subject ? `<div style="font-size:11px;color:#64748b;">${escapeHtml(n.subject)}</div>` : ''}
+              ${author ? `<div style="font-size:11px;color:#64748b;">by ${escapeHtml(author)}</div>` : ''}
+              <div style="margin-left:auto;font-size:11px;color:#94a3b8;">${fmtDate(item.date)}</div>
+              ${isMine ? `<button onclick="_contactNoteDelete('${n.id}','${contactId}',this)" title="Delete this note"
+                style="background:#fff;border:1px solid #ddd6fe;color:#7c3aed;font-size:10px;padding:3px 8px;border-radius:5px;cursor:pointer;font-weight:600;"
+                onmouseenter="this.style.background='#fee2e2';this.style.color='#b91c1c';this.style.borderColor='#fca5a5';"
+                onmouseleave="this.style.background='#fff';this.style.color='#7c3aed';this.style.borderColor='#ddd6fe';">✕ Delete</button>` : ''}
             </div>
             <div style="font-size:13px;color:#1e293b;white-space:pre-wrap;line-height:1.55;padding-left:22px;">${escapeHtml(truncated)}</div>
           </div>`;

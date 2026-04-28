@@ -6587,9 +6587,10 @@ async function masterSave(opts){
       return;
     }
 
+    let sbDataForMirror = null;
     if(isSupabase()){
-      const sbData = _atToSb(fields, SB_PROP_MAP);
-      await _sbPatch(SB_TABLES.properties, dealId, sbData, { keepalive: !!(opts && opts.keepalive) });
+      sbDataForMirror = _atToSb(fields, SB_PROP_MAP);
+      await _sbPatch(SB_TABLES.properties, dealId, sbDataForMirror, { keepalive: !!(opts && opts.keepalive) });
     } else {
       const res = await fetch(
         `https://api.airtable.com/v0/${cfg.base}/${cfg.table}/${dealId}`,
@@ -6600,8 +6601,13 @@ async function masterSave(opts){
       if(!res.ok) throw new Error(await res.text());
     }
 
-    // Update the CAPTURED deal object (not currentDeal which may have changed)
+    // Update the CAPTURED deal object (not currentDeal which may have changed).
+    // v205: also mirror the snake_case shape so readers that look up
+    // `dealToSave.pitch_out_price` stay in sync with the Airtable-label
+    // mirror (`dealToSave['Pitch Out Price']`). Otherwise the Offers tab
+    // shows stale values after a Financial-tab autosave.
     Object.assign(dealToSave, fields);
+    if(sbDataForMirror) Object.assign(dealToSave, sbDataForMirror);
     clearDirty();
     // v102.5: no success toast — the Save button color reset is visual feedback
     // enough. Manual save (clicking the global Save button) still works the same
@@ -10518,14 +10524,13 @@ async function _pitchOutApplyFromToggle(){
   newPitchOut = Math.round(newPitchOut);
 
   try {
-    await _sbPatch('ace_properties', currentDeal.id, {
+    const sbPatch = {
       pitch_out_price: newPitchOut,
       pitch_out_markup_type: mode,
       pitch_out_markup_value: val
-    });
-    currentDeal.pitch_out_price = newPitchOut;
-    currentDeal.pitch_out_markup_type = mode;
-    currentDeal.pitch_out_markup_value = val;
+    };
+    await _sbPatch('ace_properties', currentDeal.id, sbPatch);
+    _dealMirrorSnakeUpdate(sbPatch);
     loadOffersTab(currentDeal.id);
   } catch(e) {
     console.warn('pitch out apply failed:', e.message);
@@ -10683,6 +10688,21 @@ function _offerQuickRecalcSpread(){
   }
 }
 
+// v205: keep currentDeal in sync on BOTH the snake_case key AND the
+// Airtable label after an Offers-tab write. Without this, downstream
+// readers that look up `d['Pitch Out Price']` (e.g. the Financial tab
+// render) see stale data until a full reload — the user-visible bug
+// where the Financial tab's Pitch Out Price stayed blank after the
+// Offers tab showed a fresh value.
+function _dealMirrorSnakeUpdate(updates){
+  if(!currentDeal || !updates) return;
+  for(const [k, v] of Object.entries(updates)){
+    currentDeal[k] = v;
+    const atLabel = (typeof SB_PROP_MAP === 'object' && SB_PROP_MAP) ? SB_PROP_MAP[k] : null;
+    if(atLabel && atLabel !== k) currentDeal[atLabel] = v;
+  }
+}
+
 async function _pitchOutSave(triggerType){
   const el = document.getElementById('offerInPitchOut');
   if(!el || !currentDeal) return;
@@ -10693,14 +10713,14 @@ async function _pitchOutSave(triggerType){
     return;
   }
   try {
-    await _sbPatch('ace_properties', currentDeal.id, {
+    const sbPatch = {
       pitch_out_price: amount,
       pitch_out_markup_type: amount == null ? null : triggerType,
       pitch_out_markup_value: triggerType === 'manual' ? null : currentDeal.pitch_out_markup_value
-    });
-    currentDeal.pitch_out_price = amount;
-    currentDeal.pitch_out_markup_type = amount == null ? null : triggerType;
-    if(triggerType === 'manual') currentDeal.pitch_out_markup_value = null;
+    };
+    await _sbPatch('ace_properties', currentDeal.id, sbPatch);
+    _dealMirrorSnakeUpdate(sbPatch);
+    if(triggerType === 'manual') _dealMirrorSnakeUpdate({ pitch_out_markup_value: null });
     el.style.borderBottomColor = '#86efac';
     setTimeout(()=>{ el.style.borderBottomColor = '#93c5fd'; }, 800);
     _pitchOutRefreshNote();
@@ -10733,14 +10753,13 @@ async function _pitchOutApply(kind){
   }
   newPitchOut = Math.round(newPitchOut);
   try {
-    await _sbPatch('ace_properties', currentDeal.id, {
+    const sbPatch = {
       pitch_out_price: newPitchOut,
       pitch_out_markup_type: kind,
       pitch_out_markup_value: val
-    });
-    currentDeal.pitch_out_price = newPitchOut;
-    currentDeal.pitch_out_markup_type = kind;
-    currentDeal.pitch_out_markup_value = val;
+    };
+    await _sbPatch('ace_properties', currentDeal.id, sbPatch);
+    _dealMirrorSnakeUpdate(sbPatch);
     loadOffersTab(currentDeal.id);
   } catch(e) {
     console.warn('pitch out apply failed:', e.message);

@@ -53720,23 +53720,28 @@ function renderNotesTab(d){
   ` : '';
 
   // v102.30: Deal Notes and General Property Notes render as stacked cards
-  const _renderBlobCards = (label, raw, accent) => {
+  // v194: each card now has a ✕ delete button — handler in _deleteNoteEntry.
+  const _renderBlobCards = (label, raw, accent, fieldKey) => {
     const entries = _parseBlob(raw);
     if(entries.length === 0) return '';
     return `
       <div style="margin-bottom:12px;">
         <div style="font-size:11px;font-weight:700;color:${accent};text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">${label} <span style="color:#94a3b8;font-weight:500;text-transform:none;letter-spacing:0;">· ${entries.length} ${entries.length===1?'entry':'entries'}</span></div>
-        ${entries.map(e => `
-          <div style="background:#fff;border:1px solid #e2e8f0;border-left:3px solid ${accent};border-radius:6px;padding:10px 14px;margin-bottom:6px;">
-            ${e.date ? `<div style="font-size:10px;color:#94a3b8;font-weight:600;margin-bottom:4px;">${e.date}</div>` : ''}
-            <div style="font-size:12px;color:#334155;white-space:pre-wrap;line-height:1.5;">${e.body.replace(/</g,'&lt;')}</div>
+        ${entries.map((e, i) => `
+          <div style="background:#fff;border:1px solid #e2e8f0;border-left:3px solid ${accent};border-radius:6px;padding:10px 14px;margin-bottom:6px;position:relative;">
+            <button onclick="_deleteNoteEntry('${fieldKey}', ${i}, this)" title="Delete this entry"
+              style="position:absolute;top:6px;right:6px;background:#fff;border:1px solid #e2e8f0;color:#94a3b8;font-size:11px;line-height:1;padding:3px 7px;border-radius:5px;cursor:pointer;font-weight:600;"
+              onmouseenter="this.style.background='#fee2e2';this.style.color='#b91c1c';this.style.borderColor='#fca5a5';"
+              onmouseleave="this.style.background='#fff';this.style.color='#94a3b8';this.style.borderColor='#e2e8f0';">✕</button>
+            ${e.date ? `<div style="font-size:10px;color:#94a3b8;font-weight:600;margin-bottom:4px;padding-right:24px;">${e.date}</div>` : ''}
+            <div style="font-size:12px;color:#334155;white-space:pre-wrap;line-height:1.5;padding-right:24px;">${e.body.replace(/</g,'&lt;')}</div>
           </div>
         `).join('')}
       </div>`;
   };
 
-  const dealNotesSection = _renderBlobCards('Deal Notes',             d['Deal Notes'],             '#1a3a6e');
-  const genNotesSection  = _renderBlobCards('General Property Notes', d['General Property Notes'], '#1a3a6e');
+  const dealNotesSection = _renderBlobCards('Deal Notes',             d['Deal Notes'],             '#1a3a6e', 'deal');
+  const genNotesSection  = _renderBlobCards('General Property Notes', d['General Property Notes'], '#1a3a6e', 'gen');
 
   // v128: AI Auto Fill Notes — JSONB array on ace_properties.ai_autofill_log
   // populated by every AI Auto-Fill apply. Each entry is one full snapshot
@@ -60795,6 +60800,51 @@ function showSaveConfirm(msg){
   clearTimeout(toast._timer);
   toast._timer = setTimeout(()=>{ toast.style.opacity='0'; setTimeout(()=>toast.style.display='none',400); },2500);
 }
+
+// v194: delete a single entry from Deal Notes / General Property Notes.
+// fieldKey: 'deal' | 'gen'. index is the 0-based position in the rendered list
+// (matches the order returned by _parseBlob — newest-first after the v102.30 sort).
+async function _deleteNoteEntry(fieldKey, index, btnEl){
+  if(!currentDeal) return;
+  const fieldName = fieldKey === 'deal' ? 'Deal Notes' : 'General Property Notes';
+  const raw = currentDeal[fieldName] || '';
+  if(!raw.trim()) return;
+  if(!confirm('Delete this entry from '+fieldName+'? This cannot be undone.')) return;
+  // Re-parse using the same logic _renderBlobCards uses, so indices match.
+  const _parseBlobLocal = (raw) => {
+    const parsed = _parseNextSteps(raw);
+    const flat = [];
+    if(parsed.current) flat.push(parsed.current);
+    parsed.history.forEach(h => flat.push(h));
+    if(flat.length <= 1) return flat;
+    const first = _tryParseDate(flat[0].date);
+    const last  = _tryParseDate(flat[flat.length-1].date);
+    if(first && last && first >= last) return flat;
+    return flat.slice().reverse();
+  };
+  const entries = _parseBlobLocal(raw);
+  if(index < 0 || index >= entries.length){ alert('Entry not found.'); return; }
+  entries.splice(index, 1);
+  // Rebuild blob in the same shape saveNoteEntry produces (newest-first, blank
+  // line between entries). Untagged entries are kept verbatim without a header.
+  const rebuilt = entries.map(e => e.date ? `[${e.date}] ${e.body}` : e.body).join('\n\n').trim();
+  if(btnEl){ btnEl.disabled = true; btnEl.style.opacity = '0.5'; }
+  try {
+    const ok = await airtableUpdate(currentDeal.id, { [fieldName]: rebuilt });
+    if(!ok){ alert('Save failed.'); return; }
+    currentDeal[fieldName] = rebuilt;
+    showSaveConfirm(fieldName + ' entry deleted ✓');
+    // Refresh the Notes tab to reflect the deletion.
+    const activeTab = document.querySelector('.tab-btn.active');
+    if(typeof switchTab === 'function' && activeTab){
+      switchTab('notes', activeTab);
+    }
+  } catch(e){
+    alert('Delete failed: ' + (e.message||'unknown'));
+    if(btnEl){ btnEl.disabled = false; btnEl.style.opacity = '1'; }
+  }
+}
+window._deleteNoteEntry = _deleteNoteEntry;
 
 function saveNoteEntry(){
   if(!currentDeal) return;

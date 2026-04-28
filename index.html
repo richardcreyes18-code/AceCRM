@@ -41099,6 +41099,85 @@ function _bcAutoSave(){
   _bcAutoSaveTimer = setTimeout(()=>{ bcSaveExpanded(_bcCurrentRecordId, true); }, 1200);
 }
 
+// v207: standard US state codes (50 + DC) for the AI review modal's
+// preferred_states multi-select. Kept inline so the picker has no
+// additional fetches.
+const _BC_AI_US_STATES = [
+  'AL','AK','AZ','AR','CA','CO','CT','DE','FL','GA','HI','ID','IL','IN','IA',
+  'KS','KY','LA','ME','MD','MA','MI','MN','MS','MO','MT','NE','NV','NH','NJ',
+  'NM','NY','NC','ND','OH','OK','OR','PA','RI','SC','SD','TN','TX','UT','VT',
+  'VA','WA','WV','WI','WY','DC'
+];
+
+// v207: build the in-row editor for the AI review modal. Falls back to a
+// plain input when the field is text/number/boolean. For enum/multienum
+// (with an options list) it renders a proper picker so the AI's value
+// stays canonical and the user picks from the same vocab on edit.
+//
+// All variants write into a hidden input #aiVal_<col> with a
+// `data-edit-type` attribute the apply path already understands. That
+// keeps _bcAiAutoFillApply simple — no per-widget reading logic.
+function _bcAiBuildEditor(col, propVal, kind, options){
+  const esc = s => String(s==null?'':s).replace(/[<&>"]/g, c => ({'<':'&lt;','&':'&amp;','>':'&gt;','"':'&quot;'}[c]));
+  if(kind === 'boolean'){
+    return `<select id="aiVal_${col}" data-edit-type="boolean" style="width:100%;padding:5px 8px;font-size:11px;border:1px solid #cbd5e1;border-radius:5px;">
+      <option value="true" ${propVal===true?'selected':''}>Yes</option>
+      <option value="false" ${propVal===false?'selected':''}>No</option>
+    </select>`;
+  }
+  if(kind === 'number'){
+    return `<input id="aiVal_${col}" data-edit-type="number" value="${esc(propVal)}" style="width:100%;padding:5px 8px;font-size:11px;border:1px solid #cbd5e1;border-radius:5px;"/>`;
+  }
+  if(kind === 'enum' && Array.isArray(options) && options.length){
+    const propStr = String(propVal == null ? '' : propVal).trim();
+    const opts = options.map(o => `<option value="${esc(o)}" ${o===propStr?'selected':''}>${esc(o)}</option>`).join('');
+    return `<select id="aiVal_${col}" data-edit-type="text" style="width:100%;padding:5px 8px;font-size:11px;border:1px solid #cbd5e1;border-radius:5px;">
+      <option value="">— none —</option>
+      ${opts}
+    </select>`;
+  }
+  if(kind === 'multienum' && Array.isArray(options) && options.length){
+    const propStr = String(propVal == null ? '' : propVal);
+    const selected = new Set(propStr.split(/[,;]/).map(s => s.trim()).filter(Boolean));
+    const chips = options.map(o => {
+      const isSel = selected.has(o);
+      return `<label style="display:inline-flex;align-items:center;gap:4px;padding:3px 8px;font-size:10px;border:1px solid ${isSel?'#7c3aed':'#cbd5e1'};background:${isSel?'#ede9fe':'#fff'};color:${isSel?'#5b21b6':'#475569'};border-radius:99px;cursor:pointer;user-select:none;font-weight:${isSel?'600':'500'};">
+        <input type="checkbox" data-bc-ai-multi="${col}" value="${esc(o)}" ${isSel?'checked':''} onchange="_bcAiSyncMulti('${col}')" style="margin:0;display:none;"/>
+        ${esc(o)}
+      </label>`;
+    }).join('');
+    return `<div style="display:flex;flex-wrap:wrap;gap:4px;max-height:120px;overflow-y:auto;padding:2px;">
+      ${chips}
+    </div>
+    <input type="hidden" id="aiVal_${col}" data-edit-type="text" value="${esc([...selected].join(', '))}"/>`;
+  }
+  // text / csv / fallback
+  return `<input id="aiVal_${col}" data-edit-type="text" value="${esc(propVal)}" style="width:100%;padding:5px 8px;font-size:11px;border:1px solid #cbd5e1;border-radius:5px;"/>`;
+}
+
+// v207: keep the hidden #aiVal_<col> in sync as the user toggles chips
+// in the multienum picker. Apply path reads only the hidden input, so
+// this is the only sync hook needed.
+window._bcAiSyncMulti = function(col){
+  const root = document.getElementById('bcAiReviewModal');
+  if(!root) return;
+  const checks = root.querySelectorAll(`input[data-bc-ai-multi="${col}"]`);
+  const vals = [];
+  for(const cb of checks){
+    if(cb.checked) vals.push(cb.value);
+    // Update the visual state on the wrapping label.
+    const lbl = cb.closest('label');
+    if(lbl){
+      lbl.style.borderColor   = cb.checked ? '#7c3aed' : '#cbd5e1';
+      lbl.style.background    = cb.checked ? '#ede9fe' : '#fff';
+      lbl.style.color         = cb.checked ? '#5b21b6' : '#475569';
+      lbl.style.fontWeight    = cb.checked ? '600' : '500';
+    }
+  }
+  const hidden = document.getElementById('aiVal_' + col);
+  if(hidden) hidden.value = vals.join(', ');
+};
+
 // v204: AI Auto-Fill for Buyer Criteria — mirror of _aiAutoFillDeal but
 // targets the ace_buyer_criteria row + ai-parse-buyer-criteria edge fn.
 // Sources read by the server: linked contact's fub_calls, fub_notes,
@@ -41204,19 +41283,20 @@ function _bcAiRenderReviewModal(bcId, resp, hostModal){
     if(propEntry){
       stateLabel = '<span style="font-size:9px;color:#15803d;background:#dcfce7;border:1px solid #86efac;border-radius:99px;padding:1px 6px;">applied</span>';
       const propVal = propEntry.proposed;
-      let editType = f.type || 'text';
-      if(editType === 'csv') editType = 'text';
-      let inputHtml;
-      if(editType === 'boolean'){
-        inputHtml = `<select id="aiVal_${col}" data-edit-type="boolean" style="width:100%;padding:5px 8px;font-size:11px;border:1px solid #cbd5e1;border-radius:5px;">
-          <option value="true" ${propVal===true?'selected':''}>Yes</option>
-          <option value="false" ${propVal===false?'selected':''}>No</option>
-        </select>`;
-      } else if(editType === 'number'){
-        inputHtml = `<input id="aiVal_${col}" data-edit-type="number" value="${esc(propVal)}" style="width:100%;padding:5px 8px;font-size:11px;border:1px solid #cbd5e1;border-radius:5px;"/>`;
-      } else {
-        inputHtml = `<input id="aiVal_${col}" data-edit-type="text" value="${esc(propVal)}" style="width:100%;padding:5px 8px;font-size:11px;border:1px solid #cbd5e1;border-radius:5px;"/>`;
+      const editType = f.type || 'text';
+      // v207: client-side option list. Server sends `options` for true
+      // enum/multienum fields. For preferred_states we treat as a
+      // multi-select against the standard US state list even though the
+      // server keeps it as csv. preferred_counties / preferred_cities
+      // are kept as text (lists too big for an inline picker — user can
+      // refine on the BC page itself, which has a chip picker).
+      let resolvedOptions = Array.isArray(f.options) ? f.options : null;
+      let resolvedKind = editType;
+      if(col === 'preferred_states' && !resolvedOptions){
+        resolvedOptions = _BC_AI_US_STATES;
+        resolvedKind = 'multienum';
       }
+      const inputHtml = _bcAiBuildEditor(col, propVal, resolvedKind, resolvedOptions);
       valCell = `<div style="font-size:11px;color:#0f172a;font-weight:600;">${fmtVal(propVal)}</div>`;
       editorCell = inputHtml;
       acceptCell = `<input type="checkbox" data-kind="value" id="aiAccept_${col}" checked style="margin:0;cursor:pointer;"/>`;

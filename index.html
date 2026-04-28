@@ -2505,7 +2505,7 @@ async function _relListForContact(contactId){
   if(!contactId) return [];
   try {
     const rows = await _sbGet('ace_agent_contacts',
-      `select=id,user_id,since_date,notes,source,source_ref_id,created_at&contact_id=eq.${contactId}&order=since_date.asc.nullslast,created_at.asc&limit=100`);
+      `select=id,user_id,since_date,notes,source,source_ref_id,created_at,relationship_level,last_viewed_at,last_communicated_at&contact_id=eq.${contactId}&order=since_date.asc.nullslast,created_at.asc&limit=100`);
     return Array.isArray(rows) ? rows : [];
   } catch(e){ console.warn('[_relListForContact] failed:', e.message); return []; }
 }
@@ -2556,6 +2556,33 @@ async function _relUpdateRow(rowId, patch){
   catch(e){ alert('Could not save: '+e.message); return false; }
 }
 
+// v190: bump last_viewed_at / last_communicated_at on the (current user, contact)
+// junction row. Upserts the row if it doesn't exist (cheap relationship side-effect
+// — the user is engaging with the contact, so a relationship is implicit).
+// Fire-and-forget; errors logged but never thrown.
+async function _relTouchActivity(contactId, kind){
+  if(!contactId || !_currentUser?.id) return;
+  const col = kind === 'communicated' ? 'last_communicated_at' : 'last_viewed_at';
+  const now = new Date().toISOString();
+  try {
+    const existing = await _sbGet('ace_agent_contacts',
+      `select=id&user_id=eq.${_currentUser.id}&contact_id=eq.${contactId}&limit=1`);
+    if(Array.isArray(existing) && existing[0]){
+      await _sbPatch('ace_agent_contacts', existing[0].id, { [col]: now });
+    } else {
+      await _sbPost('ace_agent_contacts', {
+        user_id: _currentUser.id,
+        contact_id: contactId,
+        source: 'manual',
+        since_date: now.slice(0,10),
+        [col]: now,
+      });
+    }
+  } catch(e){
+    console.warn('[_relTouchActivity] failed:', e.message);
+  }
+}
+
 // Render the section into <div id="rp_relationships_{contactId}">.
 async function _relRenderForContact(contactId){
   const host = document.getElementById('rp_relationships_'+contactId);
@@ -2573,12 +2600,28 @@ async function _relRenderForContact(contactId){
     'fub_import_backfill': '📥 FUB Import',
   };
 
+  const fmtTs = ts => {
+    if(!ts) return '—';
+    try {
+      const d = new Date(ts);
+      const now = new Date();
+      const sameDay = d.toDateString() === now.toDateString();
+      const opts = sameDay
+        ? { hour:'numeric', minute:'2-digit' }
+        : { month:'short', day:'numeric', year: d.getFullYear()===now.getFullYear()?undefined:'2-digit' };
+      return d.toLocaleString('en-US', opts);
+    } catch(_){ return '—'; }
+  };
+
   const rowsHtml = rows.map(r => {
     const u = userById.get(r.user_id);
     const name  = u ? (u.name || u.fub_name) : ('user '+String(r.user_id).slice(0,8));
     const since = r.since_date || '';
     const notes = r.notes || '';
     const src   = sourceLabel[r.source] || (r.source ? esc(r.source) : '—');
+    const lvl   = (r.relationship_level==null) ? '' : String(r.relationship_level);
+    const levelOpts = [['','—']].concat([1,2,3,4,5,6,7,8,9,10].map(n => [String(n), String(n)]))
+      .map(([v,l]) => `<option value="${v}"${v===lvl?' selected':''}>${l}</option>`).join('');
     return `
       <div style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;padding:10px 12px;margin-bottom:8px;">
         <div style="display:flex;align-items:center;justify-content:space-between;gap:8px;margin-bottom:6px;">
@@ -2590,11 +2633,20 @@ async function _relRenderForContact(contactId){
             title="Remove relationship"
             style="background:none;border:none;color:#94a3b8;font-size:14px;cursor:pointer;padding:2px 6px;">✕</button>
         </div>
-        <div style="display:flex;gap:10px;align-items:center;margin-bottom:6px;">
+        <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:6px;">
           <label style="font-size:10px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.04em;">Since</label>
           <input type="date" value="${esc(since)}"
             onchange="_relRowPatch('${r.id}', {since_date: this.value || null})"
             style="font-size:12px;padding:3px 6px;border:1px solid #cbd5e1;border-radius:5px;outline:none;" />
+          <label style="font-size:10px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:.04em;margin-left:6px;" title="Relationship strength 1-10">Level</label>
+          <select onchange="_relRowPatch('${r.id}', {relationship_level: this.value===''?null:parseInt(this.value,10)})"
+            style="font-size:12px;padding:3px 6px;border:1px solid #cbd5e1;border-radius:5px;outline:none;background:#fff;">
+            ${levelOpts}
+          </select>
+        </div>
+        <div style="display:flex;gap:14px;flex-wrap:wrap;font-size:10px;color:#64748b;margin-bottom:6px;">
+          <span>👁 Last viewed: <strong style="color:#334155;font-weight:600;">${fmtTs(r.last_viewed_at)}</strong></span>
+          <span>💬 Last comm: <strong style="color:#334155;font-weight:600;">${fmtTs(r.last_communicated_at)}</strong></span>
         </div>
         <textarea rows="2" placeholder="Relationship notes — e.g. 'Met at NJBIZ event, interested in self-storage', referral source, deal preferences…"
           onchange="_relRowPatch('${r.id}', {notes: this.value || null})"
@@ -15468,6 +15520,8 @@ async function _sendModalConfirm(){
       if(typeof _autoLogEmailPitch === 'function'){
         _autoLogEmailPitch({ dealId: _autoDealId, contact: _autoRecipient, subject: _autoSubject });
       }
+      // v190: bump last_communicated_at on the agent-contact junction
+      if(_autoRecipient?.id) _relTouchActivity(_autoRecipient.id, 'communicated');
     } else if(result.fallback){
       showSaveConfirm('✎ Opened Gmail compose (connect Gmail in sidebar for 1-click send)');
       _closeSendModal();
@@ -27720,9 +27774,9 @@ async function showContactsPage(){
 
   document.getElementById('mainArea').innerHTML = `
     <div style="padding:16px;display:flex;flex-direction:column;height:100%;min-height:0;box-sizing:border-box;">
-      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;flex-shrink:0;">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px;flex-shrink:0;flex-wrap:wrap;gap:8px;">
         <div style="font-size:16px;font-weight:bold;color:#1a3a6e;">👥 Contacts</div>
-        <div style="display:flex;gap:8px;align-items:center;">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
           <div style="display:flex;">
             <button id="cscope_all"  data-base-style="${scopeBtnAllBase}"  style="${scopeBtnAllBase}${_contactScope==='all'?activeStyle:idleStyle}"  onclick="setContactScope('all')"  title="Show every contact in the system">All Contacts</button>
             <button id="cscope_mine" data-base-style="${scopeBtnMineBase}" style="${scopeBtnMineBase}${_contactScope==='mine'?activeStyle:idleStyle}" onclick="setContactScope('mine')" title="Your personal relationships + contacts tied to your deals">★ My Contacts</button>
@@ -27740,10 +27794,35 @@ async function showContactsPage(){
           <button class="save-btn" onclick="_contactsLastLoadMs=0;showContactsPage()" style="padding:5px 10px;" title="Force reload from database">↻</button>
         </div>
       </div>
+      <div id="contactsAgentBar" style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;margin-bottom:10px;padding:8px 10px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;flex-shrink:0;">
+        <span style="font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.04em;">🤝 Agent View</span>
+        <select id="contactsAgentFilter" class="form-select" style="width:200px;font-size:12px;" onchange="_contactsOnAgentChange()">
+          <option value="">— Select an agent —</option>
+        </select>
+        <span id="contactsAgentExtras" style="display:none;align-items:center;gap:8px;flex-wrap:wrap;">
+          <label style="font-size:11px;color:#64748b;font-weight:600;">Sort:</label>
+          <select id="contactsAgentSort" class="form-select" style="width:170px;font-size:12px;" onchange="_contactsApplyAgentView()">
+            <option value="level_desc">Relationship Level (high→low)</option>
+            <option value="since_desc">Relationship Date (newest)</option>
+            <option value="since_asc">Relationship Date (oldest)</option>
+            <option value="viewed_desc">Last Viewed (recent)</option>
+            <option value="comm_desc">Last Communicated (recent)</option>
+            <option value="name_asc">Name (A→Z)</option>
+          </select>
+          <label style="font-size:11px;color:#64748b;font-weight:600;">Min Level:</label>
+          <select id="contactsAgentMinLevel" class="form-select" style="width:90px;font-size:12px;" onchange="_contactsApplyAgentView()">
+            <option value="">Any</option>
+            ${[1,2,3,4,5,6,7,8,9,10].map(n => `<option value="${n}">${n}+</option>`).join('')}
+          </select>
+          <button onclick="_contactsClearAgentView()" style="background:#fff;border:1px solid #cbd5e1;color:#334155;padding:4px 10px;font-size:11px;border-radius:5px;cursor:pointer;">Clear</button>
+          <span id="contactsAgentCount" style="font-size:11px;color:#64748b;margin-left:6px;"></span>
+        </span>
+      </div>
       <div id="contactsTableWrap" style="flex:1;overflow:auto;min-height:0;">
         <div style="text-align:center;padding:30px;color:#888;font-size:12px;">⏳ Loading contacts...</div>
       </div>
     </div>`;
+  _contactsPopulateAgentFilter();
 
   const cfg = getConfig();
   if(!cfg.key && !isSupabase()){ document.getElementById('contactsTableWrap').innerHTML='<div style="padding:20px;color:#c00;">Connect your database first (Settings)</div>'; return; }
@@ -27863,6 +27942,102 @@ async function _loadMoreContacts(){
 // Default is driven by _viewMode: My Deals → 'mine', All Deals → 'all'.
 // User can override via the segmented toggle in the Contacts header.
 let _contactScope = 'all';
+
+// v190: agent-view state. When set, the contacts list is restricted to the
+// picked agent's ace_agent_contacts rows, and can be sorted by relationship
+// attributes (level, since, last viewed, last communicated).
+let _contactsAgentFilterId = '';        // user_id of selected agent, '' = none
+let _contactsAgentRelMap = new Map();   // contact_id -> { id, relationship_level, since_date, last_viewed_at, last_communicated_at }
+
+async function _contactsPopulateAgentFilter(){
+  const sel = document.getElementById('contactsAgentFilter');
+  if(!sel) return;
+  const users = await _relLoadUsers();
+  const opts = ['<option value="">— Select an agent —</option>']
+    .concat(users.map(u => {
+      const name = u.name || u.fub_name || ('user '+String(u.id).slice(0,6));
+      const role = u.role ? ' · '+u.role : '';
+      return `<option value="${u.id}">${name}${role}</option>`;
+    }));
+  sel.innerHTML = opts.join('');
+  if(_contactsAgentFilterId) sel.value = _contactsAgentFilterId;
+  // Reflect open state if a previous agent was already selected
+  document.getElementById('contactsAgentExtras').style.display = _contactsAgentFilterId ? 'flex' : 'none';
+  if(_contactsAgentFilterId) await _contactsLoadAgentRelMap(_contactsAgentFilterId);
+}
+
+async function _contactsLoadAgentRelMap(userId){
+  _contactsAgentRelMap = new Map();
+  if(!userId) return;
+  try {
+    const rows = await _sbGet('ace_agent_contacts',
+      `select=id,contact_id,relationship_level,since_date,last_viewed_at,last_communicated_at&user_id=eq.${userId}&limit=20000`);
+    (rows||[]).forEach(r => _contactsAgentRelMap.set(r.contact_id, r));
+  } catch(e){
+    console.warn('[_contactsLoadAgentRelMap] failed:', e.message);
+  }
+}
+
+window._contactsOnAgentChange = async function(){
+  const sel = document.getElementById('contactsAgentFilter');
+  const userId = sel?.value || '';
+  _contactsAgentFilterId = userId;
+  document.getElementById('contactsAgentExtras').style.display = userId ? 'flex' : 'none';
+  if(userId){
+    await _contactsLoadAgentRelMap(userId);
+    await _contactsHydrateMissingForAgentView();
+  } else {
+    _contactsAgentRelMap = new Map();
+  }
+  filterContacts();
+};
+
+window._contactsApplyAgentView = function(){ filterContacts(); };
+
+window._contactsClearAgentView = function(){
+  _contactsAgentFilterId = '';
+  _contactsAgentRelMap = new Map();
+  const sel = document.getElementById('contactsAgentFilter'); if(sel) sel.value = '';
+  const extras = document.getElementById('contactsAgentExtras'); if(extras) extras.style.display = 'none';
+  filterContacts();
+};
+
+// Lazy-fetch contacts that the agent has relationships with but aren't in
+// allContacts (e.g. they're past the first page of the contacts cache).
+async function _contactsHydrateMissingForAgentView(){
+  if(!_contactsAgentFilterId || _contactsAgentRelMap.size === 0) return;
+  const known = new Set((allContacts||[]).map(r => r.id));
+  const missing = [];
+  for(const cid of _contactsAgentRelMap.keys()){
+    if(!known.has(cid)) missing.push(cid);
+  }
+  if(!missing.length) return;
+  try {
+    // Batch in 500-id chunks (PostgREST URL length safety)
+    const CHUNK = 500;
+    for(let i=0; i<missing.length; i+=CHUNK){
+      const ids = missing.slice(i, i+CHUNK).join(',');
+      const rows = await _sbGet(SB_TABLES.contacts,
+        `select=id,name,phone_number,secondary_phone,email,company,contact_notes,type,date_added,import_source,fub_contact_id&id=in.(${ids})&deleted_at=is.null`);
+      (rows||[]).forEach(row => {
+        if(known.has(row.id)) return;
+        allContacts.push({ id: row.id, fields: {
+          'Name': row.name, 'Phone Number': row.phone_number,
+          'Secondary Phone Number': row.secondary_phone,
+          'Email': row.email, 'Company': row.company,
+          'Contact Notes': row.contact_notes,
+          'Type': row.type || [],
+          'Date Added': row.date_added,
+          'Import Source': row.import_source || '',
+          '_fubContactId': row.fub_contact_id || null
+        }});
+        known.add(row.id);
+      });
+    }
+  } catch(e){
+    console.warn('[_contactsHydrateMissingForAgentView] failed:', e.message);
+  }
+}
 
 function setContactScope(scope){
   _contactScope = scope;
@@ -28143,33 +28318,72 @@ async function _liveSearchContacts(q){
     }));
 
     // Apply client-side filters we couldn't push to server: type (array),
-    // source multi-select, mine-scope
+    // source multi-select, mine-scope, v190 agent-view + min level
     const mineIds   = _contactScope === 'mine' ? _computeMyContactIds() : null;
     const selSources = _msGetSelected('cs');
+    const agentActive = !!_contactsAgentFilterId;
+    const minLevelStr = agentActive ? (document.getElementById('contactsAgentMinLevel')?.value || '') : '';
+    const minLevel    = minLevelStr ? parseInt(minLevelStr, 10) : 0;
     const filtered = adapted.filter(r => {
       const f = r.fields;
       const matchT = !typeFilterVal || (f.Type || []).includes(typeFilterVal);
-      const matchScope = !mineIds || mineIds.has(r.id);
+      const matchScope = agentActive ? _contactsAgentRelMap.has(r.id) : (!mineIds || mineIds.has(r.id));
       const matchSrc = !selSources || selSources.includes(f['Import Source'] || '(none)');
-      return matchT && matchScope && matchSrc;
+      let matchLvl = true;
+      if(agentActive && minLevel > 0){
+        const rel = _contactsAgentRelMap.get(r.id);
+        const lvl = rel?.relationship_level;
+        matchLvl = (lvl != null && lvl >= minLevel);
+      }
+      return matchT && matchScope && matchSrc && matchLvl;
     });
 
-    // Apply the same sort as filterContacts for consistency
-    const sortKey = {
-      name:    r => (r.fields.Name||'').toLowerCase(),
-      type:    r => (r.fields.Type||[]).join(',').toLowerCase(),
-      phone:   r => (r.fields['Phone Number']||'').toLowerCase(),
-      email:   r => (r.fields.Email||'').toLowerCase(),
-      company: r => (r.fields.Company||'').toLowerCase(),
-      notes:   r => (r.fields['Contact Notes']||'').toLowerCase(),
-      date:    r => r.fields['Date Added']||''
-    }[_contactsSort.col] || (r => (r.fields.Name||'').toLowerCase());
-    filtered.sort((a, b) => {
-      const av = sortKey(a), bv = sortKey(b);
-      if(av < bv) return _contactsSort.dir === 'asc' ? -1 : 1;
-      if(av > bv) return _contactsSort.dir === 'asc' ? 1 : -1;
-      return 0;
-    });
+    if(agentActive){
+      const mode = document.getElementById('contactsAgentSort')?.value || 'level_desc';
+      const get  = id => _contactsAgentRelMap.get(id) || {};
+      const tsNum = v => v ? new Date(v).getTime() : 0;
+      filtered.sort((a, b) => {
+        const ra = get(a.id), rb = get(b.id);
+        if(mode === 'level_desc'){
+          const av = ra.relationship_level==null ? -1 : ra.relationship_level;
+          const bv = rb.relationship_level==null ? -1 : rb.relationship_level;
+          if(av !== bv) return bv - av;
+        } else if(mode === 'since_desc' || mode === 'since_asc'){
+          const av = ra.since_date || '';
+          const bv = rb.since_date || '';
+          if(av !== bv) return mode === 'since_desc' ? (av < bv ? 1 : -1) : (av < bv ? -1 : 1);
+        } else if(mode === 'viewed_desc'){
+          const av = tsNum(ra.last_viewed_at), bv = tsNum(rb.last_viewed_at);
+          if(av !== bv) return bv - av;
+        } else if(mode === 'comm_desc'){
+          const av = tsNum(ra.last_communicated_at), bv = tsNum(rb.last_communicated_at);
+          if(av !== bv) return bv - av;
+        }
+        const an = (a.fields.Name||'').toLowerCase();
+        const bn = (b.fields.Name||'').toLowerCase();
+        return an < bn ? -1 : (an > bn ? 1 : 0);
+      });
+    } else {
+      // Apply the same sort as filterContacts for consistency
+      const sortKey = {
+        name:    r => (r.fields.Name||'').toLowerCase(),
+        type:    r => (r.fields.Type||[]).join(',').toLowerCase(),
+        phone:   r => (r.fields['Phone Number']||'').toLowerCase(),
+        email:   r => (r.fields.Email||'').toLowerCase(),
+        company: r => (r.fields.Company||'').toLowerCase(),
+        notes:   r => (r.fields['Contact Notes']||'').toLowerCase(),
+        date:    r => r.fields['Date Added']||''
+      }[_contactsSort.col] || (r => (r.fields.Name||'').toLowerCase());
+      filtered.sort((a, b) => {
+        const av = sortKey(a), bv = sortKey(b);
+        if(av < bv) return _contactsSort.dir === 'asc' ? -1 : 1;
+        if(av > bv) return _contactsSort.dir === 'asc' ? 1 : -1;
+        return 0;
+      });
+    }
+
+    const cnt = document.getElementById('contactsAgentCount');
+    if(cnt) cnt.textContent = agentActive ? `${filtered.length} relationship${filtered.length===1?'':'s'}` : '';
 
     renderContactsTable(filtered);
   } catch(e){
@@ -28187,32 +28401,74 @@ function filterContacts(){
   const mineIds = _contactScope === 'mine' ? _computeMyContactIds() : null;
   const selSources = _msGetSelected('cs');
 
-  const filtered = allContacts.filter(r=>{
+  // v190: agent-view filter overrides the mine/all scope (when active)
+  const agentActive = !!_contactsAgentFilterId;
+  const minLevelStr = agentActive ? (document.getElementById('contactsAgentMinLevel')?.value || '') : '';
+  const minLevel    = minLevelStr ? parseInt(minLevelStr, 10) : 0;
+
+  let filtered = allContacts.filter(r=>{
     const f = r.fields;
     const matchQ = !q || [f.Name, f['Phone Number'], f.Company, f.Email, f['Contact Notes']]
       .some(v => v && String(v).toLowerCase().includes(q));
     const matchT = !type || (f.Type||[]).includes(type);
-    const matchScope = !mineIds || mineIds.has(r.id);
+    const matchScope = agentActive ? _contactsAgentRelMap.has(r.id) : (!mineIds || mineIds.has(r.id));
     const matchSrc = !selSources || selSources.includes(f['Import Source'] || '(none)');
-    return matchQ && matchT && matchScope && matchSrc;
+    let matchLvl = true;
+    if(agentActive && minLevel > 0){
+      const rel = _contactsAgentRelMap.get(r.id);
+      const lvl = rel?.relationship_level;
+      matchLvl = (lvl != null && lvl >= minLevel);
+    }
+    return matchQ && matchT && matchScope && matchSrc && matchLvl;
   });
 
-  // v103: apply sort
-  const sortKey = {
-    name:    r => (r.fields.Name||'').toLowerCase(),
-    type:    r => (r.fields.Type||[]).join(',').toLowerCase(),
-    phone:   r => (r.fields['Phone Number']||'').toLowerCase(),
-    email:   r => (r.fields.Email||'').toLowerCase(),
-    company: r => (r.fields.Company||'').toLowerCase(),
-    notes:   r => (r.fields['Contact Notes']||'').toLowerCase(),
-    date:    r => r.fields['Date Added']||''
-  }[_contactsSort.col] || (r => (r.fields.Name||'').toLowerCase());
-  filtered.sort((a, b) => {
-    const av = sortKey(a), bv = sortKey(b);
-    if(av < bv) return _contactsSort.dir === 'asc' ? -1 : 1;
-    if(av > bv) return _contactsSort.dir === 'asc' ? 1 : -1;
-    return 0;
-  });
+  if(agentActive){
+    const mode = document.getElementById('contactsAgentSort')?.value || 'level_desc';
+    const get  = id => _contactsAgentRelMap.get(id) || {};
+    const tsNum = v => v ? new Date(v).getTime() : 0;
+    filtered.sort((a, b) => {
+      const ra = get(a.id), rb = get(b.id);
+      if(mode === 'level_desc'){
+        const av = ra.relationship_level==null ? -1 : ra.relationship_level;
+        const bv = rb.relationship_level==null ? -1 : rb.relationship_level;
+        if(av !== bv) return bv - av;
+      } else if(mode === 'since_desc' || mode === 'since_asc'){
+        const av = ra.since_date || '';
+        const bv = rb.since_date || '';
+        if(av !== bv) return mode === 'since_desc' ? (av < bv ? 1 : -1) : (av < bv ? -1 : 1);
+      } else if(mode === 'viewed_desc'){
+        const av = tsNum(ra.last_viewed_at), bv = tsNum(rb.last_viewed_at);
+        if(av !== bv) return bv - av;
+      } else if(mode === 'comm_desc'){
+        const av = tsNum(ra.last_communicated_at), bv = tsNum(rb.last_communicated_at);
+        if(av !== bv) return bv - av;
+      }
+      // Tiebreak / 'name_asc' fallback
+      const an = (a.fields.Name||'').toLowerCase();
+      const bn = (b.fields.Name||'').toLowerCase();
+      return an < bn ? -1 : (an > bn ? 1 : 0);
+    });
+  } else {
+    // v103: apply sort
+    const sortKey = {
+      name:    r => (r.fields.Name||'').toLowerCase(),
+      type:    r => (r.fields.Type||[]).join(',').toLowerCase(),
+      phone:   r => (r.fields['Phone Number']||'').toLowerCase(),
+      email:   r => (r.fields.Email||'').toLowerCase(),
+      company: r => (r.fields.Company||'').toLowerCase(),
+      notes:   r => (r.fields['Contact Notes']||'').toLowerCase(),
+      date:    r => r.fields['Date Added']||''
+    }[_contactsSort.col] || (r => (r.fields.Name||'').toLowerCase());
+    filtered.sort((a, b) => {
+      const av = sortKey(a), bv = sortKey(b);
+      if(av < bv) return _contactsSort.dir === 'asc' ? -1 : 1;
+      if(av > bv) return _contactsSort.dir === 'asc' ? 1 : -1;
+      return 0;
+    });
+  }
+
+  const cnt = document.getElementById('contactsAgentCount');
+  if(cnt) cnt.textContent = agentActive ? `${filtered.length} relationship${filtered.length===1?'':'s'}` : '';
 
   renderContactsTable(filtered);
 }
@@ -28280,6 +28536,27 @@ function renderContactsTable(records){
   // Use cached deal maps so we don't rebuild them every keystroke
   const { dealMap, contactToDeals } = _getContactsDealMaps();
 
+  // v190: agent-view extra columns (level + last comm) when an agent is selected
+  const agentActive = !!_contactsAgentFilterId;
+  const fmtTsShort = ts => {
+    if(!ts) return '<span style="color:#cbd5e1;">—</span>';
+    try {
+      const d = new Date(ts), now = new Date();
+      const diff = (now - d) / 86400000;
+      if(diff < 1) return d.toLocaleTimeString('en-US',{hour:'numeric',minute:'2-digit'});
+      if(diff < 7) return Math.floor(diff)+'d ago';
+      return d.toLocaleDateString('en-US',{month:'short',day:'numeric',year: d.getFullYear()===now.getFullYear()?undefined:'2-digit'});
+    } catch(_){ return '—'; }
+  };
+  const lvlBadge = lvl => {
+    if(lvl==null) return '<span style="color:#cbd5e1;">—</span>';
+    let bg = '#e2e8f0', fg = '#475569';
+    if(lvl >= 8){ bg = '#dcfce7'; fg = '#166534'; }
+    else if(lvl >= 5){ bg = '#fef3c7'; fg = '#92400e'; }
+    else if(lvl >= 1){ bg = '#fee2e2'; fg = '#991b1b'; }
+    return `<span style="display:inline-block;min-width:22px;text-align:center;padding:1px 7px;border-radius:99px;background:${bg};color:${fg};font-weight:700;font-size:10px;">${lvl}</span>`;
+  };
+
   wrap.innerHTML = `
     <div style="font-size:11px;color:#666;margin-bottom:6px;">${totalCount} contact${totalCount!==1?'s':''}${wasCapped?' <span style="color:#94a3b8;">(showing first '+HARD_CAP+' — keep typing to narrow)</span>':''}</div>
     <table style="width:100%;border-collapse:collapse;font-size:11px;">
@@ -28296,6 +28573,11 @@ function renderContactsTable(records){
             const arrow = _contactsSort.col === col ? (_contactsSort.dir === 'asc' ? ' ▲' : ' ▼') : '';
             return `<th onclick="_contactsToggleSort('${col}')" style="padding:7px 10px;text-align:left;border:1px solid #0e2244;cursor:pointer;user-select:none;${_contactsSort.col===col?'background:rgba(255,255,255,0.08);':''}" title="Click to sort by ${label}">${label}${arrow}</th>`;
           }).join('')}
+          ${agentActive ? `
+            <th style="padding:7px 10px;text-align:center;border:1px solid #0e2244;width:54px;" title="Relationship level 1-10">Lvl</th>
+            <th style="padding:7px 10px;text-align:left;border:1px solid #0e2244;width:90px;" title="Last viewed">👁 Viewed</th>
+            <th style="padding:7px 10px;text-align:left;border:1px solid #0e2244;width:90px;" title="Last communicated">💬 Comm</th>
+          ` : ''}
           <th style="padding:7px 10px;text-align:left;border:1px solid #0e2244;">Linked Properties</th>
           <th onclick="_contactsToggleSort('notes')" style="padding:7px 10px;text-align:left;border:1px solid #0e2244;cursor:pointer;user-select:none;${_contactsSort.col==='notes'?'background:rgba(255,255,255,0.08);':''}" title="Click to sort by Notes">Contact Notes${_contactsSort.col==='notes'?(_contactsSort.dir==='asc'?' ▲':' ▼'):''}</th>
           <th onclick="_contactsToggleSort('date')" style="padding:7px 10px;text-align:left;border:1px solid #0e2244;cursor:pointer;user-select:none;${_contactsSort.col==='date'?'background:rgba(255,255,255,0.08);':''}" title="Click to sort by Date Added">Date Added${_contactsSort.col==='date'?(_contactsSort.dir==='asc'?' ▲':' ▼'):''}</th>
@@ -28328,6 +28610,7 @@ function renderContactsTable(records){
             </span>`;
           }).join('');
 
+          const rel = agentActive ? _contactsAgentRelMap.get(r.id) : null;
           return `<tr style="background:${bg};cursor:pointer;" onclick="openContactModal('${r.id}')" title="Click to edit">
             <td style="padding:4px;border:1px solid #ddd;text-align:center;">
               <button onclick="event.stopPropagation();toggleContactRelationship('${r.id}',this)" title="${starTitle}" style="background:transparent;border:none;cursor:pointer;padding:2px 4px;border-radius:4px;">${starInner}</button>
@@ -28337,6 +28620,11 @@ function renderContactsTable(records){
             <td style="padding:6px 10px;border:1px solid #ddd;">${f['Phone Number']||'—'}</td>
             <td style="padding:6px 10px;border:1px solid #ddd;">${f.Email||'—'}</td>
             <td style="padding:6px 10px;border:1px solid #ddd;">${f.Company||'—'}</td>
+            ${agentActive ? `
+              <td style="padding:6px 8px;border:1px solid #ddd;text-align:center;">${lvlBadge(rel?.relationship_level)}</td>
+              <td style="padding:6px 8px;border:1px solid #ddd;color:#555;font-size:10px;">${fmtTsShort(rel?.last_viewed_at)}</td>
+              <td style="padding:6px 8px;border:1px solid #ddd;color:#555;font-size:10px;">${fmtTsShort(rel?.last_communicated_at)}</td>
+            ` : ''}
             <td style="padding:6px 10px;border:1px solid #ddd;">${propLinks||'<span style="color:#aaa;">—</span>'}</td>
             <td style="padding:6px 10px;border:1px solid #ddd;color:#555;">${notes||'—'}</td>
             <td style="padding:6px 10px;border:1px solid #ddd;color:#888;">${f['Date Added']||'—'}</td>
@@ -28636,6 +28924,10 @@ async function showContactDetailPage(recordId, returnTo){
   }
   const f = existing.fields||{};
   const types = ['Seller','Buyer','1031','Other'];
+
+  // v190: fire-and-forget bump of last_viewed_at on the (current user, contact)
+  // junction row so the agent-view "Last Viewed" sort surfaces recent activity.
+  _relTouchActivity(existing.id, 'viewed');
 
   // Resolve the Back button target. Default: back to Contacts page.
   // If returnTo is 'batch' and we're mid-batch-review, go back to that buyer.
@@ -48554,6 +48846,17 @@ async function toggleTaskDone(taskId, currentStatus, source){
     _globalTasksHandleStatusChange(taskId, newStatus);
     // v175: status lives on the cached row used by the edit modal too.
     _taskCachePatchRow(taskId, { status: newStatus });
+    // v190: when marking done, if this task has a communication type of
+    // call/email/text and is linked to a contact, bump last_communicated_at
+    // on the agent-contact junction so the Contacts page surfaces recent activity.
+    if(newStatus === 'Done'){
+      const cached = _taskCacheGet(taskId);
+      const ct = (cached?.row?.communication_type || '').toLowerCase();
+      const cid = cached?.row?.contact_id;
+      if(cid && (ct === 'call' || ct === 'email' || ct === 'text')){
+        _relTouchActivity(cid, 'communicated');
+      }
+    }
     if(typeof showSaveConfirm === 'function'){
       showSaveConfirm(newStatus === 'Done' ? '✓ Task completed' : '↩ Task reopened');
     }

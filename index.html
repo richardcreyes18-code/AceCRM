@@ -39785,6 +39785,9 @@ async function bcOpenExpanded(recordId){
             <button onclick="bcSaveExpanded('${recordId}')" style="background:linear-gradient(180deg,#60c060,#409040);color:#fff;border:1px solid #206020;padding:6px 22px;font-size:12px;font-weight:bold;border-radius:3px;cursor:pointer;">
               ✓ Save
             </button>
+            <button onclick="_bcAiAutoFill('${recordId}')" title="Use AI to fill every buyer-criteria field from communication + contact notes" style="background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border:none;padding:6px 16px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;white-space:nowrap;">
+              ✦ AI Auto-Fill
+            </button>
             <button onclick="showBuyerMatchFinder('${recordId}')" style="background:var(--primary);color:#fff;border:none;padding:6px 18px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;white-space:nowrap;">
               Find Matching Deals →
             </button>
@@ -41073,6 +41076,375 @@ function _bcAutoSave(){
   if(msg){ msg.textContent='⏳ Saving...'; msg.style.display='inline'; msg.style.color='#90d4ff'; }
   _bcAutoSaveTimer = setTimeout(()=>{ bcSaveExpanded(_bcCurrentRecordId, true); }, 1200);
 }
+
+// v204: AI Auto-Fill for Buyer Criteria — mirror of _aiAutoFillDeal but
+// targets the ace_buyer_criteria row + ai-parse-buyer-criteria edge fn.
+// Sources read by the server: linked contact's fub_calls, fub_notes,
+// ace_contact_notes, contact.contact_notes, plus the user's free-text
+// "additional context" entered in the prompt modal below.
+window._bcAiAutoFill = function(bcId){
+  const modal = document.createElement('div');
+  modal.id = 'bcAiPromptModal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:99998;display:flex;align-items:center;justify-content:center;padding:20px;';
+  modal.onclick = (e) => { if(e.target === modal) modal.remove(); };
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;padding:26px 28px;max-width:560px;width:96%;box-shadow:0 25px 60px rgba(0,0,0,0.25);font-family:'Inter',system-ui,sans-serif;">
+      <div style="font-size:18px;font-weight:700;color:#0f172a;margin-bottom:6px;">✦ AI Auto-Fill Buyer Criteria</div>
+      <div style="font-size:12px;color:#64748b;line-height:1.5;margin-bottom:14px;">
+        Claude will read this buyer's call notes, FUB notes, and your contact notes,
+        then propose values for every buyer-criteria field. Add any extra context
+        below — pasted email threads, voicemail transcripts, etc. Optional.
+      </div>
+      <textarea id="bcAiAdditionalText" placeholder="Paste any additional context here (optional)…"
+        style="width:100%;height:160px;font-size:12px;font-family:inherit;border:1px solid #cbd5e1;border-radius:8px;padding:10px;resize:vertical;box-sizing:border-box;"></textarea>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:12px;font-size:11px;color:#475569;">
+        <input type="checkbox" id="bcAiOnlyFillEmpty" checked style="margin:0;"/>
+        <label for="bcAiOnlyFillEmpty" style="cursor:pointer;">Only fill empty fields (uncheck to overwrite existing values too)</label>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px;">
+        <button onclick="document.getElementById('bcAiPromptModal')?.remove()"
+          style="background:transparent;border:1px solid #cbd5e1;color:#64748b;padding:8px 14px;font-size:12px;border-radius:8px;cursor:pointer;font-family:inherit;">Cancel</button>
+        <button onclick="_bcAiAutoFillRun('${bcId}', this)"
+          style="background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border:none;padding:8px 18px;font-size:12px;font-weight:700;border-radius:8px;cursor:pointer;font-family:inherit;">✦ Run AI Auto-Fill</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+};
+
+window._bcAiAutoFillRun = async function(bcId, btn){
+  const promptModal = document.getElementById('bcAiPromptModal');
+  const additionalText = document.getElementById('bcAiAdditionalText')?.value || '';
+  const onlyFillEmpty = document.getElementById('bcAiOnlyFillEmpty')?.checked === true;
+  if(btn){ btn.disabled = true; btn.textContent = '⏳ Reading…'; }
+  // Swap the prompt modal for a loading state — same spinner the deal
+  // version uses so the experience is consistent.
+  if(promptModal){
+    promptModal.innerHTML = `
+      <div style="background:#fff;border-radius:12px;padding:30px;max-width:500px;text-align:center;box-shadow:0 25px 60px rgba(0,0,0,0.25);font-family:'Inter',system-ui,sans-serif;">
+        <div style="font-size:28px;margin-bottom:10px;">✦</div>
+        <div style="font-size:14px;font-weight:600;color:#0f172a;margin-bottom:6px;">Reading the buyer…</div>
+        <div style="font-size:12px;color:#64748b;">Claude is scanning communication notes for buyer-criteria fields. Takes 10–20 seconds.</div>
+      </div>`;
+  }
+  const cfg = getConfig();
+  let resp;
+  try {
+    const r = await fetch(`${cfg.url}/functions/v1/ai-parse-buyer-criteria`, {
+      method: 'POST',
+      headers: { 'Content-Type':'application/json', apikey: cfg.key, Authorization: 'Bearer '+cfg.key },
+      body: JSON.stringify({ buyer_criteria_id: bcId, dry_run: true, only_fill_empty: onlyFillEmpty, additional_text: additionalText }),
+    });
+    resp = await r.json();
+    if(!r.ok || !resp.ok) throw new Error(resp.error || `HTTP ${r.status}`);
+  } catch(e){
+    if(promptModal) promptModal.remove();
+    alert('AI parse failed: ' + (e.message || e));
+    return;
+  }
+  // Render the review modal in place of the prompt modal.
+  _bcAiRenderReviewModal(bcId, resp, promptModal);
+};
+
+function _bcAiRenderReviewModal(bcId, resp, hostModal){
+  const proposed = resp.proposed_changes || {};
+  const naProposals = Array.isArray(resp.na_proposals) ? resp.na_proposals : [];
+  const currentNa = Array.isArray(resp.current_na_fields) ? resp.current_na_fields : [];
+  const uncertain = Array.isArray(resp.uncertain_fields) ? resp.uncertain_fields : [];
+  const all = Array.isArray(resp.all_fields) ? resp.all_fields : [];
+  const proposedCount = Object.keys(proposed).length;
+  const naProposedCount = naProposals.length;
+  const currentNaSet = new Set(currentNa);
+  const naProposalsByCol = {}; for(const p of naProposals){ naProposalsByCol[p.col] = p; }
+
+  const fmtVal = (v) => {
+    if(v === null || v === undefined || v === '') return '<span style="color:#cbd5e1;">—</span>';
+    if(typeof v === 'boolean') return v ? '✓ Yes' : '✗ No';
+    if(typeof v === 'number') return Number.isInteger(v) ? v.toLocaleString() : String(v);
+    return String(v).slice(0, 90).replace(/[<&]/g, c => c==='<'?'&lt;':'&amp;');
+  };
+  const esc = s => String(s==null?'':s).replace(/[<&]/g, c => c==='<'?'&lt;':'&amp;').replace(/"/g,'&quot;');
+
+  const groupOrder = ['Asset Types','Pricing','Location','Multifamily','Warehouse','Office','Retail','Shopping Center','Mixed Use','Land','Automotive','Special','Misc'];
+  const groups = {};
+  for(const f of all){ (groups[f.group] = groups[f.group] || []).push(f); }
+  const orderedGroups = groupOrder.filter(g => groups[g]).concat(Object.keys(groups).filter(g => !groupOrder.includes(g)));
+
+  const rowHtml = (f) => {
+    const col = f.col;
+    const propEntry = proposed[col];
+    const naEntry = naProposalsByCol[col];
+    const isCurrentNa = currentNaSet.has(col);
+    const before = (f.before === null || f.before === undefined) ? '' : f.before;
+    let stateLabel = '';
+    let valCell = '';
+    let editorCell = '';
+    let acceptCell = '';
+    if(propEntry){
+      stateLabel = '<span style="font-size:9px;color:#15803d;background:#dcfce7;border:1px solid #86efac;border-radius:99px;padding:1px 6px;">applied</span>';
+      const propVal = propEntry.proposed;
+      let editType = f.type || 'text';
+      if(editType === 'csv') editType = 'text';
+      let inputHtml;
+      if(editType === 'boolean'){
+        inputHtml = `<select id="aiVal_${col}" data-edit-type="boolean" style="width:100%;padding:5px 8px;font-size:11px;border:1px solid #cbd5e1;border-radius:5px;">
+          <option value="true" ${propVal===true?'selected':''}>Yes</option>
+          <option value="false" ${propVal===false?'selected':''}>No</option>
+        </select>`;
+      } else if(editType === 'number'){
+        inputHtml = `<input id="aiVal_${col}" data-edit-type="number" value="${esc(propVal)}" style="width:100%;padding:5px 8px;font-size:11px;border:1px solid #cbd5e1;border-radius:5px;"/>`;
+      } else {
+        inputHtml = `<input id="aiVal_${col}" data-edit-type="text" value="${esc(propVal)}" style="width:100%;padding:5px 8px;font-size:11px;border:1px solid #cbd5e1;border-radius:5px;"/>`;
+      }
+      valCell = `<div style="font-size:11px;color:#0f172a;font-weight:600;">${fmtVal(propVal)}</div>`;
+      editorCell = inputHtml;
+      acceptCell = `<input type="checkbox" data-kind="value" id="aiAccept_${col}" checked style="margin:0;cursor:pointer;"/>`;
+    } else if(naEntry){
+      stateLabel = '<span style="font-size:9px;color:#7c3aed;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:99px;padding:1px 6px;">N/A</span>';
+      valCell = `<span style="font-size:11px;color:#7c3aed;font-style:italic;">No preference</span>`;
+      editorCell = `<span style="font-size:10px;color:#94a3b8;">— mark as N/A —</span>`;
+      acceptCell = `<input type="checkbox" data-kind="na" id="aiAccept_${col}" checked style="margin:0;cursor:pointer;"/>`;
+    } else if(isCurrentNa){
+      stateLabel = '<span style="font-size:9px;color:#94a3b8;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:99px;padding:1px 6px;">already N/A</span>';
+      valCell = `<span style="font-size:11px;color:#94a3b8;font-style:italic;">N/A</span>`;
+      editorCell = `<span style="font-size:10px;color:#cbd5e1;">— locked —</span>`;
+      acceptCell = '';
+    } else {
+      stateLabel = '<span style="font-size:9px;color:#cbd5e1;background:#f8fafc;border:1px solid #e2e8f0;border-radius:99px;padding:1px 6px;">no info</span>';
+      valCell = '<span style="color:#cbd5e1;">—</span>';
+      editorCell = '<span style="color:#cbd5e1;">—</span>';
+      acceptCell = '';
+    }
+    const explanation = (propEntry && propEntry.explanation) || (naEntry && naEntry.explanation) || '';
+    return `<tr style="border-top:1px solid #f1f5f9;${(propEntry||naEntry)?'':'opacity:0.5;'}">
+      <td style="padding:7px 8px;font-size:11px;color:#0f172a;font-weight:500;vertical-align:top;width:160px;">
+        ${esc(f.label || col)}<br>
+        <span style="font-size:9px;color:#94a3b8;font-family:ui-monospace,Menlo,monospace;">${esc(col)}</span>
+      </td>
+      <td style="padding:7px 8px;font-size:11px;color:#475569;vertical-align:top;width:130px;word-break:break-word;">${fmtVal(before)}</td>
+      <td style="padding:7px 8px;vertical-align:top;width:160px;word-break:break-word;">${valCell}</td>
+      <td style="padding:7px 8px;vertical-align:top;width:200px;">${editorCell}</td>
+      <td style="padding:7px 8px;font-size:10px;color:#475569;font-style:italic;line-height:1.4;vertical-align:top;word-break:break-word;">${explanation ? esc(explanation) : '<span style="color:#cbd5e1;font-style:normal;">—</span>'}</td>
+      <td style="padding:7px 8px;text-align:center;vertical-align:top;width:90px;">${stateLabel}</td>
+      <td style="padding:7px 8px;text-align:center;vertical-align:top;width:50px;">${acceptCell}</td>
+    </tr>`;
+  };
+
+  const groupBlocks = orderedGroups.map(g => {
+    const rows = groups[g].map(rowHtml).join('');
+    const proposedHere = groups[g].filter(f => proposed[f.col]).length;
+    const naHere = groups[g].filter(f => naProposalsByCol[f.col]).length;
+    const summary = `${proposedHere} suggested${naHere?` · ${naHere} N/A`:''}`;
+    return `<details ${proposedHere||naHere?'open':''} style="background:#fff;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:10px;overflow:hidden;">
+      <summary style="padding:9px 14px;cursor:pointer;font-size:12px;font-weight:700;color:#0f172a;background:#f8fafc;display:flex;justify-content:space-between;align-items:center;">
+        <span>${esc(g)}</span>
+        <span style="font-size:10px;color:#64748b;font-weight:500;">${summary}</span>
+      </summary>
+      <div style="overflow-x:auto;">
+        <table style="width:100%;border-collapse:collapse;font-size:11px;min-width:920px;">
+          <thead>
+            <tr style="background:#fafbfc;font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.05em;">
+              <th style="padding:7px 8px;text-align:left;border-bottom:1px solid #e2e8f0;">Field</th>
+              <th style="padding:7px 8px;text-align:left;border-bottom:1px solid #e2e8f0;">Before</th>
+              <th style="padding:7px 8px;text-align:left;border-bottom:1px solid #e2e8f0;">AI Suggestion</th>
+              <th style="padding:7px 8px;text-align:left;border-bottom:1px solid #e2e8f0;">Edit</th>
+              <th style="padding:7px 8px;text-align:left;border-bottom:1px solid #e2e8f0;">Why</th>
+              <th style="padding:7px 8px;text-align:center;border-bottom:1px solid #e2e8f0;width:90px;">Status</th>
+              <th style="padding:7px 8px;text-align:center;border-bottom:1px solid #e2e8f0;width:50px;">Apply</th>
+            </tr>
+          </thead>
+          <tbody>${rows}</tbody>
+        </table>
+      </div>
+    </details>`;
+  }).join('');
+
+  const uncertainBlock = uncertain.length ? `
+    <div style="background:#fff7ed;border:1px solid #fed7aa;border-radius:8px;padding:10px 14px;margin-bottom:10px;">
+      <div style="font-size:11px;font-weight:700;color:#9a3412;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">⚠ AI uncertain — review manually</div>
+      <ul style="margin:0;padding-left:18px;font-size:11px;color:#78350f;line-height:1.5;">
+        ${uncertain.map(u => `<li><strong>${esc(u.label||u.col||'')}:</strong> ${esc(u.why||u.reason||'')}</li>`).join('')}
+      </ul>
+    </div>` : '';
+
+  const root = hostModal || document.createElement('div');
+  if(!hostModal){
+    root.id = 'bcAiReviewModal';
+    root.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:99998;display:flex;align-items:center;justify-content:center;padding:20px;';
+    document.body.appendChild(root);
+  } else {
+    root.id = 'bcAiReviewModal';
+  }
+  root.onclick = (e) => { if(e.target === root) root.remove(); };
+  root.innerHTML = `
+    <div style="background:#fff;border-radius:12px;padding:0;max-width:1180px;width:97%;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 25px 60px rgba(0,0,0,0.25);font-family:'Inter',system-ui,sans-serif;">
+      <div style="padding:16px 22px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+        <div>
+          <div style="font-size:16px;font-weight:700;color:#0f172a;">✦ AI Auto-Fill — Review &amp; Apply</div>
+          <div style="font-size:11px;color:#64748b;margin-top:2px;">${proposedCount} value${proposedCount===1?'':'s'} suggested · ${naProposedCount} N/A · ${uncertain.length} uncertain · ${(resp.source_chars||0).toLocaleString()} chars read · ${esc(resp.model||'')}</div>
+        </div>
+        <div style="display:flex;gap:8px;">
+          <button onclick="document.getElementById('bcAiReviewModal')?.remove()"
+            style="background:transparent;border:1px solid #cbd5e1;color:#64748b;padding:7px 14px;font-size:12px;border-radius:8px;cursor:pointer;font-family:inherit;">Cancel</button>
+          <button onclick="_bcAiSelectAll(true)"
+            style="background:#f1f5f9;border:1px solid #cbd5e1;color:#0f172a;padding:7px 14px;font-size:12px;border-radius:8px;cursor:pointer;font-family:inherit;">Select all</button>
+          <button onclick="_bcAiSelectAll(false)"
+            style="background:#f1f5f9;border:1px solid #cbd5e1;color:#0f172a;padding:7px 14px;font-size:12px;border-radius:8px;cursor:pointer;font-family:inherit;">Clear</button>
+          <button onclick="_bcAiAutoFillApply('${bcId}', this)"
+            style="background:#1a3a6e;color:#fff;border:none;padding:7px 18px;font-size:12px;font-weight:700;border-radius:8px;cursor:pointer;font-family:inherit;">✓ Apply Selected</button>
+        </div>
+      </div>
+      <div style="overflow:auto;padding:18px 22px;background:#f8fafc;flex:1;">
+        ${uncertainBlock}
+        ${groupBlocks || '<div style="color:#94a3b8;font-size:12px;text-align:center;padding:30px;">AI returned no suggestions — try adding more context above.</div>'}
+      </div>
+    </div>`;
+  // Stash data for the apply path
+  root._proposed = proposed;
+  root._naProposals = naProposals;
+  root._currentNa = currentNa;
+  root._uncertain = uncertain;
+  root._allFields = all;
+}
+
+window._bcAiSelectAll = function(checked){
+  const root = document.getElementById('bcAiReviewModal');
+  if(!root) return;
+  for(const cb of root.querySelectorAll('input[type=checkbox][data-kind]')){
+    cb.checked = !!checked;
+  }
+};
+
+window._bcAiAutoFillApply = async function(bcId, btn){
+  const modal = document.getElementById('bcAiReviewModal');
+  if(!modal) return;
+  const proposed = modal._proposed || {};
+  const naProposals = modal._naProposals || [];
+  const currentNa = modal._currentNa || [];
+  const uncertain = modal._uncertain || [];
+  const allFields = modal._allFields || [];
+
+  const acceptedValueCols = new Set();
+  const acceptedNaCols = new Set();
+  const userOverrides = {};
+  for(const cb of modal.querySelectorAll('input[type=checkbox][data-kind]')){
+    if(!cb.checked) continue;
+    const col = (cb.id || '').replace(/^aiAccept_/, '');
+    if(!col) continue;
+    if(cb.dataset.kind === 'value' && proposed[col]){
+      acceptedValueCols.add(col);
+      const editEl = document.getElementById('aiVal_' + col);
+      if(editEl){
+        const editType = editEl.dataset.editType || 'text';
+        const raw = String(editEl.value ?? '').trim();
+        let parsed;
+        if(editType === 'boolean'){
+          parsed = raw === 'true';
+        } else if(editType === 'number'){
+          if(raw === '') parsed = null;
+          else {
+            const n = Number(raw.replace(/[^\d.\-]/g, ''));
+            parsed = isFinite(n) ? n : null;
+          }
+        } else {
+          parsed = raw === '' ? null : raw;
+        }
+        userOverrides[col] = parsed;
+      }
+    } else if(cb.dataset.kind === 'na'){
+      acceptedNaCols.add(col);
+    }
+  }
+  if(acceptedValueCols.size === 0 && acceptedNaCols.size === 0){
+    alert('Nothing selected.');
+    return;
+  }
+  if(btn){ btn.disabled = true; btn.textContent = 'Applying…'; }
+
+  // Build the patch + audit log entry — same shape the deal-side apply uses,
+  // so the shared _renderAiAutofillLog renders BC entries identically.
+  const valuePatch = {};
+  const overrideFlags = {};
+  for(const col of acceptedValueCols){
+    if(!proposed[col]) continue;
+    let v = proposed[col].proposed;
+    if(Object.prototype.hasOwnProperty.call(userOverrides, col)){
+      const ov = userOverrides[col];
+      if(ov !== v && !(ov == null && v == null)){
+        overrideFlags[col] = true;
+        v = ov;
+      }
+    }
+    if(v === null || v === undefined || v === '') continue;
+    valuePatch[col] = v;
+  }
+  const acceptedNa = [...acceptedNaCols];
+  const patch = { ...valuePatch };
+
+  // BC has no na_fields column — N/A flags live in field_status JSONB.
+  // Merge accepted N/A cols into field_status as 'no_preference'.
+  if(acceptedNa.length){
+    try {
+      const cur = await _sbGet(SB_TABLES.buyerCriteria, `id=eq.${bcId}&select=field_status&limit=1`);
+      const existing = (Array.isArray(cur) && cur[0]?.field_status) || {};
+      const merged = { ...(typeof existing === 'object' && existing ? existing : {}) };
+      for(const c of acceptedNa){ merged[c] = 'no_preference'; }
+      patch.field_status = merged;
+    } catch(e){ console.warn('[bc-ai] field_status merge failed:', e.message); }
+  }
+
+  // Audit log — same per-row shape the deal-side writes so the shared
+  // _renderAiAutofillLog renderer reuses without any branching.
+  try {
+    const appliedSet = new Set(Object.keys(valuePatch));
+    const naSet = new Set(acceptedNa);
+    const changes = [];
+    for(const f of allFields){
+      const propEntry = proposed[f.col];
+      const naEntry = (naProposals || []).find(p => p.col === f.col);
+      if(!propEntry && !naEntry) continue;
+      const applied = appliedSet.has(f.col);
+      const appliedNa = naSet.has(f.col);
+      changes.push({
+        col: f.col,
+        label: f.label || f.col.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+        before: f.before ?? null,
+        proposed: propEntry ? (propEntry.proposed ?? null) : null,
+        applied: applied ? (valuePatch[f.col] ?? null) : null,
+        applied_na: appliedNa,
+        skipped: !applied && !appliedNa,
+        explanation: (propEntry && propEntry.explanation) || (naEntry && naEntry.explanation) || null,
+        user_override: !!overrideFlags[f.col],
+      });
+    }
+    const logEntry = {
+      at: new Date().toISOString(),
+      applied_count: Object.keys(valuePatch).length,
+      na_count: acceptedNa.length,
+      changes,
+    };
+    const cur = await _sbGet(SB_TABLES.buyerCriteria, `id=eq.${bcId}&select=ai_autofill_log&limit=1`);
+    const existing = (Array.isArray(cur) && cur[0]?.ai_autofill_log) || [];
+    const arr = Array.isArray(existing) ? existing : [];
+    arr.push(logEntry);
+    patch.ai_autofill_log = arr;
+  } catch(e){ console.warn('[bc-ai] log build failed:', e.message); }
+
+  try {
+    await _sbPatch(SB_TABLES.buyerCriteria, bcId, patch);
+    if(typeof showSaveConfirm === 'function'){
+      const parts = [];
+      if(Object.keys(valuePatch).length) parts.push(`${Object.keys(valuePatch).length} value${Object.keys(valuePatch).length===1?'':'s'}`);
+      if(acceptedNa.length) parts.push(`${acceptedNa.length} N/A`);
+      showSaveConfirm(`✓ Applied ${parts.join(' + ')}`);
+    }
+    modal.remove();
+    if(typeof _bcLastLoadMs !== 'undefined') _bcLastLoadMs = 0;
+    bcOpenExpanded(bcId);
+  } catch(e){
+    if(btn){ btn.disabled = false; btn.textContent = '✓ Apply Selected'; }
+    alert('Apply failed: ' + (e.message || e));
+  }
+};
 
 async function bcSaveExpanded(recordId, isAuto=false){
   _bcLastLoadMs = 0;  // v63 perf: any save invalidates the cache so next list load is fresh

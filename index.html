@@ -28927,13 +28927,56 @@ function _contactAddProperty(contactId){
 }
 
 // Entry point from the contact detail page's Buyer Criteria tab.
-// Same pattern as _contactAddProperty but routes to the buyer form.
+// v202: shows a choice modal — Lead Form (full intake) vs Blank Buyer
+// Criteria (bare row, fill in inline). The lead-form path is unchanged
+// from prior versions; the blank path inserts a minimal row tied to the
+// contact and opens it directly in bcOpenExpanded.
 function _contactAddBuyerCriteria(contactId){
   const existing = allContacts.find(r => r.id === contactId);
   if(!existing){
     alert('Contact not found. Try refreshing the Contacts page.');
     return;
   }
+  _bcShowAddChoiceModal(contactId);
+}
+
+// v202: choice picker — Lead Form vs Blank Buyer Criteria.
+function _bcShowAddChoiceModal(contactId){
+  // Reuse the existing modal style if one is open; otherwise inject one.
+  const prev = document.getElementById('bcAddChoiceModal');
+  if(prev) prev.remove();
+  const el = document.createElement('div');
+  el.id = 'bcAddChoiceModal';
+  el.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9999;display:flex;align-items:center;justify-content:center;';
+  el.innerHTML = `
+    <div style="background:#fff;border-radius:12px;padding:28px 32px;max-width:520px;width:92%;box-shadow:0 24px 64px rgba(0,0,0,0.35);font-family:'Inter',system-ui,sans-serif;">
+      <div style="font-size:18px;font-weight:700;color:#0f172a;margin-bottom:6px;">Add Buyer Criteria</div>
+      <div style="font-size:13px;color:#64748b;margin-bottom:22px;">How would you like to fill this out?</div>
+      <div style="display:flex;flex-direction:column;gap:10px;">
+        <button onclick="_bcAddViaLeadForm('${contactId}')"
+          style="text-align:left;padding:14px 16px;border:1px solid #1e3a8a;background:linear-gradient(180deg,#1e3a8a,#0e2244);color:#fff;border-radius:10px;cursor:pointer;font-family:inherit;">
+          <div style="font-size:14px;font-weight:700;">📝 Lead Form</div>
+          <div style="font-size:11px;opacity:0.85;margin-top:3px;">Full guided intake — every field, with prompts. Best for new buyers.</div>
+        </button>
+        <button onclick="_bcAddBlankFromContact('${contactId}')"
+          style="text-align:left;padding:14px 16px;border:1px solid #cbd5e1;background:#f8fafc;color:#0f172a;border-radius:10px;cursor:pointer;font-family:inherit;">
+          <div style="font-size:14px;font-weight:700;">📄 Blank Buyer Criteria</div>
+          <div style="font-size:11px;color:#64748b;margin-top:3px;">Skip the form — open a blank record and fill it in manually.</div>
+        </button>
+      </div>
+      <div style="display:flex;justify-content:flex-end;margin-top:18px;">
+        <button onclick="document.getElementById('bcAddChoiceModal')?.remove()"
+          style="background:transparent;border:none;color:#64748b;font-size:12px;cursor:pointer;font-family:inherit;">Cancel</button>
+      </div>
+    </div>`;
+  document.body.appendChild(el);
+}
+
+// v202: original lead-form path, factored out so the choice modal can call it.
+function _bcAddViaLeadForm(contactId){
+  document.getElementById('bcAddChoiceModal')?.remove();
+  const existing = allContacts.find(r => r.id === contactId);
+  if(!existing){ alert('Contact not found.'); return; }
   const f = existing.fields || {};
   _liPrefillContext = {
     mode: 'buyer',
@@ -28947,6 +28990,55 @@ function _contactAddBuyerCriteria(contactId){
   };
   _li = { mode: 'buyer', assets: [], assetTypes: [], assetKeys: [], counties: [] };
   _liRenderBuyerForm();
+}
+
+// v202: blank-row path. Inserts a minimal ace_buyer_criteria row linked to
+// this contact, hydrates it into allBuyerCriteria so the table/picker can
+// see it without a full reload, then opens it in bcOpenExpanded.
+async function _bcAddBlankFromContact(contactId){
+  document.getElementById('bcAddChoiceModal')?.remove();
+  const existing = allContacts.find(r => r.id === contactId);
+  if(!existing){ alert('Contact not found.'); return; }
+  const f = existing.fields || {};
+  const agentFub = (typeof _currentUser !== 'undefined' && _currentUser && _currentUser.fub_name) || null;
+  try {
+    const row = {
+      contact_id: contactId,
+      date_added: new Date().toISOString().slice(0,10),
+      fub_assigned_to: agentFub,
+      import_source: 'manual_blank'
+    };
+    const created = await _sbPost(SB_TABLES.buyerCriteria, row);
+    const newRow = Array.isArray(created) ? created[0] : created;
+    if(!newRow?.id) throw new Error('Insert returned no id');
+    // Mirror the loader-side hydration so the table sees this row immediately.
+    const fields = {};
+    for(const [snake, atLabel] of Object.entries(SB_BC_MAP)){
+      if(snake === 'id') continue;
+      const v = newRow[snake];
+      fields[atLabel] = (v === null || v === undefined) ? '' : v;
+    }
+    fields['Import Source'] = newRow.import_source || '';
+    fields['Buyer'] = contactId ? [contactId] : [];
+    fields['_contactId'] = contactId;
+    if(typeof allBuyerCriteria !== 'undefined' && Array.isArray(allBuyerCriteria)){
+      allBuyerCriteria.unshift({ id: newRow.id, fields });
+    }
+    if(typeof allBuyerContacts !== 'undefined'){
+      allBuyerContacts[contactId] = allBuyerContacts[contactId] || {
+        Name: f['Name'] || '',
+        'Phone Number': f['Phone Number'] || '',
+        Email: f['Email'] || '',
+        Company: f['Company'] || '',
+        '_fubContactId': f['_fubContactId'] || f['FUB Contact ID'] || null
+      };
+    }
+    if(typeof _bcLastLoadMs !== 'undefined') _bcLastLoadMs = 0;
+    bcOpenExpanded(newRow.id);
+  } catch(e){
+    console.error('Blank BC create failed:', e);
+    alert('Could not create blank buyer criteria: ' + (e.message || e));
+  }
 }
 
 // After submission from a prefill flow, navigate back to the contact

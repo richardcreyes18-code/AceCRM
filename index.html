@@ -1926,6 +1926,13 @@ const SB_PROP_MAP = {
   construction_type:'Construction Type',
   est_gross_minus_noi_monthly:'Est Gross Minus NOI (Monthly)',
   down_payment_pct:'Down Payment (%)', renovation_expense:'Renovation Expense',
+  // v191: Pitch Out scenario (middle column on Financial Analysis Purchase
+  // Price section). Same shape as the actual + proforma down-payment pair —
+  // separate renovation budget + DP type/value so the buyer-facing Pitch Out
+  // CoC can be modeled independently from asking-price and proforma scenarios.
+  pitch_out_renovation_expense:'Pitch Out Renovation Expense',
+  pitch_out_down_payment_type:'Pitch Out Down Payment Type',
+  pitch_out_down_payment_pct:'Pitch Out Down Payment (%)',
   unit_mix_text:'Unit Mix', mf_unit_rent_data:'MF Unit Rent Data', tenant_mix_data:'Tenant Mix Data',
   noi_actual_yr:'NOI Actual Yr', noi_proforma_yr:'NOI Proforma Yr', noi_override_active:'NOI Override Active',
   target_seller_net:'Target Seller Net',
@@ -6820,6 +6827,19 @@ function collectAllDealFields(){
   // Information tab (the primary source since Size & Unit Inputs section was removed).
   s(fields,'Down Payment (%)',                 getNum('fin_a_downPct'));
   s(fields,'Renovation Expense',              getNum('fin_renovation'));
+  // v191: middle column (Pitch Out — actual income) persistence
+  s(fields,'Pitch Out Down Payment (%)',       getNum('fin_m_downPct'));
+  s(fields,'Pitch Out Renovation Expense',     getNum('fin_m_renovation'));
+  s(fields,'Proforma Down Payment (%)',        getNum('fin_p_downPct'));
+  const _aDpEl = document.getElementById('aDpTypePct');
+  const _mDpEl = document.getElementById('mDpTypePct');
+  const _pDpEl = document.getElementById('pDpTypePct');
+  if(_aDpEl) fields['Down Payment Type']           = _aDpEl.checked ? 'pct' : 'amount';
+  if(_mDpEl) fields['Pitch Out Down Payment Type'] = _mDpEl.checked ? 'pct' : 'amount';
+  if(_pDpEl) fields['Proforma Down Payment Type']  = _pDpEl.checked ? 'pct' : 'amount';
+  // Pitch Out Price is mirrored across middle and right inputs
+  const _po = getNum('fin_p_price') || getNum('fin_m_price');
+  if(_po) fields['Pitch Out Price'] = _po;
 
   // Expense categories — sum to monthly totals
   const EXP_CATS = {
@@ -6846,11 +6866,12 @@ function collectAllDealFields(){
   const _pnoi = window._pNOI_mo  ? window._pNOI_mo*12  : (_pegi - (window._pTotalOpEx_mo||0)*12);
   // v112.4: Prefer live DOM over the mount-time globals so a freshly-typed
   // price saves the correct cap rate to Supabase (same bug as recalcFinancials).
-  const _ask  = getNum('fin_askPrice')   || window._capAskPrice   || 0;
-  const _offer= getNum('fin_offerPrice') || window._capOfferPrice || 0;
+  // v191: proforma cap rate uses Pitch Out Price (mirror of fin_p_price / fin_m_price).
+  const _ask    = getNum('fin_askPrice') || window._capAskPrice   || 0;
+  const _pitch  = getNum('fin_p_price') || getNum('fin_m_price') || window._capOfferPrice || 0;
   // NOI is a formula field in Airtable — do not write
-  if(_noi  && _ask)   s(fields,'Cap Rate (CRM)',          Math.round(_noi/_ask*10000)/10000);
-  if(_pnoi && _offer) s(fields,'Cap Rate Proforma (CRM)', Math.round(_pnoi/_offer*10000)/10000);
+  if(_noi  && _ask)    s(fields,'Cap Rate (CRM)',          Math.round(_noi/_ask*10000)/10000);
+  if(_pnoi && _pitch)  s(fields,'Cap Rate Proforma (CRM)', Math.round(_pnoi/_pitch*10000)/10000);
 
   // Debt service
   const annDebt = window._aAnnDebt||0;
@@ -11430,9 +11451,13 @@ function renderFinancialTab(d){
   fi.aOccupancy  = aOccupancy;
   fi.aDpType     = d['Down Payment Type']          || 'percent';
   fi.pDpType     = d['Proforma Down Payment Type'] || 'percent';
+  fi.mDpType     = d['Pitch Out Down Payment Type']|| 'percent';
+  fi.mDownPct    = (d['Pitch Out Down Payment (%)'] != null && d['Pitch Out Down Payment (%)'] !== '')
+                     ? Number(d['Pitch Out Down Payment (%)']) : aDownPct;
   fi.aGRISource  = d['GRI Source']                 || 'custom';
   fi.aRenovation = Number(d['Renovation Expense']) || 0;
   fi.renovation  = fi.aRenovation; // legacy alias
+  fi.mRenovation = Number(d['Pitch Out Renovation Expense']) || 0;
   // NRU % fields
   if(d['Non-Revenue Units (%)'] != null)          fi.aNRU = Number(d['Non-Revenue Units (%)']);
   if(d['Proforma Non-Revenue Units (%)'] != null) fi.pNRU = Number(d['Proforma Non-Revenue Units (%)']);
@@ -11465,17 +11490,30 @@ function renderFinancialTab(d){
   // ── Actual calculations ────────────────────────────────────
   const aEGI   = aGrossRent * (1 - aVacancy/100) + aOtherInc;
   const aNOI   = (aEGI - aExpenses) > 0 ? (aEGI - aExpenses) : noiAt;
-  // CAP Rate Actual = NOI ÷ Asking Price; Proforma = Proforma NOI ÷ Offer Price
-  const capAskPrice   = ask  || offer;
-  const capOfferPrice = offer || ask;
-  const aPrice = offer || ask;  // for mortgage / loan calc
+  // v191: 3-column pricing.
+  //   LEFT  (Actual / Asking-or-Accepted) — uses Target Seller Net if set, else Asking Price.
+  //   MIDDLE (Actual / Pitch Out)        — uses Pitch Out Price.
+  //   RIGHT  (Proforma / Pitch Out)      — uses Pitch Out Price.
+  const targetSellerNet = Number(d['Target Seller Net']) || 0;
+  const pitchOut        = Number(d['Pitch Out Price']) || 0;
+  const leftPrice       = targetSellerNet || ask || offer;
+  // CAP Rate Actual = aNOI ÷ leftPrice; Proforma = pNOI ÷ pitch-out (or fallback)
+  const capAskPrice   = leftPrice;
+  const capOfferPrice = pitchOut || offer || ask;
+  const aPrice = pitchOut || offer || ask;  // for mortgage / loan calc
   // Down payment calcs — Asking side (left) for Actual CoC
   const aDpType  = fi.aDpType || 'percent';
   const aDpVal   = Number(fi.aDownPct) || 25;
-  const aDown    = aDpType==='amount' ? aDpVal : (ask||offer) * aDpVal/100;
+  const aDown    = aDpType==='amount' ? aDpVal : leftPrice * aDpVal/100;
   const aReno    = Number(fi.aRenovation) || Number(fi.renovation) || 0;
   const aTotalCash = aDown + aReno;
   const aLoan    = aPrice - aDown;
+  // v191: Middle column — Pitch Out at actual income
+  const mDpType   = fi.mDpType || 'percent';
+  const mDpVal    = Number(fi.mDownPct) || aDpVal;
+  const mDown     = mDpType==='amount' ? mDpVal : (pitchOut||leftPrice) * mDpVal/100;
+  const mReno     = Number(fi.mRenovation) || 0;
+  const mTotalCash = mDown + mReno;
 
   // Monthly mortgage payment
   const aMoRate = aIntRate/100/12;
@@ -11504,10 +11542,10 @@ function renderFinancialTab(d){
   const pEGI      = pGrossRent * (1 - pVacancy/100) + pOtherInc;
   const pNOI      = (pEGI - pExpenses) > 0 ? (pEGI - pExpenses) : 0;
   const pCashFlow = pNOI - aAnnDebt;
-  // Proforma down payment — Offer side (right) for Proforma CoC
+  // Proforma down payment — Right column / Pitch Out (proforma income) for Proforma CoC
   const pDpType   = fi.pDpType || 'percent';
   const pDpVal    = Number(fi.pDownPct) || aDownPct;
-  const pDown     = pDpType==='amount' ? pDpVal : (offer||ask) * pDpVal/100;
+  const pDown     = pDpType==='amount' ? pDpVal : (pitchOut||offer||ask) * pDpVal/100;
   const pReno     = Number(fi.renovation) || 0;
   const pTotalCash = pDown + pReno;
   const pCapRate  = pNOI>0 && capOfferPrice>0 ? pNOI/capOfferPrice : 0;
@@ -11736,89 +11774,138 @@ function renderFinancialTab(d){
     <!-- v113.77: Custom NOI Override panel moved DOWN to just above Cash
          Flow (per user) — see further down. -->
 
-    <!-- PURCHASE PRICE & DOWN PAYMENT ───────────────────────── -->
+    <!-- PURCHASE PRICE & DOWN PAYMENT (v191: 3 columns — Asking | Pitch Out Actual | Pitch Out Proforma) ── -->
     <div class="info-box">
       <div class="info-box-title">Purchase Price &amp; Down Payment</div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:0;font-size:11px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:0;font-size:11px;">
 
-        <!-- LEFT: ASKING (Actual CoC) -->
-        <div style="padding:12px 16px 12px 0;border-right:2px solid #ddd;">
-          <div style="font-weight:bold;color:#2060b0;font-size:12px;margin-bottom:10px;padding-bottom:4px;border-bottom:1px solid #c0d0e8;">
-            Actual (Current) — Asking Price
+        <!-- LEFT: ASKING / ACCEPTED FROM SELLER (Actual CoC, asking-price scenario) -->
+        <div style="padding:12px 14px 12px 0;border-right:2px solid #ddd;">
+          <div style="font-weight:bold;color:#2060b0;font-size:12px;margin-bottom:4px;padding-bottom:4px;border-bottom:1px solid #c0d0e8;">
+            Actual (Current) — ${(Number(d['Target Seller Net'])||0) > 0 ? 'Accepted from Seller' : 'Asking Price'}
+          </div>
+          <div style="font-size:9px;color:#64748b;margin-bottom:8px;font-style:italic;">
+            ${(Number(d['Target Seller Net'])||0) > 0
+              ? '↪ using seller-accepted net (overrides asking)'
+              : '↪ from Offers tab "Seller Original Asking"'}
           </div>
           <table style="width:100%;border:none;border-collapse:separate;border-spacing:0 6px;">
             <tr>
-              <td style="width:175px;font-weight:bold;color:#333;text-align:right;padding-right:8px;">Asking Price</td>
+              <td style="width:155px;font-weight:bold;color:#333;text-align:right;padding-right:8px;">${(Number(d['Target Seller Net'])||0) > 0 ? 'Accepted Price' : 'Asking Price'}</td>
               <td><span style="color:#333;margin-right:4px;">$</span>
-                <input class="form-input num-input" id="fin_askPrice" type="text" inputmode="numeric" value="${_fmtNum(ask||'')}" style="width:120px;" oninput="liveDownCalc()"/>
+                <input class="form-input num-input" id="fin_askPrice" type="text" inputmode="numeric" value="${_fmtNum((Number(d['Target Seller Net'])||0) || ask || '')}" style="width:110px;" oninput="liveDownCalc()"/>
               </td>
             </tr>
             <tr>
               <td style="font-weight:bold;color:#333;text-align:right;padding-right:8px;">Renovation Expense</td>
               <td><span style="color:#333;margin-right:4px;">$</span>
-                <input class="form-input num-input" id="fin_a_renovation" type="text" inputmode="numeric" value="${_fmtNum(fi.aRenovation||fi.renovation||'')}" style="width:120px;" oninput="liveDownCalc()"/>
+                <input class="form-input num-input" id="fin_a_renovation" type="text" inputmode="numeric" value="${_fmtNum(fi.aRenovation||fi.renovation||'')}" style="width:110px;" oninput="liveDownCalc()"/>
               </td>
             </tr>
             <tr>
               <td style="font-weight:bold;color:#333;text-align:right;padding-right:8px;">Down Payment Type</td>
-              <td style="display:flex;gap:16px;align-items:center;padding-top:2px;">
+              <td style="display:flex;gap:10px;align-items:center;padding-top:2px;flex-wrap:wrap;">
                 <label><input type="radio" name="aDP" id="aDpTypePct" value="percent" ${fi.aDpType!=='amount'?'checked':''} onchange="liveDownCalc()"/> Percent</label>
                 <label><input type="radio" name="aDP" id="aDpTypeAmt" value="amount" ${fi.aDpType==='amount'?'checked':''} onchange="liveDownCalc()"/> Amount</label>
               </td>
             </tr>
             <tr>
               <td style="font-weight:bold;color:#333;text-align:right;padding-right:8px;">Your Down Payment</td>
-              <td style="display:flex;gap:8px;align-items:center;padding-top:2px;">
-                <strong id="fin_a_downDisplay" style="color:#2060b0;min-width:90px;">$0.00</strong>
-                <input class="form-input" id="fin_a_downPct" value="${fi.aDownPct||aDownPct}" style="width:50px;text-align:center;" oninput="liveDownCalc()"/>
+              <td style="display:flex;gap:6px;align-items:center;padding-top:2px;flex-wrap:wrap;">
+                <strong id="fin_a_downDisplay" style="color:#2060b0;min-width:80px;">$0.00</strong>
+                <input class="form-input" id="fin_a_downPct" value="${fi.aDownPct||aDownPct}" style="width:46px;text-align:center;" oninput="liveDownCalc()"/>
                 <span id="fin_a_dpLabel" style="font-weight:bold;color:#333;">${fi.aDpType==='amount'?'$':'%'}</span>
               </td>
             </tr>
             <tr>
               <td style="font-weight:bold;color:#333;text-align:right;padding-right:8px;">
-                Total Cash Required ${tip('tcr','Down Payment + Renovation. Total out-of-pocket cash. Used for Actual Cash-on-Cash Return.')}
+                Total Cash Required ${tip('tcr','Down Payment + Renovation. Total out-of-pocket cash. Used for Actual Cash-on-Cash at the asking-price (or seller-accepted) scenario.')}
               </td>
               <td><strong id="fin_a_totalCash" style="color:#2060b0;font-size:13px;">$0.00</strong></td>
             </tr>
           </table>
         </div>
 
-        <!-- RIGHT: OFFER (Proforma CoC) -->
-        <div style="padding:12px 0 12px 16px;">
-          <div style="font-weight:bold;color:#2a7a2a;font-size:12px;margin-bottom:10px;padding-bottom:4px;border-bottom:1px solid #b0d8b0;">
-            Proforma (Projected) — Offer / Purchase Price
+        <!-- MIDDLE: PITCH OUT (Actual CoC, buyer-facing pitch-out scenario) -->
+        <div style="padding:12px 14px;border-right:2px solid #ddd;">
+          <div style="font-weight:bold;color:#7c3aed;font-size:12px;margin-bottom:4px;padding-bottom:4px;border-bottom:1px solid #ddd6fe;">
+            Actual (Current) — Pitch Out Price
           </div>
+          <div style="font-size:9px;color:#64748b;margin-bottom:8px;font-style:italic;">↪ from Offers tab "Pitch Out Price"</div>
           <table style="width:100%;border:none;border-collapse:separate;border-spacing:0 6px;">
             <tr>
-              <td style="width:175px;font-weight:bold;color:#333;text-align:right;padding-right:8px;">Offer / Purchase Price</td>
+              <td style="width:155px;font-weight:bold;color:#333;text-align:right;padding-right:8px;">Pitch Out Price</td>
               <td><span style="color:#333;margin-right:4px;">$</span>
-                <input class="form-input num-input" id="fin_offerPrice" type="text" inputmode="numeric" value="${_fmtNum(offer||ask||'')}" style="width:120px;" oninput="liveDownCalc()"/>
+                <input class="form-input num-input" id="fin_m_price" type="text" inputmode="numeric" value="${_fmtNum(Number(d['Pitch Out Price'])||'')}" style="width:110px;" oninput="_finPoSync('m');liveDownCalc()"/>
               </td>
             </tr>
             <tr>
               <td style="font-weight:bold;color:#333;text-align:right;padding-right:8px;">Renovation Expense</td>
               <td><span style="color:#333;margin-right:4px;">$</span>
-                <input class="form-input num-input" id="fin_renovation" type="text" inputmode="numeric" value="${_fmtNum(fi.renovation||'')}" style="width:120px;" oninput="liveDownCalc()"/>
+                <input class="form-input num-input" id="fin_m_renovation" type="text" inputmode="numeric" value="${_fmtNum(fi.mRenovation||'')}" style="width:110px;" oninput="liveDownCalc()"/>
               </td>
             </tr>
             <tr>
               <td style="font-weight:bold;color:#333;text-align:right;padding-right:8px;">Down Payment Type</td>
-              <td style="display:flex;gap:16px;align-items:center;padding-top:2px;">
+              <td style="display:flex;gap:10px;align-items:center;padding-top:2px;flex-wrap:wrap;">
+                <label><input type="radio" name="mDP" id="mDpTypePct" value="percent" ${fi.mDpType!=='amount'?'checked':''} onchange="liveDownCalc()"/> Percent</label>
+                <label><input type="radio" name="mDP" id="mDpTypeAmt" value="amount" ${fi.mDpType==='amount'?'checked':''} onchange="liveDownCalc()"/> Amount</label>
+              </td>
+            </tr>
+            <tr>
+              <td style="font-weight:bold;color:#333;text-align:right;padding-right:8px;">Your Down Payment</td>
+              <td style="display:flex;gap:6px;align-items:center;padding-top:2px;flex-wrap:wrap;">
+                <strong id="fin_m_downDisplay" style="color:#7c3aed;min-width:80px;">$0.00</strong>
+                <input class="form-input" id="fin_m_downPct" value="${fi.mDownPct||aDownPct}" style="width:46px;text-align:center;" oninput="liveDownCalc()"/>
+                <span id="fin_m_dpLabel" style="font-weight:bold;color:#333;">${fi.mDpType==='amount'?'$':'%'}</span>
+              </td>
+            </tr>
+            <tr>
+              <td style="font-weight:bold;color:#333;text-align:right;padding-right:8px;">
+                Total Cash Required ${tip('tcr_m','Down Payment + Renovation. Used for Cash-on-Cash at the buyer-facing pitch-out price (using actual income/expenses).')}
+              </td>
+              <td><strong id="fin_m_totalCash" style="color:#7c3aed;font-size:13px;">$0.00</strong></td>
+            </tr>
+          </table>
+        </div>
+
+        <!-- RIGHT: PITCH OUT (Proforma CoC, buyer-facing pitch-out scenario, proforma income) -->
+        <div style="padding:12px 0 12px 14px;">
+          <div style="font-weight:bold;color:#2a7a2a;font-size:12px;margin-bottom:4px;padding-bottom:4px;border-bottom:1px solid #b0d8b0;">
+            Proforma (Projected) — Pitch Out Price
+          </div>
+          <div style="font-size:9px;color:#64748b;margin-bottom:8px;font-style:italic;">↪ from Offers tab "Pitch Out Price"</div>
+          <table style="width:100%;border:none;border-collapse:separate;border-spacing:0 6px;">
+            <tr>
+              <td style="width:155px;font-weight:bold;color:#333;text-align:right;padding-right:8px;">Pitch Out Price</td>
+              <td><span style="color:#333;margin-right:4px;">$</span>
+                <input class="form-input num-input" id="fin_p_price" type="text" inputmode="numeric" value="${_fmtNum(Number(d['Pitch Out Price'])||'')}" style="width:110px;" oninput="_finPoSync('p');liveDownCalc()"/>
+              </td>
+            </tr>
+            <tr>
+              <td style="font-weight:bold;color:#333;text-align:right;padding-right:8px;">Renovation Expense</td>
+              <td><span style="color:#333;margin-right:4px;">$</span>
+                <input class="form-input num-input" id="fin_renovation" type="text" inputmode="numeric" value="${_fmtNum(fi.renovation||'')}" style="width:110px;" oninput="liveDownCalc()"/>
+              </td>
+            </tr>
+            <tr>
+              <td style="font-weight:bold;color:#333;text-align:right;padding-right:8px;">Down Payment Type</td>
+              <td style="display:flex;gap:10px;align-items:center;padding-top:2px;flex-wrap:wrap;">
                 <label><input type="radio" name="pDP" id="pDpTypePct" value="percent" ${fi.pDpType!=='amount'?'checked':''} onchange="liveDownCalc()"/> Percent</label>
                 <label><input type="radio" name="pDP" id="pDpTypeAmt" value="amount" ${fi.pDpType==='amount'?'checked':''} onchange="liveDownCalc()"/> Amount</label>
               </td>
             </tr>
             <tr>
               <td style="font-weight:bold;color:#333;text-align:right;padding-right:8px;">Your Down Payment</td>
-              <td style="display:flex;gap:8px;align-items:center;padding-top:2px;">
-                <strong id="fin_p_downDisplay" style="color:#2a7a2a;min-width:90px;">$0.00</strong>
-                <input class="form-input" id="fin_p_downPct" value="${fi.pDownPct||aDownPct}" style="width:50px;text-align:center;" oninput="liveDownCalc()"/>
+              <td style="display:flex;gap:6px;align-items:center;padding-top:2px;flex-wrap:wrap;">
+                <strong id="fin_p_downDisplay" style="color:#2a7a2a;min-width:80px;">$0.00</strong>
+                <input class="form-input" id="fin_p_downPct" value="${fi.pDownPct||aDownPct}" style="width:46px;text-align:center;" oninput="liveDownCalc()"/>
                 <span id="fin_p_dpLabel" style="font-weight:bold;color:#333;">${fi.pDpType==='amount'?'$':'%'}</span>
               </td>
             </tr>
             <tr>
               <td style="font-weight:bold;color:#333;text-align:right;padding-right:8px;">
-                Total Cash Required ${tip('tcr2','Down Payment + Renovation. Total out-of-pocket cash. Used for Proforma Cash-on-Cash Return.')}
+                Total Cash Required ${tip('tcr2','Down Payment + Renovation. Used for Proforma Cash-on-Cash at the buyer-facing pitch-out price (using proforma income/expenses).')}
               </td>
               <td><strong id="fin_p_totalCash" style="color:#2a7a2a;font-size:13px;">$0.00</strong></td>
             </tr>
@@ -56140,19 +56227,29 @@ function hideTip(){
   if(box) box.style.display='none';
 }
 
+// v191: keep middle (#fin_m_price) and right (#fin_p_price) Pitch Out price
+// inputs in sync. Both bind to the same DB column (`pitch_out_price`).
+function _finPoSync(source){
+  const m = document.getElementById('fin_m_price');
+  const p = document.getElementById('fin_p_price');
+  if(!m || !p) return;
+  if(source === 'm') p.value = m.value;
+  else if(source === 'p') m.value = p.value;
+}
+window._finPoSync = _finPoSync;
+
 function liveDownCalc(){
   markDirty();
   const fmt = v => '$'+v.toLocaleString('en-US',{minimumFractionDigits:2,maximumFractionDigits:2});
   const num = id => Number(String(document.getElementById(id)?.value||'').replace(/,/g,''))||0;
 
-  // ── LEFT SIDE: Asking Price (Actual CoC) ─────────────────────
+  // ── LEFT SIDE: Asking Price / Accepted from Seller (Actual CoC) ─
   const askPrice  = num('fin_askPrice');
   const aReno     = num('fin_a_renovation');
   const aIsPct    = document.getElementById('aDpTypePct')?.checked !== false;
   const aDpVal    = num('fin_a_downPct') || 25;
   const aDown     = aIsPct ? askPrice*(aDpVal/100) : aDpVal;
   const aTotalCash = aDown + aReno;
-  const aLoan     = askPrice - aDown;
 
   const aDownDisp  = document.getElementById('fin_a_downDisplay');
   const aTotalDisp = document.getElementById('fin_a_totalCash');
@@ -56161,14 +56258,29 @@ function liveDownCalc(){
   if(aTotalDisp) aTotalDisp.textContent = fmt(aTotalCash);
   if(aDpLabel)   aDpLabel.textContent   = aIsPct ? '%' : '$';
 
-  // ── RIGHT SIDE: Offer Price (Proforma CoC) ───────────────────
-  const offerPrice = num('fin_offerPrice');
+  // ── MIDDLE: Pitch Out Price (Actual income/expenses) ──────────
+  const mPrice    = num('fin_m_price');
+  const mReno     = num('fin_m_renovation');
+  const mIsPct    = document.getElementById('mDpTypePct')?.checked !== false;
+  const mDpVal    = num('fin_m_downPct') || 25;
+  const mDown     = mIsPct ? mPrice*(mDpVal/100) : mDpVal;
+  const mTotalCash = mDown + mReno;
+
+  const mDownDisp  = document.getElementById('fin_m_downDisplay');
+  const mTotalDisp = document.getElementById('fin_m_totalCash');
+  const mDpLabel   = document.getElementById('fin_m_dpLabel');
+  if(mDownDisp)  mDownDisp.textContent  = fmt(mDown);
+  if(mTotalDisp) mTotalDisp.textContent = fmt(mTotalCash);
+  if(mDpLabel)   mDpLabel.textContent   = mIsPct ? '%' : '$';
+
+  // ── RIGHT SIDE: Pitch Out Price (Proforma income/expenses) ────
+  const pPrice     = num('fin_p_price');
   const pReno      = num('fin_renovation');
   const pIsPct     = document.getElementById('pDpTypePct')?.checked !== false;
   const pDpVal     = num('fin_p_downPct') || 25;
-  const pDown      = pIsPct ? offerPrice*(pDpVal/100) : pDpVal;
+  const pDown      = pIsPct ? pPrice*(pDpVal/100) : pDpVal;
   const pTotalCash = pDown + pReno;
-  const pLoan      = offerPrice - pDown;
+  const pLoan      = pPrice - pDown;
 
   const pDownDisp  = document.getElementById('fin_p_downDisplay');
   const pTotalDisp = document.getElementById('fin_p_totalCash');
@@ -56177,7 +56289,7 @@ function liveDownCalc(){
   if(pTotalDisp) pTotalDisp.textContent = fmt(pTotalCash);
   if(pDpLabel)   pDpLabel.textContent   = pIsPct ? '%' : '$';
 
-  // ── Mortgage section (uses offer price loan) ─────────────────
+  // ── Mortgage section (uses pitch-out price proforma loan) ─────
   const loanDisp  = document.getElementById('fin_loanAmt');
   const moPmtDisp = document.getElementById('fin_moPmt');
   if(loanDisp) loanDisp.textContent = pLoan>0?('$'+Math.round(pLoan).toLocaleString()):'—';
@@ -56192,6 +56304,7 @@ function liveDownCalc(){
 
   // Store for recalcFinancials to use in CoC
   window._aTotalCash = aTotalCash;
+  window._mTotalCash = mTotalCash;
   window._pTotalCash = pTotalCash;
 
   // v112.3: CAP Rate depends on price, CoC depends on total cash — refresh
@@ -56999,11 +57112,12 @@ function _finUpdateKeyMetrics(){
   const aNOI_yr = aEGI_yr - aOpEx_yr;
   const pNOI_yr = pEGI_yr - pOpEx_yr;
 
-  // ── Price (Asking drives Actual CAP; Offer drives Proforma CAP) ──
-  const ask   = v('fin_askPrice');
-  const offer = v('fin_offerPrice');
-  const capAsk   = ask   || offer;
-  const capOffer = offer || ask;
+  // ── Price (Asking drives Actual CAP; Pitch Out drives Proforma CAP) ──
+  // v191: switched fin_offerPrice → fin_p_price (Pitch Out, mirrored with fin_m_price)
+  const ask    = v('fin_askPrice');
+  const pitch  = v('fin_p_price') || v('fin_m_price');
+  const capAsk    = ask   || pitch;
+  const capOffer  = pitch || ask;
 
   // ── Annual debt service (sum of itemized mortgages, else implied loan) ──
   let aAnnDebt = 0;
@@ -57410,11 +57524,21 @@ function saveFinInputs(dealId){
   // Build the complete Airtable fields object — all Phase 2 fields
   const fields = {};
 
-  // ── Asking / Offer Price ─────────────────────────────────────
-  const ask   = get('fin_askPrice');
-  const offer = get('fin_offerPrice');
-  if(ask)   fields['Asking Price']   = ask;
-  if(offer) fields['Offer Price']    = offer;
+  // ── Asking / Pitch Out Price ─────────────────────────────────
+  // v191: Asking input now mirrors Target Seller Net when set, so write to
+  // whichever column is the live source. Right + Middle inputs both bind to
+  // pitch_out_price (mirrored via _finPoSync). The Ace Starter Offer
+  // (`offer_price`) is no longer surfaced in this section — edited on Offers tab.
+  const ask = get('fin_askPrice');
+  if(ask){
+    if(Number(currentDeal['Target Seller Net'])||0){
+      fields['Target Seller Net'] = ask;
+    } else {
+      fields['Asking Price'] = ask;
+    }
+  }
+  const pitchOut = get('fin_p_price') || get('fin_m_price');
+  if(pitchOut) fields['Pitch Out Price'] = pitchOut;
 
   // ── Income ───────────────────────────────────────────────────
   const aGRI_mo = getAuthMo('fin_aGrossRent_mo', 'fin_aGrossRent_yr');
@@ -57457,11 +57581,16 @@ function saveFinInputs(dealId){
   fields['Non-Revenue Units (%)']          = get('fin_aNRU_pct');
   fields['Proforma Non-Revenue Units (%)'] = get('fin_pNRU_pct');
   fields['Proforma Down Payment (%)']      = get('fin_p_downPct');
+  // v191: middle (Pitch Out — actual income) column persistence.
+  fields['Pitch Out Down Payment (%)']     = get('fin_m_downPct');
+  fields['Pitch Out Renovation Expense']   = get('fin_m_renovation');
   // Radio button state: save the selected down-payment type for each side
   const aDpTypePctEl = document.getElementById('aDpTypePct');
+  const mDpTypePctEl = document.getElementById('mDpTypePct');
   const pDpTypePctEl = document.getElementById('pDpTypePct');
-  if(aDpTypePctEl) fields['Down Payment Type']          = aDpTypePctEl.checked ? 'pct' : 'amount';
-  if(pDpTypePctEl) fields['Proforma Down Payment Type'] = pDpTypePctEl.checked ? 'pct' : 'amount';
+  if(aDpTypePctEl) fields['Down Payment Type']            = aDpTypePctEl.checked ? 'pct' : 'amount';
+  if(mDpTypePctEl) fields['Pitch Out Down Payment Type']  = mDpTypePctEl.checked ? 'pct' : 'amount';
+  if(pDpTypePctEl) fields['Proforma Down Payment Type']   = pDpTypePctEl.checked ? 'pct' : 'amount';
   // GRI source: stored on currentDeal directly by setFinGRISource;
   // re-read from there so a save triggered by any other path picks it up
   if(currentDeal['GRI Source']) fields['GRI Source'] = currentDeal['GRI Source'];
@@ -57598,10 +57727,11 @@ function saveFinInputs(dealId){
   });
 
   // ── Calculated Cap Rates (write back to Airtable) ────────────
-  const _ask   = get('fin_askPrice')  || Number(currentDeal['Asking Price'])||0;
-  const _offer = get('fin_offerPrice')|| Number(currentDeal['Offer Price'])||0;
-  const _capAsk   = _ask   || _offer;  // Actual cap rate uses Asking Price
-  const _capOffer = _offer || _ask;    // Proforma cap rate uses Offer Price
+  // v191: Proforma cap rate now uses Pitch Out Price (mirror across fin_p_price / fin_m_price)
+  const _ask   = get('fin_askPrice') || Number(currentDeal['Asking Price']) || 0;
+  const _pitch = get('fin_p_price') || get('fin_m_price') || Number(currentDeal['Pitch Out Price']) || 0;
+  const _capAsk   = _ask   || _pitch;  // Actual cap rate uses Asking / Accepted-from-Seller
+  const _capOffer = _pitch || _ask;    // Proforma cap rate uses Pitch Out Price
   const _noi   = Number(currentDeal['NOI'])||0;
   const _pGRI  = get('fin_pGrossRent_mo')*12;
   const _pVacRaw = document.getElementById('fin_pVacancy')?.value;
@@ -60592,10 +60722,13 @@ function recalcFinancials(dealId){
   const fi = {
     aGRISource : aGRISource,
     askPrice   : get('fin_askPrice'),
-    offerPrice : get('fin_offerPrice'),
+    offerPrice : get('fin_p_price') || get('fin_m_price'),  // v191: now Pitch Out Price
     aRenovation: get('fin_a_renovation'),
     aDownPct   : get('fin_a_downPct'),
     aDpType    : document.querySelector('input[name="aDP"]:checked')?.value||'percent',
+    mDownPct   : get('fin_m_downPct'),
+    mDpType    : document.querySelector('input[name="mDP"]:checked')?.value||'percent',
+    mRenovation: get('fin_m_renovation'),
     pDownPct   : get('fin_p_downPct'),
     pDpType    : document.querySelector('input[name="pDP"]:checked')?.value||'percent',
     aGrossRent : get('fin_aGrossRent_mo')*12,
@@ -60739,8 +60872,10 @@ function recalcFinancials(dealId){
   // first caused cap rate to briefly update while typing, then revert to the
   // stale render-time price when debouncedRecalc fires. Matches the order used
   // in _finUpdateKeyMetrics (line 38265-38268).
-  const _capAsk   = get('fin_askPrice')   || get('fin_offerPrice') || window._capAskPrice   || 0;
-  const _capOffer = get('fin_offerPrice') || get('fin_askPrice')   || window._capOfferPrice || 0;
+  // v191: right-column proforma metrics now use Pitch Out Price (fin_p_price);
+  // left-column actual metrics still use Asking / Accepted from Seller (fin_askPrice).
+  const _capAsk   = get('fin_askPrice') || get('fin_p_price') || window._capAskPrice   || 0;
+  const _capOffer = get('fin_p_price')  || get('fin_m_price') || get('fin_askPrice') || window._capOfferPrice || 0;
   const _mort_mo  = window._aMortgage_mo||0;
   const _pmort_mo = window._pMortgage_mo||_mort_mo;
   const _cf_yr    = _noi_yr  - (_mort_mo*12);

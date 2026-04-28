@@ -14744,7 +14744,23 @@ function _renderTemplatePicker(){
 }
 
 async function loadSavedTemplate(id){
-  if(!id){ _currentTemplateId = null; _renderTemplatePicker?.(); return; }
+  if(!id){
+    // v200: picking "— New / Unsaved —" now clears the form so the user
+    // gets a blank canvas to write a new template from scratch. Save / Save As
+    // will create a new loadable template afterwards.
+    // _rtMount swaps the textarea for a contenteditable div sharing the same
+    // id; its `.value` setter mirrors innerHTML, so this clears both modes.
+    _currentTemplateId = null;
+    const subEl = document.getElementById('emailTemplateSubject');
+    const bodyEl= document.getElementById('emailTemplateText');
+    if(subEl)  subEl.value = '';
+    if(bodyEl) bodyEl.value = '';
+    const toneEl = document.getElementById('emailTplTone');  if(toneEl)  toneEl.value = '';
+    const extraEl= document.getElementById('emailTplExtra'); if(extraEl) extraEl.value= '';
+    if(typeof _atplRefreshStatusBar === 'function') _atplRefreshStatusBar();
+    _renderTemplatePicker?.();
+    return;
+  }
   const t = _emailTemplates.find(x => x.id === id);
   if(!t) return;
   _currentTemplateId = id;

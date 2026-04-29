@@ -2832,6 +2832,8 @@ function _sanitizeFilename(name) {
 }
 
 // ── AUTH STATE ───────────────────────────────────────────────────
+// Bump SESSION_VERSION to force every logged-in user to re-authenticate on next load.
+const SESSION_VERSION = 1;
 let _currentUser = null; // { id, name, email, initials, fub_name, role }
 let _viewMode = 'my';    // 'my' = own deals, 'all' = company pipeline
 let _authToken = null;
@@ -2843,6 +2845,7 @@ function _saveSession(token, user, refreshToken) {
   if(refreshToken !== undefined) _refreshToken = refreshToken;
   localStorage.setItem('ace_auth_token', token);
   localStorage.setItem('ace_auth_user', JSON.stringify(user));
+  localStorage.setItem('ace_session_version', String(SESSION_VERSION));
   if(refreshToken) localStorage.setItem('ace_refresh_token', refreshToken);
 }
 
@@ -2855,9 +2858,15 @@ function _clearSession() {
   localStorage.removeItem('ace_auth_token');
   localStorage.removeItem('ace_auth_user');
   localStorage.removeItem('ace_refresh_token');
+  localStorage.removeItem('ace_session_version');
 }
 
 function _loadSession() {
+  const storedVersion = parseInt(localStorage.getItem('ace_session_version') || '0', 10);
+  if(storedVersion !== SESSION_VERSION) {
+    _clearSession();
+    return false;
+  }
   const token = localStorage.getItem('ace_auth_token');
   const user  = localStorage.getItem('ace_auth_user');
   const refresh = localStorage.getItem('ace_refresh_token');

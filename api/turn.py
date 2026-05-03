@@ -15,8 +15,10 @@ Env vars required (set in Vercel dashboard → Project → Settings → Env Vari
 import os
 import io
 import re
+import sys
 import json
 import base64
+import traceback
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
@@ -56,13 +58,32 @@ _SB_HEADERS = {
 
 def sb_select(table: str, params) -> list:
     url = f"{SUPABASE_URL}/rest/v1/{table}"
-    with httpx.Client(timeout=10.0, http2=False) as client:
-        r = client.get(url, params=params, headers=_SB_HEADERS)
-    if r.status_code >= 400:
-        raise RuntimeError(
-            f"PostgREST {r.status_code} on {table}: {r.text[:300]}"
-        )
-    return r.json()
+    print(f"[sb_select] GET {url} params={params}", file=sys.stderr, flush=True)
+    try:
+        with httpx.Client(timeout=10.0, http2=False) as client:
+            r = client.get(url, params=params, headers=_SB_HEADERS)
+        print(f"[sb_select] {r.status_code} for {table} ({len(r.content)} bytes)",
+              file=sys.stderr, flush=True)
+        if r.status_code >= 400:
+            raise RuntimeError(
+                f"PostgREST {r.status_code} on {table}: {r.text[:300]}"
+            )
+        return r.json()
+    except Exception as e:
+        print(f"[sb_select] EXCEPTION {type(e).__name__}: {e}",
+              file=sys.stderr, flush=True)
+        traceback.print_exc(file=sys.stderr)
+        raise
+
+
+# One-time startup log (per cold start) so we can verify env var is set
+# without leaking the key. URL is not secret; key length is enough to
+# confirm it's populated.
+print(
+    f"[startup] SUPABASE_URL={SUPABASE_URL!r} "
+    f"KEY_LEN={len(SUPABASE_KEY)} HOST={SUPABASE_URL.split('//')[-1] if '//' in SUPABASE_URL else SUPABASE_URL}",
+    file=sys.stderr, flush=True,
+)
 
 PERSONA = (AGENT_DIR / "persona.md").read_text()
 SETTINGS = (AGENT_DIR / "settings.md").read_text()
@@ -442,6 +463,28 @@ def synthesize(text: str) -> bytes:
 
 # ───────────────── FastAPI handler ─────────────────
 app = FastAPI()
+
+
+@app.get("/api/debug/supabase")
+def debug_supabase():
+    """Hit this directly in your browser — instant Supabase reachability test.
+    No audio, no Whisper, no Claude, no TTS — just one GET to PostgREST."""
+    out = {
+        "supabase_url": SUPABASE_URL,
+        "supabase_key_length": len(SUPABASE_KEY),
+        "openai_key_set": bool(OPENAI_API_KEY),
+        "anthropic_key_set": bool(ANTHROPIC_API_KEY),
+    }
+    try:
+        rows = sb_select("ace_properties", [("select", "id"), ("limit", "1")])
+        out["ok"] = True
+        out["sample_row_count"] = len(rows)
+        out["sample_row_id"] = rows[0]["id"] if rows else None
+    except Exception as e:
+        out["ok"] = False
+        out["error_type"] = type(e).__name__
+        out["error_message"] = str(e)[:500]
+    return out
 
 
 @app.post("/api/turn")

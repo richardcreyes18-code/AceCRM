@@ -38,7 +38,12 @@ SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 
 openai = OpenAI(api_key=OPENAI_API_KEY)
 anthropic = Anthropic(api_key=ANTHROPIC_API_KEY)
-supabase: Client = create_client(SUPABASE_URL, SUPABASE_KEY)
+
+# supabase client is created per-request inside the handler.
+# Reusing a module-level Client across Vercel warm-container invocations
+# led to ConnectError [Errno 16] EBUSY on the second+ call, since the
+# underlying httpx connection went stale between cold/warm cycles.
+supabase: Client = None  # type: ignore[assignment]
 
 PERSONA = (AGENT_DIR / "persona.md").read_text()
 SETTINGS = (AGENT_DIR / "settings.md").read_text()
@@ -421,6 +426,8 @@ app = FastAPI()
 
 @app.post("/api/turn")
 async def turn(audio: UploadFile = File(...)):
+    global supabase
+    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     try:
         audio_bytes = await audio.read()
         if not audio_bytes:

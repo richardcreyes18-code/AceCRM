@@ -270,68 +270,126 @@ def _norm_address(s: str) -> str:
     return re.sub(r"[^a-z0-9]", "", s)
 
 
-def commit_update_deal(intent: dict) -> dict:
-    data = intent.get("data") or {}
-    search_address = (data.get("search_address") or "").strip()
-    updates = data.get("updates") or {}
-    if not search_address:
-        return {"committed": False, "error": "no search_address in pending intent"}
-    if not updates:
-        return {"committed": False, "error": "no updates in pending intent"}
-
+def find_property(search_address: str) -> dict:
+    """Search ace_properties for a row matching `search_address`. Returns
+    {status, ...} where status is 'found' / 'ambiguous' / 'not_found'.
+    Used both for pre-validation (before asking confirmation) and for
+    the commit step itself."""
+    if not search_address or not search_address.strip():
+        return {"status": "not_found", "reason": "no search_address"}
+    search_address = search_address.strip()
     clean_search = _norm_address(search_address)
-    # Use number + first street word as the ILIKE prefix so "56 Main"
-    # matches BOTH "56 Main St" and "56 Main Street" in the DB. Searching
-    # for "56 Main Street" misses rows stored as "56 Main St".
-    parts = search_address.split()
-    short_search = " ".join(parts[:2]) if len(parts) >= 2 else (parts[0] if parts else "")
-    if not short_search:
-        return {"committed": False, "error": "search_address too short"}
 
-    or_filter = (
-        f"(address.ilike.*{short_search}*,"
-        f"property_name.ilike.*{short_search}*,"
-        f"complex_name.ilike.*{short_search}*)"
-    )
-    rows = sb_select("ace_properties", [
-        ("select", "id,address,property_name,complex_name,deal_notes,municipality"),
-        ("or", or_filter),
-        ("deleted_at", "is.null"),
-        ("is_archived", "eq.false"),
-        ("limit", "25"),
-    ]) or []
+    # Try a sequence of progressively shorter ILIKE prefixes, biggest first.
+    # Use first-2-words ("56 Main"), then number-only ("56"), so we match
+    # both "56 Main St, Flemington, NJ" and oddly-stored variants.
+    parts = search_address.split()
+    candidate_prefixes = []
+    if len(parts) >= 2:
+        candidate_prefixes.append(" ".join(parts[:2]))
+    if parts:
+        candidate_prefixes.append(parts[0])
+    candidate_prefixes = list(dict.fromkeys(candidate_prefixes))  # dedupe, keep order
+
+    seen_ids = set()
+    rows = []
+    for prefix in candidate_prefixes:
+        or_filter = (
+            f"(address.ilike.*{prefix}*,"
+            f"property_name.ilike.*{prefix}*,"
+            f"complex_name.ilike.*{prefix}*)"
+        )
+        try:
+            batch = sb_select("ace_properties", [
+                ("select", "id,address,property_name,complex_name,deal_notes,municipality"),
+                ("or", or_filter),
+                ("deleted_at", "is.null"),
+                ("is_archived", "eq.false"),
+                ("limit", "30"),
+            ]) or []
+        except Exception as e:
+            print(f"[find_property] search error for prefix={prefix!r}: {e}",
+                  file=sys.stderr, flush=True)
+            continue
+        for r in batch:
+            if r["id"] not in seen_ids:
+                seen_ids.add(r["id"])
+                rows.append(r)
+        if rows:
+            # We have something — prefer the strictest prefix that returned hits.
+            break
 
     # Normalize-match against address / property_name / complex_name.
-    # A row counts as a candidate if ANY of the three columns has a
-    # normalized substring overlap with the cleaned search.
     candidates = []
     for r in rows:
         for col in ("address", "property_name", "complex_name"):
             field = _norm_address(r.get(col) or "")
-            if field and (clean_search in field or field in clean_search):
+            if not field:
+                continue
+            if clean_search in field or field in clean_search:
                 candidates.append(r)
                 break
 
+    # Fallback: if normalize-overlap is too strict (e.g., search is just a
+    # number like "56" and rows have "56" but city differs), accept any row
+    # whose address starts with the search number.
+    if not candidates and rows and parts:
+        for r in rows:
+            for col in ("address", "property_name", "complex_name"):
+                field = (r.get(col) or "").lower()
+                if field.startswith(parts[0].lower()):
+                    candidates.append(r)
+                    break
+
     if not candidates:
         return {
-            "committed": False,
-            "error": f"no property matches '{search_address}'",
-            "_searched_prefix": short_search,
+            "status": "not_found",
+            "_searched_prefixes": candidate_prefixes,
             "_rows_scanned": len(rows),
+            "_sample_rows": [r.get("address") for r in rows[:3]],
         }
     if len(candidates) > 1:
         labels = [
             (c.get("address") or c.get("property_name") or c.get("complex_name") or "?")
-            for c in candidates[:3]
+            for c in candidates[:5]
         ]
-        return {
-            "committed": False,
-            "ambiguous": True,
-            "error": f"multiple matches: {', '.join(labels)}",
-        }
+        return {"status": "ambiguous", "matches": labels}
 
     match = candidates[0]
-    deal_id = match["id"]
+    return {
+        "status": "found",
+        "deal_id": match["id"],
+        "address": match.get("address"),
+        "property_name": match.get("property_name"),
+        "deal_notes": match.get("deal_notes"),
+    }
+
+
+def commit_update_deal(intent: dict) -> dict:
+    data = intent.get("data") or {}
+    search_address = (data.get("search_address") or "").strip()
+    updates = data.get("updates") or {}
+    if not updates:
+        return {"committed": False, "error": "no updates in pending intent"}
+
+    # Prefer the deal_id pre-resolved during forward_to_assist — saves a
+    # second search and avoids any chance of resolving a different row on
+    # the commit pass.
+    deal_id = intent.get("_resolved_deal_id")
+    address = intent.get("_resolved_address")
+    deal_notes_existing = intent.get("_resolved_deal_notes") or ""
+
+    if not deal_id:
+        validation = find_property(search_address)
+        if validation.get("status") == "not_found":
+            return {"committed": False, "error": "not_found", **validation}
+        if validation.get("status") == "ambiguous":
+            return {"committed": False, "ambiguous": True, **validation}
+        deal_id = validation["deal_id"]
+        address = validation["address"]
+        deal_notes_existing = validation.get("deal_notes") or ""
+
+    match = {"id": deal_id, "address": address, "deal_notes": deal_notes_existing}
 
     patch = {}
     for k, v in updates.items():
@@ -416,6 +474,24 @@ def forward_to_assist(transcript: str, prev_turns=None) -> dict:
     if response.get("error"):
         return {"error": response["error"]}
     result = response.get("result") or {}
+
+    # Pre-validate update_deal intents against the live DB so we don't
+    # ask the user to confirm something we'll just fail at. If the property
+    # doesn't exist (or is ambiguous), skip the confirmation step entirely
+    # and tell them upfront.
+    if result.get("intent") == "update_deal":
+        sa = ((result.get("data") or {}).get("search_address") or "").strip()
+        validation = find_property(sa)
+        result["_validation"] = validation
+        if validation.get("status") == "found":
+            result["_resolved_deal_id"] = validation["deal_id"]
+            result["_resolved_address"] = validation["address"]
+            result["_resolved_deal_notes"] = validation.get("deal_notes") or ""
+        else:
+            # not_found / ambiguous → frontend & system prompt know to skip
+            # the "Say yes to confirm" step.
+            result["_skip_confirmation"] = True
+
     # Always tag so Claude knows this is a write-intent payload, not read data.
     result["_write_intent"] = True
     return result
@@ -799,11 +875,24 @@ def ask_claude(transcript: str, command_file, facts, prev_turns=None) -> str:
         "# Write-intent handling (when data has _write_intent: true)\n"
         "The crm-ai-assist function returned a structured intent (seller_lead, "
         "buyer_criteria, update_deal, or pitch_log). Speak a natural-language "
-        "preview of what's about to happen using the fields in the data, then "
-        "end with: 'Say yes to confirm, or open the ✦ button to edit fields.' "
-        "Example for seller_lead: 'Got it — about to create John Smith with "
-        "phone 201-555-1234, plus a 12-unit multifamily at 45 Park Ave Bayonne "
-        "asking $2.5M. Say yes to confirm, or open the ✦ button to edit fields.'\n"
+        "preview of what's about to happen using the fields in the data.\n"
+        "\n"
+        "FOR update_deal SPECIFICALLY — check the `_validation` object FIRST:\n"
+        "- If `_validation.status == 'not_found'`: the property doesn't exist "
+        "in Ace. Speak ONLY: 'Couldn't find a deal matching [search_address]. "
+        "Check the address — it might be stored differently in Ace.' Do NOT "
+        "say 'about to update' or 'say yes' — there's nothing to confirm.\n"
+        "- If `_validation.status == 'ambiguous'`: speak the matches list and "
+        "ask which one. Example: 'Found two — 56 Main in Flemington and 56 "
+        "Main Avenue in Newark. Which one?' Do NOT ask for yes/no.\n"
+        "- If `_validation.status == 'found'`: speak the preview using the "
+        "EXACT `_resolved_address` (the DB form), not the user's spoken "
+        "approximation, then end with 'Say yes to confirm.' Example: 'Found "
+        "it — 56 Main St, Flemington. About to set asking price to $3M. Say "
+        "yes to confirm.'\n"
+        "\n"
+        "FOR other write intents (no _validation), speak the preview and end "
+        "with: 'Say yes to confirm, or open the ✦ button to edit fields.'\n"
         "\n"
         "# Commit handling (when data has _pending_commit: true)\n"
         "User said yes to a previous write preview. Behavior:\n"

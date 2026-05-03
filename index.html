@@ -64728,6 +64728,33 @@ function _aiSelectDealForUpdate(dealId){
         });
         if(history.length > HISTORY_MAX) history = history.slice(-HISTORY_MAX);
       }
+      // If a voice commit just landed, sync the CRM's in-memory cache so
+      // the user sees the new value without manually reloading. The
+      // dashboard's own ✦ commit calls _quickRefreshData(); we call the
+      // same thing here.
+      const facts = data.facts || {};
+      if(facts.committed === true && facts.address){
+        try {
+          if(typeof _quickRefreshData === 'function'){
+            _quickRefreshData().catch(()=>{});
+          }
+          // If the affected deal is the one currently open, re-render it
+          // after the refresh has had a moment to repopulate allDeals.
+          if(typeof currentDeal !== 'undefined' && currentDeal && currentDeal.id){
+            setTimeout(() => {
+              try {
+                const fresh = (typeof allDeals !== 'undefined' && Array.isArray(allDeals))
+                  ? allDeals.find(d => d.id === currentDeal.id)
+                  : null;
+                if(fresh && typeof openDeal === 'function') openDeal(fresh);
+                if(typeof buildSidebar === 'function'){
+                  buildSidebar(document.getElementById('sideSearch')?.value || '');
+                }
+              } catch(e){ console.warn('voice post-commit re-render failed:', e); }
+            }, 1000);
+          }
+        } catch(e){ console.warn('voice refresh failed:', e); }
+      }
       setStatus('Ready.');
     } catch(err){
       appendMsg('System', 'Error: ' + (err.message || err));

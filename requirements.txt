@@ -2,5 +2,8 @@ fastapi>=0.110.0
 python-multipart>=0.0.9
 openai>=1.40.0
 anthropic>=0.39.0
-# supabase-py removed: incompatible with Vercel/Lambda (httpx EBUSY).
-# api/turn.py talks to PostgREST directly via stdlib urllib instead.
+httpx>=0.27.0
+# supabase-py removed: incompatible with Vercel/Lambda
+# (its httpx config + async transport hit EBUSY).
+# api/turn.py uses httpx.Client (sync, http2=False) to talk to
+# PostgREST directly, sidestepping whatever was breaking the SDK.

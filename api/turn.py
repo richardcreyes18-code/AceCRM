@@ -17,12 +17,10 @@ import io
 import re
 import json
 import base64
-import urllib.parse
-import urllib.request
-import urllib.error
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
+import httpx
 from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 from openai import OpenAI
@@ -33,38 +31,38 @@ PROJECT_ROOT = Path(__file__).resolve().parent.parent
 AGENT_DIR = PROJECT_ROOT / "ace-agent"
 COMMANDS_DIR = AGENT_DIR / "commands"
 
-OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
-ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
-SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
-SUPABASE_KEY = os.environ["SUPABASE_KEY"]
+OPENAI_API_KEY = os.environ["OPENAI_API_KEY"].strip()
+ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"].strip()
+SUPABASE_URL = os.environ["SUPABASE_URL"].strip().rstrip("/")
+SUPABASE_KEY = os.environ["SUPABASE_KEY"].strip()
 
 openai = OpenAI(api_key=OPENAI_API_KEY)
 anthropic = Anthropic(api_key=ANTHROPIC_API_KEY)
 
 
 # ───────────────── direct PostgREST client ─────────────────
-# We call Supabase via raw HTTP using urllib (stdlib) instead of the
-# `supabase` Python SDK. The SDK uses httpx under the hood, which fails
-# with `ConnectError: [Errno 16] Device or resource busy` inside the
-# Vercel/Lambda Python runtime. urllib uses the OS socket layer directly
-# and has no such issue.
+# We call Supabase via httpx instead of the `supabase` Python SDK or
+# stdlib urllib. Both of those failed inside Vercel's Python runtime
+# with `[Errno 16] Device or resource busy` on every outbound request
+# to *.supabase.co. The openai and anthropic SDKs (also httpx-based)
+# work fine in the same function, so a direct httpx.Client call sidesteps
+# whatever Lambda-level socket weirdness is breaking the stdlib path.
+_SB_HEADERS = {
+    "apikey": SUPABASE_KEY,
+    "Authorization": f"Bearer {SUPABASE_KEY}",
+    "Accept": "application/json",
+}
+
+
 def sb_select(table: str, params) -> list:
-    qs = urllib.parse.urlencode(params, doseq=True, safe=",.*()")
-    url = f"{SUPABASE_URL}/rest/v1/{table}?{qs}"
-    req = urllib.request.Request(
-        url,
-        headers={
-            "apikey": SUPABASE_KEY,
-            "Authorization": f"Bearer {SUPABASE_KEY}",
-            "Accept": "application/json",
-        },
-    )
-    try:
-        with urllib.request.urlopen(req, timeout=10) as resp:
-            return json.loads(resp.read())
-    except urllib.error.HTTPError as e:
-        body = e.read().decode("utf-8", errors="replace")[:300]
-        raise RuntimeError(f"PostgREST {e.code} on {table}: {body}") from None
+    url = f"{SUPABASE_URL}/rest/v1/{table}"
+    with httpx.Client(timeout=10.0, http2=False) as client:
+        r = client.get(url, params=params, headers=_SB_HEADERS)
+    if r.status_code >= 400:
+        raise RuntimeError(
+            f"PostgREST {r.status_code} on {table}: {r.text[:300]}"
+        )
+    return r.json()
 
 PERSONA = (AGENT_DIR / "persona.md").read_text()
 SETTINGS = (AGENT_DIR / "settings.md").read_text()

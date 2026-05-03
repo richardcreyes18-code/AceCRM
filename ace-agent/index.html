@@ -79,6 +79,9 @@
   .turn.ace .who { color: var(--ace); }
   .turn .text { color: var(--text); }
   .turn .text.error { color: #ff7675; }
+  .turn details { margin-top: 6px; }
+  .turn details summary { cursor: pointer; font-size: 11px; color: var(--muted); user-select: none; }
+  .turn details pre { font-size: 11px; color: var(--muted); background: rgba(255,255,255,0.03); padding: 8px; border-radius: 6px; overflow-x: auto; max-height: 240px; margin-top: 6px; white-space: pre-wrap; word-break: break-word; }
   .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 40px 0; }
 </style>
 </head>
@@ -86,7 +89,7 @@
   <div class="wrap">
     <header>
       <h1>ace-agent</h1>
-      <span class="hint">Caps Lock or click to talk</span>
+      <span class="hint">Spacebar or click to talk</span>
     </header>
 
     <div>
@@ -97,7 +100,7 @@
     </div>
 
     <div id="transcript" class="transcript">
-      <div class="empty">Press Caps Lock or tap the mic to start.</div>
+      <div class="empty">Press space or tap the mic to start.</div>
     </div>
   </div>
 
@@ -125,13 +128,22 @@ function clearEmpty() {
   if (e) e.remove();
 }
 
-function appendTurn(who, text, isError) {
+function appendTurn(who, text, isError, debug) {
   clearEmpty();
   const div = document.createElement('div');
   div.className = `turn ${who.toLowerCase()}`;
   const w = document.createElement('span'); w.className = 'who'; w.textContent = who;
   const t = document.createElement('span'); t.className = 'text' + (isError ? ' error' : ''); t.textContent = text;
   div.appendChild(w); div.appendChild(t);
+  if (debug && (debug.command || debug.facts)) {
+    const det = document.createElement('details');
+    const sum = document.createElement('summary');
+    sum.textContent = debug.command ? `data (${debug.command})` : 'data';
+    const pre = document.createElement('pre');
+    pre.textContent = JSON.stringify(debug.facts ?? null, null, 2);
+    det.appendChild(sum); det.appendChild(pre);
+    div.appendChild(det);
+  }
   transcriptEl.appendChild(div);
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
 }
@@ -194,7 +206,7 @@ async function sendTurn(blob) {
       return;
     }
     if (data.transcript) appendTurn('You', data.transcript);
-    if (data.reply) appendTurn('Ace', data.reply);
+    if (data.reply) appendTurn('Ace', data.reply, false, { command: data.command, facts: data.facts });
     if (data.audio) {
       const audio = new Audio('data:audio/mp3;base64,' + data.audio);
       audio.play().catch(() => {});
@@ -211,8 +223,10 @@ async function sendTurn(blob) {
 micBtn.addEventListener('click', () => { recording ? stopRecording() : startRecording(); });
 
 document.addEventListener('keydown', (e) => {
-  if (e.code !== 'CapsLock') return;
+  if (e.code !== 'Space') return;
+  if (isTyping(e.target)) return;
   if (e.repeat) return;
+  e.preventDefault();
   recording ? stopRecording() : startRecording();
 });
 </script>

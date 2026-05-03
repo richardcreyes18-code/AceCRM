@@ -94,14 +94,14 @@ def fetch_daily_brief() -> dict:
         if (t.get("status") or "").lower() not in ("done", "completed", "archived")
     ][:5]
 
-    cutoff = _iso_hours_ago(48)
+    cutoff = _iso_hours_ago(7 * 24)  # broaden to 7 days so a quiet 48h doesn't read as empty
     deals = (
         supabase.table("ace_properties")
-        .select("address,property_name,pipeline_stage,asking_price,pitch_out_price,updated_at")
+        .select("address,property_name,pipeline_stage,asking_price,pitch_out_price,top_priority,updated_at")
         .is_("deleted_at", "null").eq("is_archived", False)
         .gte("updated_at", cutoff)
         .order("updated_at", desc=True)
-        .limit(10).execute().data or []
+        .limit(20).execute().data or []
     )
     deals.sort(key=lambda d: STAGE_RANK.get(d.get("pipeline_stage") or "", 99))
     recent_moves = []
@@ -111,31 +111,31 @@ def fetch_daily_brief() -> dict:
             "stage": d.get("pipeline_stage"),
             "asking": _fmt_money(d["asking_price"]) if d.get("asking_price") else None,
             "pitch_out": _fmt_money(d["pitch_out_price"]) if d.get("pitch_out_price") else None,
+            "days_ago": _days_since(d.get("updated_at")),
         })
 
-    stale_cutoff = _iso_hours_ago(14 * 24)
-    stale = (
+    # Always-on fallback: top-priority active deals so the brief is never empty
+    top_priority = (
         supabase.table("ace_properties")
         .select("address,property_name,pipeline_stage,updated_at")
         .is_("deleted_at", "null").eq("is_archived", False)
         .eq("top_priority", True)
-        .lt("updated_at", stale_cutoff)
-        .order("updated_at", desc=False).limit(3).execute().data or []
+        .order("updated_at", desc=False).limit(5).execute().data or []
     )
-    stale_priorities = [
+    top_priority_active = [
         {
-            "label": s.get("address") or s.get("property_name") or "unnamed",
-            "stage": s.get("pipeline_stage"),
-            "days_idle": _days_since(s.get("updated_at")),
+            "label": p.get("address") or p.get("property_name") or "unnamed",
+            "stage": p.get("pipeline_stage"),
+            "days_idle": _days_since(p.get("updated_at")),
         }
-        for s in stale
-        if (s.get("pipeline_stage") or "") not in ("Closed", "Dead", "Lost")
+        for p in top_priority
+        if (p.get("pipeline_stage") or "") not in ("Closed", "Dead", "Lost")
     ]
 
     return {
         "tasks_due_or_overdue": open_tasks,
         "recent_deal_moves": recent_moves,
-        "stale_top_priority": stale_priorities,
+        "top_priority_active": top_priority_active,
     }
 
 
@@ -442,7 +442,13 @@ async def turn(audio: UploadFile = File(...)):
         mp3 = synthesize(reply)
         audio_b64 = base64.b64encode(mp3).decode("ascii")
 
-        return {"transcript": transcript, "reply": reply, "audio": audio_b64}
+        return {
+            "transcript": transcript,
+            "reply": reply,
+            "audio": audio_b64,
+            "command": cmd_file,
+            "facts": facts,
+        }
 
     except HTTPException:
         raise

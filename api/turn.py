@@ -17,6 +17,9 @@ import io
 import re
 import json
 import base64
+import urllib.parse
+import urllib.request
+import urllib.error
 from pathlib import Path
 from datetime import datetime, timedelta, timezone
 
@@ -24,7 +27,6 @@ from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.responses import JSONResponse
 from openai import OpenAI
 from anthropic import Anthropic
-from supabase import create_client, Client
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
@@ -33,17 +35,36 @@ COMMANDS_DIR = AGENT_DIR / "commands"
 
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"]
 ANTHROPIC_API_KEY = os.environ["ANTHROPIC_API_KEY"]
-SUPABASE_URL = os.environ["SUPABASE_URL"]
+SUPABASE_URL = os.environ["SUPABASE_URL"].rstrip("/")
 SUPABASE_KEY = os.environ["SUPABASE_KEY"]
 
 openai = OpenAI(api_key=OPENAI_API_KEY)
 anthropic = Anthropic(api_key=ANTHROPIC_API_KEY)
 
-# supabase client is created per-request inside the handler.
-# Reusing a module-level Client across Vercel warm-container invocations
-# led to ConnectError [Errno 16] EBUSY on the second+ call, since the
-# underlying httpx connection went stale between cold/warm cycles.
-supabase: Client = None  # type: ignore[assignment]
+
+# ───────────────── direct PostgREST client ─────────────────
+# We call Supabase via raw HTTP using urllib (stdlib) instead of the
+# `supabase` Python SDK. The SDK uses httpx under the hood, which fails
+# with `ConnectError: [Errno 16] Device or resource busy` inside the
+# Vercel/Lambda Python runtime. urllib uses the OS socket layer directly
+# and has no such issue.
+def sb_select(table: str, params) -> list:
+    qs = urllib.parse.urlencode(params, doseq=True, safe=",.*()")
+    url = f"{SUPABASE_URL}/rest/v1/{table}?{qs}"
+    req = urllib.request.Request(
+        url,
+        headers={
+            "apikey": SUPABASE_KEY,
+            "Authorization": f"Bearer {SUPABASE_KEY}",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            return json.loads(resp.read())
+    except urllib.error.HTTPError as e:
+        body = e.read().decode("utf-8", errors="replace")[:300]
+        raise RuntimeError(f"PostgREST {e.code} on {table}: {body}") from None
 
 PERSONA = (AGENT_DIR / "persona.md").read_text()
 SETTINGS = (AGENT_DIR / "settings.md").read_text()
@@ -87,27 +108,25 @@ def _days_since(ts):
 # ───────────────── live Supabase fetches ─────────────────
 def fetch_daily_brief() -> dict:
     today = datetime.now(timezone.utc).date().isoformat()
-    tasks = (
-        supabase.table("ace_tasks")
-        .select("task,due_date,priority,status")
-        .lte("due_date", today)
-        .not_.is_("due_date", "null")
-        .execute().data or []
-    )
+    tasks = sb_select("ace_tasks", [
+        ("select", "task,due_date,priority,status"),
+        ("due_date", f"lte.{today}"),
+        ("due_date", "not.is.null"),
+    ]) or []
     open_tasks = [
         t for t in tasks
         if (t.get("status") or "").lower() not in ("done", "completed", "archived")
     ][:5]
 
-    cutoff = _iso_hours_ago(7 * 24)  # broaden to 7 days so a quiet 48h doesn't read as empty
-    deals = (
-        supabase.table("ace_properties")
-        .select("address,property_name,pipeline_stage,asking_price,pitch_out_price,top_priority,updated_at")
-        .is_("deleted_at", "null").eq("is_archived", False)
-        .gte("updated_at", cutoff)
-        .order("updated_at", desc=True)
-        .limit(20).execute().data or []
-    )
+    cutoff = _iso_hours_ago(7 * 24)
+    deals = sb_select("ace_properties", [
+        ("select", "address,property_name,pipeline_stage,asking_price,pitch_out_price,top_priority,updated_at"),
+        ("deleted_at", "is.null"),
+        ("is_archived", "eq.false"),
+        ("updated_at", f"gte.{cutoff}"),
+        ("order", "updated_at.desc"),
+        ("limit", "20"),
+    ]) or []
     deals.sort(key=lambda d: STAGE_RANK.get(d.get("pipeline_stage") or "", 99))
     recent_moves = []
     for d in deals[:5]:
@@ -119,14 +138,14 @@ def fetch_daily_brief() -> dict:
             "days_ago": _days_since(d.get("updated_at")),
         })
 
-    # Always-on fallback: top-priority active deals so the brief is never empty
-    top_priority = (
-        supabase.table("ace_properties")
-        .select("address,property_name,pipeline_stage,updated_at")
-        .is_("deleted_at", "null").eq("is_archived", False)
-        .eq("top_priority", True)
-        .order("updated_at", desc=False).limit(5).execute().data or []
-    )
+    top_priority = sb_select("ace_properties", [
+        ("select", "address,property_name,pipeline_stage,updated_at"),
+        ("deleted_at", "is.null"),
+        ("is_archived", "eq.false"),
+        ("top_priority", "eq.true"),
+        ("order", "updated_at.asc"),
+        ("limit", "5"),
+    ]) or []
     top_priority_active = [
         {
             "label": p.get("address") or p.get("property_name") or "unnamed",
@@ -148,14 +167,14 @@ def fetch_contact(name: str) -> dict:
     if not name:
         return {"error": "no name provided"}
 
-    contacts = (
-        supabase.table("ace_contacts")
-        .select("id,name,company,contact_role,phone_mobile,phone_office,email,updated_at")
-        .is_("deleted_at", "null")
-        .ilike("name", f"%{name}%")
-        .order("updated_at", desc=True)
-        .limit(3).execute().data or []
-    )
+    contacts = sb_select("ace_contacts", [
+        ("select", "id,name,company,contact_role,phone_mobile,phone_office,email,updated_at"),
+        ("deleted_at", "is.null"),
+        ("name", f"ilike.*{name}*"),
+        ("order", "updated_at.desc"),
+        ("limit", "3"),
+    ]) or []
+
     if not contacts:
         return {"matches": [], "query": name}
 
@@ -170,19 +189,20 @@ def fetch_contact(name: str) -> dict:
         }
 
     c = contacts[0]
-    notes = (
-        supabase.table("ace_contact_notes")
-        .select("subject,body,created_at")
-        .eq("contact_id", c["id"]).is_("deleted_at", "null")
-        .order("created_at", desc=True).limit(2).execute().data or []
-    )
-    props = (
-        supabase.table("ace_properties")
-        .select("address,property_name,pipeline_stage")
-        .eq("owner_contact_id", c["id"])
-        .is_("deleted_at", "null").eq("is_archived", False)
-        .limit(3).execute().data or []
-    )
+    notes = sb_select("ace_contact_notes", [
+        ("select", "subject,body,created_at"),
+        ("contact_id", f"eq.{c['id']}"),
+        ("deleted_at", "is.null"),
+        ("order", "created_at.desc"),
+        ("limit", "2"),
+    ]) or []
+    props = sb_select("ace_properties", [
+        ("select", "address,property_name,pipeline_stage"),
+        ("owner_contact_id", f"eq.{c['id']}"),
+        ("deleted_at", "is.null"),
+        ("is_archived", "eq.false"),
+        ("limit", "3"),
+    ]) or []
     return {
         "contact": {
             "name": c.get("name"),
@@ -206,22 +226,23 @@ def fetch_contact(name: str) -> dict:
 def fetch_deal(query: str) -> dict:
     if not query:
         return {"error": "no query provided"}
-    pattern = f"%{query}%"
-    deals = (
-        supabase.table("ace_properties")
-        .select(
-            "id,address,property_name,complex_name,pipeline_stage,deal_tag,"
-            "asking_price,offer_price,pitch_out_price,target_seller_net,"
-            "cap_rate_crm,number_of_units,no_of_units,owner_contact_id,updated_at"
-        )
-        .is_("deleted_at", "null").eq("is_archived", False)
-        .or_(
-            f"address.ilike.{pattern},"
-            f"property_name.ilike.{pattern},"
-            f"complex_name.ilike.{pattern}"
-        )
-        .order("updated_at", desc=True).limit(3).execute().data or []
+    or_filter = (
+        f"(address.ilike.*{query}*,"
+        f"property_name.ilike.*{query}*,"
+        f"complex_name.ilike.*{query}*)"
     )
+    deals = sb_select("ace_properties", [
+        ("select",
+         "id,address,property_name,complex_name,pipeline_stage,deal_tag,"
+         "asking_price,offer_price,pitch_out_price,target_seller_net,"
+         "cap_rate_crm,number_of_units,no_of_units,owner_contact_id,updated_at"),
+        ("deleted_at", "is.null"),
+        ("is_archived", "eq.false"),
+        ("or", or_filter),
+        ("order", "updated_at.desc"),
+        ("limit", "3"),
+    ]) or []
+
     if not deals:
         return {"matches": [], "query": query}
 
@@ -251,21 +272,22 @@ def fetch_deal(query: str) -> dict:
 
     owner = None
     if d.get("owner_contact_id"):
-        rows = (
-            supabase.table("ace_contacts")
-            .select("name,company")
-            .eq("id", d["owner_contact_id"]).is_("deleted_at", "null")
-            .limit(1).execute().data or []
-        )
+        rows = sb_select("ace_contacts", [
+            ("select", "name,company"),
+            ("id", f"eq.{d['owner_contact_id']}"),
+            ("deleted_at", "is.null"),
+            ("limit", "1"),
+        ]) or []
         if rows:
             owner = {"name": rows[0].get("name"), "company": rows[0].get("company")}
 
-    offers = (
-        supabase.table("ace_deal_offers")
-        .select("offer_type,party_name,amount,offer_date,is_winning,presentation_status")
-        .eq("deal_id", d["id"]).is_("deleted_at", "null")
-        .order("offer_date", desc=True).limit(2).execute().data or []
-    )
+    offers = sb_select("ace_deal_offers", [
+        ("select", "offer_type,party_name,amount,offer_date,is_winning,presentation_status"),
+        ("deal_id", f"eq.{d['id']}"),
+        ("deleted_at", "is.null"),
+        ("order", "offer_date.desc"),
+        ("limit", "2"),
+    ]) or []
     offer_list = [
         {
             "type": o.get("offer_type"),
@@ -277,12 +299,12 @@ def fetch_deal(query: str) -> dict:
         for o in offers
     ]
 
-    open_tasks = (
-        supabase.table("ace_tasks")
-        .select("task,due_date,priority,status")
-        .eq("property_id", d["id"])
-        .order("due_date", desc=False).limit(3).execute().data or []
-    )
+    open_tasks = sb_select("ace_tasks", [
+        ("select", "task,due_date,priority,status"),
+        ("property_id", f"eq.{d['id']}"),
+        ("order", "due_date.asc"),
+        ("limit", "3"),
+    ]) or []
     open_tasks = [
         t for t in open_tasks
         if (t.get("status") or "").lower() not in ("done", "completed", "archived")
@@ -426,8 +448,6 @@ app = FastAPI()
 
 @app.post("/api/turn")
 async def turn(audio: UploadFile = File(...)):
-    global supabase
-    supabase = create_client(SUPABASE_URL, SUPABASE_KEY)
     try:
         audio_bytes = await audio.read()
         if not audio_bytes:

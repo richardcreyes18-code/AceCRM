@@ -2,4 +2,5 @@ fastapi>=0.110.0
 python-multipart>=0.0.9
 openai>=1.40.0
 anthropic>=0.39.0
-supabase>=2.7.0
+# supabase-py removed: incompatible with Vercel/Lambda (httpx EBUSY).
+# api/turn.py talks to PostgREST directly via stdlib urllib instead.

@@ -64728,32 +64728,68 @@ function _aiSelectDealForUpdate(dealId){
         });
         if(history.length > HISTORY_MAX) history = history.slice(-HISTORY_MAX);
       }
-      // If a voice commit just landed, sync the CRM's in-memory cache so
-      // the user sees the new value without manually reloading. The
-      // dashboard's own ✦ commit calls _quickRefreshData(); we call the
-      // same thing here.
+      // Voice commit just landed — patch the in-memory allDeals row
+      // directly and re-render INSTANTLY (mirrors what _aiCommitDealUpdate
+      // does after the ✦ button commit). _quickRefreshData would work but
+      // re-fetches all ~5700 deals which takes seconds.
       const facts = data.facts || {};
-      if(facts.committed === true && facts.address){
+      if(facts.committed === true && facts.deal_id){
         try {
+          // Title-case mirrors of the snake_case columns — openDeal()
+          // reads these "Airtable-style" names. Mutating both keeps the
+          // displayed values correct after re-render.
+          const FIELD_MAP = {
+            asking_price: 'Asking Price', offer_price: 'Offer Price',
+            pitch_out_price: 'Pitch Out Price', target_seller_net: 'Target Seller Net',
+            pipeline_stage: 'Pipeline Stage', deal_tag: 'Deal Tag',
+            deal_notes: 'Deal Notes', next_steps: 'Next Steps',
+            general_property_notes: 'General Property Notes',
+            crm_asset_classification: 'CRM Asset Classification',
+            why_selling: 'Why Selling', noi: 'NOI', cap_rate_crm: 'Cap Rate',
+            gross_rental_income_monthly: 'Gross Rental Income (Monthly)',
+            expenses_monthly: 'Expenses Monthly',
+            gross_revenue_yearly: 'Gross Revenue (Yearly)',
+            expenses_yearly: 'Expenses (Yearly)',
+            number_of_units: 'Number of Units', no_of_units: '# of Units',
+            square_footage: 'Square Footage',
+            is_archived: 'Is Archived', top_priority: 'Top Priority',
+            discuss_in_meeting: 'Discuss In Meeting',
+          };
+          const target = (typeof allDeals !== 'undefined' && Array.isArray(allDeals))
+            ? allDeals.find(d => d.id === facts.deal_id) : null;
+          if(target){
+            // Apply each updated field in both forms.
+            const finalValues = facts.final_values || {};
+            Object.entries(finalValues).forEach(([k, v]) => {
+              target[k] = v;
+              if(FIELD_MAP[k]) target[FIELD_MAP[k]] = v;
+            });
+            // deal_notes was excluded from final_values (it's append-only);
+            // pull the new full text from updated_deal_notes if present.
+            if(facts.updated_deal_notes != null){
+              target.deal_notes = facts.updated_deal_notes;
+              target['Deal Notes'] = facts.updated_deal_notes;
+            }
+            // Recalculate derived fields (cap rate, commission, etc.) using
+            // the CRM's own loader if available.
+            if(typeof _lf === 'object' && _lf && typeof _lf.loadOnto === 'function'){
+              try { _lf.loadOnto(target); } catch(_){ }
+            }
+            // Re-render the open deal card if it's the one we updated.
+            if(typeof currentDeal !== 'undefined' && currentDeal &&
+               currentDeal.id === facts.deal_id && typeof openDeal === 'function'){
+              try { openDeal(target); } catch(_){ }
+            }
+            // Refresh sidebar so prices/stages update there too.
+            if(typeof buildSidebar === 'function'){
+              try { buildSidebar(document.getElementById('sideSearch')?.value || ''); } catch(_){ }
+            }
+          }
+          // Background full-refresh so any other tabs / derived data resync.
           if(typeof _quickRefreshData === 'function'){
             _quickRefreshData().catch(()=>{});
           }
-          // If the affected deal is the one currently open, re-render it
-          // after the refresh has had a moment to repopulate allDeals.
-          if(typeof currentDeal !== 'undefined' && currentDeal && currentDeal.id){
-            setTimeout(() => {
-              try {
-                const fresh = (typeof allDeals !== 'undefined' && Array.isArray(allDeals))
-                  ? allDeals.find(d => d.id === currentDeal.id)
-                  : null;
-                if(fresh && typeof openDeal === 'function') openDeal(fresh);
-                if(typeof buildSidebar === 'function'){
-                  buildSidebar(document.getElementById('sideSearch')?.value || '');
-                }
-              } catch(e){ console.warn('voice post-commit re-render failed:', e); }
-            }, 1000);
-          }
-        } catch(e){ console.warn('voice refresh failed:', e); }
+        } catch(e){ console.warn('voice instant-update failed:', e); }
       }
       setStatus('Ready.');
     } catch(err){

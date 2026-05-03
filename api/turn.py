@@ -543,6 +543,7 @@ def commit_update_deal(intent: dict) -> dict:
 
     return {
         "committed": True,
+        "deal_id": deal_id,  # frontend uses this to mutate allDeals in-place
         "address": match.get("address") or updated_row.get("address"),
         "fields_updated": list(patch.keys()),
         "field_count": len(patch),
@@ -554,6 +555,8 @@ def commit_update_deal(intent: dict) -> dict:
             for k in patch.keys()
             if k != "deal_notes"
         },
+        # Include deal_notes if it was updated so frontend can paste it in
+        "updated_deal_notes": updated_row.get("deal_notes") if "deal_notes" in patch else None,
     }
 
 

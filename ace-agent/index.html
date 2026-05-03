@@ -230,6 +230,17 @@ async function sendTurn(blob) {
     }
     if (data.transcript) appendTurn('You', data.transcript);
     if (data.reply) appendTurn('Ace', data.reply, false, { command: data.command, facts: data.facts });
+    // Mark the most recent uncommitted write-intent in history as committed
+    // when a write succeeds, so future confirms don't re-commit it.
+    if (data.facts && data.facts.committed === true) {
+      for (let i = history.length - 1; i >= 0; i--) {
+        const f = history[i].facts;
+        if (f && f._write_intent && !f._committed_already) {
+          f._committed_already = true;
+          break;
+        }
+      }
+    }
     if (data.audio) {
       stopCurrentAudio();
       currentAudio = new Audio('data:audio/mp3;base64,' + data.audio);

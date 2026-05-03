@@ -816,17 +816,41 @@ _PRONOUN_RE = re.compile(
 # Phrases that indicate the user wants to CREATE / UPDATE / LOG something
 # rather than read. Matched conservatively — when in doubt we let it fall
 # through to read commands or general Claude.
+# Verbs that signal a write
+_UPDATE_VERBS = r"(?:update|change|set|modify|edit|adjust|raise|lower|increase|decrease|bump|move)"
+# Field words the user might mention. Broad — covers everything in
+# ace_properties that crm-ai-assist knows how to update.
+_FIELD_WORDS = (
+    r"(?:asking|offer|pitch[\s-]?out|listing|sale|target|seller\s+net)?[\s-]?"
+    r"(?:price|amount|net|number|count|amount)|"
+    r"(?:pipeline\s+)?(?:stage|status|tag|priority)|"
+    r"(?:deal\s+|next\s+|general\s+(?:property\s+)?)?(?:notes?|step|steps)|"
+    r"noi|cap[\s-]?rate|gross|expenses?|vacancy|revenue|rental|income|"
+    r"square[\s-]?(?:footage|feet|foot)|sqft|sf|units?|number\s+of\s+units|"
+    r"(?:total\s+)?(?:building|gross|net)\s+(?:square|footage|sf)|"
+    r"year[\s-]?built|year[\s-]?renovated|parking|stories|units|"
+    r"owner|seller|buyer|address|description|complex|"
+    r"mortgage|loan|interest[\s-]?rate|down[\s-]?payment|amortization|"
+    r"property[\s-]?(?:type|class|use|description)|asset[\s-]?(?:type|class)|"
+    r"location[\s-]?(?:class|trending|type)|construction|condition|"
+    r"why[\s-]?selling|seller[\s-]?(?:type|motivation|financial)"
+)
 _WRITE_INTENT_RE = re.compile(
+    # CREATE / ADD patterns
     r"\b(?:create|add|new|log|enter)\s+(?:a\s+|the\s+)?"
     r"(?:seller|buyer|lead|pitch|deal|contact|property|note|task)\b"
-    r"|\bupdate\s+(?:the\s+)?(?:asking|price|stage|note|pipeline|noi|cap\s+rate|owner)\b"
-    r"|\bchange\s+(?:the\s+)?(?:asking|price|stage|owner|note|priority)\b"
-    r"|\bset\s+(?:the\s+)?(?:asking|price|stage|gross|noi|cap)\b"
+    # Field-explicit updates: "update <field>" / "change <field>" / etc.
+    rf"|\b{_UPDATE_VERBS}\s+(?:the\s+)?(?:total\s+|gross\s+|net\s+)?(?:{_FIELD_WORDS})\b"
+    # Generic update tied to a property reference: "update X for 56 Main"
+    rf"|\b{_UPDATE_VERBS}\s+(?:.{{1,80}}?)\s+(?:for|on|of|at)\s+\d+\s+\w+"
+    # Stage transitions
     r"|\bmove\s+.+?\s+to\s+(?:.+?\s+)?(?:stage|pitch\s+out|spread|accepted|asking|starter|closed)\b"
+    # Star / archive / mark
     r"|\bstar\s+.+?\s+(?:as\s+)?(?:top\s+priority|priority|hot)\b"
     r"|\barchive\s+(?:the\s+)?(?:deal|property|.+)\b"
     r"|\bmark\s+.+?\s+(?:top\s+priority|as\s+priority|archived)\b"
     r"|\bappend\s+(?:a\s+)?note\b"
+    # Call notes / pitches
     r"|\b(?:i|just)\s+(?:spoke|talked|met|called|got\s+a\s+call|got\s+off\s+the\s+phone)\b"
     r"|\bpitched\s+.+?\s+to\b"
     r"|\b(?:spoke|talked)\s+with\s+.+?\s+(?:about|at)\b",
@@ -847,12 +871,17 @@ def match_command(transcript: str, prev_turns=None):
     t = transcript.lower().strip().rstrip(".?!")
 
     # If the previous turn left a pending write preview AND this turn is a
-    # confirmation, route to a commit handler.
+    # confirmation, route to a commit handler. Skip entries that already
+    # committed (frontend marks them with _committed_already after success
+    # so we don't re-commit the same intent).
     if prev_turns and _CONFIRM_RE.match(t):
         for prev in reversed(prev_turns):
             facts = prev.get("facts") or {}
-            if isinstance(facts, dict) and facts.get("_write_intent"):
-                return ("write-commit", json.dumps(facts))
+            if not (isinstance(facts, dict) and facts.get("_write_intent")):
+                continue
+            if facts.get("_committed_already") or facts.get("committed") is True:
+                continue
+            return ("write-commit", json.dumps(facts))
 
     # Pronoun resolution — re-target the most recent entity-bearing turn.
     if prev_turns and _PRONOUN_RE.search(t):

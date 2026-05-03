@@ -407,22 +407,88 @@ def commit_update_deal(intent: dict) -> dict:
             patch[k] = v
 
     url = f"{SUPABASE_URL}/rest/v1/ace_properties"
-    print(f"[commit_update_deal] PATCH {deal_id} fields={list(patch.keys())}",
+    print(f"[commit_update_deal] PATCH id={deal_id} fields={list(patch.keys())} payload={patch}",
           file=sys.stderr, flush=True)
     with httpx.Client(timeout=10.0, http2=False) as client:
         resp = client.patch(
             url,
             params=[("id", f"eq.{deal_id}")],
             json=patch,
-            headers={**_SB_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+            headers={
+                **_SB_HEADERS,
+                "Content-Type": "application/json",
+                "Prefer": "return=representation",  # makes PostgREST return updated rows
+            },
         )
+
+    print(f"[commit_update_deal] response status={resp.status_code} body={resp.text[:300]}",
+          file=sys.stderr, flush=True)
+
     if resp.status_code >= 400:
-        return {"committed": False, "error": f"PATCH {resp.status_code}: {resp.text[:200]}"}
+        return {
+            "committed": False,
+            "error": f"PATCH {resp.status_code}: {resp.text[:300]}",
+            "_target_id": deal_id,
+            "_patch_sent": patch,
+        }
+
+    # PostgREST returns 200 + [] when 0 rows match. Without this check we'd
+    # report "committed: true" while nothing actually changed.
+    try:
+        resp_body = resp.json()
+    except (ValueError, json.JSONDecodeError):
+        resp_body = None
+
+    rows_affected = (
+        len(resp_body) if isinstance(resp_body, list)
+        else (1 if isinstance(resp_body, dict) else 0)
+    )
+    if rows_affected == 0:
+        return {
+            "committed": False,
+            "error": "PATCH returned 200 but affected 0 rows — likely RLS blocking UPDATE on ace_properties, or wrong id",
+            "_target_id": deal_id,
+            "_patch_sent": patch,
+            "_response_body": (resp.text[:300] if resp.text else "(empty)"),
+            "_status_code": resp.status_code,
+        }
+
+    # Sanity check: confirm the value actually landed by inspecting the
+    # returned row. If asking_price was meant to be 3000000 and the row
+    # comes back with the old value, something rejected the change.
+    updated_row = resp_body[0] if isinstance(resp_body, list) and resp_body else (
+        resp_body if isinstance(resp_body, dict) else {}
+    )
+    mismatch_fields = []
+    for k, v in patch.items():
+        if k == "deal_notes":
+            continue  # appended; comparison gets messy
+        actual = updated_row.get(k)
+        # Loose numeric comparison
+        try:
+            if v is not None and actual is not None and float(actual) == float(v):
+                continue
+        except (TypeError, ValueError):
+            pass
+        if actual != v:
+            mismatch_fields.append({"field": k, "expected": v, "actual": actual})
+
+    if mismatch_fields:
+        return {
+            "committed": False,
+            "error": f"PATCH succeeded but values did not change — {len(mismatch_fields)} field(s) mismatch",
+            "_target_id": deal_id,
+            "_address": match.get("address"),
+            "_mismatch": mismatch_fields,
+            "_response_body": resp.text[:400],
+        }
+
     return {
         "committed": True,
-        "address": match.get("address"),
+        "address": match.get("address") or updated_row.get("address"),
         "fields_updated": list(patch.keys()),
         "field_count": len(patch),
+        "rows_affected": rows_affected,
     }
 
 

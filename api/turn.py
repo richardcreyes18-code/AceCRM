@@ -910,6 +910,30 @@ def match_command(transcript: str, prev_turns=None):
     if m:
         return ("deal-snapshot.md", clean_entity_query(m.group(1)))
 
+    # Continuation of an incomplete write-intent. If the most recent
+    # write_intent in history had clarifying_questions OR empty updates,
+    # the user is almost certainly answering the agent's question — re-run
+    # the write-intent path so crm-ai-assist sees the full conversation
+    # and stitches the previous address with this turn's price (or
+    # whatever field was missing). Without this, "The new price is 2.8M"
+    # falls through to general Claude, which hallucinates a confirmation
+    # prompt with no actual intent stored — so the next "yes" commits
+    # against turn 1's empty updates.
+    if prev_turns:
+        for prev in reversed(prev_turns):
+            facts = prev.get("facts") or {}
+            if not (isinstance(facts, dict) and facts.get("_write_intent")):
+                continue
+            clarifying = facts.get("clarifying_questions") or []
+            data = facts.get("data") or {}
+            updates = data.get("updates") or {}
+            search_address = (data.get("search_address") or "").strip()
+            # "Incomplete" = needs clarification OR missing one of the two
+            # required fields for an update (search_address + updates).
+            if clarifying or not updates or not search_address:
+                return ("write-intent", transcript)
+            break  # most recent write intent was complete — don't intercept
+
     return None
 
 

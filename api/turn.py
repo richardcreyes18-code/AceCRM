@@ -295,14 +295,27 @@ def fetch_deal(query: str) -> dict:
 def match_command(transcript: str):
     t = transcript.lower().strip().rstrip(".?!")
 
-    if re.search(r"\b(daily|morning)\s+brief\b|\bbrief\s+me\b", t):
+    if re.search(
+        r"\b(daily|morning)\s+brief(ing)?\b"
+        r"|\bbrief\s+me\b"
+        r"|\b(?:my\s+|today'?s\s+)?briefing\b"
+        r"|\bwhat'?s\s+on\s+(?:my|the)\s+(?:plate|agenda)\b",
+        t,
+    ):
         return ("daily-brief.md", "")
 
-    m = re.search(r"\b(?:contact\s+lookup|find\s+contact|lookup|look\s+up)\s+(.+)$", t)
+    m = re.search(
+        r"\b(?:contact\s+lookup|find\s+contact|lookup|look\s+up|find|pull\s+up|tell\s+me\s+about)\s+(.+)$",
+        t,
+    )
     if m:
         return ("contact-lookup.md", m.group(1).strip())
 
-    m = re.search(r"\b(?:deal\s+snapshot|snapshot)\s+(.+)$", t)
+    m = re.search(
+        r"\b(?:deal\s+snapshot|snapshot|deal\s+on|"
+        r"what'?s\s+(?:going\s+on|happening)\s+(?:on|with))\s+(.+)$",
+        t,
+    )
     if m:
         return ("deal-snapshot.md", m.group(1).strip())
 
@@ -328,22 +341,41 @@ def ask_claude(transcript: str, command_file, facts) -> str:
     if command_file:
         cmd_path = COMMANDS_DIR / command_file
         if cmd_path.exists():
-            blocks.append(f"# Command spec: {command_file}\n\n{cmd_path.read_text()}")
+            blocks.append(
+                f"# Command spec (FOR YOUR REFERENCE ONLY)\n"
+                f"Below is the spec for '{command_file}'. The SQL queries shown "
+                f"are documentation — they have ALREADY been executed on your "
+                f"behalf and the results are in the 'Live data from Supabase' "
+                f"block below. Use the spec only to understand HOW to phrase "
+                f"the answer (which fields matter, what order to lead with). "
+                f"Do NOT describe, paraphrase, or repeat the SQL aloud.\n\n"
+                f"{cmd_path.read_text()}"
+            )
 
     if facts is not None:
         blocks.append(
-            "# Live data from Supabase\n"
+            "# Live data from Supabase (already fetched for you)\n"
             "These are the real, current values from AceCRM. Use them verbatim. "
             "Do NOT invent numbers, names, or dates not in this block. "
-            "If a field is null/missing, simply omit it from your reply.\n\n"
+            "If a field is null/missing, omit it from your reply.\n\n"
             f"```json\n{json.dumps(facts, indent=2, default=str)}\n```"
         )
 
     blocks.append(
-        "You are speaking through a TTS voice (OpenAI onyx). "
-        "Reply in 2 sentences max, plain spoken English, no markdown, no bullet "
-        "points. Under ~30 seconds of audio. If the data is empty, say so in "
-        "one sentence and stop."
+        "# Output rules — STRICT\n"
+        "You are speaking through a TTS voice (OpenAI onyx). Your reply will "
+        "be read aloud verbatim, so:\n"
+        "- 2 sentences max. Under ~30 seconds of audio.\n"
+        "- Plain spoken English. No markdown, no bullet points, no headers.\n"
+        "- NEVER write tool-call syntax (no <tool_call>, no <function_call>, "
+        "no XML tags of any kind). You do NOT have tools available.\n"
+        "- NEVER write or describe SQL queries, JSON, code blocks, or column "
+        "names. The user is hearing this, not reading it.\n"
+        "- If the 'Live data' block above is missing or empty for a command, "
+        "say 'I don't have that data right now' and stop. Do not improvise "
+        "or pretend to query a database.\n"
+        "- For general questions (no command matched), answer from your own "
+        "knowledge in Ricky's voice — short, direct, no hedging."
     )
     system = "\n\n---\n\n".join(blocks)
 
@@ -364,8 +396,22 @@ def transcribe(audio_bytes: bytes, filename: str) -> str:
     return (r.text or "").strip()
 
 
+_TAG_RE = re.compile(r"<[^>]+>")
+_CODE_RE = re.compile(r"```[\s\S]*?```")
+
+
+def sanitize_for_tts(text: str) -> str:
+    """Strip XML/HTML tags and code fences before TTS — last-resort guard
+    against the model leaking tool-call syntax or SQL into the voice channel."""
+    text = _CODE_RE.sub("", text)
+    text = _TAG_RE.sub("", text)
+    text = text.strip()
+    return text or "I had nothing to say back."
+
+
 def synthesize(text: str) -> bytes:
-    r = openai.audio.speech.create(model=TTS_MODEL, voice=TTS_VOICE, input=text)
+    clean = sanitize_for_tts(text)
+    r = openai.audio.speech.create(model=TTS_MODEL, voice=TTS_VOICE, input=clean)
     return r.content
 
 

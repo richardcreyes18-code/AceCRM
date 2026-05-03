@@ -86,7 +86,7 @@
   <div class="wrap">
     <header>
       <h1>ace-agent</h1>
-      <span class="hint">Spacebar or click to talk</span>
+      <span class="hint">Caps Lock or click to talk</span>
     </header>
 
     <div>
@@ -97,7 +97,7 @@
     </div>
 
     <div id="transcript" class="transcript">
-      <div class="empty">Press space or tap the mic to start.</div>
+      <div class="empty">Press Caps Lock or tap the mic to start.</div>
     </div>
   </div>
 
@@ -211,10 +211,8 @@ async function sendTurn(blob) {
 micBtn.addEventListener('click', () => { recording ? stopRecording() : startRecording(); });
 
 document.addEventListener('keydown', (e) => {
-  if (e.code !== 'Space') return;
-  if (isTyping(e.target)) return;
+  if (e.code !== 'CapsLock') return;
   if (e.repeat) return;
-  e.preventDefault();
   recording ? stopRecording() : startRecording();
 });
 </script>

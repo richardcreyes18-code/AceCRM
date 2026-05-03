@@ -270,6 +270,30 @@ def _norm_address(s: str) -> str:
     return re.sub(r"[^a-z0-9]", "", s)
 
 
+_CITY_RE = re.compile(
+    r"\bin\s+([A-Za-z][A-Za-z'\s\-]+?)(?:\s+(?:nj|ny|pa|new\s+jersey|new\s+york|pennsylvania)|[,.]|$)",
+    re.IGNORECASE,
+)
+
+
+def _extract_city(search_address: str) -> str:
+    """Pull a city name out of the search address. 'X Y Z in Flemington' →
+    'Flemington'. Returns '' if no city found."""
+    if not search_address:
+        return ""
+    m = _CITY_RE.search(search_address)
+    if m:
+        return m.group(1).strip()
+    # Comma-separated fallback: "56 Main St, Flemington, NJ"
+    if "," in search_address:
+        parts = [p.strip() for p in search_address.split(",") if p.strip()]
+        for part in parts[1:]:  # skip the street part
+            words = part.split()
+            if words and not re.match(r"^\d", words[0]) and len(words[0]) > 1 and words[0].lower() not in ("nj", "ny", "pa", "ca", "fl", "tx", "usa"):
+                return words[0]
+    return ""
+
+
 def find_property(search_address: str) -> dict:
     """Search ace_properties for a row matching `search_address`. Returns
     {status, ...} where status is 'found' / 'ambiguous' / 'not_found'.
@@ -279,6 +303,7 @@ def find_property(search_address: str) -> dict:
         return {"status": "not_found", "reason": "no search_address"}
     search_address = search_address.strip()
     clean_search = _norm_address(search_address)
+    city = _extract_city(search_address)
 
     # Try a sequence of progressively shorter ILIKE prefixes, biggest first.
     # Use first-2-words ("56 Main"), then number-only ("56"), so we match
@@ -299,14 +324,19 @@ def find_property(search_address: str) -> dict:
             f"property_name.ilike.*{prefix}*,"
             f"complex_name.ilike.*{prefix}*)"
         )
+        params = [
+            ("select", "id,address,property_name,complex_name,deal_notes,municipality"),
+            ("or", or_filter),
+            ("deleted_at", "is.null"),
+            ("is_archived", "eq.false"),
+            ("limit", "30"),
+        ]
+        # If the user said a city, require it. Cuts "56 Main in Flemington"
+        # down to just the Flemington row, never asking which Main St.
+        if city:
+            params.append(("municipality", f"ilike.*{city}*"))
         try:
-            batch = sb_select("ace_properties", [
-                ("select", "id,address,property_name,complex_name,deal_notes,municipality"),
-                ("or", or_filter),
-                ("deleted_at", "is.null"),
-                ("is_archived", "eq.false"),
-                ("limit", "30"),
-            ]) or []
+            batch = sb_select("ace_properties", params) or []
         except Exception as e:
             print(f"[find_property] search error for prefix={prefix!r}: {e}",
                   file=sys.stderr, flush=True)
@@ -318,6 +348,34 @@ def find_property(search_address: str) -> dict:
         if rows:
             # We have something — prefer the strictest prefix that returned hits.
             break
+
+    # If city-filtered search came up empty, retry WITHOUT the city filter
+    # (city might be misspelled by Whisper or stored differently).
+    if not rows and city:
+        for prefix in candidate_prefixes:
+            or_filter = (
+                f"(address.ilike.*{prefix}*,"
+                f"property_name.ilike.*{prefix}*,"
+                f"complex_name.ilike.*{prefix}*)"
+            )
+            try:
+                batch = sb_select("ace_properties", [
+                    ("select", "id,address,property_name,complex_name,deal_notes,municipality"),
+                    ("or", or_filter),
+                    ("deleted_at", "is.null"),
+                    ("is_archived", "eq.false"),
+                    ("limit", "30"),
+                ]) or []
+            except Exception as e:
+                print(f"[find_property] city-fallback search error for prefix={prefix!r}: {e}",
+                      file=sys.stderr, flush=True)
+                continue
+            for r in batch:
+                if r["id"] not in seen_ids:
+                    seen_ids.add(r["id"])
+                    rows.append(r)
+            if rows:
+                break
 
     # Normalize-match against address / property_name / complex_name.
     candidates = []
@@ -489,6 +547,13 @@ def commit_update_deal(intent: dict) -> dict:
         "fields_updated": list(patch.keys()),
         "field_count": len(patch),
         "rows_affected": rows_affected,
+        # Final values FROM THE DB so Ace can speak the truth, not the request.
+        # If the user hears the wrong number here, the DB write itself was wrong.
+        "final_values": {
+            k: updated_row.get(k)
+            for k in patch.keys()
+            if k != "deal_notes"
+        },
     }
 
 
@@ -962,12 +1027,24 @@ def ask_claude(transcript: str, command_file, facts, prev_turns=None) -> str:
         "\n"
         "# Commit handling (when data has _pending_commit: true)\n"
         "User said yes to a previous write preview. Behavior:\n"
-        "- If `committed: true` → speak a brief done-message using `address` "
-        "and `field_count`. Example: 'Done — updated 412 Market Street with "
-        "two changes.' Don't read field names, just the count.\n"
+        "- If `committed: true` → speak a done-message that includes the "
+        "ACTUAL value from `final_values` (not the requested value). This "
+        "tells the user what the DB now holds. Format: 'Done — set [field "
+        "in plain English] on [address] to [value from final_values].' "
+        "Example with final_values: {asking_price: 3000000} → 'Done — set "
+        "asking price on 56 Main Street to $3M.' If multiple fields, list "
+        "them tersely: 'Done — set asking $3M and stage Pitch Out on 412 "
+        "Market.' Format prices as $X.XM or $XK.\n"
         "- If `ambiguous: true` → speak the matches list and ask which one. "
         "Example: 'Two matches — 412 Market in Newark and 88 Market in "
         "Elizabeth. Which one?'\n"
+        "- If `committed: false` and `_mismatch` is present → the PATCH "
+        "succeeded but the value didn't actually change. Speak: 'The write "
+        "ran but the value didn't take — likely a row-level security "
+        "policy on ace_properties. Check Supabase auth policies.'\n"
+        "- If `committed: false` and error mentions '0 rows' → say 'The "
+        "write failed — Supabase blocked the update. Likely an RLS policy "
+        "on ace_properties or the wrong API key.'\n"
         "- If `committed: false` (other reason) → speak the error in plain "
         "English. Example: 'Couldn't find a deal matching that address — "
         "try a more specific one.'\n"

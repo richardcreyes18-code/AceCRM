@@ -242,6 +242,104 @@ def fetch_contact(name: str) -> dict:
     }
 
 
+# ───────────────── voice commit (v222 — update_deal only) ─────────────────
+# Mirrors dashboard _aiCommitDealUpdate() in index.html. Other intents
+# (seller_lead, buyer_criteria, pitch_log) still go through the dashboard
+# ✦ preview UI for now — they need dedup logic that's not yet ported.
+_NUMERIC_PROPERTY_FIELDS = {
+    "asking_price", "offer_price", "pitch_out_price", "target_seller_net",
+    "noi", "gross_revenue_yearly", "expenses_yearly",
+    "gross_rental_income_monthly", "expenses_monthly",
+    "square_footage", "number_of_units", "no_of_units",
+    "cap_rate_crm",
+}
+_BOOLEAN_PROPERTY_FIELDS = {"is_archived", "top_priority", "discuss_in_meeting"}
+
+_STREET_SUFFIXES = [
+    ("street", "st"), ("avenue", "ave"), ("boulevard", "blvd"),
+    ("drive", "dr"), ("road", "rd"), ("lane", "ln"),
+    ("court", "ct"), ("place", "pl"),
+    ("highway", "hwy"), ("parkway", "pkwy"),
+]
+
+
+def _norm_address(s: str) -> str:
+    s = (s or "").lower()
+    for full, short in _STREET_SUFFIXES:
+        s = re.sub(rf"\b{full}\b", short, s)
+    return re.sub(r"[^a-z0-9]", "", s)
+
+
+def commit_update_deal(intent: dict) -> dict:
+    data = intent.get("data") or {}
+    search_address = (data.get("search_address") or "").strip()
+    updates = data.get("updates") or {}
+    if not search_address:
+        return {"committed": False, "error": "no search_address in pending intent"}
+    if not updates:
+        return {"committed": False, "error": "no updates in pending intent"}
+
+    clean_search = _norm_address(search_address)
+    short_search = " ".join(search_address.split()[:3])
+    rows = sb_select("ace_properties", [
+        ("select", "id,address,deal_notes"),
+        ("address", f"ilike.*{short_search}*"),
+        ("deleted_at", "is.null"),
+        ("limit", "10"),
+    ]) or []
+    candidates = [
+        r for r in rows
+        if clean_search in _norm_address(r.get("address", ""))
+        or _norm_address(r.get("address", "")) in clean_search
+    ]
+    if not candidates:
+        return {"committed": False, "error": f"no property matches '{search_address}'"}
+    if len(candidates) > 1:
+        labels = [c.get("address", "?") for c in candidates[:3]]
+        return {
+            "committed": False,
+            "ambiguous": True,
+            "error": f"multiple matches: {', '.join(labels)}",
+        }
+
+    match = candidates[0]
+    deal_id = match["id"]
+
+    patch = {}
+    for k, v in updates.items():
+        if k == "deal_notes":
+            existing = (match.get("deal_notes") or "").strip()
+            patch[k] = (existing + "\n---\n" + str(v)) if existing else str(v)
+        elif k in _NUMERIC_PROPERTY_FIELDS:
+            try:
+                patch[k] = float(v) if v not in (None, "") else None
+            except (TypeError, ValueError):
+                patch[k] = None
+        elif k in _BOOLEAN_PROPERTY_FIELDS:
+            patch[k] = bool(v) if not isinstance(v, str) else v.lower() in ("true", "yes", "1")
+        else:
+            patch[k] = v
+
+    url = f"{SUPABASE_URL}/rest/v1/ace_properties"
+    print(f"[commit_update_deal] PATCH {deal_id} fields={list(patch.keys())}",
+          file=sys.stderr, flush=True)
+    with httpx.Client(timeout=10.0, http2=False) as client:
+        resp = client.patch(
+            url,
+            params=[("id", f"eq.{deal_id}")],
+            json=patch,
+            headers={**_SB_HEADERS, "Content-Type": "application/json", "Prefer": "return=representation"},
+        )
+    if resp.status_code >= 400:
+        return {"committed": False, "error": f"PATCH {resp.status_code}: {resp.text[:200]}"}
+    return {
+        "committed": True,
+        "address": match.get("address"),
+        "fields_updated": list(patch.keys()),
+        "field_count": len(patch),
+    }
+
+
 # ───────────────── crm-ai-assist (writes pipeline) ─────────────────
 # The dashboard's ✦ AI Assistant (Claude Haiku 4.5, /functions/v1/crm-ai-assist)
 # extracts structured write intents from natural language: seller_lead,
@@ -595,16 +693,22 @@ def fetch_for(command_file: str, args: str, prev_turns=None):
         if command_file == "write-intent":
             return forward_to_assist(args, prev_turns)
         if command_file == "write-commit":
-            # v221: acknowledge only. v222 will execute the writes.
             try:
                 pending = json.loads(args)
             except json.JSONDecodeError:
-                pending = {}
+                return {"_pending_commit": True, "error": "could not parse pending intent"}
+            intent_type = pending.get("intent")
+            if intent_type == "update_deal":
+                result = commit_update_deal(pending)
+                result["_pending_commit"] = True
+                result["intent"] = intent_type
+                return result
+            # seller_lead / buyer_criteria / pitch_log: still defer to dashboard.
             return {
                 "_pending_commit": True,
-                "intent": pending.get("intent"),
+                "intent": intent_type,
                 "summary": pending.get("summary"),
-                "_note": "v221: voice commit not implemented yet — open the ✦ button on the dashboard to confirm and commit.",
+                "_note": f"Voice commit for {intent_type} isn't ported yet — tap the ✦ button on the dashboard to commit. (update_deal works via voice as of v222.)",
             }
     except Exception as e:
         return {"error": f"{type(e).__name__}: {e}"}
@@ -673,10 +777,20 @@ def ask_claude(transcript: str, command_file, facts, prev_turns=None) -> str:
         "phone 201-555-1234, plus a 12-unit multifamily at 45 Park Ave Bayonne "
         "asking $2.5M. Say yes to confirm, or open the ✦ button to edit fields.'\n"
         "\n"
-        "# Confirmation handling (when data has _pending_commit: true)\n"
-        "User said yes to a previous write preview. Voice-commit isn't wired "
-        "yet — say exactly: 'Voice commits land in the next push. For now, "
-        "tap the ✦ button on the dashboard to commit it.'\n"
+        "# Commit handling (when data has _pending_commit: true)\n"
+        "User said yes to a previous write preview. Behavior:\n"
+        "- If `committed: true` → speak a brief done-message using `address` "
+        "and `field_count`. Example: 'Done — updated 412 Market Street with "
+        "two changes.' Don't read field names, just the count.\n"
+        "- If `ambiguous: true` → speak the matches list and ask which one. "
+        "Example: 'Two matches — 412 Market in Newark and 88 Market in "
+        "Elizabeth. Which one?'\n"
+        "- If `committed: false` (other reason) → speak the error in plain "
+        "English. Example: 'Couldn't find a deal matching that address — "
+        "try a more specific one.'\n"
+        "- If `_note` is present (intent type not yet wired) → say exactly "
+        "what the note suggests, briefly: 'That one needs the dashboard ✦ "
+        "button — voice can only commit deal updates so far.'\n"
         "\n"
         "# Clarifying questions (when data has clarifying_questions array)\n"
         "Speak the FIRST clarifying question conversationally, ignore the "

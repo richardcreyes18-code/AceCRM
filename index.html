@@ -64557,5 +64557,168 @@ function _aiSelectDealForUpdate(dealId){
   </div>
 </div>
 
+<!-- v222: Voice agent floating widget — sits above the ✦ AI button.
+     Talks to /api/turn (Whisper → match command / crm-ai-assist → Claude → TTS)
+     so you can use voice from anywhere in the CRM without leaving the page. -->
+<div id="voiceWidget" style="position:fixed;bottom:92px;right:24px;z-index:8001;font-family:'Inter',system-ui,sans-serif;">
+  <button id="voiceFab" onclick="_voiceToggle()" title="Voice agent" style="width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#ff5b3a,#dc2626);color:#fff;border:none;box-shadow:0 4px 20px rgba(220,38,38,0.45);cursor:pointer;font-size:22px;display:flex;align-items:center;justify-content:center;transition:transform 0.2s;">🎙</button>
+  <div id="voicePanel" style="display:none;position:absolute;bottom:68px;right:0;width:420px;max-width:calc(100vw - 40px);height:560px;max-height:calc(100vh - 120px);background:#0b0d10;border-radius:16px;box-shadow:0 12px 50px rgba(0,0,0,0.45);border:1px solid #232830;overflow:hidden;flex-direction:column;color:#e6e8eb;">
+    <div style="background:linear-gradient(135deg,#0f172a,#dc2626);color:#fff;padding:14px 16px;display:flex;align-items:center;gap:10px;flex-shrink:0;">
+      <div style="font-size:20px;">🎙</div>
+      <div style="flex:1;min-width:0;">
+        <div style="font-size:14px;font-weight:700;">Ace Agent (Voice)</div>
+        <div style="font-size:10px;color:#fca5a5;margin-top:1px;">Click mic, speak, click again to send</div>
+      </div>
+      <button onclick="_voiceClearChat()" title="Clear" style="background:rgba(255,255,255,0.12);border:none;color:#fff;width:28px;height:28px;border-radius:6px;cursor:pointer;font-size:14px;">↻</button>
+      <button onclick="_voiceToggle()" style="background:transparent;border:none;color:#fff;font-size:18px;cursor:pointer;padding:4px;">×</button>
+    </div>
+    <div id="voiceMessages" style="flex:1;overflow-y:auto;padding:14px 16px;background:#0b0d10;display:flex;flex-direction:column;gap:12px;">
+      <div class="voice-empty" style="color:#8b9199;font-size:12px;text-align:center;padding:30px 0;">Click the mic below to start.</div>
+    </div>
+    <div style="border-top:1px solid #232830;padding:14px;background:#14181d;flex-shrink:0;display:flex;justify-content:center;align-items:center;gap:14px;">
+      <button id="voiceRecordBtn" onclick="_voiceToggleRecord()" style="width:64px;height:64px;border-radius:50%;background:#14181d;border:2px solid #232830;color:#e6e8eb;font-size:26px;cursor:pointer;transition:all 0.15s;display:flex;align-items:center;justify-content:center;">🎙</button>
+      <div id="voiceStatus" style="font-size:11px;color:#8b9199;min-width:80px;">Ready.</div>
+    </div>
+  </div>
+</div>
+
+<script>
+// v222: Voice agent widget. Self-contained IIFE so it doesn't pollute globals
+// beyond the four window._voice* handlers wired to the buttons above.
+(function(){
+  let mediaRecorder = null, chunks = [], stream = null;
+  let recording = false, busy = false;
+  let history = [];
+  const HISTORY_MAX = 5;
+
+  const panel = document.getElementById('voicePanel');
+  const recordBtn = document.getElementById('voiceRecordBtn');
+  const messagesEl = document.getElementById('voiceMessages');
+  const statusEl = document.getElementById('voiceStatus');
+
+  window._voiceToggle = function(){
+    panel.style.display = (panel.style.display !== 'flex') ? 'flex' : 'none';
+  };
+
+  window._voiceClearChat = function(){
+    history = [];
+    messagesEl.innerHTML = '<div class="voice-empty" style="color:#8b9199;font-size:12px;text-align:center;padding:30px 0;">Cleared. Click the mic to start.</div>';
+  };
+
+  function setStatus(t){ statusEl.textContent = t; }
+
+  function escapeHtml(s){
+    return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+  }
+
+  function appendMsg(who, text, debug){
+    const empty = messagesEl.querySelector('.voice-empty');
+    if(empty) empty.remove();
+    const div = document.createElement('div');
+    div.style.cssText = 'line-height:1.45;font-size:13px;';
+    const wColor = who === 'You' ? '#66c2ff' : (who === 'Ace' ? '#ffb84d' : '#ff7675');
+    div.innerHTML = '<span style="color:'+wColor+';font-weight:700;font-size:11px;text-transform:uppercase;letter-spacing:0.06em;margin-right:6px;">'+who+'</span><span style="color:#e6e8eb;">'+escapeHtml(text)+'</span>';
+    if(debug && (debug.command || debug.facts !== undefined)){
+      const det = document.createElement('details');
+      det.style.cssText = 'margin-top:4px;';
+      const sum = document.createElement('summary');
+      sum.style.cssText = 'cursor:pointer;font-size:10px;color:#8b9199;user-select:none;';
+      sum.textContent = debug.command ? 'data ('+debug.command+')' : 'data';
+      const pre = document.createElement('pre');
+      pre.style.cssText = 'font-size:10px;color:#8b9199;background:rgba(255,255,255,0.03);padding:6px 8px;border-radius:4px;overflow-x:auto;max-height:180px;margin-top:4px;white-space:pre-wrap;word-break:break-word;';
+      pre.textContent = JSON.stringify(debug.facts ?? null, null, 2);
+      det.appendChild(sum); det.appendChild(pre);
+      div.appendChild(det);
+    }
+    messagesEl.appendChild(div);
+    messagesEl.scrollTop = messagesEl.scrollHeight;
+  }
+
+  async function startRecording(){
+    if(recording || busy) return;
+    try {
+      stream = await navigator.mediaDevices.getUserMedia({audio: true});
+    } catch(err){
+      setStatus('Mic blocked.');
+      appendMsg('System', 'Microphone access denied. Allow it in your browser and try again.');
+      return;
+    }
+    const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+      ? 'audio/webm;codecs=opus' : 'audio/webm';
+    mediaRecorder = new MediaRecorder(stream, {mimeType: mime});
+    chunks = [];
+    mediaRecorder.ondataavailable = e => { if(e.data && e.data.size) chunks.push(e.data); };
+    mediaRecorder.onstop = handleStop;
+    mediaRecorder.start();
+    recording = true;
+    recordBtn.style.background = '#ff5b3a';
+    recordBtn.style.borderColor = '#ff5b3a';
+    recordBtn.style.color = '#fff';
+    recordBtn.textContent = '■';
+    setStatus('Recording…');
+  }
+
+  function stopRecording(){
+    if(!recording) return;
+    recording = false;
+    recordBtn.style.background = '#14181d';
+    recordBtn.style.borderColor = '#232830';
+    recordBtn.style.color = '#e6e8eb';
+    recordBtn.textContent = '🎙';
+    setStatus('Processing…');
+    if(mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+  }
+
+  window._voiceToggleRecord = function(){ recording ? stopRecording() : startRecording(); };
+
+  async function handleStop(){
+    if(stream){ stream.getTracks().forEach(t => t.stop()); stream = null; }
+    if(!chunks.length){ setStatus('Ready.'); return; }
+    const blob = new Blob(chunks, {type: 'audio/webm'});
+    chunks = [];
+    await sendTurn(blob);
+  }
+
+  async function sendTurn(blob){
+    busy = true;
+    try {
+      const fd = new FormData();
+      fd.append('audio', blob, 'turn.webm');
+      fd.append('history', JSON.stringify(history.slice(-HISTORY_MAX)));
+      const res = await fetch('/api/turn', {method: 'POST', body: fd});
+      if(!res.ok){
+        appendMsg('System', 'Server error: ' + (await res.text()).slice(0, 200));
+        setStatus('Ready.');
+        return;
+      }
+      const data = await res.json();
+      if(data.error === 'no speech'){ setStatus("Didn't catch that."); return; }
+      if(data.transcript) appendMsg('You', data.transcript);
+      if(data.reply) appendMsg('Ace', data.reply, {command: data.command, facts: data.facts});
+      if(data.audio){
+        const audio = new Audio('data:audio/mp3;base64,' + data.audio);
+        audio.play().catch(()=>{});
+      }
+      if(data.transcript || data.reply){
+        history.push({
+          transcript: data.transcript || '',
+          reply: data.reply || '',
+          command: data.command || null,
+          args: data.args || '',
+          facts: data.facts || null,
+        });
+        if(history.length > HISTORY_MAX) history = history.slice(-HISTORY_MAX);
+      }
+      setStatus('Ready.');
+    } catch(err){
+      appendMsg('System', 'Error: ' + (err.message || err));
+      setStatus('Ready.');
+    } finally {
+      busy = false;
+    }
+  }
+})();
+</script>
+
 </body>
 </html>

@@ -95,6 +95,7 @@
     <div>
       <div class="mic-row">
         <button id="mic" class="mic" aria-label="Toggle recording">🎙</button>
+        <button id="stopBtn" onclick="stopCurrentAudio()" title="Stop Ace from talking" style="display:none;background:#374151;color:#fff;border:none;padding:8px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;">⏹ Stop</button>
       </div>
       <div id="status" class="status">Ready.</div>
     </div>
@@ -114,12 +115,24 @@ let chunks = [];
 let stream = null;
 let recording = false;
 let busy = false;
+let currentAudio = null;
 
 // Conversation history sent with each turn so the backend can resolve
 // pronouns ("that deal", "the same one") and Claude can reference
 // prior context. Keep last 5 client-side; backend trims to last 3.
 const HISTORY_MAX = 5;
 let history = [];
+
+const stopBtn = document.getElementById('stopBtn');
+
+function stopCurrentAudio(){
+  if(currentAudio){
+    try { currentAudio.pause(); currentAudio.currentTime = 0; } catch(_){ }
+    currentAudio = null;
+  }
+  if(stopBtn) stopBtn.style.display = 'none';
+}
+window.stopCurrentAudio = stopCurrentAudio;
 
 function setStatus(t) { statusEl.textContent = t; }
 
@@ -156,6 +169,9 @@ function appendTurn(who, text, isError, debug) {
 
 async function startRecording() {
   if (recording || busy) return;
+  // Cut Ace off if she's still talking — pressing the mic again should
+  // interrupt her so we can speak over her.
+  stopCurrentAudio();
   try {
     stream = await navigator.mediaDevices.getUserMedia({ audio: true });
   } catch (err) {
@@ -215,8 +231,12 @@ async function sendTurn(blob) {
     if (data.transcript) appendTurn('You', data.transcript);
     if (data.reply) appendTurn('Ace', data.reply, false, { command: data.command, facts: data.facts });
     if (data.audio) {
-      const audio = new Audio('data:audio/mp3;base64,' + data.audio);
-      audio.play().catch(() => {});
+      stopCurrentAudio();
+      currentAudio = new Audio('data:audio/mp3;base64,' + data.audio);
+      currentAudio.onended = () => { currentAudio = null; if(stopBtn) stopBtn.style.display = 'none'; };
+      currentAudio.onerror = () => { currentAudio = null; if(stopBtn) stopBtn.style.display = 'none'; };
+      currentAudio.play().catch(() => { currentAudio = null; if(stopBtn) stopBtn.style.display = 'none'; });
+      if(stopBtn) stopBtn.style.display = 'inline-block';
     }
     // Record this turn so the next one has context for pronoun resolution.
     if (data.transcript || data.reply) {

@@ -280,22 +280,50 @@ def commit_update_deal(intent: dict) -> dict:
         return {"committed": False, "error": "no updates in pending intent"}
 
     clean_search = _norm_address(search_address)
-    short_search = " ".join(search_address.split()[:3])
+    # Use number + first street word as the ILIKE prefix so "56 Main"
+    # matches BOTH "56 Main St" and "56 Main Street" in the DB. Searching
+    # for "56 Main Street" misses rows stored as "56 Main St".
+    parts = search_address.split()
+    short_search = " ".join(parts[:2]) if len(parts) >= 2 else (parts[0] if parts else "")
+    if not short_search:
+        return {"committed": False, "error": "search_address too short"}
+
+    or_filter = (
+        f"(address.ilike.*{short_search}*,"
+        f"property_name.ilike.*{short_search}*,"
+        f"complex_name.ilike.*{short_search}*)"
+    )
     rows = sb_select("ace_properties", [
-        ("select", "id,address,deal_notes"),
-        ("address", f"ilike.*{short_search}*"),
+        ("select", "id,address,property_name,complex_name,deal_notes,municipality"),
+        ("or", or_filter),
         ("deleted_at", "is.null"),
-        ("limit", "10"),
+        ("is_archived", "eq.false"),
+        ("limit", "25"),
     ]) or []
-    candidates = [
-        r for r in rows
-        if clean_search in _norm_address(r.get("address", ""))
-        or _norm_address(r.get("address", "")) in clean_search
-    ]
+
+    # Normalize-match against address / property_name / complex_name.
+    # A row counts as a candidate if ANY of the three columns has a
+    # normalized substring overlap with the cleaned search.
+    candidates = []
+    for r in rows:
+        for col in ("address", "property_name", "complex_name"):
+            field = _norm_address(r.get(col) or "")
+            if field and (clean_search in field or field in clean_search):
+                candidates.append(r)
+                break
+
     if not candidates:
-        return {"committed": False, "error": f"no property matches '{search_address}'"}
+        return {
+            "committed": False,
+            "error": f"no property matches '{search_address}'",
+            "_searched_prefix": short_search,
+            "_rows_scanned": len(rows),
+        }
     if len(candidates) > 1:
-        labels = [c.get("address", "?") for c in candidates[:3]]
+        labels = [
+            (c.get("address") or c.get("property_name") or c.get("complex_name") or "?")
+            for c in candidates[:3]
+        ]
         return {
             "committed": False,
             "ambiguous": True,

@@ -64575,9 +64575,10 @@ function _aiSelectDealForUpdate(dealId){
     <div id="voiceMessages" style="flex:1;overflow-y:auto;padding:14px 16px;background:#0b0d10;display:flex;flex-direction:column;gap:12px;">
       <div class="voice-empty" style="color:#8b9199;font-size:12px;text-align:center;padding:30px 0;">Click the mic below to start.</div>
     </div>
-    <div style="border-top:1px solid #232830;padding:14px;background:#14181d;flex-shrink:0;display:flex;justify-content:center;align-items:center;gap:14px;">
+    <div style="border-top:1px solid #232830;padding:14px;background:#14181d;flex-shrink:0;display:flex;justify-content:center;align-items:center;gap:12px;">
       <button id="voiceRecordBtn" onclick="_voiceToggleRecord()" style="width:64px;height:64px;border-radius:50%;background:#14181d;border:2px solid #232830;color:#e6e8eb;font-size:26px;cursor:pointer;transition:all 0.15s;display:flex;align-items:center;justify-content:center;">🎙</button>
-      <div id="voiceStatus" style="font-size:11px;color:#8b9199;min-width:80px;">Ready.</div>
+      <button id="voiceStopBtn" onclick="_voiceStopAudio()" title="Stop Ace from talking" style="display:none;background:#374151;color:#fff;border:none;padding:8px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;">⏹ Stop</button>
+      <div id="voiceStatus" style="font-size:11px;color:#8b9199;min-width:70px;">Ready.</div>
     </div>
   </div>
 </div>
@@ -64589,12 +64590,23 @@ function _aiSelectDealForUpdate(dealId){
   let mediaRecorder = null, chunks = [], stream = null;
   let recording = false, busy = false;
   let history = [];
+  let currentAudio = null;  // currently-playing TTS clip — kept so we can stop it
   const HISTORY_MAX = 5;
 
   const panel = document.getElementById('voicePanel');
   const recordBtn = document.getElementById('voiceRecordBtn');
+  const stopBtn = document.getElementById('voiceStopBtn');
   const messagesEl = document.getElementById('voiceMessages');
   const statusEl = document.getElementById('voiceStatus');
+
+  function stopCurrentAudio(){
+    if(currentAudio){
+      try { currentAudio.pause(); currentAudio.currentTime = 0; } catch(_){ }
+      currentAudio = null;
+    }
+    if(stopBtn) stopBtn.style.display = 'none';
+  }
+  window._voiceStopAudio = stopCurrentAudio;
 
   window._voiceToggle = function(){
     panel.style.display = (panel.style.display !== 'flex') ? 'flex' : 'none';
@@ -64636,6 +64648,9 @@ function _aiSelectDealForUpdate(dealId){
 
   async function startRecording(){
     if(recording || busy) return;
+    // Interrupt Ace if she's mid-sentence — pressing the mic again should
+    // shut her up so we can talk over her.
+    stopCurrentAudio();
     try {
       stream = await navigator.mediaDevices.getUserMedia({audio: true});
     } catch(err){
@@ -64696,8 +64711,12 @@ function _aiSelectDealForUpdate(dealId){
       if(data.transcript) appendMsg('You', data.transcript);
       if(data.reply) appendMsg('Ace', data.reply, {command: data.command, facts: data.facts});
       if(data.audio){
-        const audio = new Audio('data:audio/mp3;base64,' + data.audio);
-        audio.play().catch(()=>{});
+        stopCurrentAudio();
+        currentAudio = new Audio('data:audio/mp3;base64,' + data.audio);
+        currentAudio.onended = () => { currentAudio = null; if(stopBtn) stopBtn.style.display = 'none'; };
+        currentAudio.onerror = () => { currentAudio = null; if(stopBtn) stopBtn.style.display = 'none'; };
+        currentAudio.play().catch(()=>{ currentAudio = null; if(stopBtn) stopBtn.style.display = 'none'; });
+        if(stopBtn) stopBtn.style.display = 'inline-block';
       }
       if(data.transcript || data.reply){
         history.push({

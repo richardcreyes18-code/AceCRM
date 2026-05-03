@@ -242,6 +242,33 @@ def fetch_contact(name: str) -> dict:
     }
 
 
+def fetch_recent_deals(_args: str = "") -> dict:
+    rows = sb_select("ace_properties", [
+        ("select",
+         "id,address,property_name,complex_name,"
+         "property_type_text,crm_asset_classification,"
+         "pipeline_stage,asking_price,municipality,state,created_at"),
+        ("deleted_at", "is.null"),
+        ("is_archived", "eq.false"),
+        ("order", "created_at.desc"),
+        ("limit", "5"),
+    ]) or []
+    return {
+        "recent_deals": [
+            {
+                "label": d.get("address") or d.get("property_name") or d.get("complex_name") or "unnamed",
+                "asset_type": d.get("property_type_text") or d.get("crm_asset_classification"),
+                "city": d.get("municipality"),
+                "state": d.get("state"),
+                "stage": d.get("pipeline_stage"),
+                "asking": _fmt_money(d["asking_price"]) if d.get("asking_price") else None,
+                "days_ago": _days_since(d.get("created_at")),
+            }
+            for d in rows
+        ]
+    }
+
+
 def fetch_deal(query: str) -> dict:
     if not query:
         return {"error": "no query provided"}
@@ -350,6 +377,19 @@ def match_command(transcript: str):
     ):
         return ("daily-brief.md", "")
 
+    # Recent deals — matched BEFORE deal-snapshot/contact-lookup so
+    # phrases like "most recent deal I added" don't get pulled into
+    # those greedier patterns.
+    if re.search(
+        r"\b(?:most\s+)?recent\s+deals?\b"
+        r"|\b(?:latest|newest)\s+(?:deals?|properties?|listings?)\b"
+        r"|\blast\s+(?:few|three|3|five|5|several)?\s*deals?\b"
+        r"|\bdeals?\s+(?:i'?ve|i\s+have)\s+(?:added|inputted|entered|created|put\s+in)\b"
+        r"|\bwhat\s+deals?\s+(?:have\s+)?i\s+(?:added|inputted|entered)\b",
+        t,
+    ):
+        return ("recent-deals.md", "")
+
     m = re.search(
         r"\b(?:contact\s+lookup|find\s+contact|lookup|look\s+up|find|pull\s+up|tell\s+me\s+about)\s+(.+)$",
         t,
@@ -376,6 +416,8 @@ def fetch_for(command_file: str, args: str):
             return fetch_contact(args)
         if command_file == "deal-snapshot.md":
             return fetch_deal(args)
+        if command_file == "recent-deals.md":
+            return fetch_recent_deals(args)
     except Exception as e:
         return {"error": f"{type(e).__name__}: {e}"}
     return None

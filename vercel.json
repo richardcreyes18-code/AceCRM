@@ -1,0 +1,9 @@
+{
+  "functions": {
+    "api/turn.py": {
+      "memory": 1024,
+      "maxDuration": 60,
+      "includeFiles": "ace-agent/**/*.md"
+    }
+  }
+}

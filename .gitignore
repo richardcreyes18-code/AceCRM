@@ -1,0 +1,30 @@
+# Secrets — NEVER commit
+.env
+.env.local
+.env.*.local
+ace-agent/.env
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.venv/
+venv/
+ace-agent/.venv/
+
+# Node
+node_modules/
+
+# macOS
+.DS_Store
+
+# Editors / tooling
+.claude/
+.vscode/
+.idea/
+
+# MCP local config (may contain server URLs/tokens)
+.mcp.json
+
+# Vercel
+.vercel/

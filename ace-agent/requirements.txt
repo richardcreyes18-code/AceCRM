@@ -1,0 +1,15 @@
+# Mac native agent (agent.py — Caps Lock trigger)
+pynput>=1.7.7
+sounddevice>=0.4.6
+numpy>=1.26.0
+
+# Web agent (server.py — browser trigger)
+fastapi>=0.110.0
+uvicorn[standard]>=0.27.0
+python-multipart>=0.0.9
+
+# Shared by both
+openai>=1.40.0
+anthropic>=0.39.0
+supabase>=2.7.0
+python-dotenv>=1.0.0

@@ -1,0 +1,222 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>ace-agent</title>
+<style>
+  :root {
+    --bg: #0b0d10;
+    --panel: #14181d;
+    --line: #232830;
+    --text: #e6e8eb;
+    --muted: #8b9199;
+    --accent: #ff5b3a;
+    --you: #66c2ff;
+    --ace: #ffb84d;
+  }
+  * { box-sizing: border-box; }
+  html, body { height: 100%; margin: 0; }
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "SF Pro Text", system-ui, sans-serif;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    padding: 32px 16px;
+  }
+  .wrap { width: 100%; max-width: 720px; display: flex; flex-direction: column; gap: 24px; }
+  header {
+    display: flex; align-items: baseline; justify-content: space-between;
+  }
+  h1 { font-size: 22px; margin: 0; letter-spacing: -0.01em; }
+  .hint { color: var(--muted); font-size: 13px; }
+
+  .mic-row {
+    display: flex; align-items: center; justify-content: center;
+    gap: 16px; padding: 32px 0;
+  }
+  button.mic {
+    width: 96px; height: 96px; border-radius: 50%;
+    border: 2px solid var(--line);
+    background: var(--panel);
+    color: var(--text);
+    font-size: 38px;
+    cursor: pointer;
+    transition: all 0.15s ease;
+    display: flex; align-items: center; justify-content: center;
+  }
+  button.mic:hover { border-color: var(--accent); }
+  button.mic.recording {
+    background: var(--accent);
+    border-color: var(--accent);
+    color: white;
+    box-shadow: 0 0 0 8px rgba(255, 91, 58, 0.18);
+    animation: pulse 1.4s ease-in-out infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { box-shadow: 0 0 0 8px rgba(255, 91, 58, 0.18); }
+    50%      { box-shadow: 0 0 0 16px rgba(255, 91, 58, 0.05); }
+  }
+  .status {
+    text-align: center; color: var(--muted); font-size: 13px; min-height: 18px;
+  }
+
+  .transcript {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 12px;
+    padding: 16px;
+    min-height: 240px;
+    max-height: 60vh;
+    overflow-y: auto;
+    display: flex; flex-direction: column; gap: 12px;
+  }
+  .turn { line-height: 1.45; font-size: 15px; }
+  .turn .who { font-weight: 600; margin-right: 8px; font-size: 12px; text-transform: uppercase; letter-spacing: 0.06em; }
+  .turn.you .who { color: var(--you); }
+  .turn.ace .who { color: var(--ace); }
+  .turn .text { color: var(--text); }
+  .turn .text.error { color: #ff7675; }
+  .empty { color: var(--muted); font-size: 13px; text-align: center; padding: 40px 0; }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <header>
+      <h1>ace-agent</h1>
+      <span class="hint">Spacebar or click to talk</span>
+    </header>
+
+    <div>
+      <div class="mic-row">
+        <button id="mic" class="mic" aria-label="Toggle recording">🎙</button>
+      </div>
+      <div id="status" class="status">Ready.</div>
+    </div>
+
+    <div id="transcript" class="transcript">
+      <div class="empty">Press space or tap the mic to start.</div>
+    </div>
+  </div>
+
+<script>
+const micBtn = document.getElementById('mic');
+const statusEl = document.getElementById('status');
+const transcriptEl = document.getElementById('transcript');
+
+let mediaRecorder = null;
+let chunks = [];
+let stream = null;
+let recording = false;
+let busy = false;
+
+function setStatus(t) { statusEl.textContent = t; }
+
+function isTyping(el) {
+  if (!el) return false;
+  const tag = (el.tagName || '').toLowerCase();
+  return tag === 'input' || tag === 'textarea' || el.isContentEditable;
+}
+
+function clearEmpty() {
+  const e = transcriptEl.querySelector('.empty');
+  if (e) e.remove();
+}
+
+function appendTurn(who, text, isError) {
+  clearEmpty();
+  const div = document.createElement('div');
+  div.className = `turn ${who.toLowerCase()}`;
+  const w = document.createElement('span'); w.className = 'who'; w.textContent = who;
+  const t = document.createElement('span'); t.className = 'text' + (isError ? ' error' : ''); t.textContent = text;
+  div.appendChild(w); div.appendChild(t);
+  transcriptEl.appendChild(div);
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
+
+async function startRecording() {
+  if (recording || busy) return;
+  try {
+    stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  } catch (err) {
+    setStatus('Mic permission denied.');
+    appendTurn('System', 'Microphone access denied. Allow it in your browser and reload.', true);
+    return;
+  }
+  const mime = MediaRecorder.isTypeSupported('audio/webm;codecs=opus')
+    ? 'audio/webm;codecs=opus'
+    : 'audio/webm';
+  mediaRecorder = new MediaRecorder(stream, { mimeType: mime });
+  chunks = [];
+  mediaRecorder.ondataavailable = (e) => { if (e.data && e.data.size) chunks.push(e.data); };
+  mediaRecorder.onstop = handleStop;
+  mediaRecorder.start();
+  recording = true;
+  micBtn.classList.add('recording');
+  micBtn.textContent = '■';
+  setStatus('Recording… press space or click to stop.');
+}
+
+function stopRecording() {
+  if (!recording) return;
+  recording = false;
+  micBtn.classList.remove('recording');
+  micBtn.textContent = '🎙';
+  setStatus('Processing…');
+  if (mediaRecorder && mediaRecorder.state !== 'inactive') mediaRecorder.stop();
+}
+
+async function handleStop() {
+  if (stream) { stream.getTracks().forEach(t => t.stop()); stream = null; }
+  if (!chunks.length) { setStatus('Ready.'); return; }
+  const blob = new Blob(chunks, { type: 'audio/webm' });
+  chunks = [];
+  await sendTurn(blob);
+}
+
+async function sendTurn(blob) {
+  busy = true;
+  try {
+    const fd = new FormData();
+    fd.append('audio', blob, 'turn.webm');
+    const res = await fetch('/api/turn', { method: 'POST', body: fd });
+    if (!res.ok) {
+      const txt = await res.text();
+      appendTurn('System', `Server error: ${txt}`, true);
+      setStatus('Ready.');
+      return;
+    }
+    const data = await res.json();
+    if (data.error === 'no speech') {
+      setStatus('Didn\'t catch any speech.');
+      return;
+    }
+    if (data.transcript) appendTurn('You', data.transcript);
+    if (data.reply) appendTurn('Ace', data.reply);
+    if (data.audio) {
+      const audio = new Audio('data:audio/mp3;base64,' + data.audio);
+      audio.play().catch(() => {});
+    }
+    setStatus('Ready.');
+  } catch (err) {
+    appendTurn('System', `Error: ${err.message || err}`, true);
+    setStatus('Ready.');
+  } finally {
+    busy = false;
+  }
+}
+
+micBtn.addEventListener('click', () => { recording ? stopRecording() : startRecording(); });
+
+document.addEventListener('keydown', (e) => {
+  if (e.code !== 'Space') return;
+  if (isTyping(e.target)) return;
+  if (e.repeat) return;
+  e.preventDefault();
+  recording ? stopRecording() : startRecording();
+});
+</script>
+</body>
+</html>

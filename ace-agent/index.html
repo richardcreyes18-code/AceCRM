@@ -115,6 +115,12 @@ let stream = null;
 let recording = false;
 let busy = false;
 
+// Conversation history sent with each turn so the backend can resolve
+// pronouns ("that deal", "the same one") and Claude can reference
+// prior context. Keep last 5 client-side; backend trims to last 3.
+const HISTORY_MAX = 5;
+let history = [];
+
 function setStatus(t) { statusEl.textContent = t; }
 
 function isTyping(el) {
@@ -193,6 +199,7 @@ async function sendTurn(blob) {
   try {
     const fd = new FormData();
     fd.append('audio', blob, 'turn.webm');
+    fd.append('history', JSON.stringify(history.slice(-HISTORY_MAX)));
     const res = await fetch('/api/turn', { method: 'POST', body: fd });
     if (!res.ok) {
       const txt = await res.text();
@@ -210,6 +217,16 @@ async function sendTurn(blob) {
     if (data.audio) {
       const audio = new Audio('data:audio/mp3;base64,' + data.audio);
       audio.play().catch(() => {});
+    }
+    // Record this turn so the next one has context for pronoun resolution.
+    if (data.transcript || data.reply) {
+      history.push({
+        transcript: data.transcript || '',
+        reply: data.reply || '',
+        command: data.command || null,
+        args: data.args || '',
+      });
+      if (history.length > HISTORY_MAX) history = history.slice(-HISTORY_MAX);
     }
     setStatus('Ready.');
   } catch (err) {

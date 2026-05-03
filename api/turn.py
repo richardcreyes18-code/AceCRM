@@ -242,6 +242,35 @@ def fetch_contact(name: str) -> dict:
     }
 
 
+def fetch_entity(query: str) -> dict:
+    """Try both contact and deal lookups in parallel; return whichever has data.
+    Used when the user says 'tell me about X' / 'look up X' without specifying
+    whether X is a person or a property."""
+    contact_data = None
+    deal_data = None
+    try:
+        contact_data = fetch_contact(query)
+    except Exception as e:
+        contact_data = {"error": f"{type(e).__name__}: {e}"}
+    try:
+        deal_data = fetch_deal(query)
+    except Exception as e:
+        deal_data = {"error": f"{type(e).__name__}: {e}"}
+
+    contact_has = contact_data and not contact_data.get("error") and (
+        contact_data.get("contact") or contact_data.get("matches")
+    )
+    deal_has = deal_data and not deal_data.get("error") and (
+        deal_data.get("deal") or deal_data.get("matches")
+    )
+
+    return {
+        "query": query,
+        "contact_result": contact_data if contact_has else None,
+        "deal_result": deal_data if deal_has else None,
+    }
+
+
 def fetch_recent_deals(_args: str = "") -> dict:
     rows = sb_select("ace_properties", [
         ("select",
@@ -365,8 +394,46 @@ def fetch_deal(query: str) -> dict:
 
 
 # ───────────────── routing ─────────────────
-def match_command(transcript: str):
+_NUM_WORDS = r"(?:\d+|one|two|three|four|five|six|seven|eight|nine|ten|few|several)"
+
+# Trim a free-form search query at natural sentence breakers so a long
+# voice utterance ("409 Main Street in West Orange that I added three
+# days ago, the multifamily") collapses to the searchable head ("409
+# Main Street in West Orange") before hitting PostgREST ILIKE.
+_BREAKERS = [
+    r"\s+that\s+", r"\s+which\s+", r"\s+who\s+", r"\s+where\s+",
+    r"\s*,\s*", r"\s+\-\s+",
+]
+_BREAKER_RE = re.compile("|".join(_BREAKERS), re.IGNORECASE)
+
+
+def clean_entity_query(query: str) -> str:
+    parts = _BREAKER_RE.split(query, maxsplit=1)
+    return parts[0].strip() if parts else query.strip()
+
+
+# Pronoun-style references that mean "the entity from the prior turn".
+# When matched AND we have a prev turn with a known command+args, we
+# reuse that command instead of trying to parse an entity from this turn.
+_PRONOUN_RE = re.compile(
+    r"\b(?:that|this|the\s+(?:previous|last|same))\s+"
+    r"(?:deal|property|contact|guy|person|one|address|listing|thing)\b"
+    r"|\bthat\s+one\b"
+    r"|\bthe\s+same\s+one\b",
+    re.IGNORECASE,
+)
+
+
+def match_command(transcript: str, prev_turns=None):
     t = transcript.lower().strip().rstrip(".?!")
+
+    # Pronoun resolution — re-target the most recent entity-bearing turn.
+    if prev_turns and _PRONOUN_RE.search(t):
+        for prev in reversed(prev_turns):
+            cmd = prev.get("command")
+            args = prev.get("args")
+            if cmd and args and cmd != "daily-brief.md" and cmd != "recent-deals.md":
+                return (cmd, args)
 
     if re.search(
         r"\b(daily|morning)\s+brief(ing)?\b"
@@ -377,25 +444,35 @@ def match_command(transcript: str):
     ):
         return ("daily-brief.md", "")
 
-    # Recent deals — matched BEFORE deal-snapshot/contact-lookup so
-    # phrases like "most recent deal I added" don't get pulled into
-    # those greedier patterns.
+    # Recent deals — broadened to handle "latest three deals", "deals
+    # that I've inputted", "[N] most recent deals", etc.
     if re.search(
         r"\b(?:most\s+)?recent\s+deals?\b"
-        r"|\b(?:latest|newest)\s+(?:deals?|properties?|listings?)\b"
-        r"|\blast\s+(?:few|three|3|five|5|several)?\s*deals?\b"
-        r"|\bdeals?\s+(?:i'?ve|i\s+have)\s+(?:added|inputted|entered|created|put\s+in)\b"
-        r"|\bwhat\s+deals?\s+(?:have\s+)?i\s+(?:added|inputted|entered)\b",
+        rf"|\b(?:latest|newest)\s+(?:{_NUM_WORDS})?\s*(?:deals?|properties?|listings?)\b"
+        rf"|\blast\s+(?:{_NUM_WORDS})?\s*deals?\b"
+        rf"|\b{_NUM_WORDS}\s+(?:most\s+)?(?:recent|latest|newest)\s+deals?\b"
+        r"|\bdeals?\s+(?:that\s+)?(?:i'?ve|i\s+have)\s+(?:added|inputted|entered|created|put\s+in)\b"
+        r"|\bwhat\s+deals?\s+(?:have\s+)?i\s+(?:added|inputted|entered)\b"
+        r"|\bnew\s+deals?\s+in\s+the\s+system\b",
         t,
     ):
         return ("recent-deals.md", "")
 
+    # Universal entity lookup — "tell me about X" is ambiguous (contact
+    # or deal?) so we try both. Also handles "look up", "pull up",
+    # "find", "search for", "info on".
     m = re.search(
-        r"\b(?:contact\s+lookup|find\s+contact|lookup|look\s+up|find|pull\s+up|tell\s+me\s+about)\s+(.+)$",
+        r"\b(?:tell\s+me\s+about|what\s+about|info\s+on|"
+        r"look\s+up|lookup|pull\s+up|search\s+for|find)\s+(.+)$",
         t,
     )
     if m:
-        return ("contact-lookup.md", m.group(1).strip())
+        return ("entity-lookup.md", clean_entity_query(m.group(1)))
+
+    # Explicit single-table commands still work as overrides.
+    m = re.search(r"\bcontact\s+lookup\s+(.+)$", t)
+    if m:
+        return ("contact-lookup.md", clean_entity_query(m.group(1)))
 
     m = re.search(
         r"\b(?:deal\s+snapshot|snapshot|deal\s+on|"
@@ -403,7 +480,7 @@ def match_command(transcript: str):
         t,
     )
     if m:
-        return ("deal-snapshot.md", m.group(1).strip())
+        return ("deal-snapshot.md", clean_entity_query(m.group(1)))
 
     return None
 
@@ -418,13 +495,27 @@ def fetch_for(command_file: str, args: str):
             return fetch_deal(args)
         if command_file == "recent-deals.md":
             return fetch_recent_deals(args)
+        if command_file == "entity-lookup.md":
+            return fetch_entity(args)
     except Exception as e:
         return {"error": f"{type(e).__name__}: {e}"}
     return None
 
 
-def ask_claude(transcript: str, command_file, facts) -> str:
+def ask_claude(transcript: str, command_file, facts, prev_turns=None) -> str:
     blocks = [PERSONA, SETTINGS]
+
+    if prev_turns:
+        recent = prev_turns[-3:]
+        lines = ["# Recent conversation (most recent last) — for pronoun & follow-up resolution"]
+        for turn in recent:
+            u = (turn.get("transcript") or "").strip()
+            a = (turn.get("reply") or "").strip()
+            if u:
+                lines.append(f"- USER: {u}")
+            if a:
+                lines.append(f"  ACE:  {a}")
+        blocks.append("\n".join(lines))
 
     if command_file:
         cmd_path = COMMANDS_DIR / command_file
@@ -529,9 +620,22 @@ def debug_supabase():
     return out
 
 
+from fastapi import Form
+
+
 @app.post("/api/turn")
-async def turn(audio: UploadFile = File(...)):
+async def turn(
+    audio: UploadFile = File(...),
+    history: str = Form("[]"),
+):
     try:
+        try:
+            prev_turns = json.loads(history) if history else []
+            if not isinstance(prev_turns, list):
+                prev_turns = []
+        except json.JSONDecodeError:
+            prev_turns = []
+
         audio_bytes = await audio.read()
         if not audio_bytes:
             raise HTTPException(400, "empty audio")
@@ -542,13 +646,13 @@ async def turn(audio: UploadFile = File(...)):
                 {"transcript": "", "reply": "", "audio": "", "error": "no speech"}
             )
 
-        match = match_command(transcript)
+        match = match_command(transcript, prev_turns=prev_turns)
         cmd_file, args, facts = None, "", None
         if match:
             cmd_file, args = match
             facts = fetch_for(cmd_file, args)
 
-        reply = ask_claude(transcript, cmd_file, facts)
+        reply = ask_claude(transcript, cmd_file, facts, prev_turns=prev_turns)
         mp3 = synthesize(reply)
         audio_b64 = base64.b64encode(mp3).decode("ascii")
 
@@ -557,6 +661,7 @@ async def turn(audio: UploadFile = File(...)):
             "reply": reply,
             "audio": audio_b64,
             "command": cmd_file,
+            "args": args,
             "facts": facts,
         }
 

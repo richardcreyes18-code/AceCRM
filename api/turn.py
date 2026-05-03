@@ -242,6 +242,59 @@ def fetch_contact(name: str) -> dict:
     }
 
 
+# ───────────────── crm-ai-assist (writes pipeline) ─────────────────
+# The dashboard's ✦ AI Assistant (Claude Haiku 4.5, /functions/v1/crm-ai-assist)
+# extracts structured write intents from natural language: seller_lead,
+# buyer_criteria, update_deal, pitch_log. The voice agent forwards write-y
+# transcripts to the same function so we don't duplicate intent extraction.
+# Commits still go through the dashboard preview UI for now (v222 will add
+# spoken-confirmation commits).
+def forward_to_assist(transcript: str, prev_turns=None) -> dict:
+    messages = []
+    for turn in (prev_turns or [])[-5:]:
+        u = (turn.get("transcript") or "").strip()
+        a = (turn.get("reply") or "").strip()
+        if u:
+            messages.append({"role": "user", "content": u})
+        if a:
+            messages.append({"role": "assistant", "content": a})
+    messages.append({"role": "user", "content": transcript})
+
+    url = f"{SUPABASE_URL}/functions/v1/crm-ai-assist"
+    print(f"[crm-ai-assist] POST with {len(messages)} messages",
+          file=sys.stderr, flush=True)
+    try:
+        with httpx.Client(timeout=30.0, http2=False) as client:
+            r = client.post(
+                url,
+                headers={
+                    "Authorization": f"Bearer {SUPABASE_KEY}",
+                    "Content-Type": "application/json",
+                    "apikey": SUPABASE_KEY,
+                },
+                json={
+                    "messages": messages,
+                    "attachments": [],
+                    "context": {},
+                },
+            )
+    except Exception as e:
+        print(f"[crm-ai-assist] EXCEPTION {type(e).__name__}: {e}",
+              file=sys.stderr, flush=True)
+        return {"error": f"{type(e).__name__}: {e}"}
+
+    if r.status_code >= 400:
+        return {"error": f"crm-ai-assist {r.status_code}: {r.text[:300]}"}
+
+    response = r.json()
+    if response.get("error"):
+        return {"error": response["error"]}
+    result = response.get("result") or {}
+    # Always tag so Claude knows this is a write-intent payload, not read data.
+    result["_write_intent"] = True
+    return result
+
+
 def fetch_entity(query: str) -> dict:
     """Try both contact and deal lookups in parallel; return whichever has data.
     Used when the user says 'tell me about X' / 'look up X' without specifying
@@ -424,8 +477,46 @@ _PRONOUN_RE = re.compile(
 )
 
 
+# Phrases that indicate the user wants to CREATE / UPDATE / LOG something
+# rather than read. Matched conservatively — when in doubt we let it fall
+# through to read commands or general Claude.
+_WRITE_INTENT_RE = re.compile(
+    r"\b(?:create|add|new|log|enter)\s+(?:a\s+|the\s+)?"
+    r"(?:seller|buyer|lead|pitch|deal|contact|property|note|task)\b"
+    r"|\bupdate\s+(?:the\s+)?(?:asking|price|stage|note|pipeline|noi|cap\s+rate|owner)\b"
+    r"|\bchange\s+(?:the\s+)?(?:asking|price|stage|owner|note|priority)\b"
+    r"|\bset\s+(?:the\s+)?(?:asking|price|stage|gross|noi|cap)\b"
+    r"|\bmove\s+.+?\s+to\s+(?:.+?\s+)?(?:stage|pitch\s+out|spread|accepted|asking|starter|closed)\b"
+    r"|\bstar\s+.+?\s+(?:as\s+)?(?:top\s+priority|priority|hot)\b"
+    r"|\barchive\s+(?:the\s+)?(?:deal|property|.+)\b"
+    r"|\bmark\s+.+?\s+(?:top\s+priority|as\s+priority|archived)\b"
+    r"|\bappend\s+(?:a\s+)?note\b"
+    r"|\b(?:i|just)\s+(?:spoke|talked|met|called|got\s+a\s+call|got\s+off\s+the\s+phone)\b"
+    r"|\bpitched\s+.+?\s+to\b"
+    r"|\b(?:spoke|talked)\s+with\s+.+?\s+(?:about|at)\b",
+    re.IGNORECASE,
+)
+
+# Confirmation phrases — "yes" / "do it" / "confirm" — used to commit a
+# pending write that the previous turn previewed. v221 just acknowledges;
+# v222 will execute.
+_CONFIRM_RE = re.compile(
+    r"^\s*(?:yes|yeah|yep|yup|correct|confirm|do\s+it|go\s+ahead|"
+    r"that'?s\s+right|sounds?\s+good|commit\s+it)\s*[.!]?\s*$",
+    re.IGNORECASE,
+)
+
+
 def match_command(transcript: str, prev_turns=None):
     t = transcript.lower().strip().rstrip(".?!")
+
+    # If the previous turn left a pending write preview AND this turn is a
+    # confirmation, route to a commit handler.
+    if prev_turns and _CONFIRM_RE.match(t):
+        for prev in reversed(prev_turns):
+            facts = prev.get("facts") or {}
+            if isinstance(facts, dict) and facts.get("_write_intent"):
+                return ("write-commit", json.dumps(facts))
 
     # Pronoun resolution — re-target the most recent entity-bearing turn.
     if prev_turns and _PRONOUN_RE.search(t):
@@ -434,6 +525,10 @@ def match_command(transcript: str, prev_turns=None):
             args = prev.get("args")
             if cmd and args and cmd != "daily-brief.md" and cmd != "recent-deals.md":
                 return (cmd, args)
+
+    # Write intents — forward to crm-ai-assist for structured extraction.
+    if _WRITE_INTENT_RE.search(t):
+        return ("write-intent", transcript)
 
     if re.search(
         r"\b(daily|morning)\s+brief(ing)?\b"
@@ -485,7 +580,7 @@ def match_command(transcript: str, prev_turns=None):
     return None
 
 
-def fetch_for(command_file: str, args: str):
+def fetch_for(command_file: str, args: str, prev_turns=None):
     try:
         if command_file == "daily-brief.md":
             return fetch_daily_brief()
@@ -497,6 +592,20 @@ def fetch_for(command_file: str, args: str):
             return fetch_recent_deals(args)
         if command_file == "entity-lookup.md":
             return fetch_entity(args)
+        if command_file == "write-intent":
+            return forward_to_assist(args, prev_turns)
+        if command_file == "write-commit":
+            # v221: acknowledge only. v222 will execute the writes.
+            try:
+                pending = json.loads(args)
+            except json.JSONDecodeError:
+                pending = {}
+            return {
+                "_pending_commit": True,
+                "intent": pending.get("intent"),
+                "summary": pending.get("summary"),
+                "_note": "v221: voice commit not implemented yet — open the ✦ button on the dashboard to confirm and commit.",
+            }
     except Exception as e:
         return {"error": f"{type(e).__name__}: {e}"}
     return None
@@ -544,17 +653,35 @@ def ask_claude(transcript: str, command_file, facts, prev_turns=None) -> str:
         "# Output rules — STRICT\n"
         "You are speaking through a TTS voice (OpenAI onyx). Your reply will "
         "be read aloud verbatim, so:\n"
-        "- 2 sentences max. Under ~30 seconds of audio.\n"
+        "- 2 sentences max for reads. 3 sentences max for write previews.\n"
         "- Plain spoken English. No markdown, no bullet points, no headers.\n"
         "- NEVER write tool-call syntax (no <tool_call>, no <function_call>, "
         "no XML tags of any kind). You do NOT have tools available.\n"
         "- NEVER write or describe SQL queries, JSON, code blocks, or column "
         "names. The user is hearing this, not reading it.\n"
         "- If the 'Live data' block above is missing or empty for a command, "
-        "say 'I don't have that data right now' and stop. Do not improvise "
-        "or pretend to query a database.\n"
+        "say 'I don't have that data right now' and stop.\n"
         "- For general questions (no command matched), answer from your own "
-        "knowledge in Ricky's voice — short, direct, no hedging."
+        "knowledge in Ricky's voice — short, direct, no hedging.\n"
+        "\n"
+        "# Write-intent handling (when data has _write_intent: true)\n"
+        "The crm-ai-assist function returned a structured intent (seller_lead, "
+        "buyer_criteria, update_deal, or pitch_log). Speak a natural-language "
+        "preview of what's about to happen using the fields in the data, then "
+        "end with: 'Say yes to confirm, or open the ✦ button to edit fields.' "
+        "Example for seller_lead: 'Got it — about to create John Smith with "
+        "phone 201-555-1234, plus a 12-unit multifamily at 45 Park Ave Bayonne "
+        "asking $2.5M. Say yes to confirm, or open the ✦ button to edit fields.'\n"
+        "\n"
+        "# Confirmation handling (when data has _pending_commit: true)\n"
+        "User said yes to a previous write preview. Voice-commit isn't wired "
+        "yet — say exactly: 'Voice commits land in the next push. For now, "
+        "tap the ✦ button on the dashboard to commit it.'\n"
+        "\n"
+        "# Clarifying questions (when data has clarifying_questions array)\n"
+        "Speak the FIRST clarifying question conversationally, ignore the "
+        "rest. Example data: clarifying_questions: ['What's the phone number?', "
+        "'What's the asking price?'] → 'What's the phone number?'"
     )
     system = "\n\n---\n\n".join(blocks)
 
@@ -650,7 +777,7 @@ async def turn(
         cmd_file, args, facts = None, "", None
         if match:
             cmd_file, args = match
-            facts = fetch_for(cmd_file, args)
+            facts = fetch_for(cmd_file, args, prev_turns=prev_turns)
 
         reply = ask_claude(transcript, cmd_file, facts, prev_turns=prev_turns)
         mp3 = synthesize(reply)

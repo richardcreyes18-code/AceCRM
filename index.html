@@ -35652,6 +35652,18 @@ function showSettingsPage(){
           <button onclick="_streetViewBulkOpen()" style="background:#059669;color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Bulk fill →</button>
         </section>
 
+        <!-- v231: Bulk Geocode tile — gives every deal lat/lon so it shows up on the map -->
+        <section data-settings-tab="tools" style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
+          <div style="font-size:28px;flex-shrink:0;">🌎</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:15px;font-weight:700;color:#0f172a;">Clean &amp; Geocode addresses</div>
+            <div style="font-size:12px;color:#64748b;margin-top:3px;line-height:1.5;">
+              Strips junk prefixes/suffixes from addresses and auto-populates county, lat, lon so every deal shows up on the map. Safe to re-run — skips deals that already have coordinates by default.
+            </div>
+          </div>
+          <button onclick="openBulkGeocodeModal()" style="background:linear-gradient(135deg,#1e3a8a,#2563eb);color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Open geocode tool →</button>
+        </section>
+
         <!-- v119: AI Auto-Fill catalog tile -->
         <section data-settings-tab="tools" style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
           <div style="font-size:28px;flex-shrink:0;">✦</div>

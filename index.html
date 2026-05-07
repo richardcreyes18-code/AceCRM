@@ -28627,6 +28627,13 @@ function filterContacts(){
   const mineIds = _contactScope === 'mine' ? _computeMyContactIds() : null;
   const selSources = _msGetSelected('cs');
 
+  // v238: tokenize query so middle initials / prefixes don't block a match.
+  // "joseph hadef" should find "Joseph N Hadef"; "646 samsonic" should find
+  // a contact whose phone is 6462072461 AND email contains samsonic. Each
+  // whitespace-separated token must appear somewhere in the haystack
+  // (substring match, case-insensitive). Empty query matches everything.
+  const qTokens = q.split(/\s+/).filter(Boolean);
+
   // v190: agent-view filter overrides the mine/all scope (when active)
   const agentActive = !!_contactsAgentFilterId;
   const minLevelStr = agentActive ? (document.getElementById('contactsAgentMinLevel')?.value || '') : '';
@@ -28634,8 +28641,14 @@ function filterContacts(){
 
   let filtered = allContacts.filter(r=>{
     const f = r.fields;
-    const matchQ = !q || [f.Name, f['Phone Number'], f.Company, f.Email, f['Contact Notes']]
-      .some(v => v && String(v).toLowerCase().includes(q));
+    let matchQ = true;
+    if(qTokens.length){
+      // Concatenate candidate fields with a sentinel so a token can't
+      // straddle two fields. \u0001 (SOH) is fine — never appears in user data.
+      const haystack = [f.Name, f['Phone Number'], f.Company, f.Email, f['Contact Notes']]
+        .filter(Boolean).map(v => String(v).toLowerCase()).join(' \u0001 ');
+      matchQ = qTokens.every(t => haystack.includes(t));
+    }
     const matchT = !type || (f.Type||[]).includes(type);
     const matchScope = agentActive ? _contactsAgentRelMap.has(r.id) : (!mineIds || mineIds.has(r.id));
     const matchSrc = !selSources || selSources.includes(f['Import Source'] || '(none)');

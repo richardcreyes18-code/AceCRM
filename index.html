@@ -41558,6 +41558,25 @@ function _bcAiRenderReviewModal(bcId, resp, hostModal){
       resolvedOptions = _BC_AI_US_STATES;
       resolvedKind = 'multienum';
     }
+    // v232: simple_area_preference uses curated regions (North NJ /
+    // Central NJ / South NJ / Tri-State / etc.) instead of free text so
+    // the buyer matcher can join against the same vocabulary.
+    if(col === 'simple_area_preference' && !resolvedOptions){
+      const regions = (typeof _appLists !== 'undefined' && Array.isArray(_appLists.regions)) ? _appLists.regions : [];
+      if(regions.length){
+        resolvedOptions = regions;
+        resolvedKind = 'multienum';
+      }
+    }
+    // v232: preferred_counties picks from the curated counties list
+    // (NJ + neighboring states with curated coverage).
+    if(col === 'preferred_counties' && !resolvedOptions){
+      const counties = (typeof _appLists !== 'undefined' && Array.isArray(_appLists.counties)) ? _appLists.counties : [];
+      if(counties.length){
+        resolvedOptions = counties;
+        resolvedKind = 'multienum';
+      }
+    }
 
     if(propEntry){
       stateLabel = '<span style="font-size:9px;color:#15803d;background:#dcfce7;border:1px solid #86efac;border-radius:99px;padding:1px 6px;">applied</span>';
@@ -41649,8 +41668,37 @@ function _bcAiRenderReviewModal(bcId, resp, hostModal){
     root.id = 'bcAiReviewModal';
   }
   root.onclick = (e) => { if(e.target === root) root.remove(); };
+
+  // v232: right-side source panel — mirrors the deal-card AI Auto-Fill modal.
+  // Keys come back from the edge function v6+ as resp.source_breakdown:
+  //   contact_record · ace_contact_notes · fub_call_notes · fub_notes · additional_text
+  const sourceBreakdown = (resp.source_breakdown && typeof resp.source_breakdown === 'object') ? resp.source_breakdown : {};
+  const SOURCE_LABELS = {
+    contact_record:    '👤 Contact record',
+    ace_contact_notes: '📝 Ace contact notes',
+    fub_call_notes:    '📞 FUB call notes',
+    fub_notes:         '🗒 FUB notes',
+    additional_text:   '✦ Your additional context',
+  };
+  const sourceKeysWithText = Object.keys(sourceBreakdown).filter(k => sourceBreakdown[k] && String(sourceBreakdown[k]).trim());
+  const sourceTotalChars = sourceKeysWithText.reduce((n, k) => n + String(sourceBreakdown[k] || '').length, 0);
+  const sourcesHtml = sourceKeysWithText.length
+    ? sourceKeysWithText.map((k, i) => {
+        const txt = String(sourceBreakdown[k] || '').trim();
+        const open = i < 2 ? 'open' : '';
+        const label = SOURCE_LABELS[k] || k;
+        return `<details ${open} style="border-bottom:1px solid #e2e8f0;">
+          <summary style="padding:8px 12px;cursor:pointer;font-size:11px;font-weight:600;color:#0f172a;background:#f8fafc;display:flex;align-items:center;justify-content:space-between;gap:8px;">
+            <span>${esc(label)}</span>
+            <span style="color:#94a3b8;font-size:10px;font-weight:500;">${txt.length.toLocaleString()} chars</span>
+          </summary>
+          <pre style="margin:0;padding:10px 14px;font-size:11px;line-height:1.55;color:#334155;background:#fff;white-space:pre-wrap;word-break:break-word;font-family:ui-monospace,Menlo,Monaco,monospace;">${esc(txt)}</pre>
+        </details>`;
+      }).join('')
+    : `<div style="padding:24px;text-align:center;font-size:11px;color:#94a3b8;">No notes / call transcripts on this contact yet — AI had nothing to read from. Add context in the prompt above to seed the run.</div>`;
+
   root.innerHTML = `
-    <div style="background:#fff;border-radius:12px;padding:0;max-width:1180px;width:97%;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 25px 60px rgba(0,0,0,0.25);font-family:'Inter',system-ui,sans-serif;">
+    <div style="background:#fff;border-radius:12px;padding:0;max-width:1500px;width:98%;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 25px 60px rgba(0,0,0,0.25);font-family:'Inter',system-ui,sans-serif;">
       <div style="padding:16px 22px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
         <div>
           <div style="font-size:16px;font-weight:700;color:#0f172a;">✦ AI Auto-Fill — Review &amp; Apply</div>
@@ -41667,9 +41715,20 @@ function _bcAiRenderReviewModal(bcId, resp, hostModal){
             style="background:#1a3a6e;color:#fff;border:none;padding:7px 18px;font-size:12px;font-weight:700;border-radius:8px;cursor:pointer;font-family:inherit;">✓ Apply Selected</button>
         </div>
       </div>
-      <div style="overflow:auto;padding:18px 22px;background:#f8fafc;flex:1;">
-        ${uncertainBlock}
-        ${groupBlocks || '<div style="color:#94a3b8;font-size:12px;text-align:center;padding:30px;">AI returned no suggestions — try adding more context above.</div>'}
+      <div style="display:flex;flex:1;min-height:0;">
+        <!-- LEFT: field review table -->
+        <div style="flex:1 1 62%;min-width:0;overflow:auto;padding:18px 22px;background:#f8fafc;">
+          ${uncertainBlock}
+          ${groupBlocks || '<div style="color:#94a3b8;font-size:12px;text-align:center;padding:30px;">AI returned no suggestions — try adding more context above.</div>'}
+        </div>
+        <!-- RIGHT: source notes the AI read from -->
+        <div style="flex:1 1 38%;min-width:0;display:flex;flex-direction:column;background:#fafbfc;border-left:1px solid #e2e8f0;">
+          <div style="padding:10px 14px;border-bottom:1px solid #e2e8f0;background:#fff;font-size:11px;color:#475569;flex-shrink:0;">
+            <strong style="color:#0f172a;font-size:12px;">Sources the AI read</strong>
+            <span style="color:#94a3b8;margin-left:6px;">${sourceKeysWithText.length} source${sourceKeysWithText.length===1?'':'s'} · ${sourceTotalChars.toLocaleString()} chars total</span>
+          </div>
+          <div style="overflow-y:auto;flex:1;">${sourcesHtml}</div>
+        </div>
       </div>
     </div>`;
   // Stash data for the apply path

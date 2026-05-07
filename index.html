@@ -2068,7 +2068,35 @@ const SB_BC_MAP = {
   field_status:'Field Status',
   // v203: AI Auto-Fill log (mirrors ace_properties.ai_autofill_log) —
   // append-only array of snapshots, one per AI run on this buyer.
-  ai_autofill_log:'AI Autofill Log'
+  ai_autofill_log:'AI Autofill Log',
+  // v235: backing columns for the asset sections that previously had no
+  // persistence (Hotel, Self Storage, Mobile Home Park, Healthcare,
+  // Special Purpose, Development) plus per-asset target_sf for the
+  // "single ballpark" SF case ("~10k SF") that should NOT collapse into
+  // min=max.
+  hotel_min_keys:            'Hotel Min Keys',
+  hotel_max_keys:            'Hotel Max Keys',
+  hotel_flag_preference:     'Hotel Flag Preference',
+  hotel_notes:               'Hotel Notes',
+  storage_min_units:         'Storage Min Units',
+  storage_min_net_sf:        'Storage Min Net SF',
+  storage_climate:           'Storage Climate',
+  mhp_min_pads:              'MHP Min Pads',
+  mhp_max_pads:              'MHP Max Pads',
+  mhp_ownership:             'MHP Ownership',
+  healthcare_min_sf:         'Healthcare Min SF',
+  healthcare_max_sf:         'Healthcare Max SF',
+  healthcare_subtype:        'Healthcare Sub-Type',
+  special_purpose_use:       'Special Purpose Use',
+  development_project_type:  'Development Project Type',
+  development_stage:         'Development Stage',
+  development_min_size:      'Development Min Size',
+  development_max_size:      'Development Max Size',
+  warehouse_target_sf:       'Warehouse Target SF',
+  retail_target_sf:          'Retail Target SF',
+  office_target_sf:          'Office Target SF',
+  shopping_target_sf:        'Shopping Target SF',
+  mixeduse_target_sf:        'MixedUse Target SF'
 };
 
 // Tasks map (ace_tasks) — v113.21 adds multi-agent assignment, buyer link,
@@ -40308,23 +40336,27 @@ function bcExpandedAssetSection(asset, f){
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:10px;">
         ${num('Min SF',             'bcf_minSF',        f['Warehouse Min Square Footage'], 'e.g. 5000')}
         ${num('Max SF',             'bcf_maxSF',        f['Warehouse Max Square Footage'], 'e.g. 100000')}
-        ${num('Min Clear Height (ft)','bcf_wh_height',  f['Warehouse Min Clear Height'],   'e.g. 20')}
+        ${num('Target SF (single estimate)', 'bcf_wh_targetSF', f['Warehouse Target SF'], 'e.g. 10000 (~10k SF)')}
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:10px;">
+        ${num('Min Clear Height (ft)','bcf_wh_height',  f['Warehouse Min Clear Height'],   'e.g. 20')}
         ${num('Min # Loading Docks','bcf_wh_docks',     f['Warehouse Min Docks'],          'e.g. 2')}
         ${sel('Investor or Owner-Occ?','bcf_wh_invown', f['Warehouse Investor or Owner'],  [{v:'',l:'Either'},{v:'Investor',l:'Investor'},{v:'Owner-Occupier',l:'Owner-Occupier'}])}
-        ${sel('Deal Profile',       'bcf_wh_profile',   f['Warehouse Profile Preference'], [{v:'',l:'Any'},{v:'Value Add',l:'Value Add'},{v:'NNN',l:'NNN'},{v:'Stabilized',l:'Stabilized'},{v:'Vacant',l:'Vacant'}])}
       </div>
-      <div style="display:grid;grid-template-columns:1fr;gap:12px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        ${sel('Deal Profile',       'bcf_wh_profile',   f['Warehouse Profile Preference'], [{v:'',l:'Any'},{v:'Value Add',l:'Value Add'},{v:'NNN',l:'NNN'},{v:'Stabilized',l:'Stabilized'},{v:'Vacant',l:'Vacant'}])}
         ${txt('Dock Doors / Features (free text)','bcf_wh_features', f['Warehouse Features'], 'e.g. Drive-in, Dock High, Rail access...')}
       </div>`;
 
   } else if(lc.includes('shopping')){
     // Shopping center is its own asset type, distinct from retail strip mall
     fields = `
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:10px;">
         ${num('Min SF',             'bcf_shop_minSF',   f['Shopping Min SF'],        'e.g. 10000')}
         ${num('Max SF',             'bcf_shop_maxSF',   f['Shopping Max SF'],        'e.g. 80000')}
+        ${num('Target SF (single estimate)', 'bcf_shop_targetSF', f['Shopping Target SF'], 'e.g. 30000')}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr;gap:12px;">
         ${num('Min # of Tenants',   'bcf_shop_mintenants', f['Shopping Min Tenants'],'e.g. 6')}
       </div>`;
 
@@ -40333,14 +40365,15 @@ function bcExpandedAssetSection(asset, f){
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:10px;">
         ${num('Min SF',             'bcf_ret_minSF',    f['Retail Min SF'],          'e.g. 2000')}
         ${num('Max SF',             'bcf_ret_maxSF',    f['Retail Max SF'],          'e.g. 20000')}
-        ${num('Min # of Tenants',   'bcf_ret_minunits', f['Retail Min Tenants'],     'e.g. 3')}
+        ${num('Target SF (single estimate)', 'bcf_ret_targetSF', f['Retail Target SF'], 'e.g. 5000')}
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:10px;">
+        ${num('Min # of Tenants',   'bcf_ret_minunits', f['Retail Min Tenants'],     'e.g. 3')}
         ${sel('Lease Preference',   'bcf_ret_lease',    f['Retail Lease Preference'],[{v:'',l:'Any'},{v:'NNN Preferred',l:'NNN Preferred'},{v:'Gross OK',l:'Gross OK'},{v:'Mixed',l:'Mixed'}])}
         ${sel('Anchor Preference',  'bcf_ret_anchor',   f['Retail Anchor Preference'],[{v:'',l:'No Preference'},{v:'Anchored Preferred',l:'Anchored Preferred'},{v:'Unanchored OK',l:'Unanchored OK'}])}
-        ${num('Min Occupancy (%)',  'bcf_ret_occ',      f['Retail Min Occupancy'],   'e.g. 80')}
       </div>
-      <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-top:10px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        ${num('Min Occupancy (%)',  'bcf_ret_occ',      f['Retail Min Occupancy'],   'e.g. 80')}
         ${txt('Tenant Type Preference (free text)','bcf_ret_tenants', f['Retail Tenant Type'], 'e.g. NNN, Credit tenants...')}
       </div>`;
 
@@ -40349,9 +40382,10 @@ function bcExpandedAssetSection(asset, f){
       <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:10px;">
         ${num('Min SF',             'bcf_off_minSF',    f['Office Min SF'],          'e.g. 3000')}
         ${num('Max SF',             'bcf_off_maxSF',    f['Office Max SF'],          'e.g. 30000')}
-        ${sel('Class Preference',   'bcf_off_class',    f['Office Class Preference'],[{v:'',l:'Any'},{v:'A',l:'A'},{v:'B',l:'B'},{v:'C',l:'C'},{v:'Medical',l:'Medical'}])}
+        ${num('Target SF (single estimate)', 'bcf_off_targetSF', f['Office Target SF'], 'e.g. 8000')}
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+        ${sel('Class Preference',   'bcf_off_class',    f['Office Class Preference'],[{v:'',l:'Any'},{v:'A',l:'A'},{v:'B',l:'B'},{v:'C',l:'C'},{v:'Medical',l:'Medical'}])}
         ${num('Min # of Tenants',   'bcf_off_mintenants', f['Office Min Tenants'],   'e.g. 1')}
         ${num('Max # of Tenants',   'bcf_off_maxtenants', f['Office Max Tenants'],   'e.g. 20')}
       </div>`;
@@ -40369,10 +40403,13 @@ function bcExpandedAssetSection(asset, f){
 
   } else if(lc.includes('mixed')){
     fields = `
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:10px;">
         ${num('Min Residential Units','bcf_mu_minres', f['MixedUse Min Residential'],'e.g. 2')}
         ${num('Min Commercial Spaces','bcf_mu_mincom', f['MixedUse Min Commercial'], 'e.g. 1')}
         ${num('Min Building SF',      'bcf_mu_minsf',  f['MixedUse Min SF'],         'e.g. 3000')}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr;gap:12px;">
+        ${num('Target SF (single estimate)', 'bcf_mu_targetSF', f['MixedUse Target SF'], 'e.g. 8000')}
       </div>`;
 
   } else if(lc.includes('automotive') || lc.includes('auto')){
@@ -42283,6 +42320,46 @@ async function bcSaveExpanded(recordId, isAuto=false){
   const ddEl = document.getElementById('bcf_deal_dependent');
   if(ddEl) fields['Budget Deal Dependent'] = ddEl.checked === true;
   sv('Financing Type',                   gv('bcf_financing'));
+
+  // v235: Hotel — guarded with element existence check because the section is
+  // only present when a Hotel chip is on the form. gn() / gv() already
+  // tolerate missing IDs by returning null/'', so this is a defense-in-depth
+  // pattern, not a guard.
+  const hotelMinKeys = gn('bcf_hotel_minkeys'); if(hotelMinKeys!==null) fields['Hotel Min Keys'] = hotelMinKeys;
+  const hotelMaxKeys = gn('bcf_hotel_maxkeys'); if(hotelMaxKeys!==null) fields['Hotel Max Keys'] = hotelMaxKeys;
+  sv('Hotel Flag Preference',            gv('bcf_hotel_flag'));
+  sv('Hotel Notes',                      gv('bcf_hotel_notes'));
+
+  // v235: Self Storage
+  const storMinUnits = gn('bcf_storage_minunits'); if(storMinUnits!==null) fields['Storage Min Units'] = storMinUnits;
+  const storMinSF    = gn('bcf_storage_minsf');    if(storMinSF!==null)    fields['Storage Min Net SF'] = storMinSF;
+  sv('Storage Climate',                  gv('bcf_storage_climate'));
+
+  // v235: Mobile Home Park
+  const mhpMinPads = gn('bcf_mhp_minpads'); if(mhpMinPads!==null) fields['MHP Min Pads'] = mhpMinPads;
+  const mhpMaxPads = gn('bcf_mhp_maxpads'); if(mhpMaxPads!==null) fields['MHP Max Pads'] = mhpMaxPads;
+  sv('MHP Ownership',                    gv('bcf_mhp_ownership'));
+
+  // v235: Healthcare / Medical
+  const healthMinSF = gn('bcf_health_minSF'); if(healthMinSF!==null) fields['Healthcare Min SF'] = healthMinSF;
+  const healthMaxSF = gn('bcf_health_maxSF'); if(healthMaxSF!==null) fields['Healthcare Max SF'] = healthMaxSF;
+  sv('Healthcare Sub-Type',              gv('bcf_health_sub'));
+
+  // v235: Special Purpose
+  sv('Special Purpose Use',              gv('bcf_special_use'));
+
+  // v235: Development
+  sv('Development Project Type',         gv('bcf_dev_project'));
+  sv('Development Stage',                gv('bcf_dev_stage'));
+  const devMin = gn('bcf_dev_minsize'); if(devMin!==null) fields['Development Min Size'] = devMin;
+  const devMax = gn('bcf_dev_maxsize'); if(devMax!==null) fields['Development Max Size'] = devMax;
+
+  // v235: per-asset Target SF (single ballpark estimate; coexists with min/max)
+  const whTgt   = gn('bcf_wh_targetSF');    if(whTgt!==null)   fields['Warehouse Target SF']  = whTgt;
+  const retTgt  = gn('bcf_ret_targetSF');   if(retTgt!==null)  fields['Retail Target SF']     = retTgt;
+  const offTgt  = gn('bcf_off_targetSF');   if(offTgt!==null)  fields['Office Target SF']     = offTgt;
+  const shopTgt = gn('bcf_shop_targetSF');  if(shopTgt!==null) fields['Shopping Target SF']   = shopTgt;
+  const muTgt   = gn('bcf_mu_targetSF');    if(muTgt!==null)   fields['MixedUse Target SF']   = muTgt;
 
   // v111: persist field_status map (object of field_id → 'no_preference' | 'not_available')
   // Always include it in saves so the DB matches the UI state, even if empty.

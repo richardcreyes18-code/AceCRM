@@ -40181,8 +40181,24 @@ async function bcOpenExpanded(recordId){
           </div>
         </div>
 
-        <!-- ASSET-SPECIFIC CRITERIA -->
-        ${assets.map(asset => bcExpandedAssetSection(asset, f)).join('')}
+        <!-- ASSET-SPECIFIC CRITERIA (v235: deduped, live-rendered) -->
+        ${(() => {
+          // Stash `f` for _bcRefreshAssetSections so it can re-render
+          // when chips change without a page reload.
+          window._bcCurrentFields = f;
+          // Dedupe by section key so "Multifamily" + "Multifamily: Garden"
+          // (or "Development: Warehouse" + "Warehouse / Industrial") only
+          // render the section once.
+          const seen = new Set();
+          const blocks = [];
+          for(const a of assets){
+            const k = _bcAssetSectionKey(a);
+            if(seen.has(k)) continue;
+            seen.add(k);
+            blocks.push(bcExpandedAssetSection(a, f));
+          }
+          return `<div id="bcf_asset_sections">${blocks.join('')}</div>`;
+        })()}
 
         <!-- NOTES -->
         <div class="info-box">
@@ -40367,15 +40383,149 @@ function bcExpandedAssetSection(asset, f){
         ${sel('Owner-Occ or Investor?','bcf_auto_type', f['Automotive Type Preference'],   [{v:'',l:'Either'},{v:'Owner-Occupier',l:'Owner-Occupier'},{v:'Investor',l:'Investor'}])}
       </div>`;
 
+  // v235: requirements blocks for asset types that previously fell to the
+  // default "use the Notes section" message. These are read-only against
+  // the buyer-criteria row's other_requirements / contact notes for now —
+  // the values are captured as free-text + numbers so the buyer matcher
+  // can grow into them later. Each block writes to its own bcf_<asset>_*
+  // input ids. None of these have backing columns yet, so they're scoped
+  // to the bcf_requirements textarea via a shared "Add to notes" hint
+  // until columns are added.
+  } else if(lc.includes('hotel') || lc.includes('hospitality')){
+    fields = `
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+        ${num('Min # of Keys / Rooms','bcf_hotel_minkeys', f['Hotel Min Keys'], 'e.g. 50')}
+        ${num('Max # of Keys / Rooms','bcf_hotel_maxkeys', f['Hotel Max Keys'], 'e.g. 250')}
+        ${sel('Flag / Brand Preference','bcf_hotel_flag',  f['Hotel Flag Preference'],
+          [{v:'',l:'Any'},{v:'Branded',l:'Branded only'},{v:'Independent',l:'Independent OK'},{v:'Boutique',l:'Boutique'}])}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-top:10px;">
+        ${txt('Operating model / notes', 'bcf_hotel_notes', f['Hotel Notes'], 'e.g. Limited service, extended stay, must be franchise…')}
+      </div>`;
+
+  } else if(lc.includes('self storage') || lc.includes('self-storage') || lc.includes('storage')){
+    fields = `
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+        ${num('Min # of Units / Doors','bcf_storage_minunits', f['Storage Min Units'], 'e.g. 100')}
+        ${num('Min Net Rentable SF',   'bcf_storage_minsf',    f['Storage Min Net SF'], 'e.g. 30000')}
+        ${sel('Climate-Controlled?',   'bcf_storage_climate',  f['Storage Climate'],
+          [{v:'',l:'Either'},{v:'Climate',l:'Climate-Controlled Required'},{v:'NonClimate',l:'Non-Climate OK'}])}
+      </div>`;
+
+  } else if(lc.includes('mobile') || lc.includes('mhp') || lc.includes('manufactured')){
+    fields = `
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+        ${num('Min # of Pads / Lots','bcf_mhp_minpads', f['MHP Min Pads'], 'e.g. 50')}
+        ${num('Max # of Pads / Lots','bcf_mhp_maxpads', f['MHP Max Pads'], 'e.g. 250')}
+        ${sel('Park-Owned vs Tenant-Owned Homes','bcf_mhp_ownership', f['MHP Ownership'],
+          [{v:'',l:'Either'},{v:'POH',l:'Park-Owned Homes'},{v:'TOH',l:'Tenant-Owned Homes'},{v:'Mix',l:'Mix OK'}])}
+      </div>`;
+
+  } else if(lc.includes('healthcare') || lc.includes('medical')){
+    fields = `
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+        ${num('Min SF',              'bcf_health_minSF', f['Healthcare Min SF'], 'e.g. 5000')}
+        ${num('Max SF',              'bcf_health_maxSF', f['Healthcare Max SF'], 'e.g. 50000')}
+        ${sel('Sub-Type',            'bcf_health_sub',   f['Healthcare Sub-Type'],
+          [{v:'',l:'Any'},{v:'MOB',l:'Medical Office Building'},{v:'Surgery',l:'Surgery / Ambulatory'},{v:'Senior',l:'Senior Living / Assisted'},{v:'Skilled',l:'Skilled Nursing'},{v:'Other',l:'Other'}])}
+      </div>`;
+
+  } else if(lc.includes('special purpose') || lc.includes('special')){
+    fields = `
+      <div style="display:grid;grid-template-columns:1fr;gap:12px;">
+        ${txt('Use case / what they\'re looking for','bcf_special_use', f['Special Purpose Use'], 'e.g. Religious, school, marina, post office, day care…')}
+      </div>`;
+
+  } else if(lc.includes('development')){
+    fields = `
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+        ${txt('Project Type',  'bcf_dev_project', f['Development Project Type'], 'e.g. Ground-up multifamily, hotel, mixed-use')}
+        ${txt('Stage',         'bcf_dev_stage',   f['Development Stage'], 'e.g. Approvals in place, raw land, tear-down')}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px;">
+        ${num('Min Buildable SF / Units','bcf_dev_minsize', f['Development Min Size'], 'e.g. 50000')}
+        ${num('Max Buildable SF / Units','bcf_dev_maxsize', f['Development Max Size'], 'e.g. 200000')}
+      </div>`;
+
   } else {
-    fields = `<div style="font-size:11px;color:#666;">Use the Notes section below to specify requirements for this asset type.</div>`;
+    fields = `<div style="font-size:11px;color:#666;">No specific fields for this asset type yet — use the Notes section below.</div>`;
   }
 
+  // v235: tag the wrapper with data-asset so _bcRefreshAssetSections can
+  // dedupe (one section per asset key) and remove sections whose chip
+  // was removed without nuking unsaved input on other sections.
   return `
-    <div class="info-box">
+    <div class="info-box" data-bc-asset-section="${assetClean.toLowerCase().replace(/[^a-z0-9]+/g,'_')}">
       <div class="info-box-title">${getBcTypeBadge(assetClean)} Requirements</div>
       ${fields}
     </div>`;
+}
+
+// v235: section-key for an asset chip text. Maps every chip variant
+// ("Multifamily", "Multifamily: Garden", "Development: Warehouse",
+// "Warehouse / Industrial: Flex") onto the same canonical key the
+// renderer matches with lc.includes(). Lets _bcRefreshAssetSections
+// dedupe so two chips that share a section don't render it twice.
+function _bcAssetSectionKey(chipText){
+  const lc = String(chipText || '').toLowerCase();
+  if(lc.includes('multifamily') || lc.includes('multi')) return 'multifamily';
+  if(lc.includes('warehouse') || lc.includes('industrial') || lc.includes('distribution') || lc.includes('flex')) return 'warehouse';
+  if(lc.includes('shopping')) return 'shopping';
+  if(lc.includes('retail')) return 'retail';
+  if(lc.includes('office')) return 'office';
+  if(lc.includes('land')) return 'land';
+  if(lc.includes('mixed')) return 'mixed';
+  if(lc.includes('automotive') || lc.includes('auto')) return 'automotive';
+  if(lc.includes('hotel') || lc.includes('hospitality')) return 'hotel';
+  if(lc.includes('self storage') || lc.includes('self-storage') || lc.includes('storage')) return 'storage';
+  if(lc.includes('mobile') || lc.includes('mhp') || lc.includes('manufactured')) return 'mhp';
+  if(lc.includes('healthcare') || lc.includes('medical')) return 'healthcare';
+  if(lc.includes('special')) return 'special';
+  if(lc.includes('development')) return 'development';
+  // Fallback: stable hash-like key off the chip text so unknown types
+  // still render exactly once per distinct chip.
+  return 'misc__' + lc.replace(/[^a-z0-9]+/g,'_');
+}
+
+// v235: incremental re-render for the asset-specific requirements
+// container. Reads the current asset chips, computes the desired set
+// of section keys, then ADDS missing sections and REMOVES extras —
+// without touching sections that should stay (so any in-flight typing
+// inside those sections is preserved).
+function _bcRefreshAssetSections(){
+  const host = document.getElementById('bcf_asset_sections');
+  if(!host) return;
+  const f = (typeof _bcCurrentFields === 'object' && _bcCurrentFields) ? _bcCurrentFields : {};
+  const assets = _bcGetPillTexts('bcf_asset_pills');
+  // Desired keys (deduped, in chip order). Keep one chip per key as the
+  // representative for rendering — first occurrence wins.
+  const desired = [];
+  const seen = new Set();
+  for(const a of assets){
+    const key = _bcAssetSectionKey(a);
+    if(seen.has(key)) continue;
+    seen.add(key);
+    desired.push({ key, asset: a });
+  }
+  // Tear down sections whose key is no longer desired.
+  const desiredSet = new Set(desired.map(d => d.key));
+  for(const node of [...host.querySelectorAll('[data-bc-asset-section]')]){
+    if(!desiredSet.has(node.getAttribute('data-bc-asset-section'))){
+      node.remove();
+    }
+  }
+  // Add sections that don't exist yet, in chip order.
+  for(const { key, asset } of desired){
+    const existing = host.querySelector(`[data-bc-asset-section="${CSS.escape(key)}"]`);
+    if(existing) continue;
+    const wrap = document.createElement('div');
+    wrap.innerHTML = bcExpandedAssetSection(asset, f).trim();
+    const newNode = wrap.firstElementChild;
+    if(newNode) host.appendChild(newNode);
+  }
+  // Numeric inputs use _fmtNum() for their initial display value and the
+  // global delegated listener (Bash on `.num-input`) handles formatting on
+  // edit, so no per-input wiring is needed for newly added sections.
 }
 
 // ── Buyer Criteria pill editor helpers ───────────────────────────
@@ -40398,7 +40548,17 @@ function _bcGetPillTexts(containerId){
 // v183.1: skipAutosave guard — bcSaveExpanded calls these to write the hidden
 // inputs before serializing the form. Without the guard each call re-triggered
 // _bcAutoSave, which scheduled another save 1200ms later → infinite save loop.
-function _bcSyncAssets(skipAutosave){ document.getElementById('bcf_assets_hidden').value = _bcGetPillTexts('bcf_asset_pills').join(', '); if(!skipAutosave && typeof _bcAutoSave==='function') _bcAutoSave(); }
+function _bcSyncAssets(skipAutosave){
+  document.getElementById('bcf_assets_hidden').value = _bcGetPillTexts('bcf_asset_pills').join(', ');
+  // v235: live-render the asset-specific requirements blocks whenever the
+  // chip set changes. Was previously only computed at page render time, so
+  // adding a new asset chip required a page refresh to see its section.
+  if(typeof _bcRefreshAssetSections === 'function'){
+    try { _bcRefreshAssetSections(); }
+    catch(e){ console.warn('[bc] asset section refresh failed:', e.message); }
+  }
+  if(!skipAutosave && typeof _bcAutoSave==='function') _bcAutoSave();
+}
 function _bcSyncCounties(skipAutosave){ document.getElementById('bcf_counties_hidden').value = _bcGetPillTexts('bcf_county_pills').join(', '); if(!skipAutosave && typeof _bcAutoSave==='function') _bcAutoSave(); }
 function _bcSyncCities(skipAutosave){ document.getElementById('bcf_cities_hidden').value = _bcGetPillTexts('bcf_city_pills').join(', '); if(!skipAutosave && typeof _bcAutoSave==='function') _bcAutoSave(); }
 

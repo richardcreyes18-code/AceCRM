@@ -40051,7 +40051,17 @@ async function bcOpenExpanded(recordId){
                 <div>
                   <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:4px;">Subtype — click to add</div>
                   <div id="bcf_at_subs" style="border:1.5px solid #e2e8f0;border-radius:6px;padding:4px;min-height:100px;max-height:160px;overflow-y:auto;font-size:11px;">
-                    ${(ASSET_SUBTYPES[Object.keys(ASSET_SUBTYPES)[0]]||[]).map(s=>`<div onclick="_bcAtSelect('${Object.keys(ASSET_SUBTYPES)[0].replace(/'/g,"\\'")}','${s.replace(/'/g,"\\'")}');" style="padding:4px 7px;cursor:pointer;border-radius:4px;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'">${s}</div>`).join('')}
+                    ${(() => {
+                      // v234: same shape as _bcAtUpdateSubs — always offer
+                      // a "no subtype" row at the top so users can add the
+                      // bare category without picking a subtype.
+                      const t0 = Object.keys(ASSET_SUBTYPES)[0] || '';
+                      const safe0 = t0.replace(/'/g,"\\'");
+                      const subs0 = ASSET_SUBTYPES[t0] || [];
+                      const cat = `<div onclick="_bcAtSelect('${safe0}','')" style="padding:4px 7px;cursor:pointer;border-radius:4px;font-size:11px;font-weight:600;color:#1a3a6e;background:#eef4ff;border:1px dashed #c7d7ff;margin-bottom:4px;" onmouseover="this.style.background='#dbe7ff'" onmouseout="this.style.background='#eef4ff'" title="Add the category alone, no subtype">＋ Add "${t0}" (no subtype)</div>`;
+                      const rows = subs0.map(s=>`<div onclick="_bcAtSelect('${safe0}','${s.replace(/'/g,"\\'")}')" style="padding:4px 7px;cursor:pointer;border-radius:4px;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'">${s}</div>`).join('');
+                      return cat + rows;
+                    })()}
                   </div>
                 </div>
               </div>
@@ -40873,8 +40883,17 @@ function _bcAtUpdateSubs(){
   if(!sel||!container) return;
   const type = sel.value;
   const subs = ASSET_SUBTYPES[type]||[];
-  container.innerHTML = subs.map(s=>`<div onclick="_bcAtSelect('${type.replace(/'/g,"\\'")}','${s.replace(/'/g,"\\'")}')" style="padding:4px 7px;cursor:pointer;border-radius:4px;font-size:11px;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'">${s}</div>`).join('');
-  if(!subs.length) container.innerHTML = `<div onclick="_bcAtSelect('${type.replace(/'/g,"\\'")}','')" style="padding:4px 7px;cursor:pointer;border-radius:4px;font-size:11px;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'">Add "${type}"</div>`;
+  const safeType = type.replace(/'/g,"\\'");
+  // v234: always offer a "category-only" row at the top so the user can
+  // add (e.g.) bare "Office" without being forced to pick CBD/Suburban/etc.
+  // Previously this row only appeared for categories with no subtypes.
+  const categoryRow = `<div onclick="_bcAtSelect('${safeType}','')" style="padding:4px 7px;cursor:pointer;border-radius:4px;font-size:11px;font-weight:600;color:#1a3a6e;background:#eef4ff;border:1px dashed #c7d7ff;margin-bottom:4px;" onmouseover="this.style.background='#dbe7ff'" onmouseout="this.style.background='#eef4ff'" title="Add the category alone, no subtype">＋ Add "${type}" (no subtype)</div>`;
+  if(!subs.length){
+    container.innerHTML = categoryRow;
+    return;
+  }
+  const subRows = subs.map(s=>`<div onclick="_bcAtSelect('${safeType}','${s.replace(/'/g,"\\'")}')" style="padding:4px 7px;cursor:pointer;border-radius:4px;font-size:11px;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'">${s}</div>`).join('');
+  container.innerHTML = categoryRow + subRows;
 }
 function _bcAtSearch(){
   const q = (document.getElementById('bcf_at_search')?.value||'').toLowerCase().trim();
@@ -41170,6 +41189,58 @@ const _BC_AI_US_STATES = [
   'VA','WA','WV','WI','WY','DC'
 ];
 
+// v234: map an AI-proposed token to the canonical option label. Used by the
+// review modal so suggestions like "Middlesex County, NJ" pre-select the
+// "Middlesex" chip and "Central Jersey" pre-selects "Central NJ". Returns
+// the canonical label or null if no reasonable match exists.
+//
+// Strategy (cheapest match first):
+//   1. exact case-insensitive match
+//   2. strip common suffixes ("County, NJ", "County, ST", ", NJ") and retry
+//   3. region synonyms ("Jersey" ↔ "NJ"; "North Jersey" ↔ "North NJ")
+//   4. alphanumeric loose match (drops punctuation/whitespace)
+function _bcAiCanonicalize(raw, options){
+  if(!raw || !Array.isArray(options) || !options.length) return null;
+  const orig = String(raw).trim();
+  if(!orig) return null;
+  const norm = orig.toLowerCase();
+  // 1. exact (case-insensitive)
+  for(const o of options){ if(String(o).toLowerCase() === norm) return o; }
+  // 2. strip "County[, ST]" and ", ST" suffixes
+  const stripped = orig
+    .replace(/\s+county(?:,\s*[a-z]{2})?\s*$/i, '')
+    .replace(/,\s*[a-z]{2}\s*$/i, '')
+    .trim()
+    .toLowerCase();
+  if(stripped && stripped !== norm){
+    for(const o of options){ if(String(o).toLowerCase() === stripped) return o; }
+  }
+  // 3. region synonyms — "Jersey" ↔ "NJ"
+  const swapped = orig
+    .replace(/\bjersey\b/ig, 'NJ')
+    .replace(/\bnew\s+jersey\b/ig, 'NJ')
+    .trim()
+    .toLowerCase();
+  if(swapped !== norm){
+    for(const o of options){ if(String(o).toLowerCase() === swapped) return o; }
+  }
+  // 4. alphanumeric loose match
+  const loose = norm.replace(/[^a-z0-9]/g, '');
+  if(loose){
+    for(const o of options){
+      if(String(o).toLowerCase().replace(/[^a-z0-9]/g, '') === loose) return o;
+    }
+    // also try the swapped version under loose match
+    const looseSwap = swapped.replace(/[^a-z0-9]/g, '');
+    if(looseSwap && looseSwap !== loose){
+      for(const o of options){
+        if(String(o).toLowerCase().replace(/[^a-z0-9]/g, '') === looseSwap) return o;
+      }
+    }
+  }
+  return null;
+}
+
 // v207: build the in-row editor for the AI review modal. Falls back to a
 // plain input when the field is text/number/boolean. For enum/multienum
 // (with an options list) it renders a proper picker so the AI's value
@@ -41199,12 +41270,25 @@ function _bcAiBuildEditor(col, propVal, kind, options){
   }
   if(kind === 'multienum' && Array.isArray(options) && options.length){
     const propStr = String(propVal == null ? '' : propVal);
-    const selected = new Set(propStr.split(/[,;]/).map(s => s.trim()).filter(Boolean));
+    // v234: AI suggestions don't always match canonical option labels
+    // exactly — e.g. AI proposes "Middlesex County, NJ" but the option list
+    // has "Middlesex"; AI proposes "Central Jersey" but the option list has
+    // "Central NJ". Run each split token through _bcAiCanonicalize() so the
+    // matching chip starts pre-selected. Tokens that don't match any option
+    // are dropped (the AI shouldn't have proposed them anyway, since the
+    // edge function validates enum/multienum against the spec — but this
+    // covers fields where the option list is loaded client-side from
+    // _appLists, like simple_area_preference and preferred_counties).
+    const rawTokens = propStr.split(/[,;]/).map(s => s.trim()).filter(Boolean);
+    const canon = rawTokens.map(t => _bcAiCanonicalize(t, options)).filter(Boolean);
+    const selected = new Set(canon);
     // v209: when the option list is large (>30), switch to a chip+typeahead
     // pattern instead of showing every option as a chip. Same UX the BC
     // edit form uses for cities. The all-chips form stays for small enums
     // like asset types and US states.
     if(options.length > 30){
+      // v234: `selected` was already canonicalized above, so passing it
+      // straight into the typeahead editor pre-selects the right chips.
       return _bcAiBuildTypeaheadEditor(col, [...selected], options);
     }
     const chips = options.map(o => {
@@ -41224,7 +41308,10 @@ function _bcAiBuildEditor(col, propVal, kind, options){
   // Reads from window._NJ_MUNICIPALITIES (loaded with the BC page).
   if(col === 'preferred_cities' && Array.isArray(window._NJ_MUNICIPALITIES) && window._NJ_MUNICIPALITIES.length){
     const propStr = String(propVal == null ? '' : propVal);
-    const selected = propStr.split(/[,;]/).map(s => s.trim()).filter(Boolean);
+    // v234: same canonicalization as the chip path so AI-proposed cities
+    // pre-select even when they have a state suffix or stray whitespace.
+    const raw = propStr.split(/[,;]/).map(s => s.trim()).filter(Boolean);
+    const selected = raw.map(t => _bcAiCanonicalize(t, window._NJ_MUNICIPALITIES)).filter(Boolean);
     return _bcAiBuildTypeaheadEditor(col, selected, window._NJ_MUNICIPALITIES);
   }
   // text / csv / fallback

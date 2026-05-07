@@ -2096,7 +2096,22 @@ const SB_BC_MAP = {
   retail_target_sf:          'Retail Target SF',
   office_target_sf:          'Office Target SF',
   shopping_target_sf:        'Shopping Target SF',
-  mixeduse_target_sf:        'MixedUse Target SF'
+  mixeduse_target_sf:        'MixedUse Target SF',
+  // v237: "Other Notes" column per asset section. hotel_notes already
+  // exists (v235) and special_purpose_use covers Special Purpose, so they
+  // are intentionally omitted here.
+  multifamily_notes:         'Multifamily Notes',
+  warehouse_notes:           'Warehouse Notes',
+  retail_notes:              'Retail Notes',
+  office_notes:              'Office Notes',
+  shopping_notes:            'Shopping Notes',
+  mixeduse_notes:            'MixedUse Notes',
+  automotive_notes:          'Automotive Notes',
+  land_notes:                'Land Notes',
+  storage_notes:             'Storage Notes',
+  mhp_notes:                 'MHP Notes',
+  healthcare_notes:          'Healthcare Notes',
+  development_notes:         'Development Notes'
 };
 
 // Tasks map (ace_tasks) — v113.21 adds multi-agent assignment, buyer link,
@@ -40317,6 +40332,13 @@ function bcExpandedAssetSection(asset, f){
         ${options.map(o => `<option value="${o.v}" ${value===o.v?'selected':''}>${o.l}</option>`).join('')}
       </select>
     </div>`;
+  // v237: textarea helper — used for the per-asset "Other Notes" field.
+  // Uses oninput so the 1.2s autosave debounce captures every keystroke.
+  const ta = (label, id, value, ph) => `
+    <div style="grid-column:1/-1;">
+      <div class="bc-label">${label}</div>
+      <textarea class="form-input" id="${id}" placeholder="${ph||''}" style="width:100%;min-height:60px;font-family:Tahoma,Arial,sans-serif;font-size:11px;resize:vertical;padding:6px;box-sizing:border-box;" oninput="_bcAutoSave()">${value||''}</textarea>
+    </div>`;
 
   if(lc.includes('multi') || lc.includes('multifamily')){
     fields = `
@@ -40325,10 +40347,13 @@ function bcExpandedAssetSection(asset, f){
         ${num('Max # of Units',     'bcf_maxunits',     f['Max # of Units MF'],     'e.g. 50')}
         ${sel('MF Class',           'bcf_mf_class',     f['MF Class Preference'],   [{v:'',l:'Any'},{v:'A',l:'A'},{v:'B',l:'B'},{v:'C',l:'C'},{v:'B/C',l:'B/C'}])}
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:10px;">
         ${sel('Deal Profile',       'bcf_mf_profile',   f['MF Deal Profile'],       [{v:'',l:'Any'},{v:'Value Add',l:'Value Add'},{v:'Turn-Key',l:'Turn-Key'},{v:'Stabilized',l:'Stabilized'},{v:'Core Plus',l:'Core Plus'},{v:'Opportunistic',l:'Opportunistic'}])}
         ${txt('Style Preference',   'bcf_mf_style',     f['MF Style Preference'],   'e.g. Garden, Mid-Rise...')}
         ${num('Max Price Per Unit', 'bcf_mf_maxppu',    f['MF Max Price Per Unit'], 'e.g. 150000')}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr;gap:12px;">
+        ${ta('Other Notes (Multifamily)', 'bcf_mf_notes', f['Multifamily Notes'], 'Anything else specific to multifamily — preferred unit mix, rent comps, in-place rents, etc.')}
       </div>`;
 
   } else if(lc.includes('warehouse') || lc.includes('industrial') || lc.includes('distribution') || lc.includes('flex')){
@@ -40343,9 +40368,12 @@ function bcExpandedAssetSection(asset, f){
         ${num('Min # Loading Docks','bcf_wh_docks',     f['Warehouse Min Docks'],          'e.g. 2')}
         ${sel('Investor or Owner-Occ?','bcf_wh_invown', f['Warehouse Investor or Owner'],  [{v:'',l:'Either'},{v:'Investor',l:'Investor'},{v:'Owner-Occupier',l:'Owner-Occupier'}])}
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px;">
         ${sel('Deal Profile',       'bcf_wh_profile',   f['Warehouse Profile Preference'], [{v:'',l:'Any'},{v:'Value Add',l:'Value Add'},{v:'NNN',l:'NNN'},{v:'Stabilized',l:'Stabilized'},{v:'Vacant',l:'Vacant'}])}
         ${txt('Dock Doors / Features (free text)','bcf_wh_features', f['Warehouse Features'], 'e.g. Drive-in, Dock High, Rail access...')}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr;gap:12px;">
+        ${ta('Other Notes (Warehouse)', 'bcf_wh_notes', f['Warehouse Notes'], 'Anything else specific to warehouse / industrial — yard storage, power requirements, rail access details, etc.')}
       </div>`;
 
   } else if(lc.includes('shopping')){
@@ -40356,8 +40384,11 @@ function bcExpandedAssetSection(asset, f){
         ${num('Max SF',             'bcf_shop_maxSF',   f['Shopping Max SF'],        'e.g. 80000')}
         ${num('Target SF (single estimate)', 'bcf_shop_targetSF', f['Shopping Target SF'], 'e.g. 30000')}
       </div>
-      <div style="display:grid;grid-template-columns:1fr;gap:12px;">
+      <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:10px;">
         ${num('Min # of Tenants',   'bcf_shop_mintenants', f['Shopping Min Tenants'],'e.g. 6')}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr;gap:12px;">
+        ${ta('Other Notes (Shopping Center)', 'bcf_shop_notes', f['Shopping Notes'], 'Anything else specific to shopping centers — anchor pad needs, parking ratio, target demographics, etc.')}
       </div>`;
 
   } else if(lc.includes('retail')){
@@ -40372,9 +40403,12 @@ function bcExpandedAssetSection(asset, f){
         ${sel('Lease Preference',   'bcf_ret_lease',    f['Retail Lease Preference'],[{v:'',l:'Any'},{v:'NNN Preferred',l:'NNN Preferred'},{v:'Gross OK',l:'Gross OK'},{v:'Mixed',l:'Mixed'}])}
         ${sel('Anchor Preference',  'bcf_ret_anchor',   f['Retail Anchor Preference'],[{v:'',l:'No Preference'},{v:'Anchored Preferred',l:'Anchored Preferred'},{v:'Unanchored OK',l:'Unanchored OK'}])}
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px;">
         ${num('Min Occupancy (%)',  'bcf_ret_occ',      f['Retail Min Occupancy'],   'e.g. 80')}
         ${txt('Tenant Type Preference (free text)','bcf_ret_tenants', f['Retail Tenant Type'], 'e.g. NNN, Credit tenants...')}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr;gap:12px;">
+        ${ta('Other Notes (Retail)', 'bcf_ret_notes', f['Retail Notes'], 'Anything else specific to retail — co-tenancy needs, traffic counts, lease terms, etc.')}
       </div>`;
 
   } else if(lc.includes('office')){
@@ -40384,10 +40418,13 @@ function bcExpandedAssetSection(asset, f){
         ${num('Max SF',             'bcf_off_maxSF',    f['Office Max SF'],          'e.g. 30000')}
         ${num('Target SF (single estimate)', 'bcf_off_targetSF', f['Office Target SF'], 'e.g. 8000')}
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:10px;">
         ${sel('Class Preference',   'bcf_off_class',    f['Office Class Preference'],[{v:'',l:'Any'},{v:'A',l:'A'},{v:'B',l:'B'},{v:'C',l:'C'},{v:'Medical',l:'Medical'}])}
         ${num('Min # of Tenants',   'bcf_off_mintenants', f['Office Min Tenants'],   'e.g. 1')}
         ${num('Max # of Tenants',   'bcf_off_maxtenants', f['Office Max Tenants'],   'e.g. 20')}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr;gap:12px;">
+        ${ta('Other Notes (Office)', 'bcf_off_notes', f['Office Notes'], 'Anything else specific to office — parking ratio, build-out preferences, lease structure, etc.')}
       </div>`;
 
   } else if(lc.includes('land')){
@@ -40397,8 +40434,11 @@ function bcExpandedAssetSection(asset, f){
         ${num('Max Acres',          'bcf_land_max',     f['Land Max Acreage'],       'e.g. 20')}
         ${sel('Zoning Preference',  'bcf_land_zoning',  f['Land Zoning Preference'], [{v:'',l:'Any'},{v:'Residential',l:'Residential'},{v:'Commercial',l:'Commercial'},{v:'Industrial',l:'Industrial'},{v:'Mixed',l:'Mixed'}])}
       </div>
-      <div style="display:grid;grid-template-columns:1fr;gap:12px;">
+      <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:10px;">
         ${txt('Intended Use (free text)','bcf_land_use', f['Land Intended Use'],     'e.g. Development, Parking...')}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr;gap:12px;">
+        ${ta('Other Notes (Land)', 'bcf_land_notes', f['Land Notes'], 'Anything else specific to land — utilities access, frontage, environmental considerations, entitlements, etc.')}
       </div>`;
 
   } else if(lc.includes('mixed')){
@@ -40408,16 +40448,22 @@ function bcExpandedAssetSection(asset, f){
         ${num('Min Commercial Spaces','bcf_mu_mincom', f['MixedUse Min Commercial'], 'e.g. 1')}
         ${num('Min Building SF',      'bcf_mu_minsf',  f['MixedUse Min SF'],         'e.g. 3000')}
       </div>
-      <div style="display:grid;grid-template-columns:1fr;gap:12px;">
+      <div style="display:grid;grid-template-columns:1fr;gap:12px;margin-bottom:10px;">
         ${num('Target SF (single estimate)', 'bcf_mu_targetSF', f['MixedUse Target SF'], 'e.g. 8000')}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr;gap:12px;">
+        ${ta('Other Notes (Mixed Use)', 'bcf_mu_notes', f['MixedUse Notes'], 'Anything else specific to mixed-use — preferred ground-floor tenants, residential rent ceiling, etc.')}
       </div>`;
 
   } else if(lc.includes('automotive') || lc.includes('auto')){
     fields = `
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:10px;">
         ${num('Min # of Bays',      'bcf_auto_bays',    f['Automotive Min Bays'],          'e.g. 4')}
         ${sel('Gas Station Needed?','bcf_auto_gas',     f['Automotive Gas Preference'],    [{v:'',l:'No Preference'},{v:'Yes',l:'Yes'},{v:'No',l:'No'}])}
         ${sel('Owner-Occ or Investor?','bcf_auto_type', f['Automotive Type Preference'],   [{v:'',l:'Either'},{v:'Owner-Occupier',l:'Owner-Occupier'},{v:'Investor',l:'Investor'}])}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr;gap:12px;">
+        ${ta('Other Notes (Automotive)', 'bcf_auto_notes', f['Automotive Notes'], 'Anything else specific to automotive — service base, traffic counts, environmental, brand approvals, etc.')}
       </div>`;
 
   // v235: requirements blocks for asset types that previously fell to the
@@ -40442,29 +40488,38 @@ function bcExpandedAssetSection(asset, f){
 
   } else if(lc.includes('self storage') || lc.includes('self-storage') || lc.includes('storage')){
     fields = `
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:10px;">
         ${num('Min # of Units / Doors','bcf_storage_minunits', f['Storage Min Units'], 'e.g. 100')}
         ${num('Min Net Rentable SF',   'bcf_storage_minsf',    f['Storage Min Net SF'], 'e.g. 30000')}
         ${sel('Climate-Controlled?',   'bcf_storage_climate',  f['Storage Climate'],
           [{v:'',l:'Either'},{v:'Climate',l:'Climate-Controlled Required'},{v:'NonClimate',l:'Non-Climate OK'}])}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr;gap:12px;">
+        ${ta('Other Notes (Self Storage)', 'bcf_storage_notes', f['Storage Notes'], 'Anything else specific to self-storage — drive-up vs interior, expansion potential, on-site management, etc.')}
       </div>`;
 
   } else if(lc.includes('mobile') || lc.includes('mhp') || lc.includes('manufactured')){
     fields = `
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:10px;">
         ${num('Min # of Pads / Lots','bcf_mhp_minpads', f['MHP Min Pads'], 'e.g. 50')}
         ${num('Max # of Pads / Lots','bcf_mhp_maxpads', f['MHP Max Pads'], 'e.g. 250')}
         ${sel('Park-Owned vs Tenant-Owned Homes','bcf_mhp_ownership', f['MHP Ownership'],
           [{v:'',l:'Either'},{v:'POH',l:'Park-Owned Homes'},{v:'TOH',l:'Tenant-Owned Homes'},{v:'Mix',l:'Mix OK'}])}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr;gap:12px;">
+        ${ta('Other Notes (Mobile Home Park)', 'bcf_mhp_notes', f['MHP Notes'], 'Anything else specific to MHPs — utility billing, well/septic vs city, age restrictions, etc.')}
       </div>`;
 
   } else if(lc.includes('healthcare') || lc.includes('medical')){
     fields = `
-      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;margin-bottom:10px;">
         ${num('Min SF',              'bcf_health_minSF', f['Healthcare Min SF'], 'e.g. 5000')}
         ${num('Max SF',              'bcf_health_maxSF', f['Healthcare Max SF'], 'e.g. 50000')}
         ${sel('Sub-Type',            'bcf_health_sub',   f['Healthcare Sub-Type'],
           [{v:'',l:'Any'},{v:'MOB',l:'Medical Office Building'},{v:'Surgery',l:'Surgery / Ambulatory'},{v:'Senior',l:'Senior Living / Assisted'},{v:'Skilled',l:'Skilled Nursing'},{v:'Other',l:'Other'}])}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr;gap:12px;">
+        ${ta('Other Notes (Healthcare)', 'bcf_health_notes', f['Healthcare Notes'], 'Anything else specific to healthcare — credit-tenant requirements, parking ratio, ADA / build-out preferences, etc.')}
       </div>`;
 
   } else if(lc.includes('special purpose') || lc.includes('special')){
@@ -40475,13 +40530,16 @@ function bcExpandedAssetSection(asset, f){
 
   } else if(lc.includes('development')){
     fields = `
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px;">
         ${txt('Project Type',  'bcf_dev_project', f['Development Project Type'], 'e.g. Ground-up multifamily, hotel, mixed-use')}
         ${txt('Stage',         'bcf_dev_stage',   f['Development Stage'], 'e.g. Approvals in place, raw land, tear-down')}
       </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-top:10px;">
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:12px;margin-bottom:10px;">
         ${num('Min Buildable SF / Units','bcf_dev_minsize', f['Development Min Size'], 'e.g. 50000')}
         ${num('Max Buildable SF / Units','bcf_dev_maxsize', f['Development Max Size'], 'e.g. 200000')}
+      </div>
+      <div style="display:grid;grid-template-columns:1fr;gap:12px;">
+        ${ta('Other Notes (Development)', 'bcf_dev_notes', f['Development Notes'], 'Anything else specific to development — entitlements, environmental, contractor relationships, financing structure, etc.')}
       </div>`;
 
   } else {
@@ -40491,8 +40549,15 @@ function bcExpandedAssetSection(asset, f){
   // v235: tag the wrapper with data-asset so _bcRefreshAssetSections can
   // dedupe (one section per asset key) and remove sections whose chip
   // was removed without nuking unsaved input on other sections.
+  // v237: data-bc-asset-section MUST match _bcAssetSectionKey() output —
+  // otherwise the diff in _bcRefreshAssetSections treats the existing
+  // section as orphan, removes it, and re-renders from stale `f`,
+  // wiping any uncommitted user input. Previously it used a raw slug
+  // of the chip text ("industrial: warehouse" → "industrial_warehouse")
+  // which never matched the canonical key ("warehouse").
+  const sectionKey = _bcAssetSectionKey(assetClean);
   return `
-    <div class="info-box" data-bc-asset-section="${assetClean.toLowerCase().replace(/[^a-z0-9]+/g,'_')}">
+    <div class="info-box" data-bc-asset-section="${sectionKey}">
       <div class="info-box-title">${getBcTypeBadge(assetClean)} Requirements</div>
       ${fields}
     </div>`;
@@ -40587,14 +40652,18 @@ function _bcGetPillTexts(containerId){
 // _bcAutoSave, which scheduled another save 1200ms later → infinite save loop.
 function _bcSyncAssets(skipAutosave){
   document.getElementById('bcf_assets_hidden').value = _bcGetPillTexts('bcf_asset_pills').join(', ');
-  // v235: live-render the asset-specific requirements blocks whenever the
-  // chip set changes. Was previously only computed at page render time, so
-  // adding a new asset chip required a page refresh to see its section.
-  if(typeof _bcRefreshAssetSections === 'function'){
-    try { _bcRefreshAssetSections(); }
-    catch(e){ console.warn('[bc] asset section refresh failed:', e.message); }
+  // v235/v237: only refresh asset sections when called from a chip add /
+  // remove path. bcSaveExpanded calls with skipAutosave=true to sync the
+  // hidden input before serializing the form — it must NOT re-render the
+  // section DOM, or any uncommitted user input (a freshly chosen Deal
+  // Profile, a half-typed Min SF) gets blown away.
+  if(!skipAutosave){
+    if(typeof _bcRefreshAssetSections === 'function'){
+      try { _bcRefreshAssetSections(); }
+      catch(e){ console.warn('[bc] asset section refresh failed:', e.message); }
+    }
+    if(typeof _bcAutoSave==='function') _bcAutoSave();
   }
-  if(!skipAutosave && typeof _bcAutoSave==='function') _bcAutoSave();
 }
 function _bcSyncCounties(skipAutosave){ document.getElementById('bcf_counties_hidden').value = _bcGetPillTexts('bcf_county_pills').join(', '); if(!skipAutosave && typeof _bcAutoSave==='function') _bcAutoSave(); }
 function _bcSyncCities(skipAutosave){ document.getElementById('bcf_cities_hidden').value = _bcGetPillTexts('bcf_city_pills').join(', '); if(!skipAutosave && typeof _bcAutoSave==='function') _bcAutoSave(); }
@@ -42360,6 +42429,27 @@ async function bcSaveExpanded(recordId, isAuto=false){
   const offTgt  = gn('bcf_off_targetSF');   if(offTgt!==null)  fields['Office Target SF']     = offTgt;
   const shopTgt = gn('bcf_shop_targetSF');  if(shopTgt!==null) fields['Shopping Target SF']   = shopTgt;
   const muTgt   = gn('bcf_mu_targetSF');    if(muTgt!==null)   fields['MixedUse Target SF']   = muTgt;
+
+  // v237: per-asset Other Notes — only collected when the section is on
+  // the form (input element exists). Without this guard, removing a chip
+  // and saving would clobber an existing notes value with empty string.
+  const _bcCollectNotes = (id, label) => {
+    if(document.getElementById(id)){
+      fields[label] = (document.getElementById(id).value || '').trim();
+    }
+  };
+  _bcCollectNotes('bcf_mf_notes',      'Multifamily Notes');
+  _bcCollectNotes('bcf_wh_notes',      'Warehouse Notes');
+  _bcCollectNotes('bcf_ret_notes',     'Retail Notes');
+  _bcCollectNotes('bcf_off_notes',     'Office Notes');
+  _bcCollectNotes('bcf_shop_notes',    'Shopping Notes');
+  _bcCollectNotes('bcf_mu_notes',      'MixedUse Notes');
+  _bcCollectNotes('bcf_auto_notes',    'Automotive Notes');
+  _bcCollectNotes('bcf_land_notes',    'Land Notes');
+  _bcCollectNotes('bcf_storage_notes', 'Storage Notes');
+  _bcCollectNotes('bcf_mhp_notes',     'MHP Notes');
+  _bcCollectNotes('bcf_health_notes',  'Healthcare Notes');
+  _bcCollectNotes('bcf_dev_notes',     'Development Notes');
 
   // v111: persist field_status map (object of field_id → 'no_preference' | 'not_available')
   // Always include it in saves so the DB matches the UI state, even if empty.

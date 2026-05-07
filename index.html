@@ -41191,6 +41191,42 @@ function _bcAtSearch(){
 function _bcAtSelect(type, sub){
   const fullType = sub ? `${type}: ${sub}` : type;
   _bcAddPill('bcf_asset_pills', fullType, '#1a3a6e', _bcSyncAssets);
+  // v239: scroll the corresponding requirements section into view + flash a
+  // brief highlight, so adding a chip whose section already exists (e.g.
+  // adding "Retail: Single Tenant" when "Retail Strip Mall" is already on
+  // the form — both share the "retail" section key) still gives visible
+  // feedback. Without this the user sees no apparent change and assumes
+  // nothing happened.
+  if(typeof _bcFlashAssetSection === 'function'){
+    try { _bcFlashAssetSection(fullType); }
+    catch(e){ console.warn('[bc] flash section failed:', e.message); }
+  }
+}
+
+// v239: scroll-into-view + flash highlight for the requirements section
+// matching the asset chip text. Looks up the section key via
+// _bcAssetSectionKey() and finds the matching node.
+function _bcFlashAssetSection(chipText){
+  if(typeof _bcAssetSectionKey !== 'function') return;
+  const key = _bcAssetSectionKey(chipText);
+  // Defer one frame so _bcRefreshAssetSections (called by _bcSyncAssets a
+  // moment ago) has finished any node insertion before we look up the
+  // section to scroll to.
+  requestAnimationFrame(() => {
+    const node = document.querySelector(`[data-bc-asset-section="${CSS.escape(key)}"]`);
+    if(!node) return;
+    node.scrollIntoView({ behavior: 'smooth', block: 'center' });
+    const prevTransition = node.style.transition;
+    const prevBoxShadow  = node.style.boxShadow;
+    node.style.transition = 'box-shadow 0.6s ease-out';
+    node.style.boxShadow  = '0 0 0 3px #fbbf24';
+    setTimeout(() => {
+      node.style.boxShadow  = prevBoxShadow || '';
+      // Restore transition after the fade completes so we don't strand
+      // a custom transition on the element.
+      setTimeout(() => { node.style.transition = prevTransition || ''; }, 650);
+    }, 1200);
+  });
 }
 function _bcAddCounty(){
   const sel = document.getElementById('bcf_county_select');

@@ -28290,6 +28290,29 @@ async function toggleContactRelationshipFromDetail(contactId){
   }
 }
 
+// v232: same flow as toggleContactRelationshipFromDetail, but for the
+// "★ Add to Relationships" button on the Buyer Criteria expanded page so the
+// user can add the buyer's contact to their personal relationships without
+// navigating to the contact card first.
+async function toggleContactRelationshipFromBc(contactId){
+  const btn = document.getElementById('bc_relBtn');
+  if(btn) btn.disabled = true;
+  try {
+    const nowIn = await _toggleMyRelationship(contactId);
+    if(nowIn === null) return;
+    if(btn){
+      btn.setAttribute('style', _cdpRelBtnStyle(nowIn) + 'white-space:nowrap;');
+      btn.innerHTML = _cdpRelBtnLabel(nowIn);
+      btn.title = nowIn ? 'In your relationships — click to remove' : 'Add to your personal relationships list';
+    }
+    _showToast(nowIn ? '★ Added to your relationships' : 'Removed from your relationships', 'ok');
+  } catch(e){
+    _showToast('Failed: '+e.message, 'err');
+  } finally {
+    if(btn) btn.disabled = false;
+  }
+}
+
 // ─── GENERIC MULTI-SELECT HELPER (for Contacts + Buyer Criteria pages) ───
 // Standalone from the Deal Board's _dbMulti* helpers — uses prefix-namespaced
 // IDs/classes so multiple instances on different pages don't collide.
@@ -39985,6 +40008,7 @@ async function bcOpenExpanded(recordId){
             ${contactId ? `<div style="display:flex;gap:8px;flex-wrap:wrap;">
               <button onclick="bcOpenContactPitches('${contactId}')" style="background:#1a3a6e;color:#fff;border:1px solid #0a1f4a;padding:7px 14px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.08);white-space:nowrap;">📨 Pitch History ↗</button>
               <button onclick="bcOpenContact('${contactId}')" style="background:#fff;color:#1a3a6e;border:1px solid #1a3a6e;padding:7px 14px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.04);white-space:nowrap;">👤 View Contact Record ↗</button>
+              <button id="bc_relBtn" onclick="toggleContactRelationshipFromBc('${contactId}')" title="${_isMyRelationship(contactId)?'In your relationships — click to remove':'Add to your personal relationships list'}" style="${_cdpRelBtnStyle(_isMyRelationship(contactId))}white-space:nowrap;">${_cdpRelBtnLabel(_isMyRelationship(contactId))}</button>
               <button class="wb-add-contact-btn" data-contact-id="${contactId}" onclick="addContactToWorkbench('${contactId}', this)" style="background:#1e3a8a;color:#fff;border:none;padding:7px 14px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.08);white-space:nowrap;">+ Add to Workbench</button>
             </div>` : ''}
           </div>
@@ -41816,6 +41840,29 @@ window._bcAiAutoFillApply = async function(bcId, btn){
     }
     modal.remove();
     if(typeof _bcLastLoadMs !== 'undefined') _bcLastLoadMs = 0;
+    // v232: refetch this single row and update the in-memory allBuyerCriteria
+    // entry before re-rendering. Without this, bcOpenExpanded reads the stale
+    // cached fields and the user has to refresh / leave-and-return to see the
+    // values they just applied.
+    try {
+      const fresh = await _sbGet(SB_TABLES.buyerCriteria, `id=eq.${bcId}&select=*&limit=1`);
+      const row = Array.isArray(fresh) ? fresh[0] : null;
+      if(row && Array.isArray(allBuyerCriteria)){
+        const idx = allBuyerCriteria.findIndex(r => r.id === bcId);
+        if(idx >= 0){
+          const fields = {};
+          for(const [snake, atLabel] of Object.entries(SB_BC_MAP)){
+            if(snake === 'id') continue;
+            const v = row[snake];
+            fields[atLabel] = (v === null || v === undefined) ? '' : v;
+          }
+          fields['Import Source'] = row.import_source || '';
+          fields['Buyer'] = row.contact_id ? [row.contact_id] : [];
+          fields['_contactId'] = row.contact_id;
+          allBuyerCriteria[idx] = { id: row.id, fields };
+        }
+      }
+    } catch(e){ console.warn('[bc-ai] post-apply cache refresh failed:', e.message); }
     bcOpenExpanded(bcId);
   } catch(e){
     if(btn){ btn.disabled = false; btn.textContent = '✓ Apply Selected'; }

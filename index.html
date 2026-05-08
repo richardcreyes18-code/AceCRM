@@ -5,6 +5,18 @@
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Ace Acquisitions CRM</title>
 <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet"/>
+<!-- v241: modularization Phase 0 — external CSS placeholders. Phase 1 will
+     migrate rules out of the inline <style> below into these files. Order
+     matters: inline <style> still wins on conflicts during the transition. -->
+<link rel="stylesheet" href="css/tokens.css"/>
+<link rel="stylesheet" href="css/base.css"/>
+<link rel="stylesheet" href="css/components.css"/>
+<link rel="stylesheet" href="css/modals.css"/>
+<link rel="stylesheet" href="css/pipeline.css"/>
+<link rel="stylesheet" href="css/deal-detail.css"/>
+<link rel="stylesheet" href="css/buyer-criteria.css"/>
+<link rel="stylesheet" href="css/email-templates.css"/>
+<link rel="stylesheet" href="css/pdf-brochure.css"/>
 <style>
 /* ── RESET & BASE ───────────────────────────────────────────── */
 *{box-sizing:border-box;margin:0;padding:0;}
@@ -65393,6 +65405,12 @@ function _aiSelectDealForUpdate(dealId){
   }
 })();
 </script>
+
+<!-- v241: modularization Phase 0 — module entry point. Empty during Phase 0;
+     subsequent phases will populate js/{core,utils,schemas,...}/* and dispatch
+     from js/main.js. ES modules are deferred by default, so this loads after
+     the legacy <script> block above. -->
+<script type="module" src="js/main.js"></script>
 
 </body>
 </html>

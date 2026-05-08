@@ -1,2 +1,29 @@
-/* pipeline.css — kanban */
-/* Phase 0 placeholder: empty by design. Phase 1 will populate. */
+/* pipeline.css — kanban board (Deal Status tab) */
+
+.pipeline-wrap{overflow-x:auto;}
+.pipeline-board{display:flex;gap:12px;min-width:900px;padding-bottom:10px;}
+.pipeline-col{flex:1;min-width:130px;}
+.pipeline-col-hdr{
+  font-weight:600;font-size:12px;text-align:center;
+  padding:7px 6px;border-radius:var(--radius-sm) var(--radius-sm) 0 0;
+  border:1px solid var(--border);border-bottom:none;
+  background:var(--primary);color:#fff;
+}
+.pipeline-col-body{
+  border:1px solid var(--border);border-top:none;
+  background:var(--surface2);min-height:120px;padding:8px;
+  border-radius:0 0 var(--radius-sm) var(--radius-sm);
+}
+.pipeline-card{
+  background:var(--surface);border:1px solid var(--border);
+  border-radius:var(--radius);padding:12px 14px;margin-bottom:10px;
+  cursor:pointer;font-size:12px;line-height:1.4;
+  box-shadow:var(--shadow);transition:border-color 0.15s,box-shadow 0.15s;
+}
+.pipeline-card:hover{border-color:var(--primary);box-shadow:0 4px 12px rgba(37,99,235,0.15);}
+.pipeline-card.active-deal{border-left:3px solid var(--primary);}
+.pipeline-card .pc-addr{font-weight:700;color:var(--primary-dark);margin-bottom:5px;font-size:13px;line-height:1.35;}
+.pipeline-card .pc-price{color:var(--red);font-weight:700;font-size:14px;margin-bottom:4px;}
+.pipeline-card .pc-row{color:var(--text2);font-size:11px;margin-bottom:2px;display:flex;align-items:center;gap:5px;}
+.pipeline-card .pc-row .pc-icon{color:var(--text3);font-size:10px;width:12px;text-align:center;flex-shrink:0;}
+.pipeline-card .pc-type{color:var(--text3);font-size:11px;}

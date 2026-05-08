@@ -1,2 +1,113 @@
-/* modals.css — overlays, lightbox, drawers */
-/* Phase 0 placeholder: empty by design. Phase 1 will populate. */
+/* modals.css — settings/config overlay, photo lightbox */
+
+/* ── CONFIG OVERLAY ─────────────────────────────────────────── */
+.config-overlay{
+  position:fixed;inset:0;background:rgba(15,23,42,0.55);
+  z-index:999;display:flex;align-items:flex-start;justify-content:center;
+  padding:20px 0;overflow-y:auto;
+}
+.config-box{
+  background:var(--surface);
+  border:1px solid var(--border);border-radius:var(--radius);
+  width:480px;padding:0;
+  box-shadow:var(--shadow-lg);
+  display:flex;flex-direction:column;
+  max-height:calc(100vh - 40px);
+  flex-shrink:0;
+}
+.config-title-bar{
+  background:linear-gradient(90deg,#0f172a,#1e3a8a,#2563eb);
+  color:#fff;font-weight:600;font-size:14px;
+  padding:14px 18px;border-radius:var(--radius) var(--radius) 0 0;
+  display:flex;justify-content:space-between;align-items:center;
+}
+.config-body{padding:20px;overflow-y:auto;flex:1;}
+.config-field{margin-bottom:14px;}
+.config-field label{display:block;font-weight:600;font-size:12px;margin-bottom:5px;color:var(--text2);}
+.config-field input{
+  width:100%;border:1px solid var(--border);border-radius:var(--radius-xs);padding:8px 10px;
+  background:var(--surface);font-size:13px;color:var(--text);transition:border-color 0.15s;
+}
+.config-field input:focus{outline:none;border-color:var(--primary);box-shadow:0 0 0 2px rgba(37,99,235,0.1);}
+.config-actions{
+  display:flex;gap:8px;justify-content:flex-end;
+  padding:14px 20px;
+  border-top:1px solid var(--border);
+  background:var(--surface);
+  border-radius:0 0 var(--radius) var(--radius);
+  flex-shrink:0;
+}
+.config-save{
+  background:var(--green);
+  border:none;color:#fff;font-weight:600;
+  padding:8px 22px;border-radius:var(--radius-sm);font-size:13px;
+  transition:background 0.15s;cursor:pointer;
+}
+.config-save:hover{background:#15803d;}
+.config-cancel{
+  background:var(--surface2);
+  border:1px solid var(--border);padding:8px 18px;border-radius:var(--radius-sm);font-size:13px;
+  color:var(--text2);cursor:pointer;transition:background 0.15s;
+}
+.config-cancel:hover{background:var(--border);}
+
+/* ── PHOTO LIGHTBOX ─────────────────────────────────────────── */
+#photoLightbox {
+  position: fixed; inset: 0;
+  background: rgba(0,0,0,0.92);
+  z-index: 10000;
+  display: none;
+  align-items: center; justify-content: center;
+  user-select: none;
+}
+#photoLightbox.open { display: flex; }
+#photoLightbox .lb-img-wrap {
+  max-width: 92vw; max-height: 88vh;
+  display: flex; align-items: center; justify-content: center;
+}
+#photoLightbox img {
+  max-width: 92vw; max-height: 88vh;
+  object-fit: contain;
+  box-shadow: 0 8px 40px rgba(0,0,0,0.6);
+  border-radius: 4px;
+}
+#photoLightbox .lb-close {
+  position: absolute; top: 16px; right: 20px;
+  background: rgba(255,255,255,0.1);
+  color: #fff; border: none;
+  width: 44px; height: 44px;
+  border-radius: 50%; font-size: 22px;
+  cursor: pointer; transition: background 0.15s;
+}
+#photoLightbox .lb-close:hover { background: rgba(255,255,255,0.22); }
+#photoLightbox .lb-nav {
+  position: absolute; top: 50%; transform: translateY(-50%);
+  background: rgba(255,255,255,0.1);
+  color: #fff; border: none;
+  width: 52px; height: 52px;
+  border-radius: 50%; font-size: 28px;
+  cursor: pointer; transition: background 0.15s;
+  display: flex; align-items: center; justify-content: center;
+}
+#photoLightbox .lb-nav:hover { background: rgba(255,255,255,0.22); }
+#photoLightbox .lb-prev { left: 20px; }
+#photoLightbox .lb-next { right: 20px; }
+#photoLightbox .lb-counter {
+  position: absolute; bottom: 20px; left: 50%; transform: translateX(-50%);
+  background: rgba(0,0,0,0.6);
+  color: #fff; padding: 6px 14px;
+  border-radius: 20px; font-size: 12px; font-weight: 600;
+}
+#photoLightbox .lb-set-main {
+  position: absolute; bottom: 20px; right: 20px;
+  background: rgba(26,58,110,0.9);
+  color: #fff; border: none;
+  padding: 8px 16px;
+  border-radius: 6px; font-size: 12px; font-weight: 600;
+  cursor: pointer; transition: background 0.15s;
+}
+#photoLightbox .lb-set-main:hover { background: rgba(26,58,110,1); }
+#photoLightbox .lb-set-main.is-main {
+  background: rgba(80,80,80,0.6);
+  cursor: default;
+}

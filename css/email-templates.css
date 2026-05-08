@@ -1,2 +1,15 @@
 /* email-templates.css — rich-text editor + template preview */
-/* Phase 0 placeholder: empty by design. Phase 1 will populate. */
+
+/* v189: Rich-text editor — bullets / numbers were rendering off the left
+   edge because the global *{padding:0} reset stripped <ul>/<ol> indentation.
+   Restore enough padding so bullets/numbers sit inside the editor. */
+.rt-wrap [contenteditable] ul,
+.rt-wrap [contenteditable] ol {
+  padding-left: 28px;
+  margin: 4px 0;
+  list-style-position: outside;
+}
+.rt-wrap [contenteditable] ul { list-style-type: disc; }
+.rt-wrap [contenteditable] ol { list-style-type: decimal; }
+.rt-wrap [contenteditable] li { margin: 2px 0; padding-left: 2px; }
+.rt-wrap [contenteditable] a { color: #2563eb; text-decoration: underline; }

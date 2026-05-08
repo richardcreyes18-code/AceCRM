@@ -1,2 +1,172 @@
-/* buyer-criteria.css — bc-field-stamp + BC-specific styling */
-/* Phase 0 placeholder: empty by design. Phase 1 will populate. */
+/* buyer-criteria.css — bc-field-stamp + per-field status checklist */
+
+/* labels used in the BC summary card */
+.bc-label{font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:3px;}
+.bc-val{font-size:14px;font-weight:700;color:var(--primary-dark);margin-bottom:8px;}
+
+/* ═══════════════════════════════════════════════════════════════════
+   v111: BUYER CRITERIA FIELD STATUS — stamps + checklist
+   Pattern mirrors the v106 NO FINANCIALS stamp in Financial Analysis.
+   Fields wrapped in [data-bc-field] get an absolutely-positioned
+   diagonal stamp when their status is 'no_preference' or 'not_available'.
+   Stamp is hidden by default (display:none) and toggled by JS.
+   ═══════════════════════════════════════════════════════════════════ */
+[data-bc-field]{
+  position: relative;  /* anchor for the absolutely-positioned stamp */
+}
+.bc-field-stamp{
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  transform: translate(-50%, -50%) rotate(-10deg);
+  font-family: Georgia, 'Times New Roman', serif;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  white-space: nowrap;
+  pointer-events: none;
+  z-index: 4;
+  padding: 4px 12px;
+  border-radius: 5px;
+  font-size: 13px;
+  opacity: 0.82;
+  display: none;
+}
+.bc-field-stamp.no-pref{
+  color: rgba(180, 83, 9, 0.95);
+  border: 2.5px solid rgba(180, 83, 9, 0.58);
+  background: rgba(254, 243, 199, 0.55);
+}
+.bc-field-stamp.not-avail{
+  color: rgba(220, 38, 38, 0.95);
+  border: 2.5px solid rgba(220, 38, 38, 0.58);
+  background: rgba(254, 226, 226, 0.55);
+}
+[data-bc-field].bc-stamped > :not(.bc-field-stamp){
+  opacity: 0.35;
+  pointer-events: none;
+}
+
+/* ── Status checklist UI (at bottom of buyer criteria page) ── */
+.bc-status-section{
+  margin-top: 14px;
+  border-top: 3px double #cbd5e1;
+  background: linear-gradient(180deg,#fafbff,#f8fafc);
+  border-radius: 0 0 8px 8px;
+}
+.bc-status-toggle{
+  width: 100%;
+  background: transparent;
+  border: none;
+  padding: 14px 22px;
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  cursor: pointer;
+  font-size: 14px;
+  font-weight: 700;
+  color: #1e40af;
+  text-align: left;
+}
+.bc-status-toggle:hover{ background: rgba(30,64,175,0.04); }
+.bc-status-counts{
+  display: flex;
+  gap: 6px;
+  align-items: center;
+  font-size: 10px;
+  font-weight: 700;
+}
+.bc-count-pill{
+  padding: 2px 8px;
+  border-radius: 99px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.bc-count-pill.collected{ background: #dcfce7; color: #15803d; }
+.bc-count-pill.no-pref  { background: #fef3c7; color: #92400e; }
+.bc-count-pill.not-avail{ background: #fee2e2; color: #991b1b; }
+.bc-status-body{
+  padding: 14px 22px 20px;
+  display: none;
+}
+.bc-status-body.open{ display: block; }
+.bc-status-intro{
+  background: #eff6ff;
+  border: 1px solid #bfdbfe;
+  border-radius: 8px;
+  padding: 10px 14px;
+  font-size: 12px;
+  color: #1e3a8a;
+  margin-bottom: 12px;
+  line-height: 1.6;
+}
+.bc-status-bulk{
+  display: flex;
+  gap: 6px;
+  margin-bottom: 12px;
+  flex-wrap: wrap;
+  align-items: center;
+}
+.bc-status-bulk-label{
+  font-size: 10px;
+  color: #94a3b8;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-right: 4px;
+}
+.bc-status-bulk button{
+  background: #fff;
+  border: 1px solid #cbd5e1;
+  color: #475569;
+  padding: 4px 12px;
+  font-size: 11px;
+  font-weight: 600;
+  border-radius: 6px;
+  cursor: pointer;
+}
+.bc-status-bulk button:hover{ background: #f1f5f9; }
+.bc-status-row{
+  display: grid;
+  grid-template-columns: 1fr auto;
+  gap: 12px;
+  padding: 6px 2px;
+  align-items: center;
+  border-bottom: 1px solid #f1f5f9;
+}
+.bc-status-row:last-child{ border-bottom: none; }
+.bc-status-row-name{ font-size: 12px; color: #0f172a; font-weight: 500; }
+.bc-status-selector{
+  display: flex;
+  gap: 0;
+  border: 1px solid #cbd5e1;
+  border-radius: 5px;
+  overflow: hidden;
+  font-size: 10px;
+  font-weight: 600;
+}
+.bc-status-selector button{
+  background: #fff;
+  color: #475569;
+  border: none;
+  padding: 4px 9px;
+  cursor: pointer;
+  border-right: 1px solid #e2e8f0;
+  min-width: 76px;
+  white-space: nowrap;
+}
+.bc-status-selector button:last-child{ border-right: none; }
+.bc-status-selector button.active.collected{ background: #15803d; color: #fff; }
+.bc-status-selector button.active.no-pref  { background: #b45309; color: #fff; }
+.bc-status-selector button.active.not-avail{ background: #991b1b; color: #fff; }
+.bc-status-subgroup{ margin-bottom: 14px; }
+.bc-status-subhdr{
+  font-size: 10px;
+  font-weight: 700;
+  color: #64748b;
+  text-transform: uppercase;
+  letter-spacing: 0.05em;
+  margin-bottom: 6px;
+  padding-bottom: 3px;
+  border-bottom: 1px solid #e2e8f0;
+}

@@ -1,2 +1,112 @@
-/* deal-detail.css — tabs, deal header, financials grids */
-/* Phase 0 placeholder: empty by design. Phase 1 will populate. */
+/* deal-detail.css — deal header, tabs, section headers */
+
+/* ── DEAL HEADER ─────────────────────────────────────────────── */
+.deal-header{
+  background:var(--surface);
+  border-bottom:1px solid var(--border);
+  padding:14px 18px;
+  position:relative;
+}
+.deal-header-top{
+  display:flex;align-items:flex-start;justify-content:space-between;
+  margin-bottom:10px;
+  gap:12px;
+}
+.deal-id-line{
+  font-size:12px;color:var(--primary);font-weight:600;
+  margin-bottom:8px;
+}
+.deal-id-line span{color:var(--text3);font-weight:400;font-size:11px;margin-left:8px;}
+.deal-info-grid{display:grid;grid-template-columns:1fr 1fr;gap:4px 24px;}
+.deal-info-row{font-size:12px;display:flex;gap:6px;}
+.deal-info-label{color:var(--text2);font-weight:600;white-space:nowrap;}
+.deal-info-val{color:var(--text);}
+.deal-info-val.profit{color:var(--green);font-weight:600;}
+.deal-info-val.green{color:var(--green);}
+.deal-actions{display:flex;gap:6px;align-items:flex-start;flex-shrink:0;flex-wrap:wrap;}
+.action-btn{
+  background:var(--surface);
+  border:1px solid var(--border);border-radius:var(--radius-sm);
+  padding:6px 12px;font-size:12px;font-weight:500;color:var(--text);
+  display:flex;align-items:center;gap:5px;white-space:nowrap;
+  transition:background 0.15s,border-color 0.15s;box-shadow:var(--shadow);
+}
+.action-btn:hover{background:var(--surface2);border-color:var(--border2);}
+.action-btn.green-btn{
+  background:var(--green);
+  color:#fff;border-color:transparent;
+}
+.action-btn.green-btn:hover{background:#15803d;}
+.action-btn .icon{font-size:14px;}
+
+.deal-header-bottom{
+  display:flex;align-items:flex-start;justify-content:space-between;
+  gap:10px;
+}
+.deal-right-info{
+  display:flex;gap:10px;align-items:flex-start;
+}
+.deal-address-block{font-size:12px;line-height:1.7;}
+.deal-address-block strong{font-size:13px;color:var(--primary-dark);font-weight:600;}
+.deal-photo{
+  width:90px;height:65px;
+  background:var(--bg);
+  border:1px solid var(--border);border-radius:var(--radius-sm);
+  display:flex;align-items:center;justify-content:center;
+  font-size:9px;color:var(--text3);text-align:center;
+  flex-shrink:0;overflow:hidden;
+}
+.deal-photo img{width:100%;height:100%;object-fit:cover;}
+.status-indicator{display:flex;align-items:center;gap:5px;font-size:12px;}
+.status-dot{width:8px;height:8px;border-radius:50%;background:var(--green);flex-shrink:0;}
+.progress-bar-wrap{margin-top:6px;}
+.progress-bar-wrap label{font-size:11px;color:var(--text2);font-weight:500;}
+.progress-bar{height:6px;background:var(--border);border-radius:99px;margin-top:4px;overflow:hidden;}
+.progress-fill{height:100%;background:linear-gradient(90deg,var(--primary),#60a5fa);transition:width 0.5s;border-radius:99px;}
+
+/* ── TABS ROW ───────────────────────────────────────────────── */
+.tabs-section{
+  background:var(--surface);
+  border-bottom:1px solid var(--border);
+  padding:0 14px;
+}
+.tabs-row{display:flex;flex-wrap:wrap;gap:0;margin-bottom:0;}
+.tab-btn{
+  background:transparent;
+  border:none;
+  border-bottom:2px solid transparent;
+  padding:10px 14px;
+  font-size:12px;font-weight:500;
+  cursor:pointer;color:var(--text2);
+  white-space:nowrap;
+  transition:color 0.15s,border-color 0.15s;
+  margin-bottom:-1px;
+}
+.tab-btn:hover{color:var(--text);}
+.tab-btn.active{
+  color:var(--primary);
+  border-bottom-color:var(--primary);
+  font-weight:600;
+}
+.tab-btn.red-tab{color:var(--red);}
+.tab-btn.red-tab.active{color:var(--red);border-bottom-color:var(--red);}
+
+/* ── TAB CONTENT AREA ───────────────────────────────────────── */
+.tab-content{
+  flex:1;background:var(--surface);
+  padding:18px;
+  overflow-y:auto;
+}
+.tab-pane{display:none;}
+.tab-pane.active{display:block;}
+
+/* ── SECTION HEADERS inside tabs ────────────────────────────── */
+.section-hdr{
+  background:var(--primary-light);
+  color:var(--primary-dark);font-weight:600;font-size:12px;
+  padding:8px 14px;
+  margin:-18px -18px 14px;
+  display:flex;align-items:center;gap:8px;
+  border-bottom:1px solid #bfdbfe;
+}
+.section-hdr .icon{font-size:14px;}

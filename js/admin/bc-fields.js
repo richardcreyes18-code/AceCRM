@@ -419,6 +419,9 @@ export function _bcFieldsAdminForCategory(category, onClose){
           </div>
         </div>
         <div style="flex:1;min-height:0;overflow:auto;padding:14px 22px;background:#f8fafc;">
+          ${(typeof window._bcRenderNativeFieldsPanel === 'function')
+              ? (window._bcRenderNativeFieldsPanel(category) || '')
+              : ''}
           <!-- v292: per-scope Other Notes settings. Renders at the
                bottom of every BC requirements section. Toggle off to
                hide for this scope; edit placeholder to customize. -->

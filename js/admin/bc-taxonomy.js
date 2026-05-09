@@ -264,121 +264,128 @@ export function _bcAssetTaxonomyAdmin(){
         </div>
       </div>`;
 
-    // Wire all event handlers (delegation).
-    modal.onclick = (e) => {
-      if(e.target === modal){
-        if(dirty && !confirm('Discard unsaved taxonomy changes?')) return;
-        modal.remove();
-        return;
-      }
-      const t = e.target.closest('[data-action]');
-      if(!t) return;
-      const action = t.getAttribute('data-action');
-      if(action === 'cancel'){
-        if(dirty && !confirm('Discard unsaved taxonomy changes?')) return;
-        modal.remove();
-        return;
-      }
-      if(action === 'save'){
-        if(!dirty) return;
-        _bcTaxonomySave(taxonomy).then(() => {
-          dirty = false;
-          if(typeof showSaveConfirm === 'function') showSaveConfirm('✓ Taxonomy saved');
-          render();
-        }).catch(err => alert('Save failed: ' + (err.message || err)));
-        return;
-      }
-      if(action === 'add-cat'){
-        const inp = modal.querySelector('#bcTaxNewCat');
-        const v = inp ? String(inp.value || '').trim() : '';
-        if(!v) return;
-        if(taxonomy[v]){ alert('Category already exists.'); return; }
-        taxonomy[v] = [];
-        dirty = true;
-        render();
-        return;
-      }
-      if(action === 'edit-fields'){
-        // v288: open the per-category fields admin modal. On close
-        // (Save or Cancel) re-render the parent so the field-count
-        // badge reflects the latest state.
-        const cat = t.getAttribute('data-cat-name');
-        if(!cat) return;
-        if(typeof window._bcFieldsAdminForCategory === 'function'){
-          window._bcFieldsAdminForCategory(cat, () => render());
-        } else {
-          alert('Fields admin not loaded yet.');
-        }
-        return;
-      }
-      if(action === 'del-cat'){
-        const idx = parseInt(t.getAttribute('data-cat'), 10);
-        const cats = Object.keys(taxonomy);
-        const cat = cats[idx];
-        if(!cat) return;
-        if(!confirm(`Delete category "${cat}" and its ${taxonomy[cat].length} subtypes? (Won't be saved until you click Save.)`)) return;
-        delete taxonomy[cat];
-        dirty = true;
-        render();
-        return;
-      }
-      if(action === 'del-sub'){
-        const cIdx = parseInt(t.getAttribute('data-cat'), 10);
-        const sIdx = parseInt(t.getAttribute('data-sub'), 10);
-        const cat = Object.keys(taxonomy)[cIdx];
-        if(!cat) return;
-        taxonomy[cat] = (taxonomy[cat] || []).filter((_, i) => i !== sIdx);
-        dirty = true;
-        render();
-        return;
-      }
-      if(action === 'add-sub'){
-        const cIdx = parseInt(t.getAttribute('data-cat'), 10);
-        const cat = Object.keys(taxonomy)[cIdx];
-        if(!cat) return;
-        const inp = modal.querySelector(`[data-add-sub="${cIdx}"]`);
-        const v = inp ? String(inp.value || '').trim() : '';
-        if(!v) return;
-        if((taxonomy[cat] || []).some(s => s.toLowerCase() === v.toLowerCase())){ alert('Subtype already exists.'); return; }
-        taxonomy[cat] = (taxonomy[cat] || []).concat([v]);
-        dirty = true;
-        render();
-        return;
-      }
-    };
-    // Inline-edit handlers for the rename inputs.
-    modal.oninput = (e) => {
-      const t = e.target;
-      if(t.matches('[data-cat-edit]')){
-        const idx = parseInt(t.getAttribute('data-cat-edit'), 10);
-        const oldCat = Object.keys(taxonomy)[idx];
-        const newCat = String(t.value || '').trim();
-        if(!newCat || newCat === oldCat) return;
-        // Rebuild taxonomy preserving order.
-        const next = {};
-        for(const [k, v] of Object.entries(taxonomy)){
-          next[k === oldCat ? newCat : k] = v;
-        }
-        // Reassign without re-rendering (would lose focus).
-        for(const k in taxonomy) delete taxonomy[k];
-        Object.assign(taxonomy, next);
-        dirty = true;
-        // Update header tally without rerender — minimum fuss.
-        const dirtyMark = modal.querySelector('div[style*="margin-top:2px"]');
-        if(dirtyMark && !/unsaved/.test(dirtyMark.innerHTML)) dirtyMark.innerHTML += ' <span style="color:#b45309;font-weight:600;margin-left:8px;">● unsaved changes</span>';
-      } else if(t.matches('[data-sub-edit]')){
-        const [cIdxStr, sIdxStr] = String(t.getAttribute('data-sub-edit')).split('|');
-        const cIdx = parseInt(cIdxStr, 10);
-        const sIdx = parseInt(sIdxStr, 10);
-        const cat = Object.keys(taxonomy)[cIdx];
-        if(!cat || !taxonomy[cat]) return;
-        const newSub = String(t.value || '').trim();
-        if(!newSub) return;
-        taxonomy[cat][sIdx] = newSub;
-        dirty = true;
-      }
-    };
   }
+
+  // v289: attach delegated handlers ONCE in capture phase. Bubble-phase
+  // attachment was getting blocked by inline `event.stopPropagation()`
+  // on buttons inside <summary> (added so clicks didn't toggle the
+  // <details>). Capture runs before the target's inline handler, so
+  // stopPropagation in the bubble phase doesn't affect us.
+  // Listeners are bound once outside render() — render() only rewrites
+  // modal.innerHTML, so re-rendering doesn't stack duplicate listeners.
+  modal.addEventListener('click', (e) => {
+    if(e.target === modal){
+      if(dirty && !confirm('Discard unsaved taxonomy changes?')) return;
+      modal.remove();
+      return;
+    }
+    const t = e.target.closest('[data-action]');
+    if(!t) return;
+    const action = t.getAttribute('data-action');
+    if(action === 'cancel'){
+      if(dirty && !confirm('Discard unsaved taxonomy changes?')) return;
+      modal.remove();
+      return;
+    }
+    if(action === 'save'){
+      if(!dirty) return;
+      _bcTaxonomySave(taxonomy).then(() => {
+        dirty = false;
+        if(typeof showSaveConfirm === 'function') showSaveConfirm('✓ Taxonomy saved');
+        render();
+      }).catch(err => alert('Save failed: ' + (err.message || err)));
+      return;
+    }
+    if(action === 'add-cat'){
+      const inp = modal.querySelector('#bcTaxNewCat');
+      const v = inp ? String(inp.value || '').trim() : '';
+      if(!v) return;
+      if(taxonomy[v]){ alert('Category already exists.'); return; }
+      taxonomy[v] = [];
+      dirty = true;
+      render();
+      return;
+    }
+    if(action === 'edit-fields'){
+      // v288: open the per-category fields admin modal. On close
+      // (Save or Cancel) re-render the parent so the field-count
+      // badge reflects the latest state.
+      const cat = t.getAttribute('data-cat-name');
+      if(!cat) return;
+      if(typeof window._bcFieldsAdminForCategory === 'function'){
+        window._bcFieldsAdminForCategory(cat, () => render());
+      } else {
+        alert('Fields admin not loaded yet.');
+      }
+      return;
+    }
+    if(action === 'del-cat'){
+      const idx = parseInt(t.getAttribute('data-cat'), 10);
+      const cats = Object.keys(taxonomy);
+      const cat = cats[idx];
+      if(!cat) return;
+      if(!confirm(`Delete category "${cat}" and its ${taxonomy[cat].length} subtypes? (Won't be saved until you click Save.)`)) return;
+      delete taxonomy[cat];
+      dirty = true;
+      render();
+      return;
+    }
+    if(action === 'del-sub'){
+      const cIdx = parseInt(t.getAttribute('data-cat'), 10);
+      const sIdx = parseInt(t.getAttribute('data-sub'), 10);
+      const cat = Object.keys(taxonomy)[cIdx];
+      if(!cat) return;
+      taxonomy[cat] = (taxonomy[cat] || []).filter((_, i) => i !== sIdx);
+      dirty = true;
+      render();
+      return;
+    }
+    if(action === 'add-sub'){
+      const cIdx = parseInt(t.getAttribute('data-cat'), 10);
+      const cat = Object.keys(taxonomy)[cIdx];
+      if(!cat) return;
+      const inp = modal.querySelector(`[data-add-sub="${cIdx}"]`);
+      const v = inp ? String(inp.value || '').trim() : '';
+      if(!v) return;
+      if((taxonomy[cat] || []).some(s => s.toLowerCase() === v.toLowerCase())){ alert('Subtype already exists.'); return; }
+      taxonomy[cat] = (taxonomy[cat] || []).concat([v]);
+      dirty = true;
+      render();
+      return;
+    }
+  }, true);
+
+  // Inline-edit handlers for rename inputs (capture phase, same reason).
+  modal.addEventListener('input', (e) => {
+    const t = e.target;
+    if(t.matches('[data-cat-edit]')){
+      const idx = parseInt(t.getAttribute('data-cat-edit'), 10);
+      const oldCat = Object.keys(taxonomy)[idx];
+      const newCat = String(t.value || '').trim();
+      if(!newCat || newCat === oldCat) return;
+      // Rebuild taxonomy preserving order.
+      const next = {};
+      for(const [k, v] of Object.entries(taxonomy)){
+        next[k === oldCat ? newCat : k] = v;
+      }
+      for(const k in taxonomy) delete taxonomy[k];
+      Object.assign(taxonomy, next);
+      dirty = true;
+      // Update header tally without rerender so we don't lose focus.
+      const dirtyMark = modal.querySelector('div[style*="margin-top:2px"]');
+      if(dirtyMark && !/unsaved/.test(dirtyMark.innerHTML)) dirtyMark.innerHTML += ' <span style="color:#b45309;font-weight:600;margin-left:8px;">● unsaved changes</span>';
+    } else if(t.matches('[data-sub-edit]')){
+      const [cIdxStr, sIdxStr] = String(t.getAttribute('data-sub-edit')).split('|');
+      const cIdx = parseInt(cIdxStr, 10);
+      const sIdx = parseInt(sIdxStr, 10);
+      const cat = Object.keys(taxonomy)[cIdx];
+      if(!cat || !taxonomy[cat]) return;
+      const newSub = String(t.value || '').trim();
+      if(!newSub) return;
+      taxonomy[cat][sIdx] = newSub;
+      dirty = true;
+    }
+  }, true);
 
   document.body.appendChild(modal);
   render();

@@ -47,9 +47,11 @@ import { _showToast, showSaveConfirm } from './core/toast.js';
 import * as workbench from './workbench/workbench.js';
 import * as portfolios from './portfolios/portfolios.js';
 import * as dashboard from './dashboard/dashboard.js';
+import * as geocoding from './geocoding/google.js';
 for (const [name, value] of Object.entries(workbench))  { window[name] = value; }
 for (const [name, value] of Object.entries(portfolios)) { window[name] = value; }
 for (const [name, value] of Object.entries(dashboard))  { window[name] = value; }
+for (const [name, value] of Object.entries(geocoding))  { window[name] = value; }
 
 // Sanity log so we can confirm in DevTools that the module graph loaded.
 // Counts confirm the schema data extraction is byte-complete.
@@ -79,4 +81,5 @@ console.log('[ace-modules] schemas + utils + core loaded', {
   workbench: Object.keys(workbench).length,
   portfolios: Object.keys(portfolios).length,
   dashboard: Object.keys(dashboard).length,
+  geocoding: Object.keys(geocoding).length,
 });

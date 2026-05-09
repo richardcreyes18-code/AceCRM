@@ -31117,12 +31117,17 @@ function bcExpandedAssetSection(asset, f){
     try { extraHtml = window._bcRenderExtraFields(assetClean, _bcCurrentRecord || {}) || ''; }
     catch(e){ console.warn('[bc-fields] render extras failed:', e.message); }
   }
+  // v291: extras MUST nest inside the data-bc-asset-section wrapper.
+  // _bcRefreshAssetSections only takes wrap.firstElementChild when
+  // injecting a new chip's section, so a sibling extras div would get
+  // silently dropped. It also means a chip removal cleanly tears down
+  // the extras alongside the section instead of orphaning them.
   return `
     <div class="info-box" data-bc-asset-section="${sectionKey}">
       <div class="info-box-title">${getBcTypeBadge(assetClean)} Requirements</div>
       ${fields}
-    </div>
-    ${extraHtml}`;
+      ${extraHtml}
+    </div>`;
 }
 
 // v235: section-key for an asset chip text. Maps every chip variant

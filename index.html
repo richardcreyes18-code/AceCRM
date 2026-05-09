@@ -2083,10 +2083,13 @@ function _sanitizeFilename(name) {
 // ── AUTH STATE ───────────────────────────────────────────────────
 // Bump SESSION_VERSION to force every logged-in user to re-authenticate on next load.
 const SESSION_VERSION = 1;
-let _currentUser = null; // { id, name, email, initials, fub_name, role }
-let _viewMode = 'my';    // 'my' = own deals, 'all' = company pipeline
-let _authToken = null;
-let _refreshToken = null;
+// v244: `var` (instead of `let`) so these auth-state variables auto-attach to
+// window. The ES-module versions in js/core/auth.js read/write via window.*
+// to keep legacy and module state in sync until state.js owns the data.
+var _currentUser = null; // { id, name, email, initials, fub_name, role }
+var _viewMode = 'my';    // 'my' = own deals, 'all' = company pipeline
+var _authToken = null;
+var _refreshToken = null;
 
 function _saveSession(token, user, refreshToken) {
   _authToken = token;

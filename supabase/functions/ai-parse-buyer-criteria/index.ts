@@ -1560,6 +1560,18 @@ Deno.serve(async (req: Request) => {
       out_of_scope_asset: [],
     }
 
+    // v276: when the AI proposed the SAME value already in the BC record,
+    // we still want to surface that as "AI confirmed current value" in the
+    // review modal — instead of dropping it silently. The frontend renders
+    // these with a green check + locked apply box so the user can see the
+    // AI looked at the field and agreed.
+    const confirmed_fields: Record<string, {
+      value: unknown
+      cite?: string
+      confidence?: string
+      explanation?: string
+    }> = {}
+
     for (const f of FIELD_SPEC) {
       if (currentNa.includes(f.col)) continue
       if (!(f.col in fieldsRaw)) continue
@@ -1572,12 +1584,25 @@ Deno.serve(async (req: Request) => {
         propV = matched
       }
       const before = bc[f.col] ?? null
-      if (JSON.stringify(propV) === JSON.stringify(before)) continue
-      if (only_fill_empty && !isEmptyValue(before)) continue
       const expl = typeof explanationsRaw[f.col] === 'string' ? explanationsRaw[f.col].slice(0, 280) : undefined
       const cite = typeof citationsRaw[f.col] === 'string' ? citationsRaw[f.col].slice(0, 280) : undefined
       const confRaw = typeof confidenceRaw[f.col] === 'string' ? confidenceRaw[f.col].toLowerCase().trim() : ''
       const confidence = (['high', 'medium', 'low'] as const).find(x => x === confRaw)
+
+      // v276: AI agrees with current value → confirmed_fields, not a change.
+      if (JSON.stringify(propV) === JSON.stringify(before)) {
+        if (cite && cite.trim()) {
+          confirmed_fields[f.col] = {
+            value: propV,
+            cite,
+            ...(confidence ? { confidence } : {}),
+            ...(expl ? { explanation: expl } : {}),
+          }
+        }
+        continue
+      }
+
+      if (only_fill_empty && !isEmptyValue(before)) continue
 
       // v271 GUARDRAIL: no cite = no proposal. The system prompt requires
       // a citation for every field; if the model skipped one, drop the
@@ -1707,6 +1732,7 @@ Deno.serve(async (req: Request) => {
       ok: true,
       prompt_version: PROMPT_VERSION,
       proposed_changes,
+      confirmed_fields,
       na_proposals,
       current_na_fields: currentNa,
       uncertain_fields,

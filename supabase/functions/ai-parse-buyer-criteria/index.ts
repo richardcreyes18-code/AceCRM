@@ -25,7 +25,7 @@ const cors: Record<string, string> = {
 
 const MODEL = 'claude-sonnet-4-6'
 const MAX_TOKENS = 4096
-const PROMPT_VERSION = 'bc-v1.4'
+const PROMPT_VERSION = 'bc-v1.5'
 
 // Maps a FIELD_SPEC.group to the asset-class label(s) (from ASSET_TYPE_VOCAB)
 // that the field is scoped to. If the buyer's proposed/current
@@ -507,6 +507,25 @@ OTHER TAG RULES (apply when buy_intent is "buyer" or "both"):
     matching asset class. Always include the matched type in
     desired_property_types. Set the cite for desired_property_types as
     "tag: asset - <type>" so it's clear the source was a tag.
+    ASSET-CLASS TAGS ARE SOURCE-OF-TRUTH. NEVER QUESTION OR REMOVE THEM.
+    If the contact is tagged "asset - multi family" but the notes are
+    silent about MF or focused on something else, the contact IS still
+    a multifamily buyer — agents curate these tags deliberately. Your
+    job is NOT to ask the agent to confirm the tag; your job is to
+    keep "Multifamily" in desired_property_types regardless of whether
+    you find MF buy-box detail in the notes.
+       - If notes have NO MF-specific detail: propose only the bare
+         category ("Multifamily"). Leave mf_min_units / mf_max_units /
+         mf_class_preference / etc. EMPTY. Do NOT mark them na, do
+         NOT flag them as uncertain. The buyer is a known MF buyer
+         whose buy-box detail just isn't captured yet.
+       - If notes DO mention MF detail anywhere: extract that detail
+         normally per Step 2 rules.
+       - If notes mention OTHER asset classes alongside MF (e.g. they
+         also discuss retail), include BOTH in desired_property_types.
+         Tags don't go away just because notes show breadth.
+       - NEVER add a top_level_notes line saying "MF tag may be an
+         error" or "agent should confirm tag". The tag is correct.
     Tag → vocab category mapping:
       "asset - multi family"    → "Multifamily"
       "asset - warehouse"       → "Industrial"  (Industrial covers
@@ -754,11 +773,60 @@ Rules:
   - Always pick from this exact category vocab. The server validates
     each chip and drops anything not on the list.
   - Output bare category when notes don't specify subtype detail.
-  - Output "Category: Subtype" when notes name a specific subtype
-    ("grocery-anchored center" → "Shopping Center: Neighborhood Center"
-    OR "Retail: Grocery Anchored", whichever is more accurate; "self
-    storage" → "Industrial: Self Storage"; "garden-style apartments"
-    → "Multifamily: Garden/Low Rise").
+  - Output "Category: Subtype" when notes name a specific subtype.
+    SUBTYPE KEYWORDS — if the notes mention any of these, prefer the
+    Category: Subtype form:
+      "showroom" / "showroom space"      → "Industrial: Showroom"
+      "self storage" / "storage units"   → "Industrial: Self Storage"
+      "warehouse"                        → "Industrial: Warehouse"
+      "distribution" / "distro"          → "Industrial: Distribution"
+      "manufacturing" / "manufacturer"   → "Industrial: Manufacturing"
+      "flex space" / "flex industrial"   → "Industrial: Flex"
+      "cold storage" / "refrigerated"    → "Industrial: Cold Storage"
+      "data center"                      → "Industrial: Data Center"
+      "truck terminal"                   → "Industrial: Truck Terminal"
+      "garden-style" / "garden style"    → "Multifamily: Garden/Low Rise"
+      "high rise" / "high-rise"          → "Multifamily: High Rise"
+      "mid rise" / "mid-rise"            → "Multifamily: Mid Rise"
+      "duplex"                           → "Multifamily: Duplex"
+      "triplex"                          → "Multifamily: Triplex"
+      "fourplex" / "4-plex"              → "Multifamily: Fourplex"
+      "townhome" / "townhouse"           → "Multifamily: Townhome"
+      "student housing"                  → "Multifamily: Student Housing"
+      "affordable housing" / "LIHTC"     → "Multifamily: Affordable Housing"
+      "grocery anchored" / "grocery-anchored":
+        → "Retail: Grocery Anchored" if notes are about smaller retail
+        → "Shopping Center: Neighborhood Center" if 100k+ SF or "centers"
+      "strip mall" / "strip center"      → "Retail: Strip Mall"
+      "power center"                     → "Retail: Power Center"
+      "neighborhood center"              → "Retail: Neighborhood Center"
+        OR "Shopping Center: Neighborhood Center" depending on scale
+      "single tenant" / "STNL"           → "Retail: Single Tenant"
+      "NNN" / "triple net"               → "Retail: NNN Retail"
+      "lifestyle center"                 → "Shopping Center: Lifestyle Center"
+      "outlet center" / "outlet mall"    → "Shopping Center: Outlet Center"
+      "regional mall"                    → "Shopping Center: Regional Mall"
+      "medical office" / "MOB"           → "Health Care: Medical Office"
+      "urgent care"                      → "Health Care: Urgent Care"
+      "surgery center"                   → "Health Care: Surgery Center"
+      "boutique hotel"                   → "Hotel & Motel: Boutique"
+      "extended stay"                    → "Hotel & Motel: Extended Stay"
+      "select service"                   → "Hotel & Motel: Select Service"
+      "full service"                     → "Hotel & Motel: Full Service"
+      "independent living"               → "Senior Housing: Independent Living"
+      "assisted living"                  → "Senior Housing: Assisted Living"
+      "memory care"                      → "Senior Housing: Memory Care"
+      "skilled nursing" / "SNF"          → "Senior Housing: Skilled Nursing"
+      "CCRC"                             → "Senior Housing: CCRC"
+      "auto repair" / "mechanic shop"    → "Automotive: Auto Repair / Mechanic"
+      "auto body" / "body shop"          → "Automotive: Auto Body Shop"
+      "tire shop"                        → "Automotive: Tire Shop"
+      "car wash"                         → "Automotive: Car Wash"
+      "gas station"                      → "Special Purpose: Gas Station"
+      "parking lot" / "parking garage"   → "Special Purpose: Parking Lot/Garage"
+      "church" / "religious building"    → "Special Purpose: Church/Religious"
+      "mobile home park" / "MHP"         → "Residential Income: Mobile Home Park"
+      "single family rental" / "SFR"     → "Residential Income: Single Family Rental"
   - You may include MULTIPLE chips when the buyer's interest spans
     several categories. Comma-separated.
   - Do NOT invent categories outside the list above.
@@ -1171,6 +1239,71 @@ NOTES on what this example does NOT do:
     interest is past activity that goes in other_requirements.
   - Does NOT flag mf_max_units as uncertain. There's no genuine
     ambiguity in the stated buy-box itself.
+
+═══════════════════════════════════════════════════════════════════════
+
+EXAMPLE 5 — Tagged buyer with no asset-specific detail in notes.
+This case demonstrates: asset-class tags are source-of-truth. When
+the contact is tagged "asset - multi family" but the notes don't
+contain any MF-specific buy-box detail (no unit count, no class, no
+deal profile), still propose desired_property_types = "Multifamily"
+and leave MF subfields empty. NEVER question the tag.
+
+It also demonstrates subtype recognition: a stray "showroom" mention
+in the notes drives an Industrial: Showroom chip even when the
+buyer's main interest is multifamily.
+
+INPUT TAGS:
+  ["Buyer", "asset - multi family", "Bergen County"]
+
+INPUT NOTES:
+[note @ 2024-09-15] Said she's also open to a small showroom space
+for her side business if the right one comes up. North Jersey only.
+[note @ 2023-08-02] Got her on the phone — keep her on the list.
+[note @ 2022-03-11] New buyer lead from referral.
+
+OUTPUT:
+{
+  "buy_intent": "buyer",
+  "top_level_notes": "Tagged multifamily buyer. Notes have no MF buy-box detail — buyer is on the list as a known MF target with specifics TBD. One stray mention of openness to a showroom space (Industrial: Showroom) added as secondary.",
+  "fields": {
+    "desired_property_types":  "Multifamily, Industrial: Showroom",
+    "preferred_states":        "NJ",
+    "preferred_counties":      "Bergen County, NJ",
+    "simple_area_preference":  "North Jersey",
+    "other_requirements":      "Open to a small showroom space (Industrial: Showroom) for her side business if the right one comes up — secondary interest. MF buy-box detail not yet captured in notes."
+  },
+  "citations": {
+    "desired_property_types":  "tag: asset - multi family; from note @ 2024-09-15: 'small showroom space'",
+    "preferred_states":        "from note @ 2024-09-15: 'North Jersey only'; tag: Bergen County",
+    "preferred_counties":      "tag: Bergen County",
+    "simple_area_preference":  "from note @ 2024-09-15: 'North Jersey only'",
+    "other_requirements":      "from note @ 2024-09-15: 'open to a small showroom space ... if the right one comes up'"
+  },
+  "confidence": {
+    "desired_property_types":  "high",
+    "preferred_states":        "high",
+    "preferred_counties":      "high",
+    "simple_area_preference":  "high",
+    "other_requirements":      "medium"
+  },
+  "explanations": {
+    "desired_property_types":  "MF tag is canonical; showroom mention triggers Industrial: Showroom subtype."
+  },
+  "na": [],
+  "uncertain": []
+}
+
+NOTES on what this example does NOT do:
+  - Does NOT add a top_level_notes line saying "MF tag may be wrong"
+    or "agent should confirm MF". The tag is correct.
+  - Does NOT mark mf_min_units / mf_max_units / mf_class_preference /
+    mf_deal_profile as uncertain or na. They're just empty — buy-box
+    detail not yet captured.
+  - Does NOT drop the showroom mention as too vague. "Open to a
+    showroom" is a real (if soft) buy signal — the right place for
+    it is Industrial: Showroom in desired_property_types plus a note
+    in other_requirements that says it's secondary.
 `
 
 function buildEligibleFieldsList(args: {

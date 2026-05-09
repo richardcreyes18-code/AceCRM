@@ -44,6 +44,10 @@ for (const [name, value] of Object.entries(backmarket)) { window[name] = value; 
 import * as fub from './fub/fub.js';
 for (const [name, value] of Object.entries(fub)) { window[name] = value; }
 
+// v266: contact relationships (ace_agent_contacts) — 12 exports.
+import * as relationships from './contacts/relationships.js';
+for (const [name, value] of Object.entries(relationships)) { window[name] = value; }
+
 import {
   _stripCommas, _parseNum, _fmtNum, _phoneDigits, fmtMoney, fmtPct,
 } from './utils/format.js';

@@ -36,6 +36,10 @@ for (const [name, value] of Object.entries(agentPicker)) { window[name] = value;
 import * as appLists from './admin/app-lists.js';
 for (const [name, value] of Object.entries(appLists)) { window[name] = value; }
 
+// v264: buyer-search backmarket — 47 exports attached to window.
+import * as backmarket from './buyer-search/backmarket.js';
+for (const [name, value] of Object.entries(backmarket)) { window[name] = value; }
+
 import {
   _stripCommas, _parseNum, _fmtNum, _phoneDigits, fmtMoney, fmtPct,
 } from './utils/format.js';

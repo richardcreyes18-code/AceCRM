@@ -63,7 +63,7 @@ const AUTO_ROUTING = {
   note_count_threshold:    6,
 }
 const MAX_TOKENS = 4096
-const PROMPT_VERSION = 'bc-v1.10'
+const PROMPT_VERSION = 'bc-v1.11'
 
 // Maps a FIELD_SPEC.group to the asset-class label(s) (from ASSET_TYPE_VOCAB)
 // that the field is scoped to. If the buyer's proposed/current
@@ -1749,7 +1749,9 @@ Deno.serve(async (req: Request) => {
       if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
         for (const [cat, listUnknown] of Object.entries(raw as Record<string, unknown>)) {
           // v292: skip the meta key (`_other_notes`) — handled below.
-          if (cat === '_other_notes') continue
+          // v294: also skip _native_overrides — handled in the FIELD_SPEC
+          // override loop further down.
+          if (cat === '_other_notes' || cat === '_native_overrides') continue
           if (!Array.isArray(listUnknown)) continue
           for (const fUnknown of listUnknown) {
             const f = fUnknown as Record<string, unknown>
@@ -1802,11 +1804,66 @@ Deno.serve(async (req: Request) => {
       }
     } catch (_) { /* extras absent — continue without them */ }
 
+    // v294: per-scope native-field overrides. Storage shape:
+    //   _native_overrides: { "<Category>": { "<col>": { hidden?, label?, hint? } } }
+    // Hidden fields are dropped from FIELD_SPEC for THIS request so the
+    // model never proposes values for them. Label / hint overrides
+    // reach the model via the eligible-fields list. Lookup keys against
+    // the BC's desired_property_types so subtype chips inherit overrides
+    // from the bare category.
+    const nativeOverridesByCol = new Map<string, { hidden?: boolean; label?: string; hint?: string }>()
+    try {
+      const fieldRows2 = (await fetchSb(
+        `${SUPABASE_URL}/rest/v1/ace_ai_settings?key=eq.bc_field_definitions&select=value&limit=1`,
+        SERVICE_KEY,
+      )) as Array<{ value?: unknown }>
+      const raw2 = fieldRows2?.[0]?.value
+      const meta = (raw2 && typeof raw2 === 'object' && !Array.isArray(raw2))
+        ? (raw2 as Record<string, unknown>)._native_overrides
+        : null
+      if (meta && typeof meta === 'object' && !Array.isArray(meta)) {
+        // Active scopes for this BC — bare-category names of the chips
+        // currently selected in desired_property_types.
+        const dpt = String((bc.desired_property_types as string) || '')
+        const activeScopes = new Set(
+          dpt.split(/[,;]+/)
+            .map(s => s.trim())
+            .filter(Boolean)
+            .map(s => { const i = s.indexOf(':'); return i > 0 ? s.slice(0, i).trim() : s })
+        )
+        for (const [scope, perScope] of Object.entries(meta as Record<string, unknown>)) {
+          if (!activeScopes.has(scope)) continue
+          if (!perScope || typeof perScope !== 'object' || Array.isArray(perScope)) continue
+          for (const [col, ov] of Object.entries(perScope as Record<string, unknown>)) {
+            if (!ov || typeof ov !== 'object' || Array.isArray(ov)) continue
+            const o = ov as Record<string, unknown>
+            const out: { hidden?: boolean; label?: string; hint?: string } = {}
+            if (o.hidden === true) out.hidden = true
+            if (typeof o.label === 'string' && o.label.trim()) out.label = o.label.trim()
+            if (typeof o.hint  === 'string' && o.hint.trim())  out.hint  = o.hint.trim()
+            // Last-write-wins across scopes; in practice scopes don't
+            // overlap on the same col so this is fine.
+            nativeOverridesByCol.set(col, out)
+          }
+        }
+      }
+    } catch (_) { /* native overrides absent — continue */ }
+
     // Materialize the FIELD_SPEC to use for THIS request: native + extras.
     // Native fields look up `before` from bc[col]; extras look up from
-    // bc.extra_fields[col].
+    // bc.extra_fields[col]. Native fields with hidden=true are dropped
+    // from the request entirely (model doesn't see them, won't propose).
     const ALL_FIELDS_FOR_REQ: Array<FieldDef & { _extra?: boolean; _category?: string }> =
-      [...FIELD_SPEC, ...extraFieldDefs]
+      [
+        ...FIELD_SPEC
+          .filter(f => !nativeOverridesByCol.get(f.col)?.hidden)
+          .map(f => {
+            const ov = nativeOverridesByCol.get(f.col)
+            if (!ov || (!ov.label && !ov.hint)) return f
+            return { ...f, ...(ov.label ? { label: ov.label } : {}), ...(ov.hint ? { hint: ov.hint } : {}) }
+          }),
+        ...extraFieldDefs,
+      ]
     const ALL_FIELD_COLS_FOR_REQ = new Set(ALL_FIELDS_FOR_REQ.map(f => f.col))
     const extraColsSet = new Set(extraFieldDefs.map(f => f.col))
     const bcExtras: Record<string, unknown> =

@@ -31109,6 +31109,13 @@ function bcExpandedAssetSection(asset, f){
   // of the chip text ("industrial: warehouse" → "industrial_warehouse")
   // which never matched the canonical key ("warehouse").
   const sectionKey = _bcAssetSectionKey(assetClean);
+  // v294: apply native-field overrides (hide / label override) BEFORE
+  // appending runtime extras. Per-scope overrides come from
+  // ace_ai_settings.bc_field_definitions._native_overrides.
+  if(typeof window._bcNativeApplyOverrides === 'function'){
+    try { fields = window._bcNativeApplyOverrides(fields, assetClean) || fields; }
+    catch(e){ console.warn('[bc-native] override apply failed:', e.message); }
+  }
   // v288/v290: append runtime-defined extra fields. Pass the FULL chip
   // text — the renderer surfaces both category-level AND subtype-level
   // fields when the chip names a subtype.

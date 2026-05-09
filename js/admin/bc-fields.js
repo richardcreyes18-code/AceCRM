@@ -87,8 +87,44 @@ export async function _bcFieldsLoad(){
 export function _bcFieldsGet(category){
   if(!_cache) return [];
   if(!category) return _cache;
-  if(category === META_KEY) return [];   // v292: meta key is not a scope
+  if(category === META_KEY) return [];          // v292: meta key is not a scope
+  if(category === NATIVE_META_KEY) return [];   // v294: meta key is not a scope
   return Array.isArray(_cache[category]) ? _cache[category].slice() : [];
+}
+
+// v294: per-scope native-field overrides ({ col: { hidden?, label?, hint? } }).
+// Getter returns a shallow clone so callers can safely mutate.
+export function _bcNativeOverridesGet(scope){
+  const meta = (_cache && _cache[NATIVE_META_KEY]) || {};
+  const perScope = meta[scope] || {};
+  const clone = {};
+  for(const [k, v] of Object.entries(perScope)) clone[k] = { ...v };
+  return clone;
+}
+
+// Setter merges + saves. Pass `null` for a col's value to delete that
+// override (revert to hardcoded defaults). Pass {} for an override
+// object to clear it.
+export async function _bcNativeOverridesSet(scope, perScopeOverrides){
+  if(!_cache) _cache = {};
+  if(!_cache[NATIVE_META_KEY] || typeof _cache[NATIVE_META_KEY] !== 'object' || Array.isArray(_cache[NATIVE_META_KEY])){
+    _cache[NATIVE_META_KEY] = {};
+  }
+  const cleanPerScope = {};
+  for(const [col, ov] of Object.entries(perScopeOverrides || {})){
+    if(!ov || typeof ov !== 'object') continue;
+    const out = {};
+    if(ov.hidden === true) out.hidden = true;
+    if(typeof ov.label === 'string' && ov.label.trim()) out.label = ov.label.trim();
+    if(typeof ov.hint  === 'string' && ov.hint.trim())  out.hint  = ov.hint.trim();
+    if(Object.keys(out).length) cleanPerScope[col] = out;
+  }
+  if(Object.keys(cleanPerScope).length){
+    _cache[NATIVE_META_KEY][scope] = cleanPerScope;
+  } else {
+    delete _cache[NATIVE_META_KEY][scope];
+  }
+  return _bcFieldsSave(_cache);
 }
 
 // v292: per-scope Other Notes settings. Defaults to enabled=true with
@@ -140,11 +176,18 @@ export async function _bcFieldsSave(definitions){
 //     "_other_notes": {
 //       "Multifamily": { "enabled": true, "placeholder": "Anything else MF-specific..." },
 //       "Multifamily: Garden": { "enabled": false }
+//     },
+//     "_native_overrides": {                                // v294 (Phase 4b)
+//       "Multifamily": {
+//         "mf_min_units":         { "label": "Minimum Units" },
+//         "mf_max_price_per_unit":{ "hidden": true }
+//       }
 //     }
 //   }
-// Normalize preserves the meta untouched while still validating field
-// arrays. Getters skip the meta key when iterating scopes.
+// Normalize preserves the meta keys untouched while still validating field
+// arrays. Getters skip the meta keys when iterating scopes.
 const META_KEY = '_other_notes';
+const NATIVE_META_KEY = '_native_overrides';   // v294
 const OTHER_NOTES_DEFAULT_PLACEHOLDER = 'Anything else specific to this asset class…';
 
 function _normalize(defs){
@@ -152,6 +195,30 @@ function _normalize(defs){
   for(const [rawCat, rawList] of Object.entries(defs || {})){
     const cat = String(rawCat || '').trim();
     if(!cat) continue;
+    if(cat === NATIVE_META_KEY){
+      // v294: per-scope native-field overrides — { scope: { col: { hidden?, label?, hint? } } }
+      const meta = (rawList && typeof rawList === 'object' && !Array.isArray(rawList)) ? rawList : {};
+      const cleanMeta = {};
+      for(const [scope, perScopeRaw] of Object.entries(meta)){
+        const scopeKey = String(scope || '').trim();
+        if(!scopeKey) continue;
+        const perScope = (perScopeRaw && typeof perScopeRaw === 'object' && !Array.isArray(perScopeRaw)) ? perScopeRaw : {};
+        const cleanPerScope = {};
+        for(const [colRaw, ovRaw] of Object.entries(perScope)){
+          const col = String(colRaw || '').trim();
+          if(!col) continue;
+          const ov = (ovRaw && typeof ovRaw === 'object' && !Array.isArray(ovRaw)) ? ovRaw : {};
+          const ovOut = {};
+          if(ov.hidden === true) ovOut.hidden = true;
+          if(typeof ov.label === 'string' && ov.label.trim()) ovOut.label = ov.label.trim();
+          if(typeof ov.hint  === 'string' && ov.hint.trim())  ovOut.hint  = ov.hint.trim();
+          if(Object.keys(ovOut).length) cleanPerScope[col] = ovOut;
+        }
+        if(Object.keys(cleanPerScope).length) cleanMeta[scopeKey] = cleanPerScope;
+      }
+      out[NATIVE_META_KEY] = cleanMeta;
+      continue;
+    }
     if(cat === META_KEY){
       // Preserve the meta object as-is, with light shape validation.
       const meta = (rawList && typeof rawList === 'object' && !Array.isArray(rawList))
@@ -359,6 +426,11 @@ export function _bcFieldsAdminForCategory(category, onClose){
   // v292: per-scope Other Notes settings — local copy that the modal
   // mutates inline; persisted on Save alongside the field defs.
   const otherNotes = { ..._bcOtherNotesGet(category) };
+  // v294: per-scope native-field overrides. Subtype scopes share with
+  // the parent category — bare-category scope holds the overrides.
+  const isSubtypeScope = String(category || '').includes(':');
+  const nativeOverrideScope = isSubtypeScope ? category.split(':')[0].trim() : category;
+  const nativeOverrides = _bcNativeOverridesGet(nativeOverrideScope);
   let dirty = false;
 
   const modal = document.createElement('div');
@@ -488,6 +560,24 @@ export function _bcFieldsAdminForCategory(category, onClose){
           placeholder: otherNotes.placeholder || '',
         };
         next[META_KEY] = meta;
+        // v294: persist native-field overrides for the bare-category scope.
+        const nativeMeta = (next[NATIVE_META_KEY] && typeof next[NATIVE_META_KEY] === 'object' && !Array.isArray(next[NATIVE_META_KEY]))
+          ? Object.assign({}, next[NATIVE_META_KEY]) : {};
+        const cleanScope = {};
+        for(const [col, ov] of Object.entries(nativeOverrides || {})){
+          if(!ov || typeof ov !== 'object') continue;
+          const out = {};
+          if(ov.hidden === true) out.hidden = true;
+          if(typeof ov.label === 'string' && ov.label.trim()) out.label = ov.label.trim();
+          if(typeof ov.hint  === 'string' && ov.hint.trim())  out.hint  = ov.hint.trim();
+          if(Object.keys(out).length) cleanScope[col] = out;
+        }
+        if(Object.keys(cleanScope).length){
+          nativeMeta[nativeOverrideScope] = cleanScope;
+        } else {
+          delete nativeMeta[nativeOverrideScope];
+        }
+        next[NATIVE_META_KEY] = nativeMeta;
         _bcFieldsSave(next).then(() => {
           dirty = false;
           if(typeof showSaveConfirm === 'function') showSaveConfirm('✓ Fields saved');
@@ -508,6 +598,14 @@ export function _bcFieldsAdminForCategory(category, onClose){
         dirty = true;
         rerender();
       }
+    } else if(target.matches('[data-native-override][data-native-prop="reset"]')){
+      // v294: clear all overrides for this native field.
+      const col = target.getAttribute('data-native-override');
+      if(col && nativeOverrides[col]){
+        delete nativeOverrides[col];
+        dirty = true;
+        rerender();
+      }
     } else if(target.matches('[data-field-action]')){
       const idx = parseInt(target.getAttribute('data-field-idx'), 10);
       if(target.getAttribute('data-field-action') === 'del'){
@@ -525,6 +623,18 @@ export function _bcFieldsAdminForCategory(category, onClose){
     // v292: Other Notes placeholder text edits.
     if(t.id === 'bcOtherNotesPlaceholder'){
       otherNotes.placeholder = String(t.value || '');
+      dirty = true;
+      return;
+    }
+    // v294: native-field label-override edits.
+    if(t.matches('[data-native-override][data-native-prop="label"]')){
+      const col = t.getAttribute('data-native-override');
+      if(!col) return;
+      const v = String(t.value || '').trim();
+      const ov = nativeOverrides[col] || {};
+      if(v) ov.label = v; else delete ov.label;
+      if(Object.keys(ov).length) nativeOverrides[col] = ov;
+      else delete nativeOverrides[col];
       dirty = true;
       return;
     }
@@ -551,6 +661,22 @@ export function _bcFieldsAdminForCategory(category, onClose){
   modal.addEventListener('change', (e) => {
     if(e.target && e.target.id === 'bcOtherNotesEnabled'){
       otherNotes.enabled = !!e.target.checked;
+      dirty = true;
+      rerender();
+      return;
+    }
+    // v294: native-field hidden-toggle change. Checkbox is "Visible"
+    // (checked = visible). The override stores hidden=true when
+    // unchecked. Re-render so the row's red/white background updates.
+    if(e.target && e.target.matches('[data-native-override][data-native-prop="hidden"]')){
+      const col = e.target.getAttribute('data-native-override');
+      if(!col) return;
+      const isVisible = !!e.target.checked;
+      const ov = nativeOverrides[col] || {};
+      if(isVisible) delete ov.hidden;
+      else ov.hidden = true;
+      if(Object.keys(ov).length) nativeOverrides[col] = ov;
+      else delete nativeOverrides[col];
       dirty = true;
       rerender();
     }

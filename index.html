@@ -31938,6 +31938,14 @@ function _bcAiCanonicalize(raw, options){
 // keeps _bcAiAutoFillApply simple — no per-widget reading logic.
 function _bcAiBuildEditor(col, propVal, kind, options){
   const esc = s => String(s==null?'':s).replace(/[<&>"]/g, c => ({'<':'&lt;','&':'&amp;','>':'&gt;','"':'&quot;'}[c]));
+  // v273: desired_property_types gets the same 2-panel category+subtype
+  // picker the BC blank form uses, instead of a flat pill list. Reads
+  // ASSET_SUBTYPES (defined globally) and writes back into
+  // #aiVal_desired_property_types as a comma-joined string of
+  // "Category" or "Category: Subtype" chips.
+  if(col === 'desired_property_types' && typeof ASSET_SUBTYPES === 'object'){
+    return _bcAiBuildAssetTypePicker(propVal);
+  }
   if(kind === 'boolean'){
     return `<select id="aiVal_${col}" data-edit-type="boolean" style="width:100%;padding:5px 8px;font-size:11px;border:1px solid #cbd5e1;border-radius:5px;">
       <option value="true" ${propVal===true?'selected':''}>Yes</option>
@@ -32003,6 +32011,106 @@ function _bcAiBuildEditor(col, propVal, kind, options){
   }
   // text / csv / fallback
   return `<input id="aiVal_${col}" data-edit-type="text" value="${esc(propVal)}" style="width:100%;padding:5px 8px;font-size:11px;border:1px solid #cbd5e1;border-radius:5px;"/>`;
+}
+
+// v273: 2-panel category + subtype picker for desired_property_types in
+// the AI review modal. Mirrors the BC blank-form picker (index.html
+// ~line 30459) but with `aiAt_*` IDs so it can coexist with the BC form
+// in the DOM. Hidden input #aiVal_desired_property_types keeps the
+// comma-joined chip text for the apply path.
+function _bcAiBuildAssetTypePicker(propVal){
+  const esc = s => String(s==null?'':s).replace(/[<&>"]/g, c => ({'<':'&lt;','&':'&amp;','>':'&gt;','"':'&quot;'}[c]));
+  const propStr = String(propVal == null ? '' : propVal);
+  const initialChips = propStr.split(/[,;]/).map(s => s.trim()).filter(Boolean);
+  const cats = Object.keys(ASSET_SUBTYPES);
+  const firstCat = cats[0] || '';
+  const safeFirst = firstCat.replace(/'/g,"\\'");
+  const firstSubs = ASSET_SUBTYPES[firstCat] || [];
+  const initialSubsHtml =
+    `<div onclick="_bcAiAtSelect('${safeFirst}','')" style="padding:4px 7px;cursor:pointer;border-radius:4px;font-size:11px;font-weight:600;color:#1a3a6e;background:#eef4ff;border:1px dashed #c7d7ff;margin-bottom:4px;" onmouseover="this.style.background='#dbe7ff'" onmouseout="this.style.background='#eef4ff'" title="Add the category alone, no subtype">＋ Add &quot;${esc(firstCat)}&quot; (no subtype)</div>` +
+    firstSubs.map(s => `<div onclick="_bcAiAtSelect('${safeFirst}','${s.replace(/'/g,"\\'")}')" style="padding:4px 7px;cursor:pointer;border-radius:4px;font-size:11px;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'">${esc(s)}</div>`).join('');
+  const pillsHtml = initialChips.map(c => `
+    <span data-ai-at-chip="${esc(c)}" style="background:#1a3a6e;color:#fff;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:5px;cursor:pointer;"
+      onclick="this.remove();_bcAiAtSync()" title="Click to remove">${esc(c)} <span style="opacity:0.7;font-size:10px;">✕</span></span>`).join('');
+  return `
+    <div style="display:flex;flex-direction:column;gap:6px;width:100%;">
+      <div id="aiAt_pills" style="display:flex;flex-wrap:wrap;gap:5px;min-height:28px;padding:4px;background:#f8faff;border:1px solid #c0d0e8;border-radius:5px;">${pillsHtml}</div>
+      <input id="aiAt_search" oninput="_bcAiAtSearch()" placeholder="Search type or subtype..."
+        style="width:100%;border:1.5px solid #e2e8f0;border-radius:6px;padding:6px 10px;font-size:11px;box-sizing:border-box;"/>
+      <div id="aiAt_results" style="display:none;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:4px;max-height:140px;overflow-y:auto;position:relative;z-index:10;"></div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+        <div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:4px;">Category</div>
+          <select id="aiAt_left" size="8" onchange="_bcAiAtUpdateSubs()"
+            style="width:100%;border:1.5px solid #e2e8f0;border-radius:6px;font-size:11px;padding:3px;">
+            ${cats.map(t => `<option value="${esc(t)}">${esc(t)}</option>`).join('')}
+          </select>
+        </div>
+        <div>
+          <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:4px;">Subtype — click to add</div>
+          <div id="aiAt_subs" style="border:1.5px solid #e2e8f0;border-radius:6px;padding:4px;min-height:100px;max-height:160px;overflow-y:auto;font-size:11px;">
+            ${initialSubsHtml}
+          </div>
+        </div>
+      </div>
+      <input type="hidden" id="aiVal_desired_property_types" data-edit-type="text" value="${esc(initialChips.join(', '))}"/>
+    </div>`;
+}
+
+function _bcAiAtUpdateSubs(){
+  const sel = document.getElementById('aiAt_left');
+  const container = document.getElementById('aiAt_subs');
+  if(!sel || !container) return;
+  const type = sel.value;
+  const subs = ASSET_SUBTYPES[type] || [];
+  const safeType = type.replace(/'/g,"\\'");
+  const categoryRow = `<div onclick="_bcAiAtSelect('${safeType}','')" style="padding:4px 7px;cursor:pointer;border-radius:4px;font-size:11px;font-weight:600;color:#1a3a6e;background:#eef4ff;border:1px dashed #c7d7ff;margin-bottom:4px;" onmouseover="this.style.background='#dbe7ff'" onmouseout="this.style.background='#eef4ff'" title="Add the category alone, no subtype">＋ Add "${type}" (no subtype)</div>`;
+  if(!subs.length){ container.innerHTML = categoryRow; return; }
+  const subRows = subs.map(s => `<div onclick="_bcAiAtSelect('${safeType}','${s.replace(/'/g,"\\'")}')" style="padding:4px 7px;cursor:pointer;border-radius:4px;font-size:11px;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'">${s}</div>`).join('');
+  container.innerHTML = categoryRow + subRows;
+}
+
+function _bcAiAtSearch(){
+  const q = (document.getElementById('aiAt_search')?.value||'').toLowerCase().trim();
+  const res = document.getElementById('aiAt_results');
+  if(!res) return;
+  if(!q){ res.style.display='none'; return; }
+  const matches = [];
+  Object.entries(ASSET_SUBTYPES).forEach(([type, subs]) => {
+    if(type.toLowerCase().includes(q)) matches.push({ type, sub:'', label: type });
+    subs.forEach(s => { if(s.toLowerCase().includes(q)) matches.push({ type, sub:s, label: `${type}: ${s}` }); });
+  });
+  if(!matches.length){ res.style.display='none'; return; }
+  res.style.display = 'block';
+  res.innerHTML = matches.slice(0,12).map(m =>
+    `<div onclick="_bcAiAtSelect('${m.type.replace(/'/g,"\\'")}','${m.sub.replace(/'/g,"\\'")}');document.getElementById('aiAt_search').value='';document.getElementById('aiAt_results').style.display='none';"
+      style="padding:5px 10px;font-size:11px;cursor:pointer;border-radius:4px;"
+      onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'">${m.label}</div>`
+  ).join('');
+}
+
+function _bcAiAtSelect(type, sub){
+  const fullType = sub ? `${type}: ${sub}` : type;
+  const host = document.getElementById('aiAt_pills');
+  if(!host) return;
+  const existing = Array.from(host.querySelectorAll('[data-ai-at-chip]')).map(s => s.getAttribute('data-ai-at-chip'));
+  if(existing.some(t => t.toLowerCase() === fullType.toLowerCase())) return;
+  const span = document.createElement('span');
+  span.setAttribute('data-ai-at-chip', fullType);
+  span.style.cssText = 'background:#1a3a6e;color:#fff;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:600;display:inline-flex;align-items:center;gap:5px;cursor:pointer;';
+  span.title = 'Click to remove';
+  span.innerHTML = `${fullType.replace(/[<&>"]/g, c => ({'<':'&lt;','&':'&amp;','>':'&gt;','"':'&quot;'}[c]))} <span style="opacity:0.7;font-size:10px;">✕</span>`;
+  span.onclick = function(){ this.remove(); _bcAiAtSync(); };
+  host.appendChild(span);
+  _bcAiAtSync();
+}
+
+function _bcAiAtSync(){
+  const host = document.getElementById('aiAt_pills');
+  const hidden = document.getElementById('aiVal_desired_property_types');
+  if(!host || !hidden) return;
+  const chips = Array.from(host.querySelectorAll('[data-ai-at-chip]')).map(s => s.getAttribute('data-ai-at-chip')).filter(Boolean);
+  hidden.value = chips.join(', ');
 }
 
 // v209: chip + typeahead editor for fields with a large canonical list

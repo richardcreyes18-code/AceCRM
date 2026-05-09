@@ -206,6 +206,14 @@ export function _bcAssetTaxonomyAdmin(){
           </div>
           <div style="display:flex;gap:6px;align-items:center;">
             <span style="font-size:11px;color:#64748b;">${subs.length} subtype${subs.length===1?'':'s'}</span>
+            ${(() => {
+              // v288: per-category custom-fields editor entry point.
+              // Reads the count via window._bcFieldsGet to give a hint
+              // of how many extra fields are defined for this category.
+              const fieldCount = (typeof window._bcFieldsGet === 'function')
+                ? (window._bcFieldsGet(cat) || []).length : 0;
+              return `<button data-action="edit-fields" data-cat-name="${esc(cat)}" onclick="event.stopPropagation()" title="Edit custom requirements fields for ${esc(cat)}" style="background:#ede9fe;border:1px solid #c4b5fd;color:#5b21b6;cursor:pointer;font-size:11px;padding:3px 10px;border-radius:4px;font-weight:600;">📋 Fields${fieldCount?` (${fieldCount})`:''}</button>`;
+            })()}
             <button data-action="del-cat" data-cat="${catIdx}" onclick="event.stopPropagation()" title="Delete category" style="background:transparent;border:1px solid #fecaca;color:#b91c1c;cursor:pointer;font-size:11px;padding:3px 8px;border-radius:4px;">Delete</button>
           </div>
         </summary>
@@ -288,6 +296,19 @@ export function _bcAssetTaxonomyAdmin(){
         taxonomy[v] = [];
         dirty = true;
         render();
+        return;
+      }
+      if(action === 'edit-fields'){
+        // v288: open the per-category fields admin modal. On close
+        // (Save or Cancel) re-render the parent so the field-count
+        // badge reflects the latest state.
+        const cat = t.getAttribute('data-cat-name');
+        if(!cat) return;
+        if(typeof window._bcFieldsAdminForCategory === 'function'){
+          window._bcFieldsAdminForCategory(cat, () => render());
+        } else {
+          alert('Fields admin not loaded yet.');
+        }
         return;
       }
       if(action === 'del-cat'){

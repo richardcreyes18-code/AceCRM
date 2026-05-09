@@ -2261,6 +2261,9 @@ async function syncData(){
       // line ~7193 if the row doesn't exist or the fetch fails.
       try{ if(typeof window._bcTaxonomyLoad === 'function') await window._bcTaxonomyLoad(); }
       catch(e){ console.warn('bc-taxonomy load failed:', e.message); }
+      // v288: load runtime BC per-category extra-field definitions (Phase 2).
+      try{ if(typeof window._bcFieldsLoad === 'function') await window._bcFieldsLoad(); }
+      catch(e){ console.warn('bc-fields load failed:', e.message); }
       // v102.39 / v246: warm the Workbench contact-id cache so contact-add
       // buttons can render in their already-added state without a DB call.
       // Body lives in js/workbench/workbench.js as _wbWarmContactCache().
@@ -29558,7 +29561,13 @@ async function showBuyerCriteriaPage(){
           fields['Import Source'] = row.import_source || '';
           fields['Buyer']         = row.contact_id ? [row.contact_id] : [];
           fields['_contactId']    = row.contact_id;
-          records.push({ id: row.id, fields });
+          // v288: preserve raw extra_fields JSONB so the per-category
+          // extras renderer can read values directly.
+          records.push({
+            id: row.id,
+            fields,
+            extra_fields: (row.extra_fields && typeof row.extra_fields === 'object') ? row.extra_fields : {},
+          });
         });
         if(rows.length < batchSize) break;
         from += batchSize;
@@ -30239,7 +30248,13 @@ async function bcOpenExpanded(recordId){
           fields['Import Source']  = row.import_source || '';
           fields['Buyer']          = row.contact_id ? [row.contact_id] : [];
           fields['_contactId']     = row.contact_id;
-          return { id: row.id, fields };
+          // v288: preserve the raw extra_fields JSONB on the wrapper so
+          // the per-category extras renderer can read values directly.
+          return {
+            id: row.id,
+            fields,
+            extra_fields: (row.extra_fields && typeof row.extra_fields === 'object') ? row.extra_fields : {},
+          };
         });
         // Load contacts in batches of 40 to avoid URL length limits.
         // fub_contact_id is included so the Review & Apply panel can pull call notes.
@@ -30262,6 +30277,10 @@ async function bcOpenExpanded(recordId){
   const record  = allBuyerCriteria.find(r=>r.id===recordId);
   if(!record){ alert('Buyer not found — try refreshing.'); return; }
   const f       = record.fields;
+  // v288: stash on window so bcExpandedAssetSection (and any other
+  // helper that needs the raw record, e.g. for extra_fields) can read
+  // it without threading the param through every call.
+  window._bcCurrentRecord = record;
   const contactId = (f['Buyer']||[])[0];
   const contact = contactId ? allBuyerContacts[contactId] : null;
   const buyerName = contact?.Name || f['Name']?.split(' - ')[0] || '—';
@@ -31090,11 +31109,21 @@ function bcExpandedAssetSection(asset, f){
   // of the chip text ("industrial: warehouse" → "industrial_warehouse")
   // which never matched the canonical key ("warehouse").
   const sectionKey = _bcAssetSectionKey(assetClean);
+  // v288: append runtime-defined extra fields for the chip's bare
+  // category (e.g. "Multifamily" for "Multifamily: Garden"). Renders
+  // after the hardcoded fields. Empty string when no extras defined.
+  let extraHtml = '';
+  if(typeof window._bcRenderExtraFields === 'function'){
+    const bareCategory = String(assetClean || '').split(':')[0].trim();
+    try { extraHtml = window._bcRenderExtraFields(bareCategory, _bcCurrentRecord || {}) || ''; }
+    catch(e){ console.warn('[bc-fields] render extras failed:', e.message); }
+  }
   return `
     <div class="info-box" data-bc-asset-section="${sectionKey}">
       <div class="info-box-title">${getBcTypeBadge(assetClean)} Requirements</div>
       ${fields}
-    </div>`;
+    </div>
+    ${extraHtml}`;
 }
 
 // v235: section-key for an asset chip text. Maps every chip variant
@@ -33090,7 +33119,25 @@ window._bcAiAutoFillApply = async function(bcId, btn){
     }
   }
   const acceptedNa = [...acceptedNaCols];
-  const patch = { ...valuePatch };
+  // v288: split valuePatch — extras (proposed_changes[col]._extra=true)
+  // route to ace_buyer_criteria.extra_fields JSONB instead of as native
+  // columns. We MERGE into the existing extra_fields rather than
+  // replacing so values for fields not in this run survive.
+  const nativeValuePatch = {};
+  const extraValuePatch  = {};
+  for(const [col, v] of Object.entries(valuePatch)){
+    const propEntry = proposed[col];
+    if(propEntry && propEntry._extra){
+      extraValuePatch[col] = v;
+    } else {
+      nativeValuePatch[col] = v;
+    }
+  }
+  const patch = { ...nativeValuePatch };
+  if(Object.keys(extraValuePatch).length){
+    const existingExtras = (window._bcCurrentRecord && window._bcCurrentRecord.extra_fields) || {};
+    patch.extra_fields = { ...existingExtras, ...extraValuePatch };
+  }
 
   // BC has no na_fields column — N/A flags live in field_status JSONB.
   // Merge accepted N/A cols into field_status as 'no_preference'.
@@ -33385,6 +33432,23 @@ async function bcSaveExpanded(recordId, isAuto=false){
   try{
     if(isSupabase()){
       const sbData = _atToSb(fields, SB_BC_MAP);
+      // v288: collect runtime-defined extra-field values from the
+      // expanded view and merge into the extra_fields JSONB. We MERGE
+      // (not replace) so values for chips not currently in the form
+      // (e.g. a category chip removed earlier in this session) aren't
+      // wiped from the DB.
+      if(typeof window._bcCollectExtraFields === 'function'){
+        try {
+          const extras = window._bcCollectExtraFields() || {};
+          if(extras && Object.keys(extras).length){
+            const cur = (window._bcCurrentRecord && window._bcCurrentRecord.extra_fields) || {};
+            const merged = Object.assign({}, cur, extras);
+            sbData.extra_fields = merged;
+            // Update the in-memory record so subsequent renders see the new values.
+            if(window._bcCurrentRecord) window._bcCurrentRecord.extra_fields = merged;
+          }
+        } catch(e){ console.warn('[bc-fields] collect-extras failed:', e.message); }
+      }
       await _sbPatch(SB_TABLES.buyerCriteria, recordId, sbData);
     } else {
       const res = await fetch(`https://api.airtable.com/v0/${cfg.base}/tbltwNvbX5T3t9wRE/${recordId}`,{

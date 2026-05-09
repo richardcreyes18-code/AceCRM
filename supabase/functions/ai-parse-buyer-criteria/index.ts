@@ -63,7 +63,7 @@ const AUTO_ROUTING = {
   note_count_threshold:    6,
 }
 const MAX_TOKENS = 4096
-const PROMPT_VERSION = 'bc-v1.8'
+const PROMPT_VERSION = 'bc-v1.9'
 
 // Maps a FIELD_SPEC.group to the asset-class label(s) (from ASSET_TYPE_VOCAB)
 // that the field is scoped to. If the buyer's proposed/current
@@ -1427,15 +1427,38 @@ function buildUserMessage(args: {
   onlyFillEmpty: boolean
   guardrails: string[]
   additional_text: string
+  // v288: optional runtime extra-field defs + the BC's existing
+  // extra_fields JSONB. When provided, extras are listed alongside the
+  // hardcoded fields in the user message so the AI can propose them.
+  extraFields?: Array<FieldDef & { _category?: string }>
+  extraValues?: Record<string, unknown>
 }): string {
   const { contactName, contactTags, context, currentValues, currentNa, onlyFillEmpty, guardrails, additional_text } = args
+  const extraFields = args.extraFields || []
+  const extraValues = args.extraValues || {}
   const fieldList = buildEligibleFieldsList({ currentValues, currentNa, onlyFillEmpty })
+  const extraFieldList = extraFields.length
+    ? extraFields.map(f => {
+        const opts = f.options && f.options.length
+          ? `\n      ALLOWED VALUES (use ONLY these${f.type === 'multienum' ? ', multiple allowed' : ''}): ${f.options.join(' | ')}`
+          : ''
+        return `  - "${f.col}" [${f.type}, group=${f.group}, EXTRA / category=${f._category || ''}]: ${f.hint || '(no hint provided)'}${opts}`
+      }).join('\n')
+    : ''
+  const extraCurrentLines = extraFields.length
+    ? extraFields.map(f => {
+        const cur = extraValues[f.col]
+        if (isEmptyValue(cur)) return `  - ${f.col}: (empty) [extra]`
+        return `  - ${f.col}: ${JSON.stringify(cur)} [extra]`
+      }).join('\n')
+    : ''
   const currentLines = FIELD_SPEC
     .map(f => {
       const cur = currentValues[f.col]
       if (isEmptyValue(cur)) return `  - ${f.col}: (empty)`
       return `  - ${f.col}: ${JSON.stringify(cur)}`
     })
+    .concat(extraCurrentLines ? [extraCurrentLines] : [])
     .join('\n')
   const naContext = currentNa.length
     ? `FIELDS ALREADY MARKED N/A (do NOT propose values OR re-suggest as N/A): ${currentNa.join(', ')}`
@@ -1462,6 +1485,11 @@ function buildUserMessage(args: {
     '',
     'ELIGIBLE FIELDS YOU MAY FILL:',
     fieldList || '  (none — all fields are already filled or marked N/A)',
+    // v288: extras are runtime-defined per-category fields. The model
+    // proposes values for them just like native fields. Marker
+    // [EXTRA / category=X] in the descriptor tells you which category
+    // they belong to so you can apply asset-class scope rules.
+    extraFieldList ? `\nEXTRA FIELDS (runtime-defined per category — propose values for these too):\n${extraFieldList}` : '',
     guardrailsBlock,
     additional_text ? `\nUSER ADDITIONAL CONTEXT:\n${additional_text}` : '',
     '',
@@ -1704,22 +1732,81 @@ Deno.serve(async (req: Request) => {
       }
     } catch (_) { /* fall back to hardcoded */ }
 
+    // v288: Phase-2 runtime field definitions. ace_ai_settings row
+    // 'bc_field_definitions' holds per-category extra fields whose
+    // values live in ace_buyer_criteria.extra_fields (JSONB). Append
+    // to FIELD_SPEC at request time so the AI proposes values for
+    // them just like native fields. Marker `_extra=true` + `_category`
+    // tells the apply path to route values through extra_fields.
+    type ExtraFieldDef = FieldDef & { _extra: true; _category: string }
+    const extraFieldDefs: ExtraFieldDef[] = []
+    try {
+      const fieldRows = (await fetchSb(
+        `${SUPABASE_URL}/rest/v1/ace_ai_settings?key=eq.bc_field_definitions&select=value&limit=1`,
+        SERVICE_KEY,
+      )) as Array<{ value?: unknown }>
+      const raw = fieldRows?.[0]?.value
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        for (const [cat, listUnknown] of Object.entries(raw as Record<string, unknown>)) {
+          if (!Array.isArray(listUnknown)) continue
+          for (const fUnknown of listUnknown) {
+            const f = fUnknown as Record<string, unknown>
+            const col   = String(f?.col   || '').trim()
+            const label = String(f?.label || '').trim()
+            const type  = String(f?.type  || 'text') as FieldType
+            if (!col || !label) continue
+            if (!['text', 'number', 'boolean', 'enum', 'multienum', 'csv'].includes(type)) continue
+            const hint  = String(f?.hint  || '')
+            const opts  = Array.isArray(f?.options)
+              ? (f.options as unknown[]).map(s => String(s || '')).filter(Boolean)
+              : undefined
+            extraFieldDefs.push({
+              col,
+              label,
+              type,
+              group: `Custom: ${cat}`,
+              hint,
+              options: opts,
+              _extra: true,
+              _category: String(cat || ''),
+            })
+          }
+        }
+      }
+    } catch (_) { /* extras absent — continue without them */ }
+
+    // Materialize the FIELD_SPEC to use for THIS request: native + extras.
+    // Native fields look up `before` from bc[col]; extras look up from
+    // bc.extra_fields[col].
+    const ALL_FIELDS_FOR_REQ: Array<FieldDef & { _extra?: boolean; _category?: string }> =
+      [...FIELD_SPEC, ...extraFieldDefs]
+    const ALL_FIELD_COLS_FOR_REQ = new Set(ALL_FIELDS_FOR_REQ.map(f => f.col))
+    const extraColsSet = new Set(extraFieldDefs.map(f => f.col))
+    const bcExtras: Record<string, unknown> =
+      (bc.extra_fields && typeof bc.extra_fields === 'object' && !Array.isArray(bc.extra_fields))
+        ? (bc.extra_fields as Record<string, unknown>)
+        : {}
+    const beforeOf = (col: string): unknown =>
+      extraColsSet.has(col) ? (bcExtras[col] ?? null) : (bc[col] ?? null)
+
     const buildAllFields = (proposedMap: Record<string, { proposed: unknown; before: unknown; explanation?: string; cite?: string; confidence?: string }>,
                              naProps: Array<{ col: string; reason: string }>) =>
-      FIELD_SPEC.map(f => ({
+      ALL_FIELDS_FOR_REQ.map(f => ({
         col: f.col,
         label: f.label,
         group: f.group,
         type: f.type,
         options: f.options || null,
         hint: f.hint,
-        before: bc[f.col] ?? null,
+        before: beforeOf(f.col),
         proposed: proposedMap[f.col]?.proposed ?? null,
         explanation: proposedMap[f.col]?.explanation ?? null,
         cite: proposedMap[f.col]?.cite ?? null,
         confidence: proposedMap[f.col]?.confidence ?? null,
         na: currentNa.includes(f.col),
         proposed_na: naProps.find(p => p.col === f.col)?.reason || null,
+        _extra: f._extra || false,
+        _category: f._category || null,
       }))
 
     if (!contextText.trim() && effective_tags.length === 0) {
@@ -1756,6 +1843,9 @@ Deno.serve(async (req: Request) => {
       onlyFillEmpty: only_fill_empty,
       guardrails: userGuardrails,
       additional_text,
+      // v288: pass runtime extras + their current values so the AI can propose them.
+      extraFields:  extraFieldDefs,
+      extraValues:  bcExtras,
     })
 
     // v287: prepend an AUTHORITATIVE VOCAB block when the runtime
@@ -1864,6 +1954,8 @@ Deno.serve(async (req: Request) => {
       explanation?: string
       cite?: string
       confidence?: string
+      _extra?: boolean
+      _category?: string
     }> = {}
     // v271: server-side guardrail counters — surfaced in diagnostic so the
     // user can see what the safety nets dropped vs what the model proposed.
@@ -1882,9 +1974,11 @@ Deno.serve(async (req: Request) => {
       cite?: string
       confidence?: string
       explanation?: string
+      _extra?: boolean
+      _category?: string
     }> = {}
 
-    for (const f of FIELD_SPEC) {
+    for (const f of ALL_FIELDS_FOR_REQ) {
       if (currentNa.includes(f.col)) continue
       if (!(f.col in fieldsRaw)) continue
       let propV = coerce(fieldsRaw[f.col], f.type)
@@ -1901,7 +1995,7 @@ Deno.serve(async (req: Request) => {
         if (!matched) continue
         propV = matched
       }
-      const before = bc[f.col] ?? null
+      const before = beforeOf(f.col)
       const expl = typeof explanationsRaw[f.col] === 'string' ? explanationsRaw[f.col].slice(0, 280) : undefined
       const cite = typeof citationsRaw[f.col] === 'string' ? citationsRaw[f.col].slice(0, 280) : undefined
       const confRaw = typeof confidenceRaw[f.col] === 'string' ? confidenceRaw[f.col].toLowerCase().trim() : ''
@@ -1915,6 +2009,7 @@ Deno.serve(async (req: Request) => {
             cite,
             ...(confidence ? { confidence } : {}),
             ...(expl ? { explanation: expl } : {}),
+            ...(f._extra ? { _extra: true, _category: f._category || '' } : {}),
           }
         }
         continue
@@ -1936,6 +2031,7 @@ Deno.serve(async (req: Request) => {
         ...(expl ? { explanation: expl } : {}),
         cite,
         ...(confidence ? { confidence } : {}),
+        ...(f._extra ? { _extra: true, _category: f._category || '' } : {}),
       }
     }
 
@@ -2021,12 +2117,12 @@ Deno.serve(async (req: Request) => {
     const na_proposals: Array<{ col: string; label: string; explanation?: string }> = []
     for (const item of naRaw) {
       const col = (item as { field?: string }).field
-      if (!col || !FIELD_SPEC_COLS.has(col)) continue
+      if (!col || !ALL_FIELD_COLS_FOR_REQ.has(col)) continue
       if (currentNa.includes(col)) continue
       if (proposed_changes[col]) continue
       if (seenNa.has(col)) continue
       seenNa.add(col)
-      const def = FIELD_SPEC.find(f => f.col === col)!
+      const def = ALL_FIELDS_FOR_REQ.find(f => f.col === col)!
       const reason = String((item as { reason?: string }).reason || '').slice(0, 240)
       na_proposals.push({ col, label: def.label, ...(reason ? { explanation: reason } : {}) })
     }
@@ -2035,10 +2131,10 @@ Deno.serve(async (req: Request) => {
     const seenUnc = new Set<string>()
     for (const item of uncertainRaw) {
       const col = (item as { field?: string }).field
-      if (!col || (col !== '*' && !FIELD_SPEC_COLS.has(col))) continue
+      if (!col || (col !== '*' && !ALL_FIELD_COLS_FOR_REQ.has(col))) continue
       if (seenUnc.has(col)) continue
       seenUnc.add(col)
-      const def = col === '*' ? null : FIELD_SPEC.find(f => f.col === col)!
+      const def = col === '*' ? null : ALL_FIELDS_FOR_REQ.find(f => f.col === col)!
       uncertain_fields.push({
         col,
         label: def?.label || '(all)',
@@ -2094,6 +2190,11 @@ Deno.serve(async (req: Request) => {
           source:               taxonomyRuntimeOverride ? 'ace_ai_settings.bc_taxonomy' : 'hardcoded',
           category_count:       activeVocab.length,
           subtype_total:        Object.values(activeSubtypes).reduce((n, arr) => n + (arr?.length || 0), 0),
+        },
+        // v288: how many runtime extra fields were merged into FIELD_SPEC for this run.
+        extra_fields: {
+          count:        extraFieldDefs.length,
+          categories:   Array.from(new Set(extraFieldDefs.map(f => f._category))).filter(Boolean),
         },
       },
     })

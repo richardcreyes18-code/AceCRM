@@ -40,6 +40,10 @@ for (const [name, value] of Object.entries(appLists)) { window[name] = value; }
 import * as backmarket from './buyer-search/backmarket.js';
 for (const [name, value] of Object.entries(backmarket)) { window[name] = value; }
 
+// v265: FUB integration — 49 exports attached to window.
+import * as fub from './fub/fub.js';
+for (const [name, value] of Object.entries(fub)) { window[name] = value; }
+
 import {
   _stripCommas, _parseNum, _fmtNum, _phoneDigits, fmtMoney, fmtPct,
 } from './utils/format.js';

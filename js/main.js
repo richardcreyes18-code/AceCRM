@@ -44,16 +44,18 @@ import { _showToast, showSaveConfirm } from './core/toast.js';
 // to window so inline onclick handlers in rendered HTML resolve. Modules are
 // imported in topological order so any cross-module references (none today)
 // resolve at execution time.
-import * as workbench from './workbench/workbench.js';
-import * as portfolios from './portfolios/portfolios.js';
-import * as dashboard from './dashboard/dashboard.js';
-import * as geocoding from './geocoding/google.js';
-import * as richText from './widgets/rich-text.js';
-for (const [name, value] of Object.entries(workbench))  { window[name] = value; }
-for (const [name, value] of Object.entries(portfolios)) { window[name] = value; }
-for (const [name, value] of Object.entries(dashboard))  { window[name] = value; }
-for (const [name, value] of Object.entries(geocoding))  { window[name] = value; }
-for (const [name, value] of Object.entries(richText))   { window[name] = value; }
+import * as workbench    from './workbench/workbench.js';
+import * as portfolios   from './portfolios/portfolios.js';
+import * as dashboard    from './dashboard/dashboard.js';
+import * as geocoding    from './geocoding/google.js';
+import * as richText     from './widgets/rich-text.js';
+import * as assetCleanup from './asset-cleanup/asset-cleanup.js';
+for (const [name, value] of Object.entries(workbench))    { window[name] = value; }
+for (const [name, value] of Object.entries(portfolios))   { window[name] = value; }
+for (const [name, value] of Object.entries(dashboard))    { window[name] = value; }
+for (const [name, value] of Object.entries(geocoding))    { window[name] = value; }
+for (const [name, value] of Object.entries(richText))     { window[name] = value; }
+for (const [name, value] of Object.entries(assetCleanup)) { window[name] = value; }
 
 // Sanity log so we can confirm in DevTools that the module graph loaded.
 // Counts confirm the schema data extraction is byte-complete.
@@ -85,4 +87,5 @@ console.log('[ace-modules] schemas + utils + core loaded', {
   dashboard: Object.keys(dashboard).length,
   geocoding: Object.keys(geocoding).length,
   richText: Object.keys(richText).length,
+  assetCleanup: Object.keys(assetCleanup).length,
 });

@@ -1221,6 +1221,115 @@
   font-size: 12.5px;
 }
 
+/* ─────────────────────────────────────────────────────────────
+   Financial tab table re-skins (v303).
+   The inline <style> block in renderFinancialTab defines fin-*
+   tables with a blue gradient header and a beige input section.
+   Drop the gradient + beige; surface to design-system surface-2
+   eyebrow caps and clean borders. !important required because
+   the inline style block is defined inside the render function.
+   ─────────────────────────────────────────────────────────── */
+
+/* Results / Metrics / Cash Flow / NOI tables */
+.tab-content .fin-results-table {
+  font-size: 12px !important;
+}
+.tab-content .fin-results-table td {
+  border-bottom: 1px solid var(--border) !important;
+  padding: 7px 10px !important;
+  font-size: 12px !important;
+}
+.tab-content .fin-results-table .row-label {
+  color: var(--fg-2) !important;
+  font-weight: 700 !important;
+  font-size: 10px !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.06em !important;
+}
+
+.tab-content .fin-metrics-table th,
+.tab-content .fin-cf-table th {
+  background: var(--surface-2) !important;
+  background-image: none !important;
+  color: var(--fg-2) !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.08em !important;
+  border: 1px solid var(--border) !important;
+  padding: 8px 10px !important;
+}
+.tab-content .fin-metrics-table td,
+.tab-content .fin-cf-table td {
+  border: 1px solid var(--border) !important;
+  padding: 8px 10px !important;
+  font-size: 12px !important;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.tab-content .fin-metrics-table tr:nth-child(even) td,
+.tab-content .fin-cf-table tr:nth-child(even) td {
+  background: var(--surface-2) !important;
+}
+.tab-content .fin-metrics-table .metric-label,
+.tab-content .fin-cf-table .cf-label {
+  color: var(--fg-1) !important;
+  font-weight: 600 !important;
+  font-family: var(--font-sans);
+  font-variant-numeric: normal;
+}
+
+/* Input section — drop the beige */
+.tab-content .fin-input-section {
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius) !important;
+  padding: 14px 16px !important;
+}
+.tab-content .fin-input-title {
+  color: var(--fg-1) !important;
+  border-bottom: 1px solid var(--border) !important;
+  font-size: 11.5px !important;
+  font-weight: 700 !important;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding-bottom: 6px !important;
+  margin-bottom: 10px !important;
+}
+.tab-content .fin-input-field input {
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-xs) !important;
+  background: var(--surface) !important;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.tab-content .fin-input-field input:focus {
+  outline: none !important;
+  border-color: var(--primary) !important;
+  box-shadow: var(--shadow-focus) !important;
+}
+
+/* OpEx expense rows — soften the heavy 1px solid borders, add a
+   chevron-rotation feel via the existing toggleExpCat anchor. */
+.tab-content .exp-subrow td {
+  background: var(--surface-2) !important;
+  font-size: 11.5px !important;
+}
+.tab-content [id^="exp-icon-"] {
+  display: inline-block;
+  font-family: var(--font-mono);
+  width: 12px;
+  text-align: center;
+  color: var(--fg-3);
+  transition: transform 120ms ease;
+}
+
+/* Tip/help icons (the ?  blue circles in metric rows) */
+.tab-content .fin-tip {
+  background: var(--surface-3);
+  color: var(--fg-3);
+}
+
 /* Section header row (full-width tab headings between sections,
    distinct from .section-hd which is INSIDE .section). */
 .tab-content .section-hdr {

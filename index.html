@@ -4952,25 +4952,24 @@ function _equalizeTextareaGroup(groupName){
 let _finSubTab = 'financial'; // 'financial' | 'offers' | 'tenantmix' | 'comps' | 'quickcalc'
 
 function _finSubTabBarHTML(){
-  // v168.1: same tab-btn underline style as the parent tab row, so the
-  // sub-bar visually attaches to the main bar. Tinted background +
-  // slightly indented so the user can still tell it's a sub-level.
-  // v169: Quick Calc sub-tab — Results Summary + Key Metrics + Cash Flow
-  // & NOI alongside a target-cap / target-PSF / target-PPU offer
-  // calculator.
+  // v303: re-skinned to a clean .btn-group sub-nav. Emoji prefixes
+  // dropped per the redesign brief; active state uses .active
+  // (primary-light bg). Sub-bar is full-width and visually attached
+  // to the parent tab row by sharing surface-2 bg + a hairline.
   const subs = [
-    ['financial', '📊 Financial Analysis'],
-    ['offers',    '💰 Offers'],
-    ['tenantmix', '🏪 Tenant Mix'],
-    ['comps',     '🏘 Comps'],
-    ['quickcalc', '🧮 Quick Calculations'],
+    ['financial', 'Financial Analysis'],
+    ['offers',    'Offers'],
+    ['tenantmix', 'Tenant Mix'],
+    ['comps',     'Comps'],
+    ['quickcalc', 'Quick Calculations'],
   ];
-  return `<div class="tabs-row fin-subtabs" style="border-bottom:1px solid #e2e8f0;margin:-18px -18px 16px;padding:0 18px;background:#f8fafc;">
-    ${subs.map(([k, label]) => {
-      const active = _finSubTab === k;
-      const cls = 'tab-btn' + (active ? ' active' : '');
-      return `<button class="${cls}" onclick="switchTab('${k}', this)">${label}</button>`;
-    }).join('')}
+  return `<div class="fin-subtabs" style="margin:-14px -18px 14px;padding:8px 18px;background:var(--surface-2);border-bottom:1px solid var(--border);">
+    <div class="btn-group">
+      ${subs.map(([k, label]) => {
+        const active = _finSubTab === k ? ' active' : '';
+        return `<button class="btn sm${active}" onclick="switchTab('${k}', this)">${label}</button>`;
+      }).join('')}
+    </div>
   </div>`;
 }
 
@@ -10295,7 +10294,7 @@ function renderFinancialTab(d){
         <tr style="background:#f8f8f8;">
           <td style="padding:3px 6px;border:1px solid #ccc;">
             <a onclick="toggleExpCat('${cat.id}')" style="color:#2060b0;font-weight:bold;cursor:pointer;text-decoration:none;">
-              ${cat.label} <span id="exp-icon-${cat.id}">${isExpanded?'−':'+'}</span>
+              ${cat.label} <span id="exp-icon-${cat.id}">${isExpanded?'▾':'▸'}</span>
             </a>
             ${tip('exp_'+cat.id, cat.tip)}
           </td>
@@ -48604,7 +48603,7 @@ function toggleExpCat(catId){
   const icon = document.getElementById('exp-icon-'+catId);
   const isHidden = rows.length>0 && rows[0].style.display==='none';
   rows.forEach(r => r.style.display = isHidden?'table-row':'none');
-  if(icon) icon.textContent = isHidden?'−':'+';
+  if(icon) icon.textContent = isHidden?'▾':'▸';
   // v102.6: persist expand/collapse state to the small fin_ui_ localStorage
   // key. This is UI preference only (not deal data), so localStorage is fine.
   if(currentDeal){
@@ -48618,12 +48617,12 @@ function toggleExpCat(catId){
 
 function showAllExpCats(){
   document.querySelectorAll('[class^="exp-subrow"]').forEach(r=>r.style.display='table-row');
-  document.querySelectorAll('[id^="exp-icon-"]').forEach(i=>i.textContent='−');
+  document.querySelectorAll('[id^="exp-icon-"]').forEach(i=>i.textContent='▾');
 }
 
 function hideAllExpCats(){
   document.querySelectorAll('[class^="exp-subrow"]').forEach(r=>r.style.display='none');
-  document.querySelectorAll('[id^="exp-icon-"]').forEach(i=>i.textContent='+');
+  document.querySelectorAll('[id^="exp-icon-"]').forEach(i=>i.textContent='▸');
 }
 
 function toggleMortgage(){
@@ -48631,7 +48630,7 @@ function toggleMortgage(){
   const icon = document.getElementById('mortgageIcon');
   const isHidden = rows.length>0 && rows[0].style.display==='none';
   rows.forEach(r => r.style.display = isHidden?'table-row':'none');
-  if(icon) icon.textContent = isHidden?'−':'+';
+  if(icon) icon.textContent = isHidden?'▾':'▸';
   // v102.6: persist mortgage expand/collapse state to the small fin_ui_ key
   // (UI preference only, not deal data).
   if(currentDeal){

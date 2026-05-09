@@ -2272,14 +2272,17 @@ async function testSupabaseWrite(){
 // ─── BACKEND CHECK ─────────────────────────────────────────────
 function isSupabase() { return true; }
 
-let allDeals = [];
+// v249: `var` (not `let`) so these caches auto-attach to window. The
+// portfolios + workbench ES modules read window.allDeals / window.allPortfolios;
+// `let` at script scope is in the global declarative env and not on window.
+var allDeals = [];
 // Full unfiltered snapshot — populated by syncData() when no agent filter is
 // applied (admin / 'all' view). setViewMode() uses this to switch views
 // instantly without hitting the database again.
 let _allDealsSnapshot = [];
 // v102.28: portfolios cache. Loaded once at startup in syncData(), refreshed
 // via _loadAllPortfolios() after create/update/delete actions.
-let allPortfolios = [];
+var allPortfolios = [];
 let currentDeal = null;
 let currentTab = 'property';
 let calMonth = new Date();
@@ -31647,9 +31650,12 @@ function createBrochure(){
 }
 
 // ─── BUYER CRITERIA PAGE ──────────────────────────────────────
-let allBuyerCriteria = [];
+// v249: `var` (not `let`) so these caches auto-attach to window — the
+// portfolios + workbench ES modules read window.allBuyerCriteria /
+// window.allBuyerContacts. Same reason as allDeals / allPortfolios above.
+var allBuyerCriteria = [];
 let _bcLastLoadMs = 0;  // v63 perf cache: when allBuyerCriteria was last loaded from Supabase
-let allBuyerContacts = {};  // contactId → contact fields cache
+var allBuyerContacts = {};  // contactId → contact fields cache
 
 let _bcSort = {col:'date', dir:'desc'}; // default: newest first
 let _bcVipFilter = false; // show only VIP buyers

@@ -25,27 +25,37 @@ const cors: Record<string, string> = {
 
 const MODEL = 'claude-sonnet-4-6'
 const MAX_TOKENS = 4096
-const PROMPT_VERSION = 'bc-v1.1'
+const PROMPT_VERSION = 'bc-v1.2'
 
 // Maps a FIELD_SPEC.group to the asset-class label(s) (from ASSET_TYPE_VOCAB)
 // that the field is scoped to. If the buyer's proposed/current
-// desired_property_types doesn't include at least one of these, the field is
-// out of scope and dropped server-side. Groups not in this map are NEVER
-// asset-gated (Asset Types / Pricing / Location / Misc / Development).
+// desired_property_types doesn't include at least one of these (matched by
+// category, ignoring any ": Subtype" suffix), the field is out of scope and
+// dropped server-side. Groups not in this map are NEVER asset-gated
+// (Asset Types / Pricing / Location / Misc / Development).
+//
+// v272: synced to the new vocab labels:
+//   - "Warehouse / Industrial" → "Industrial"
+//   - "Retail Strip Mall"      → "Retail"
+//   - "Hotel"                  → "Hotel & Motel"
+//   - "Healthcare"             → "Health Care"
+//   - "Self Storage" group     → "Industrial" (Self Storage is now an
+//     Industrial subtype; chips like "Industrial: Self Storage" still
+//     activate the Self Storage field group via category match)
+//   - "Mobile Home Park" group → "Residential Income" (MHP is a subtype)
 const GROUP_REQUIRED_ASSET: Record<string, string[]> = {
-  'Multifamily':       ['Multifamily'],
-  'Warehouse':         ['Warehouse / Industrial'],
+  'Multifamily':       ['Multifamily', 'Residential Income'],
+  'Warehouse':         ['Industrial'],
   'Office':            ['Office'],
-  // Retail-grouped fields apply to either retail variant.
-  'Retail':            ['Retail Strip Mall', 'Shopping Center'],
-  'Shopping Center':   ['Shopping Center'],
+  'Retail':            ['Retail', 'Shopping Center'],
+  'Shopping Center':   ['Shopping Center', 'Retail'],
   'Mixed Use':         ['Mixed Use'],
-  'Land':              ['Land'],
+  'Land':              ['Land', 'Agricultural'],
   'Automotive':        ['Automotive'],
-  'Mobile Home Park':  ['Mobile Home Park'],
-  'Self Storage':      ['Self Storage'],
-  'Hotel':             ['Hotel'],
-  'Healthcare':        ['Healthcare'],
+  'Mobile Home Park':  ['Residential Income'],
+  'Self Storage':      ['Industrial'],
+  'Hotel':             ['Hotel & Motel'],
+  'Healthcare':        ['Health Care', 'Senior Housing'],
   'Special Purpose':   ['Special Purpose'],
 }
 
@@ -55,11 +65,40 @@ interface FieldDef { col: string; label: string; type: FieldType; group: string;
 // v207: enum/multienum vocab — the AI must pick from these. Server-side
 // coerce() drops any out-of-vocab values so the apply path can rely on
 // canonical labels matching the BC edit form's pickers.
+// v272: vocab synced to the Buyer Criteria blank form's category list
+// (index.html ASSET_SUBTYPES, line ~7193). The review modal renders these
+// as chips; the form's chip-picker accepts any of them as bare categories
+// or as "Category: Subtype" combinations. Keep this list byte-identical
+// with the form keys so values round-trip cleanly through the BC apply
+// path.
 const ASSET_TYPE_VOCAB = [
-  'Multifamily', 'Warehouse / Industrial', 'Office', 'Retail Strip Mall',
-  'Shopping Center', 'Mixed Use', 'Land', 'Automotive', 'Mobile Home Park',
-  'Self Storage', 'Hotel', 'Healthcare', 'Special Purpose',
+  'Multifamily', 'Office', 'Industrial', 'Retail', 'Shopping Center',
+  'Mixed Use', 'Land', 'Agricultural', 'Hotel & Motel', 'Senior Housing',
+  'Health Care', 'Sport & Entertainment', 'Special Purpose', 'Automotive',
+  'Residential Income',
 ]
+
+// v272: parallel to ASSET_SUBTYPES in index.html line ~7193. Used to (a)
+// validate "Category: Subtype" chip forms and (b) hint subtype labels in
+// the prompt so the AI can produce specific chips like "Retail: Grocery
+// Anchored" or "Industrial: Self Storage" when notes warrant it.
+const ASSET_SUBTYPES: Record<string, string[]> = {
+  'Multifamily':           ['Garden/Low Rise','Mid Rise','High Rise','Duplex','Triplex','Fourplex','Townhome','Student Housing','Military Housing','Affordable Housing','Mixed Income'],
+  'Office':                ['CBD','Suburban','Medical','Creative/Flex','Government','R&D','Owner/User'],
+  'Industrial':            ['Warehouse','Distribution','Manufacturing','Flex','Cold Storage','Data Center','Truck Terminal','Self Storage','R&D','Showroom'],
+  'Retail':                ['Strip Mall','Power Center','Neighborhood Center','Community Center','Regional Mall','Single Tenant','Restaurant','Auto Dealership','Drug Store','Bank','Value Add Strip','NNN Retail','Grocery Anchored'],
+  'Shopping Center':       ['Strip Center','Neighborhood Center','Community Center','Power Center','Lifestyle Center','Regional Mall','Super Regional Mall','Outlet Center'],
+  'Mixed Use':             ['Retail / Residential (Ground Floor Retail + Upper Residential)','Office / Residential','Retail / Office','Live-Work','Mixed Commercial','Ground Floor Retail + Apartments'],
+  'Land':                  ['Commercial','Residential','Industrial','Agricultural','Mixed Use','Infill','Pad Site','Development'],
+  'Agricultural':          ['Row Crops','Orchards/Vineyards','Livestock','Dairy','Poultry','Timberland','Irrigation'],
+  'Hotel & Motel':         ['Full Service','Select Service','Extended Stay','Budget/Economy','Boutique','Resort','Motel','Hostel'],
+  'Senior Housing':        ['Independent Living','Assisted Living','Memory Care','Skilled Nursing','CCRC','Active Adult'],
+  'Health Care':           ['Medical Office','Urgent Care','Surgery Center','Hospital','Rehabilitation','Behavioral Health','Lab/Life Science'],
+  'Sport & Entertainment': ['Arena/Stadium','Movie Theater','Bowling','Golf Course','Fitness/Gym','Marina','Event Venue','Amusement'],
+  'Special Purpose':       ['Car Wash','Gas Station','Parking Lot/Garage','Cemetery','Church/Religious','School','Community Center','Government','Funeral Home'],
+  'Automotive':            ['Auto Body Shop','Auto Repair / Mechanic','Auto Dealership (New)','Auto Dealership (Used)','Auto Parts Store','Tire Shop','Oil Change / Lube','Towing Facility','Auto Auction','Car Wash'],
+  'Residential Income':    ['Single Family Rental','Duplex','Triplex','Fourplex','Small Multifamily (5-20)','Large Multifamily (21+)','Mobile Home Park'],
+}
 const FINANCING_TYPES = ['Cash', 'Financing', '1031', 'Mix']
 const MF_STYLES = ['Garden', 'Mid-rise', 'High-rise', 'Walk-up', 'Townhome', 'Mixed']
 const MF_CLASSES = ['A', 'B', 'C', 'A/B', 'B/C']
@@ -375,6 +414,24 @@ function validateEnumProposal(value: unknown, type: FieldType, options: string[]
   const parts = str.split(/[,;\n]/).map(s => s.trim()).filter(Boolean)
   const matched: string[] = []
   for (const p of parts) {
+    // v272: support "Category: Subtype" chips (e.g. "Retail: Grocery
+    // Anchored", "Industrial: Self Storage"). Validate the category against
+    // the vocab; if a subtype is present and recognized in ASSET_SUBTYPES,
+    // re-attach it. If the subtype isn't recognized, fall back to the bare
+    // category rather than dropping the chip entirely.
+    const colonIdx = p.indexOf(':')
+    if (colonIdx > 0) {
+      const cat = p.slice(0, colonIdx).trim()
+      const sub = p.slice(colonIdx + 1).trim()
+      const matchedCat = matchOption(cat, options)
+      if (matchedCat) {
+        const subVocab = ASSET_SUBTYPES[matchedCat] || []
+        const matchedSub = sub ? matchOption(sub, subVocab) : null
+        const canonical = matchedSub ? `${matchedCat}: ${matchedSub}` : matchedCat
+        if (!matched.includes(canonical)) matched.push(canonical)
+        continue
+      }
+    }
     const m = matchOption(p, options)
     if (m && !matched.includes(m)) matched.push(m)
   }
@@ -450,10 +507,23 @@ OTHER TAG RULES (apply when buy_intent is "buyer" or "both"):
     matching asset class. Always include the matched type in
     desired_property_types. Set the cite for desired_property_types as
     "tag: asset - <type>" so it's clear the source was a tag.
-    Mapping: "asset - retail" → "Retail Strip Mall" AND/OR "Shopping Center"
-    (use BOTH if notes don't disambiguate; use just "Shopping Center" if
-    notes mention 100k+ SF or grocery-anchored or "centers"). Other
-    mappings are 1:1 with the obvious vocab entry.
+    Tag → vocab category mapping:
+      "asset - multi family"    → "Multifamily"
+      "asset - warehouse"       → "Industrial"  (Industrial covers
+                                  warehouse, distribution, flex,
+                                  manufacturing, cold storage, self
+                                  storage, etc.)
+      "asset - retail"          → "Retail" AND/OR "Shopping Center"
+                                  (use Shopping Center when notes
+                                  mention 100k+ SF or grocery-anchored
+                                  centers; use Retail for smaller
+                                  inline / strip / single-tenant)
+      "asset - office"          → "Office"
+      "asset - land"            → "Land"
+      "asset - hotel"           → "Hotel & Motel"
+      "asset - mobile home"     → "Residential Income" (with subtype
+                                  "Mobile Home Park" if notes warrant)
+      "asset - self storage"    → "Industrial: Self Storage"
   - "1031 Investor" or "1031" → bias financing_type to "1031".
   - "VIP" → set is_vip_buyer = true. Cite: "tag: VIP".
   - "Bounced" → ignore. Email deliverability flag, not a buying signal.
@@ -517,6 +587,71 @@ NOTES-READING RULES:
        (e.g. "North NJ", "South FL"). Otherwise leave blank.
    The free-form location_preferences field stays for the full
    description; the structured fields exist alongside it.
+
+═══════════════════════════════════════════════════════════════════════
+STEP 2.4 — DESIRED PROPERTY TYPES: CATEGORIES + SUBTYPES
+═══════════════════════════════════════════════════════════════════════
+desired_property_types is multi-select against this canonical category
+vocab (matches the BC blank-form picker exactly):
+
+  Multifamily | Office | Industrial | Retail | Shopping Center |
+  Mixed Use | Land | Agricultural | Hotel & Motel | Senior Housing |
+  Health Care | Sport & Entertainment | Special Purpose | Automotive |
+  Residential Income
+
+Each chip can be either a bare category or "Category: Subtype". Use a
+subtype when the notes are specific enough to justify it. Reference
+subtypes:
+  Multifamily:        Garden/Low Rise, Mid Rise, High Rise, Duplex,
+                      Triplex, Fourplex, Townhome, Student Housing,
+                      Military Housing, Affordable Housing, Mixed Income
+  Office:             CBD, Suburban, Medical, Creative/Flex, Government,
+                      R&D, Owner/User
+  Industrial:         Warehouse, Distribution, Manufacturing, Flex,
+                      Cold Storage, Data Center, Truck Terminal,
+                      Self Storage, R&D, Showroom
+  Retail:             Strip Mall, Power Center, Neighborhood Center,
+                      Community Center, Regional Mall, Single Tenant,
+                      Restaurant, Auto Dealership, Drug Store, Bank,
+                      Value Add Strip, NNN Retail, Grocery Anchored
+  Shopping Center:    Strip Center, Neighborhood Center, Community Center,
+                      Power Center, Lifestyle Center, Regional Mall,
+                      Super Regional Mall, Outlet Center
+  Mixed Use:          Retail / Residential, Office / Residential,
+                      Retail / Office, Live-Work, Mixed Commercial,
+                      Ground Floor Retail + Apartments
+  Land:               Commercial, Residential, Industrial, Agricultural,
+                      Mixed Use, Infill, Pad Site, Development
+  Hotel & Motel:      Full Service, Select Service, Extended Stay,
+                      Budget/Economy, Boutique, Resort, Motel, Hostel
+  Senior Housing:     Independent Living, Assisted Living, Memory Care,
+                      Skilled Nursing, CCRC, Active Adult
+  Health Care:        Medical Office, Urgent Care, Surgery Center,
+                      Hospital, Rehabilitation, Behavioral Health,
+                      Lab/Life Science
+  Special Purpose:    Car Wash, Gas Station, Parking Lot/Garage, Cemetery,
+                      Church/Religious, School, Community Center,
+                      Government, Funeral Home
+  Automotive:         Auto Body Shop, Auto Repair / Mechanic,
+                      Auto Dealership (New/Used), Auto Parts Store,
+                      Tire Shop, Oil Change / Lube, Towing Facility,
+                      Auto Auction, Car Wash
+  Residential Income: Single Family Rental, Duplex, Triplex, Fourplex,
+                      Small Multifamily (5-20), Large Multifamily (21+),
+                      Mobile Home Park
+
+Rules:
+  - Always pick from this exact category vocab. The server validates
+    each chip and drops anything not on the list.
+  - Output bare category when notes don't specify subtype detail.
+  - Output "Category: Subtype" when notes name a specific subtype
+    ("grocery-anchored center" → "Shopping Center: Neighborhood Center"
+    OR "Retail: Grocery Anchored", whichever is more accurate; "self
+    storage" → "Industrial: Self Storage"; "garden-style apartments"
+    → "Multifamily: Garden/Low Rise").
+  - You may include MULTIPLE chips when the buyer's interest spans
+    several categories. Comma-separated.
+  - Do NOT invent categories outside the list above.
 
 ═══════════════════════════════════════════════════════════════════════
 STEP 2.5 — ASSET-CLASS SCOPE GATE
@@ -752,7 +887,7 @@ OUTPUT:
   "buy_intent": "buyer",
   "top_level_notes": "Retail buyer (Shopping Center scale, 100k-400k SF, grocery-anchored). Mentions warehouse exploration in passing — included as a secondary asset class but no concrete warehouse buy-box numbers (140k SqFt is ambiguous between retail and warehouse).",
   "fields": {
-    "desired_property_types":  "Shopping Center, Warehouse / Industrial",
+    "desired_property_types":  "Shopping Center: Neighborhood Center, Industrial",
     "retail_anchor_preference":"Anchored",
     "shopping_min_sf":         100000,
     "shopping_max_sf":         400000,
@@ -1237,11 +1372,17 @@ Deno.serve(async (req: Request) => {
     const dptActiveStr = (typeof dptProposed === 'string' && dptProposed.trim())
       ? dptProposed
       : (typeof dptCurrent === 'string' ? dptCurrent : '')
+    // v272: chips can be "Category" or "Category: Subtype" — when checking
+    // asset-class scope, compare against the bare category only.
     const activeAssets = new Set(
       String(dptActiveStr || '')
         .split(/[,;]+/)
         .map(s => s.trim())
         .filter(Boolean)
+        .map(s => {
+          const i = s.indexOf(':')
+          return i > 0 ? s.slice(0, i).trim() : s
+        })
     )
     if (activeAssets.size > 0) {
       for (const f of FIELD_SPEC) {

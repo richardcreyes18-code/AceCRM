@@ -63,7 +63,7 @@ const AUTO_ROUTING = {
   note_count_threshold:    6,
 }
 const MAX_TOKENS = 4096
-const PROMPT_VERSION = 'bc-v1.9'
+const PROMPT_VERSION = 'bc-v1.10'
 
 // Maps a FIELD_SPEC.group to the asset-class label(s) (from ASSET_TYPE_VOCAB)
 // that the field is scoped to. If the buyer's proposed/current
@@ -1748,6 +1748,8 @@ Deno.serve(async (req: Request) => {
       const raw = fieldRows?.[0]?.value
       if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
         for (const [cat, listUnknown] of Object.entries(raw as Record<string, unknown>)) {
+          // v292: skip the meta key (`_other_notes`) — handled below.
+          if (cat === '_other_notes') continue
           if (!Array.isArray(listUnknown)) continue
           for (const fUnknown of listUnknown) {
             const f = fUnknown as Record<string, unknown>
@@ -1769,6 +1771,31 @@ Deno.serve(async (req: Request) => {
               options: opts,
               _extra: true,
               _category: String(cat || ''),
+            })
+          }
+        }
+        // v292: synthesize an Other Notes field per enabled scope.
+        // Stored under extra_fields[`other_notes_<slug>`] so each
+        // scope has its own bucket. The AI proposes free-text content
+        // summarizing anything else specific to that asset class.
+        const otherNotesMeta = (raw as Record<string, unknown>)._other_notes
+        if (otherNotesMeta && typeof otherNotesMeta === 'object' && !Array.isArray(otherNotesMeta)) {
+          for (const [scope, cfgUnknown] of Object.entries(otherNotesMeta as Record<string, unknown>)) {
+            const cfg = (cfgUnknown && typeof cfgUnknown === 'object') ? cfgUnknown as Record<string, unknown> : {}
+            if (cfg.enabled === false) continue
+            const slug = String(scope || '').toLowerCase().replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '')
+            if (!slug) continue
+            const placeholder = typeof cfg.placeholder === 'string' && cfg.placeholder.trim()
+              ? cfg.placeholder
+              : 'Anything else specific to this asset class — preferences, dealbreakers, agent observations, etc.'
+            extraFieldDefs.push({
+              col:        `other_notes_${slug}`,
+              label:      `Other Notes — ${scope}`,
+              type:       'text',
+              group:      `Custom: ${scope}`,
+              hint:       placeholder,
+              _extra:     true,
+              _category:  String(scope || ''),
             })
           }
         }

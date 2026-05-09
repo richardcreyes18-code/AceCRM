@@ -87,7 +87,33 @@ export async function _bcFieldsLoad(){
 export function _bcFieldsGet(category){
   if(!_cache) return [];
   if(!category) return _cache;
+  if(category === META_KEY) return [];   // v292: meta key is not a scope
   return Array.isArray(_cache[category]) ? _cache[category].slice() : [];
+}
+
+// v292: per-scope Other Notes settings. Defaults to enabled=true with
+// the standard placeholder when nothing is configured.
+export function _bcOtherNotesGet(scope){
+  const meta = (_cache && _cache[META_KEY]) || {};
+  const cfg  = meta[scope] || {};
+  return {
+    enabled:     cfg.enabled === false ? false : true,
+    placeholder: typeof cfg.placeholder === 'string' && cfg.placeholder.trim()
+                   ? cfg.placeholder
+                   : OTHER_NOTES_DEFAULT_PLACEHOLDER,
+  };
+}
+
+export async function _bcOtherNotesSet(scope, cfg){
+  if(!_cache) _cache = {};
+  if(!_cache[META_KEY] || typeof _cache[META_KEY] !== 'object' || Array.isArray(_cache[META_KEY])){
+    _cache[META_KEY] = {};
+  }
+  _cache[META_KEY][scope] = {
+    enabled:     cfg && cfg.enabled === false ? false : true,
+    placeholder: cfg && typeof cfg.placeholder === 'string' ? cfg.placeholder : '',
+  };
+  return _bcFieldsSave(_cache);
 }
 
 export async function _bcFieldsSave(definitions){
@@ -106,11 +132,43 @@ export async function _bcFieldsSave(definitions){
 
 // ─── Internal helpers ─────────────────────────────────────────────────
 
+// v292: storage shape can include a special `_other_notes` meta key
+// alongside the per-scope field arrays. Shape:
+//   {
+//     "Multifamily": [...fields],
+//     "Multifamily: Garden": [...fields],
+//     "_other_notes": {
+//       "Multifamily": { "enabled": true, "placeholder": "Anything else MF-specific..." },
+//       "Multifamily: Garden": { "enabled": false }
+//     }
+//   }
+// Normalize preserves the meta untouched while still validating field
+// arrays. Getters skip the meta key when iterating scopes.
+const META_KEY = '_other_notes';
+const OTHER_NOTES_DEFAULT_PLACEHOLDER = 'Anything else specific to this asset class…';
+
 function _normalize(defs){
   const out = {};
   for(const [rawCat, rawList] of Object.entries(defs || {})){
     const cat = String(rawCat || '').trim();
     if(!cat) continue;
+    if(cat === META_KEY){
+      // Preserve the meta object as-is, with light shape validation.
+      const meta = (rawList && typeof rawList === 'object' && !Array.isArray(rawList))
+        ? rawList : {};
+      const cleanMeta = {};
+      for(const [scope, cfg] of Object.entries(meta)){
+        const scopeKey = String(scope || '').trim();
+        if(!scopeKey) continue;
+        const c = (cfg && typeof cfg === 'object' && !Array.isArray(cfg)) ? cfg : {};
+        cleanMeta[scopeKey] = {
+          enabled:     c.enabled === false ? false : true,
+          placeholder: typeof c.placeholder === 'string' ? c.placeholder : '',
+        };
+      }
+      out[META_KEY] = cleanMeta;
+      continue;
+    }
     const list = (Array.isArray(rawList) ? rawList : [])
       .map(_normalizeField)
       .filter(Boolean);
@@ -175,21 +233,43 @@ export function _bcRenderExtraFields(chipText, record){
     : {};
 
   const block = (scopeLabel, scopeKey, defs) => {
-    if(!defs.length) return '';
     const slug = _categorySlug(scopeKey);
+    const onCfg = _bcOtherNotesGet(scopeKey);
+    // v292: render the block when EITHER custom fields exist OR the
+    // Other Notes textarea is enabled for this scope. Skip entirely
+    // only when both are absent.
+    if(!defs.length && !onCfg.enabled) return '';
     const rows = defs.map(d => {
       const id  = `bcf_extra_${slug}_${d.col}`;
       const val = extra[d.col];
       return _renderFieldRow(d, id, val);
     }).join('');
+    // v292: standard "Other Notes" textarea, configurable per scope.
+    // Stored under extra_fields[`other_notes_${slug}`] so each scope
+    // has its own bucket (no clobber across categories/subtypes).
+    let otherNotesHtml = '';
+    if(onCfg.enabled){
+      const onCol = `other_notes_${slug}`;
+      const onId  = `bcf_extra_${slug}_${onCol}`;
+      const onVal = (extra[onCol] === 0 || extra[onCol]) ? String(extra[onCol]) : '';
+      otherNotesHtml = `
+        <div data-extra-field="${esc(onCol)}" data-extra-type="text" style="grid-column:span 2;margin-top:6px;">
+          <label for="${esc(onId)}" style="font-size:11px;color:#475569;font-weight:600;display:block;margin-bottom:3px;">📝 Other Notes</label>
+          <textarea id="${esc(onId)}" rows="3" placeholder="${esc(onCfg.placeholder)}" style="border:1px solid #cbd5e1;border-radius:6px;padding:6px 9px;font-size:12px;width:100%;box-sizing:border-box;font-family:inherit;resize:vertical;">${esc(onVal)}</textarea>
+        </div>`;
+    }
+    const summaryParts = [];
+    if(defs.length)      summaryParts.push(`${defs.length} field${defs.length===1?'':'s'}`);
+    if(onCfg.enabled)    summaryParts.push('+ other notes');
     return `
       <div class="info-box" data-bc-extra-section="${esc(slug)}" style="margin-top:10px;border:1px dashed #c0d0e8;background:#fbfdff;">
         <div class="info-box-title" style="display:flex;justify-content:space-between;align-items:center;">
           <span>${esc(scopeLabel)} — Custom Requirements</span>
-          <span style="font-size:9px;color:#94a3b8;font-weight:500;">${defs.length} field${defs.length===1?'':'s'} · runtime-defined</span>
+          <span style="font-size:9px;color:#94a3b8;font-weight:500;">${summaryParts.join(' · ')}</span>
         </div>
         <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;">
           ${rows}
+          ${otherNotesHtml}
         </div>
       </div>`;
   };
@@ -276,6 +356,9 @@ export function _bcCollectExtraFields(){
 // Closes back to the taxonomy admin (caller is responsible for re-rendering).
 export function _bcFieldsAdminForCategory(category, onClose){
   const defs = (_bcFieldsGet(category) || []).slice();
+  // v292: per-scope Other Notes settings — local copy that the modal
+  // mutates inline; persisted on Save alongside the field defs.
+  const otherNotes = { ..._bcOtherNotesGet(category) };
   let dirty = false;
 
   const modal = document.createElement('div');
@@ -336,6 +419,22 @@ export function _bcFieldsAdminForCategory(category, onClose){
           </div>
         </div>
         <div style="flex:1;min-height:0;overflow:auto;padding:14px 22px;background:#f8fafc;">
+          <!-- v292: per-scope Other Notes settings. Renders at the
+               bottom of every BC requirements section. Toggle off to
+               hide for this scope; edit placeholder to customize. -->
+          <div style="border:1.5px solid ${otherNotes.enabled ? '#bfdbfe' : '#fecaca'};background:${otherNotes.enabled ? '#eff6ff' : '#fef2f2'};border-radius:8px;padding:12px 14px;margin-bottom:14px;">
+            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
+              <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;font-weight:600;color:#0f172a;">
+                <input type="checkbox" id="bcOtherNotesEnabled" ${otherNotes.enabled ? 'checked' : ''} style="margin:0;"/>
+                📝 Show "Other Notes" textarea on this scope
+              </label>
+              <span style="font-size:11px;color:#64748b;">— renders at the bottom of every BC's ${esc(category)} requirements section</span>
+            </div>
+            <div>
+              <label style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;font-weight:600;">Placeholder text (shown to user inside the textarea)</label>
+              <input type="text" id="bcOtherNotesPlaceholder" value="${esc(otherNotes.placeholder)}" placeholder="${esc(OTHER_NOTES_DEFAULT_PLACEHOLDER)}" style="width:100%;padding:7px 10px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;margin-top:3px;"/>
+            </div>
+          </div>
           ${list || '<div style="padding:30px;text-align:center;color:#94a3b8;font-size:12px;">No custom fields yet. Add one below to make new requirements show up on every BC for this category.</div>'}
           <div style="margin-top:8px;padding:14px;border:1.5px dashed #cbd5e1;border-radius:8px;background:#fff;">
             <div style="font-size:12px;font-weight:600;color:#0f172a;margin-bottom:8px;">+ Add new field</div>
@@ -378,6 +477,14 @@ export function _bcFieldsAdminForCategory(category, onClose){
         if(!dirty) return;
         const next = (_cache && typeof _cache === 'object') ? Object.assign({}, _cache) : {};
         next[category] = defs.slice();
+        // v292: persist Other Notes settings under the meta key.
+        const meta = (next[META_KEY] && typeof next[META_KEY] === 'object' && !Array.isArray(next[META_KEY]))
+          ? Object.assign({}, next[META_KEY]) : {};
+        meta[category] = {
+          enabled:     otherNotes.enabled !== false,
+          placeholder: otherNotes.placeholder || '',
+        };
+        next[META_KEY] = meta;
         _bcFieldsSave(next).then(() => {
           dirty = false;
           if(typeof showSaveConfirm === 'function') showSaveConfirm('✓ Fields saved');
@@ -412,6 +519,12 @@ export function _bcFieldsAdminForCategory(category, onClose){
   });
   modal.addEventListener('input', (e) => {
     const t = e.target;
+    // v292: Other Notes placeholder text edits.
+    if(t.id === 'bcOtherNotesPlaceholder'){
+      otherNotes.placeholder = String(t.value || '');
+      dirty = true;
+      return;
+    }
     if(!t.matches('[data-field-edit]')) return;
     const idx = parseInt(t.getAttribute('data-field-edit'), 10);
     const prop = t.getAttribute('data-prop');
@@ -426,6 +539,16 @@ export function _bcFieldsAdminForCategory(category, onClose){
     // For type changes that affect the visible options textarea, rerender.
     if(prop === 'type'){
       defs[idx] = _normalizeField(f);
+      rerender();
+    }
+  });
+
+  // v292: checkbox change for Other Notes enabled toggle. Re-render so
+  // the colored border around the panel reflects the new state.
+  modal.addEventListener('change', (e) => {
+    if(e.target && e.target.id === 'bcOtherNotesEnabled'){
+      otherNotes.enabled = !!e.target.checked;
+      dirty = true;
       rerender();
     }
   });

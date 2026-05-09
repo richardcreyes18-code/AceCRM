@@ -58,7 +58,7 @@ function _sbToAt(row, map) {
 // actions. Turn C adds the 📁 icon tag on Deal Board rows.
 
 // ── CACHE OF WHICH PORTFOLIO WE'RE VIEWING ─────────────────────────────
-// _currentPortfolioId lives on window so the legacy router + sync handlers
+// window._currentPortfolioId lives on window so the legacy router + sync handlers
 // in index.html (lines ~1619, 4319, 26261, 26291) read/write the same
 // value as this module. Bare references below resolve to window via the
 // global lookup chain — no module-scope `let` declared so there's no
@@ -722,7 +722,7 @@ export async function submitCreatePortfolio(){
 
 // ── PORTFOLIO LIST PAGE ───────────────────────────────────────────────
 export function showPortfoliosPage(){
-  _currentPortfolioId = null;
+  window._currentPortfolioId = null;
   const main = document.getElementById('mainArea');
   if(!main) return;
   const portfolios = window.allPortfolios || [];
@@ -827,7 +827,7 @@ export function openPortfolioDetail(portfolioId){
       window.history.pushState({ kind:'portfolio', id: portfolioId }, '', '#/portfolio/' + portfolioId);
     } catch(e){}
   }
-  _currentPortfolioId = portfolioId;
+  window._currentPortfolioId = portfolioId;
   // Always land on Summary tab when opening a portfolio for the first time.
   // Turn D: tab state persists across re-renders within the same portfolio
   // (for example after Edit or Add Deals) but resets on navigation.
@@ -838,7 +838,7 @@ export function openPortfolioDetail(portfolioId){
   // the user happens to be on the Offers tab already.
   _currentPortfolioOffers = [];
   _portfolioOffersLoad(portfolioId).then(() => {
-    if(_currentPortfolioId === portfolioId && _currentPortfolioTab === 'offers'){
+    if(window._currentPortfolioId === portfolioId && _currentPortfolioTab === 'offers'){
       _renderPortfolioDetail(p);
     }
   });
@@ -1063,8 +1063,8 @@ export function _renderPortfolioDetail(p){
 // Tab switcher — re-renders only the tab content area, not the whole detail page.
 export function _pfSwitchTab(tabKey){
   _currentPortfolioTab = tabKey;
-  if(!_currentPortfolioId) return;
-  const p = (window.allPortfolios || []).find(x => x.id === _currentPortfolioId);
+  if(!window._currentPortfolioId) return;
+  const p = (window.allPortfolios || []).find(x => x.id === window._currentPortfolioId);
   if(p) _renderPortfolioDetail(p);
 }
 
@@ -1331,7 +1331,7 @@ export async function changePortfolioStage(portfolioId, stageKey){
   try {
     await _portfolioUpdate(portfolioId, { 'Pipeline Stage': stageKey });
     if(typeof showSaveConfirm === 'function') showSaveConfirm('Stage → ' + stageKey);
-    if(typeof _currentPortfolioId !== 'undefined' && _currentPortfolioId === portfolioId){
+    if(typeof window._currentPortfolioId !== 'undefined' && window._currentPortfolioId === portfolioId){
       _renderPortfolioDetail(p);
     }
   } catch(e){
@@ -1348,7 +1348,7 @@ export async function changeMyPipelinePortfolioStage(portfolioId, stageKey){
   if(typeof _myPipelineMovePortfolio !== 'function') return;
   try {
     await _myPipelineMovePortfolio(portfolioId, stageKey);
-    if(typeof _currentPortfolioId !== 'undefined' && _currentPortfolioId === portfolioId){
+    if(typeof window._currentPortfolioId !== 'undefined' && window._currentPortfolioId === portfolioId){
       const p = (window.allPortfolios || []).find(x => x.id === portfolioId);
       if(p) _renderPortfolioDetail(p);
     }
@@ -1518,7 +1518,7 @@ export async function submitAddDeals(){
     await _portfolioAssignDeals(toAssign, portfolioId);
     closeAddDealsModal();
     // Re-render the detail view if we're on it
-    if(_currentPortfolioId === portfolioId){
+    if(window._currentPortfolioId === portfolioId){
       const p = (window.allPortfolios || []).find(x => x.id === portfolioId);
       if(p) _renderPortfolioDetail(p);
     } else {
@@ -1597,7 +1597,7 @@ export async function submitEditPortfolio(){
     await _portfolioUpdate(id, fields);
     closeEditPortfolioModal();
     // Re-render current view
-    if(_currentPortfolioId === id){
+    if(window._currentPortfolioId === id){
       const p = (window.allPortfolios || []).find(x => x.id === id);
       if(p) _renderPortfolioDetail(p);
     } else {
@@ -1615,7 +1615,7 @@ export async function _portfolioRemoveChild(dealId){
   try {
     await _portfolioAssignDeal(dealId, null);
     // Re-render the detail view if we're on it
-    const p = (window.allPortfolios || []).find(x => x.id === _currentPortfolioId);
+    const p = (window.allPortfolios || []).find(x => x.id === window._currentPortfolioId);
     if(p) _renderPortfolioDetail(p);
   } catch(e) {
     alert('Failed to remove: ' + (e.message || 'unknown error'));
@@ -1734,7 +1734,7 @@ export function _pfCancelHide(){
 // one important way: the affected_child_ids array lets an offer scope
 // to a subset of the portfolio's children (partial-package offers).
 
-// Cache of offers for the current portfolio. Keyed to _currentPortfolioId.
+// Cache of offers for the current portfolio. Keyed to window._currentPortfolioId.
 let _currentPortfolioOffers = [];
 
 // Fetches offers for a portfolio. Orders by offer_date desc (newest first).
@@ -1874,7 +1874,7 @@ export function _poUpdateAffectedStatus(){
 }
 
 export async function submitPortfolioOffer(){
-  const portfolioId = _currentPortfolioId;
+  const portfolioId = window._currentPortfolioId;
   if(!portfolioId) return;
 
   const err = document.getElementById('poError');
@@ -1941,9 +1941,9 @@ export async function _poDeleteFromModal(){
   if(!confirm('Delete this offer?\n\nThis will soft-delete the offer — it won\'t appear in the offers list, but the row is kept in the database for audit purposes.')) return;
   try {
     await _portfolioOfferDelete(_poEditingOfferId);
-    await _portfolioOffersLoad(_currentPortfolioId);
+    await _portfolioOffersLoad(window._currentPortfolioId);
     closePortfolioOfferModal();
-    const p = (window.allPortfolios || []).find(x => x.id === _currentPortfolioId);
+    const p = (window.allPortfolios || []).find(x => x.id === window._currentPortfolioId);
     if(p) _renderPortfolioDetail(p);
   } catch(e) {
     alert('Failed to delete: ' + (e.message || 'unknown error'));

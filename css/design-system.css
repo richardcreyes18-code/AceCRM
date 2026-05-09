@@ -1,0 +1,451 @@
+/* ─────────────────────────────────────────────────────────────
+   design-system.css — Bloomberg/CoStar institutional redesign
+   v298 — implements claude.ai/design handoff bundle
+   "Ace CRM Redesign" + "Ace CRM Design System"
+   ─────────────────────────────────────────────────────────────
+   Strategy: layered on top of existing tokens.css / base.css /
+   components.css. Loads LAST so it overrides selectively. Most
+   chrome (sidebar, deal detail, modals) keeps its existing
+   layout — this file changes the visual language: slate + single-
+   blue accent, kill purple/gradients on action buttons, Inter
+   13px body, Source Code Pro tabular-nums on numerics, semantic
+   pipeline stage badges, sharper density (32px rows, 44-48px nav).
+
+   Per the chat transcript, this is a STAGING-ONLY rollout for
+   visual review before promotion to production. */
+
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700;800&family=Source+Code+Pro:wght@400;500;600&display=swap');
+
+/* ── Extended tokens (mirror of colors_and_type.css) ─────────── */
+:root {
+  /* Surfaces / borders — already in tokens.css; alias under the
+     design-system names for components that use either. */
+  --surface-2: #f8fafc;
+  --border-2:  #cbd5e1;
+
+  /* Text scale */
+  --fg-1: #0f172a;
+  --fg-2: #475569;
+  --fg-3: #94a3b8;
+  --fg-4: #cbd5e1;
+
+  /* Primary — institutional blue */
+  --primary-darker: #1e3a8a;
+  --primary-lighter:#dbeafe;
+
+  /* Bloomberg-black chrome */
+  --chrome-bg:    #0f172a;
+  --chrome-bg-2:  #0b1220;
+  --chrome-line:  #1e293b;
+  --chrome-fg:    #94a3b8;
+  --chrome-fg-hi: #e2e8f0;
+  --chrome-fg-mute:#64748b;
+
+  /* Semantic dark variants */
+  --green-dark:  #15803d;
+  --green-border:#86efac;
+  --red-dark:    #b91c1c;
+  --red-border:  #fca5a5;
+  --yellow-dark: #b45309;
+  --yellow-border:#fcd34d;
+
+  /* Gold — logo accent ONLY. Never a button. */
+  --gold: #fbbf24;
+
+  /* Pipeline stage tokens (matches the design-system spec) */
+  --stage-prospect-bg: #fef9c3; --stage-prospect-fg: #854d0e;
+  --stage-pitch-bg:    #dbeafe; --stage-pitch-fg:    #1e40af;
+  --stage-offer-bg:    #dcfce7; --stage-offer-fg:    #14532d;
+  --stage-uc-bg:       #ffedd5; --stage-uc-fg:       #9a3412;
+  --stage-closed-bg:   #d1fae5; --stage-closed-fg:   #064e3b;
+  --stage-dead-bg:     #fee2e2; --stage-dead-fg:     #7f1d1d;
+  --stage-lead-bg:     #e0e7ff; --stage-lead-fg:     #3730a3;
+  --stage-hot-bg:      #fee2e2; --stage-hot-fg:      #991b1b;
+
+  /* Type families */
+  --font-sans: 'Inter', system-ui, -apple-system, 'Segoe UI', Roboto, sans-serif;
+  --font-mono: 'Source Code Pro', ui-monospace, 'SF Mono', Menlo, Consolas, monospace;
+  --font-stamp: Georgia, 'Times New Roman', serif;
+
+  /* Type scale */
+  --text-9:  9px;
+  --text-10: 10px;
+  --text-11: 11px;
+  --text-12: 12px;
+  --text-13: 13px;
+  --text-14: 14px;
+  --text-16: 16px;
+  --text-22: 22px;
+  --text-26: 26px;
+  --text-34: 34px;
+
+  /* Weights */
+  --w-regular: 400;
+  --w-medium:  500;
+  --w-semi:    600;
+  --w-bold:    700;
+  --w-black:   800;
+
+  /* Tracking */
+  --tracking-caps:      0.06em;
+  --tracking-caps-wide: 0.08em;
+  --tracking-eyebrow:   0.25em;
+
+  /* Radii (extended) */
+  --radius-pill: 99px;
+
+  /* Shadows */
+  --shadow-sm:    0 1px 2px rgba(15,23,42,0.04);
+  --shadow-focus: 0 0 0 3px rgba(37,99,235,0.14);
+  --shadow-hot:   0 4px 12px rgba(37,99,235,0.15);
+
+  /* Spacing scale */
+  --space-1: 2px;  --space-2: 4px;  --space-3: 6px;  --space-4: 8px;
+  --space-5: 10px; --space-6: 12px; --space-7: 14px; --space-8: 16px;
+  --space-9: 18px; --space-10: 20px; --space-12: 24px; --space-14: 28px;
+
+  /* Layout */
+  --nav-h: 44px;
+  --sidebar-w: 232px;
+  --sidebar-w-mini: 56px;
+  --section-hdr-h: 32px;
+
+  /* Motion */
+  --t-fast: 0.10s;
+  --t:      0.12s ease;
+  --t-slow: 0.30s ease;
+}
+
+/* ── Body type baseline ─────────────────────────────────────── */
+body {
+  font-family: var(--font-sans);
+  font-feature-settings: "ss01", "cv11";
+}
+
+/* ── Type primitives (drop-in classnames) ───────────────────── */
+.t-h1, .ds-h1 {
+  font-size: var(--text-22); font-weight: var(--w-black);
+  color: var(--fg-1); line-height: 1.15; letter-spacing: -0.01em;
+}
+.t-h2, .ds-h2 {
+  font-size: var(--text-16); font-weight: var(--w-bold);
+  color: var(--fg-1); line-height: 1.35;
+}
+.t-h3, .ds-h3 {
+  font-size: var(--text-14); font-weight: var(--w-bold); color: var(--fg-1);
+}
+.t-stat {
+  font-size: var(--text-34); font-weight: var(--w-black);
+  line-height: 1.15; letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+}
+.t-stat-sm {
+  font-size: 28px; font-weight: var(--w-black);
+  line-height: 1.15; font-variant-numeric: tabular-nums;
+}
+.t-eyebrow {
+  font-size: var(--text-11); font-weight: var(--w-bold);
+  text-transform: uppercase; letter-spacing: var(--tracking-caps-wide);
+  color: var(--fg-2);
+}
+.t-eyebrow-sm {
+  font-size: var(--text-10); font-weight: var(--w-bold);
+  text-transform: uppercase; letter-spacing: var(--tracking-caps);
+  color: var(--fg-3);
+}
+.t-label {
+  font-size: var(--text-12); font-weight: var(--w-semi); color: var(--fg-2);
+}
+.t-meta {
+  font-size: var(--text-11); color: var(--fg-3);
+}
+.t-mono, .t-num, .num, .mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-feature-settings: "tnum";
+}
+.t-id {
+  font-family: var(--font-mono);
+  font-size: var(--text-10);
+  font-weight: var(--w-bold);
+  color: var(--fg-2);
+  background: var(--bg);
+  padding: 1px 5px;
+  border-radius: 3px;
+}
+.tabular { font-variant-numeric: tabular-nums; font-feature-settings: "tnum"; }
+
+/* Auto-mono on common numeric table cells. Light-touch — only fires
+   when the cell explicitly opts in via the `num` class. Existing
+   layouts unaffected. */
+td.num, th.num, .col-num, .tabular-cell {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ── Pipeline stage badges (drop-in classnames) ─────────────── */
+.stage-pill {
+  display: inline-flex; align-items: center; gap: 4px;
+  padding: 2px 8px; border-radius: var(--radius-pill);
+  font-size: var(--text-11); font-weight: var(--w-semi);
+  text-transform: uppercase; letter-spacing: var(--tracking-caps);
+  border: 1px solid transparent;
+  font-family: var(--font-sans);
+}
+.stage-pill.stage-prospect { background: var(--stage-prospect-bg); color: var(--stage-prospect-fg); }
+.stage-pill.stage-pitch    { background: var(--stage-pitch-bg);    color: var(--stage-pitch-fg);    }
+.stage-pill.stage-offer    { background: var(--stage-offer-bg);    color: var(--stage-offer-fg);    }
+.stage-pill.stage-uc       { background: var(--stage-uc-bg);       color: var(--stage-uc-fg);       }
+.stage-pill.stage-closed   { background: var(--stage-closed-bg);   color: var(--stage-closed-fg);   }
+.stage-pill.stage-dead     { background: var(--stage-dead-bg);     color: var(--stage-dead-fg);     }
+.stage-pill.stage-lead     { background: var(--stage-lead-bg);     color: var(--stage-lead-fg);     }
+.stage-pill.stage-hot      { background: var(--stage-hot-bg);      color: var(--stage-hot-fg);      }
+
+/* ── Button primitives (drop-in classnames) ─────────────────── */
+.btn-ds {
+  display: inline-flex; align-items: center; gap: 6px;
+  padding: 6px 14px;
+  font-size: var(--text-13); font-weight: var(--w-semi);
+  border-radius: var(--radius-sm); border: 1px solid transparent;
+  background: var(--surface); color: var(--fg-1);
+  cursor: pointer; transition: var(--t);
+  font-family: inherit;
+}
+.btn-ds:hover { background: var(--surface-2); border-color: var(--border-2); }
+.btn-ds:focus-visible { outline: none; box-shadow: var(--shadow-focus); }
+.btn-ds.btn-primary {
+  background: var(--primary); color: #fff; border-color: var(--primary-dark);
+}
+.btn-ds.btn-primary:hover { background: var(--primary-dark); }
+.btn-ds.btn-ghost {
+  background: transparent; border: 1px solid var(--border-2); color: var(--fg-2);
+}
+.btn-ds.btn-ghost:hover { color: var(--fg-1); border-color: var(--fg-3); }
+.btn-ds.btn-danger {
+  background: var(--surface); color: var(--red-dark); border-color: var(--red-border);
+}
+.btn-ds.btn-danger:hover { background: var(--red-bg); }
+.btn-ds.btn-success {
+  background: var(--green); color: #fff; border-color: var(--green-dark);
+}
+.btn-ds.btn-success:hover { background: var(--green-dark); }
+.btn-ds.btn-sm { padding: 4px 10px; font-size: var(--text-12); }
+.btn-ds.btn-lg { padding: 8px 18px; font-size: var(--text-14); }
+
+/* ── Top nav: kill the gradient brand-card; slate ribbon ───── */
+/* Targets the existing .nav-btn / nav header strip so the chrome
+   matches the design system's Bloomberg-black palette without
+   rewriting the nav HTML structure. */
+.nav-btn {
+  font-family: var(--font-sans);
+  font-size: var(--text-12);
+  font-weight: var(--w-semi);
+}
+.nav-btn.active {
+  background: var(--primary) !important;
+  color: #fff !important;
+}
+
+/* ── KILL PURPLE / GRADIENTS on action buttons ──────────────── */
+/* The redesign explicitly removes purple AI buttons + gradient
+   accents. This rule re-skins anything that still uses the legacy
+   purple gradient (linear-gradient(135deg,#7c3aed,#5b21b6)) to
+   the institutional blue, EXCEPT inline elements explicitly opted
+   out via the .ds-keep-legacy class. */
+[style*="linear-gradient(135deg,#7c3aed,#5b21b6)"]:not(.ds-keep-legacy) {
+  background: var(--primary) !important;
+  background-image: none !important;
+  border-color: var(--primary-dark) !important;
+}
+[style*="linear-gradient(135deg,#7c3aed,#5b21b6)"]:not(.ds-keep-legacy):hover {
+  background: var(--primary-dark) !important;
+}
+
+/* AI ✦ button class hook — let inline-styled callers opt in to
+   the design-system blue without surgery on every site. */
+.ds-ai-btn {
+  background: var(--primary) !important;
+  color: #fff !important;
+  border: 1px solid var(--primary-dark) !important;
+  padding: 7px 14px;
+  font-size: var(--text-12);
+  font-weight: var(--w-bold);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+.ds-ai-btn:hover { background: var(--primary-dark) !important; }
+
+/* ── Form fields baseline ───────────────────────────────────── */
+.form-input:focus, input:focus, select:focus, textarea:focus {
+  outline: none;
+  border-color: var(--primary);
+  box-shadow: var(--shadow-focus);
+}
+
+/* ── Section header (compact) ───────────────────────────────── */
+.ds-section-hdr {
+  height: var(--section-hdr-h);
+  display: flex; align-items: center; gap: 8px;
+  padding: 0 12px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  font-size: var(--text-11);
+  font-weight: var(--w-bold);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps-wide);
+  color: var(--fg-2);
+}
+
+/* ── KPI row tile ───────────────────────────────────────────── */
+.ds-kpi {
+  display: flex; flex-direction: column; gap: 2px;
+  padding: 10px 14px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+}
+.ds-kpi .ds-kpi-label {
+  font-size: var(--text-10); font-weight: var(--w-bold);
+  text-transform: uppercase; letter-spacing: var(--tracking-caps);
+  color: var(--fg-3);
+}
+.ds-kpi .ds-kpi-value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 20px;
+  font-weight: var(--w-bold);
+  color: var(--fg-1);
+}
+.ds-kpi .ds-kpi-delta {
+  font-size: var(--text-11);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.ds-kpi .ds-kpi-delta.up   { color: var(--green-dark); }
+.ds-kpi .ds-kpi-delta.down { color: var(--red-dark); }
+
+/* ── Data table (drop-in via `.ds-table`) ───────────────────── */
+.ds-table {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: var(--text-12);
+}
+.ds-table thead th {
+  height: 28px;
+  padding: 0 10px;
+  font-size: var(--text-10);
+  font-weight: var(--w-bold);
+  text-transform: uppercase;
+  letter-spacing: var(--tracking-caps);
+  color: var(--fg-3);
+  text-align: left;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.ds-table tbody td {
+  height: 32px;
+  padding: 0 10px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-1);
+}
+.ds-table tbody tr:hover td { background: var(--surface-2); }
+.ds-table td.num, .ds-table th.num,
+.ds-table td.tabular, .ds-table th.tabular {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  text-align: right;
+}
+
+/* ── Stat strip (deal header) ──────────────────────────────── */
+.ds-stat-strip {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
+  gap: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+}
+.ds-stat-strip .ds-stat-cell {
+  padding: 10px 14px;
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 2px;
+  min-width: 0;
+}
+.ds-stat-strip .ds-stat-cell:last-child { border-right: none; }
+.ds-stat-strip .ds-stat-cell .ds-stat-label {
+  font-size: var(--text-10); font-weight: var(--w-bold);
+  text-transform: uppercase; letter-spacing: var(--tracking-caps);
+  color: var(--fg-3);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+.ds-stat-strip .ds-stat-cell .ds-stat-value {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+  font-size: 18px;
+  font-weight: var(--w-bold);
+  color: var(--fg-1);
+  white-space: nowrap; overflow: hidden; text-overflow: ellipsis;
+}
+
+/* ── Logo wordmark (slate ribbon top-nav corner) ────────────── */
+.ds-brand {
+  display: inline-flex; align-items: center; gap: 8px;
+  font-size: var(--text-14); font-weight: var(--w-bold);
+  font-style: italic; color: #fff; letter-spacing: -0.01em;
+}
+.ds-brand .ds-brand-mark {
+  width: 22px; height: 22px;
+  border-radius: 4px;
+  background: var(--grad-logo, linear-gradient(135deg, #1e3a8a 0%, #2563eb 100%));
+  display: grid; place-items: center;
+  font-size: var(--text-12); font-weight: var(--w-black);
+  color: #fff; font-style: italic;
+  box-shadow: 0 1px 0 rgba(255,255,255,0.08) inset;
+}
+.ds-brand .ds-brand-accent { color: var(--gold); }
+
+/* ── Empty state (drop-in) ──────────────────────────────────── */
+.ds-empty {
+  padding: 40px 20px; text-align: center;
+  color: var(--fg-3); font-size: var(--text-13);
+}
+
+/* ── Card ───────────────────────────────────────────────────── */
+.ds-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-sm);
+}
+.ds-card .ds-card-hdr {
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+}
+.ds-card .ds-card-body { padding: 14px; }
+
+/* ── Modal chrome (drop-in via `.ds-modal-shell`) ──────────── */
+.ds-modal-shell {
+  background: var(--surface);
+  border-radius: var(--radius);
+  box-shadow: var(--shadow-lg);
+  max-width: 640px; width: 96%;
+  font-family: var(--font-sans);
+}
+.ds-modal-shell .ds-modal-hdr {
+  padding: 14px 18px;
+  border-bottom: 1px solid var(--border);
+  display: flex; justify-content: space-between; align-items: center;
+  gap: 12px;
+}
+.ds-modal-shell .ds-modal-hdr .ds-modal-title {
+  font-size: var(--text-14); font-weight: var(--w-bold); color: var(--fg-1);
+}
+.ds-modal-shell .ds-modal-body { padding: 14px 18px; }
+.ds-modal-shell .ds-modal-footer {
+  padding: 10px 18px;
+  border-top: 1px solid var(--border);
+  display: flex; justify-content: flex-end; gap: 8px;
+}

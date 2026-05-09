@@ -18,6 +18,13 @@
 <link rel="stylesheet" href="css/buyer-criteria.css"/>
 <link rel="stylesheet" href="css/email-templates.css"/>
 <link rel="stylesheet" href="css/pdf-brochure.css"/>
+<!-- v298: design-system.css loads LAST so it can selectively override
+     legacy chrome with the Bloomberg/CoStar redesign tokens (slate +
+     single-blue accent, Inter 13px body, Source Code Pro mono numerics,
+     semantic-only stage badges, kill purple/gradients on action
+     buttons). Layered approach: most layout stays; this file changes
+     the visual language. STAGING-only rollout for visual review. -->
+<link rel="stylesheet" href="css/design-system.css"/>
 </head>
 <body>
 

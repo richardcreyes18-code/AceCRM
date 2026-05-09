@@ -41,6 +41,9 @@ import {
 } from './core/auth.js';
 import { _showToast, showSaveConfirm } from './core/toast.js';
 
+// ─── Design system ────────────────────────────────────────────────────
+import * as designSystem    from './design/design-system.js';
+
 // ─── Feature modules ──────────────────────────────────────────────────
 import * as workbench       from './workbench/workbench.js';
 import * as portfolios      from './portfolios/portfolios.js';
@@ -73,6 +76,9 @@ window._atToSb = _atToSb;
 
 // Schemas with multiple constants/functions
 for (const [name, value] of Object.entries(countyMap))      { window[name] = value; }
+
+// Design system
+for (const [name, value] of Object.entries(designSystem))   { window[name] = value; }
 
 // Feature modules
 for (const [name, value] of Object.entries(workbench))      { window[name] = value; }
@@ -117,6 +123,8 @@ console.log('[ace-modules] all modules loaded', {
   sessionVersion: SESSION_VERSION,
   proxyUrl: PROXY_URL.endsWith('/crm-proxy'),
   config:  getConfig().isConnected,
+  // design system
+  designSystem:   Object.keys(designSystem).length,
   // feature modules — exported symbol counts
   workbench:      Object.keys(workbench).length,
   portfolios:     Object.keys(portfolios).length,

@@ -1,12 +1,10 @@
 // main.js — module entry point.
 //
-// Phase 2 + 3: smoke-test imports. The schemas, utils, and core helpers are
-// loaded here so the browser confirms every path resolves and every file
-// parses cleanly. The legacy <script> in index.html still owns runtime;
-// nothing here is consumed by it yet. As features migrate in Phase 4+, they
-// import directly from these modules and the duplicate const declarations
-// in the legacy script get deleted.
+// All `import` statements come first, all `window.X = ...` attachments
+// come after. Mixing them was causing a runtime ReferenceError on the
+// boot path (see v267 fix).
 
+// ─── Schemas ──────────────────────────────────────────────────────────
 import {
   SB_TABLES,
   SB_PROP_MAP,
@@ -19,48 +17,17 @@ import {
   _sbToAt,
   _atToSb,
 } from './schemas/index.js';
-// v260: legacy callers (not-yet-migrated features) still call _sbToAt/_atToSb
-// bare. Attach to window so they resolve.
-window._sbToAt = _sbToAt;
-window._atToSb = _atToSb;
+import * as countyMap from './schemas/county-map.js';
 
-// v261: county map — 11 exports needed on window so legacy callers (lots of
-// them — Pipeline filter UI, county canonicalization at write time, BC
-// region resolution, etc.) resolve via global env lookup.
-for (const [name, value] of Object.entries(countyMap)) { window[name] = value; }
-
-// v262: agent-picker widget — 14 exports attached to window.
-for (const [name, value] of Object.entries(agentPicker)) { window[name] = value; }
-
-// v263: app-lists admin — 33 exports attached to window.
-import * as appLists from './admin/app-lists.js';
-for (const [name, value] of Object.entries(appLists)) { window[name] = value; }
-
-// v264: buyer-search backmarket — 47 exports attached to window.
-import * as backmarket from './buyer-search/backmarket.js';
-for (const [name, value] of Object.entries(backmarket)) { window[name] = value; }
-
-// v265: FUB integration — 49 exports attached to window.
-import * as fub from './fub/fub.js';
-for (const [name, value] of Object.entries(fub)) { window[name] = value; }
-
-// v266: contact relationships (ace_agent_contacts) — 12 exports.
-import * as relationships from './contacts/relationships.js';
-for (const [name, value] of Object.entries(relationships)) { window[name] = value; }
-
+// ─── Utils ────────────────────────────────────────────────────────────
 import {
   _stripCommas, _parseNum, _fmtNum, _phoneDigits, fmtMoney, fmtPct,
 } from './utils/format.js';
-
 import {
   _normalizeAddr, _addrMatches, cleanAddress, parseAddress,
 } from './utils/address.js';
 
-// Phase 4.5 shared helpers
-import * as countyMap from './schemas/county-map.js';
-import * as agentPicker from './widgets/agent-picker.js';
-
-// Phase 3: core layer
+// ─── Core ─────────────────────────────────────────────────────────────
 import { _proxyCall, PROXY_URL, SB_AUTH_URL, SB_ANON_KEY } from './core/proxy.js';
 import { getConfig } from './core/config.js';
 import {
@@ -74,32 +41,54 @@ import {
 } from './core/auth.js';
 import { _showToast, showSaveConfirm } from './core/toast.js';
 
-// Phase 4: feature modules. Each phase-4 module gets every export attached
-// to window so inline onclick handlers in rendered HTML resolve. Modules are
-// imported in topological order so any cross-module references (none today)
-// resolve at execution time.
-import * as workbench    from './workbench/workbench.js';
-import * as portfolios   from './portfolios/portfolios.js';
-import * as dashboard    from './dashboard/dashboard.js';
-import * as geocoding    from './geocoding/google.js';
-import * as richText     from './widgets/rich-text.js';
-import * as assetCleanup from './asset-cleanup/asset-cleanup.js';
-import * as gmail         from './email/gmail.js';
-import * as emailTemplates from './email/templates.js';
-import * as emailLibrary  from './email/library.js';
+// ─── Feature modules ──────────────────────────────────────────────────
+import * as workbench       from './workbench/workbench.js';
+import * as portfolios      from './portfolios/portfolios.js';
+import * as dashboard       from './dashboard/dashboard.js';
+import * as geocoding       from './geocoding/google.js';
+import * as richText        from './widgets/rich-text.js';
+import * as agentPicker     from './widgets/agent-picker.js';
+import * as assetCleanup    from './asset-cleanup/asset-cleanup.js';
+import * as gmail           from './email/gmail.js';
+import * as emailTemplates  from './email/templates.js';
+import * as emailLibrary    from './email/library.js';
+import * as appLists        from './admin/app-lists.js';
+import * as backmarket      from './buyer-search/backmarket.js';
+import * as fub             from './fub/fub.js';
+import * as relationships   from './contacts/relationships.js';
+
+// ═══════════════════════════════════════════════════════════════════════
+// Window aliases — every export from every feature/widget/schema-helper
+// module gets attached to window so legacy bare-name callers (in still-
+// in-legacy features and inline onclick handlers) resolve via the global
+// env lookup chain.
+// ═══════════════════════════════════════════════════════════════════════
+
+// Schema helpers
+window._sbToAt = _sbToAt;
+window._atToSb = _atToSb;
+
+// Schemas with multiple constants/functions
+for (const [name, value] of Object.entries(countyMap))      { window[name] = value; }
+
+// Feature modules
 for (const [name, value] of Object.entries(workbench))      { window[name] = value; }
 for (const [name, value] of Object.entries(portfolios))     { window[name] = value; }
 for (const [name, value] of Object.entries(dashboard))      { window[name] = value; }
 for (const [name, value] of Object.entries(geocoding))      { window[name] = value; }
 for (const [name, value] of Object.entries(richText))       { window[name] = value; }
+for (const [name, value] of Object.entries(agentPicker))    { window[name] = value; }
 for (const [name, value] of Object.entries(assetCleanup))   { window[name] = value; }
 for (const [name, value] of Object.entries(gmail))          { window[name] = value; }
 for (const [name, value] of Object.entries(emailTemplates)) { window[name] = value; }
 for (const [name, value] of Object.entries(emailLibrary))   { window[name] = value; }
+for (const [name, value] of Object.entries(appLists))       { window[name] = value; }
+for (const [name, value] of Object.entries(backmarket))     { window[name] = value; }
+for (const [name, value] of Object.entries(fub))            { window[name] = value; }
+for (const [name, value] of Object.entries(relationships))  { window[name] = value; }
 
-// Sanity log so we can confirm in DevTools that the module graph loaded.
-// Counts confirm the schema data extraction is byte-complete.
-console.log('[ace-modules] schemas + utils + core loaded', {
+// ─── Smoke-test log ───────────────────────────────────────────────────
+console.log('[ace-modules] all modules loaded', {
   // schemas
   tables: Object.keys(SB_TABLES).length,
   prop:   Object.keys(SB_PROP_MAP).length,
@@ -109,6 +98,7 @@ console.log('[ace-modules] schemas + utils + core loaded', {
   task:   Object.keys(SB_TASK_MAP).length,
   notif:  Object.keys(SB_NOTIF_MAP).length,
   comp:   Object.keys(SB_MANUAL_COMP_MAP).length,
+  countyMap: Object.keys(countyMap).length,
   // utils
   utils:  [_stripCommas, _parseNum, _fmtNum, _phoneDigits, fmtMoney, fmtPct,
            _normalizeAddr, _addrMatches, cleanAddress, parseAddress].length,
@@ -122,13 +112,18 @@ console.log('[ace-modules] schemas + utils + core loaded', {
   proxyUrl: PROXY_URL.endsWith('/crm-proxy'),
   config:  getConfig().isConnected,
   // feature modules — exported symbol counts
-  workbench: Object.keys(workbench).length,
-  portfolios: Object.keys(portfolios).length,
-  dashboard: Object.keys(dashboard).length,
-  geocoding: Object.keys(geocoding).length,
-  richText: Object.keys(richText).length,
-  assetCleanup: Object.keys(assetCleanup).length,
-  gmail: Object.keys(gmail).length,
+  workbench:      Object.keys(workbench).length,
+  portfolios:     Object.keys(portfolios).length,
+  dashboard:      Object.keys(dashboard).length,
+  geocoding:      Object.keys(geocoding).length,
+  richText:       Object.keys(richText).length,
+  agentPicker:    Object.keys(agentPicker).length,
+  assetCleanup:   Object.keys(assetCleanup).length,
+  gmail:          Object.keys(gmail).length,
   emailTemplates: Object.keys(emailTemplates).length,
-  emailLibrary: Object.keys(emailLibrary).length,
+  emailLibrary:   Object.keys(emailLibrary).length,
+  appLists:       Object.keys(appLists).length,
+  backmarket:     Object.keys(backmarket).length,
+  fub:            Object.keys(fub).length,
+  relationships:  Object.keys(relationships).length,
 });

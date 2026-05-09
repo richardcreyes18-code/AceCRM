@@ -46,13 +46,21 @@ function resolveModel(raw: unknown): string | null {
   return MODEL_ALIASES[norm] || MODEL_DEFAULT
 }
 
-// v281: auto-routing thresholds. Big / multi-note buyers go to Sonnet so
-// dual-role detection + recency-conflict reasoning stays sharp; smaller
-// ones go to Haiku to save ~3x on tokens.
+// v281/v283: auto-routing thresholds. Big / multi-note buyers go to
+// Sonnet so dual-role detection + recency-conflict reasoning stays
+// sharp; smaller ones go to Haiku to save ~3x on tokens.
+//
+// Tuned 2026-05-09 against bc-distribution-stats over the full 5,939-
+// buyer-tagged population. Result: 1800 chars maps to ~p87, 6 notes
+// maps to ~p82. Either condition routes ~13% of buyers to Sonnet —
+// the genuinely complex set where dual-role + multi-signal reasoning
+// pays off. The other 87% go to Haiku at ~3x cost savings.
+//
+// Re-run bc-distribution-stats to see current distribution and adjust.
 const AUTO_ROUTING = {
   // Either condition triggers Sonnet:
-  source_chars_threshold: 3000,
-  note_count_threshold:    5,
+  source_chars_threshold: 1800,
+  note_count_threshold:    6,
 }
 const MAX_TOKENS = 4096
 const PROMPT_VERSION = 'bc-v1.6'

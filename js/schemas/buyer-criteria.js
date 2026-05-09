@@ -60,6 +60,10 @@ export const SB_BC_MAP = {
   // v203: AI Auto-Fill log (mirrors ace_properties.ai_autofill_log) —
   // append-only array of snapshots, one per AI run on this buyer.
   ai_autofill_log:'AI Autofill Log',
+  // v283: top-level recency marker for the most recent AI auto-fill
+  // apply. Lets the BC list / card render "AI autofilled X ago"
+  // without scanning ai_autofill_log.
+  last_ai_autofill_at:'Last AI Autofill At',
   // v235: backing columns for the asset sections that previously had no
   // persistence (Hotel, Self Storage, Mobile Home Park, Healthcare,
   // Special Purpose, Development) plus per-asset target_sf for the

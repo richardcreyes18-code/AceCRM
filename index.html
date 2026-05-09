@@ -30279,6 +30279,15 @@ async function bcOpenExpanded(recordId){
         `}
         <span style="color:#fff;font-size:14px;font-weight:bold;">${buyerName}</span>
         <span style="color:#aad4ff;font-size:11px;">${getBcTypeBadge(assetStr)}</span>
+        ${(() => {
+          // v283: "AI autofilled X ago" badge — surfaces last_ai_autofill_at
+          // so the user can see at a glance which buyers have been touched
+          // by the AI and how recently.
+          const iso = f['Last AI Autofill At'];
+          if(!iso) return '';
+          const rel = (typeof _relTime === 'function') ? _relTime(iso) : iso.slice(0, 10);
+          return `<span title="Last AI Auto-Fill apply: ${iso}" style="background:rgba(124,58,237,0.25);color:#e9d5ff;border:1px solid rgba(167,139,250,0.4);padding:2px 8px;border-radius:99px;font-size:10px;font-weight:600;letter-spacing:.02em;cursor:help;">✦ AI autofilled ${rel}</span>`;
+        })()}
         <div style="margin-left:auto;display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
           ${_bcBatchQueue ? `
             <button onclick="bcBatchSaveAndNext('applied')" style="background:linear-gradient(180deg,#60c060,#409040);color:#fff;border:1px solid #206020;padding:6px 16px;font-size:12px;font-weight:bold;border-radius:3px;cursor:pointer;" title="Save this buyer's changes and move to next">
@@ -32932,17 +32941,30 @@ window._bcAiAutoFillApply = async function(bcId, btn){
         user_override: !!overrideFlags[f.col],
       });
     }
+    const nowIso = new Date().toISOString();
     const logEntry = {
-      at: new Date().toISOString(),
+      at: nowIso,
       applied_count: Object.keys(valuePatch).length,
       na_count: acceptedNa.length,
       changes,
     };
-    const cur = await _sbGet(SB_TABLES.buyerCriteria, `id=eq.${bcId}&select=ai_autofill_log&limit=1`);
+    const cur = await _sbGet(SB_TABLES.buyerCriteria, `id=eq.${bcId}&select=ai_autofill_log,contact_id&limit=1`);
     const existing = (Array.isArray(cur) && cur[0]?.ai_autofill_log) || [];
     const arr = Array.isArray(existing) ? existing : [];
     arr.push(logEntry);
     patch.ai_autofill_log = arr;
+    // v283: top-level recency timestamp so the BC list / card can show
+    // "AI autofilled X ago" without scanning the JSONB array.
+    patch.last_ai_autofill_at = nowIso;
+    // Also stamp the linked contact so the contact card / contact list
+    // can surface the same recency. Best-effort: missing contact_id or
+    // patch failure shouldn't block the BC apply.
+    try {
+      const linkedContactId = (Array.isArray(cur) && cur[0]?.contact_id) || null;
+      if(linkedContactId){
+        await _sbPatch('ace_contacts', linkedContactId, { last_ai_autofill_at: nowIso });
+      }
+    } catch(e){ console.warn('[bc-ai] contact timestamp patch failed:', e.message); }
   } catch(e){ console.warn('[bc-ai] log build failed:', e.message); }
 
   try {

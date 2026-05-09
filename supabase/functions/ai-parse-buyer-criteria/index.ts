@@ -39,7 +39,7 @@ function resolveModel(raw: unknown): string {
   return MODEL_ALIASES[raw.trim().toLowerCase()] || MODEL_DEFAULT
 }
 const MAX_TOKENS = 4096
-const PROMPT_VERSION = 'bc-v1.5'
+const PROMPT_VERSION = 'bc-v1.6'
 
 // Maps a FIELD_SPEC.group to the asset-class label(s) (from ASSET_TYPE_VOCAB)
 // that the field is scoped to. If the buyer's proposed/current
@@ -972,6 +972,30 @@ RULES THAT NEVER BEND
       acreage.
 5. is_vip_buyer = true ONLY when notes/tags clearly mark the buyer as
    VIP / top-tier / "our best buyer" / etc., OR a "VIP" tag is present.
+6. CRM ADMIN TERMINOLOGY — DO NOT MISREAD THESE AS DOLLAR AMOUNTS.
+   The team uses these abbreviations as CAMPAIGN CADENCE / CONTACT
+   ADMIN markers throughout the notes. They are NEVER prices.
+     "12M FUB"  → 12-month follow-up campaign cadence
+     "12mo FUB" / "12 mo FUB" / "12 month FUB" → same
+     "6M FUB" / "6mo FUB" / "3M FUB" / "3mo FUB" → 6/3-month follow-up
+     "FUB"       → "Follow Up Boss" CRM contact / a follow-up entry
+     "CM"        → ContactMatcher / call-monitor / contact metadata
+     "AA"        → an agent's initials at end of note (signature)
+     "Mojo Dialer" / "Mojo" → outbound dialer system
+     "via: COLE - <date> - Sheet1.csv" → import provenance
+     "Just call" → action item ("just give them a call")
+     A bare "M" / "mo" after a small integer (1M, 3M, 6M, 12M, 24M)
+       with NO leading $ → MONTHS, not millions.
+     A bare "K" / "k" after a small number with NO leading $ → could
+       be units of thousand-something (e.g. "10k SF") — context-
+       dependent.
+   ONLY treat as a dollar amount when the number has a leading "$"
+   or words like "million" / "thousand" or "budget" / "asking" /
+   "offer" attach it explicitly to a price context. "12M FUB" alone
+   is NEVER $12 million. If you've seen any prior BC record show
+   max_purchase_price = 12000000 with no real cite, that's almost
+   certainly this exact mistake — flag it as na with reason
+   "stale unsourced value, likely from 12M-FUB misread".
 
 ═══════════════════════════════════════════════════════════════════════
 EXAMPLES

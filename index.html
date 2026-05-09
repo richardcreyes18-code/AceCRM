@@ -32588,13 +32588,24 @@ function _bcAiRenderReviewModal(bcId, resp, hostModal){
       editorCell = _bcAiBuildEditor(col, confEntry.value, resolvedKind, resolvedOptions);
       acceptCell = `<input type="checkbox" data-kind="value" id="aiAccept_${col}" checked style="margin:0;cursor:pointer;" title="AI looked at this field and agreed with the current value."/>`;
     } else if(naEntry){
-      stateLabel = '<span style="font-size:9px;color:#7c3aed;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:99px;padding:1px 6px;">N/A or override</span>';
-      valCell = `<span style="font-size:11px;color:#7c3aed;font-style:italic;">No preference</span>`;
+      // v280: be explicit about whether this NA proposal is CLEARING a
+      // stale value or just marking an empty field. Otherwise the EDIT
+      // cell shows the existing value and looks like it's about to be
+      // applied (it isn't — data-kind="na" goes through the no-preference
+      // branch in the apply path, ignoring the editor value).
+      const beforeIsEmpty = (before === null || before === undefined || before === '');
+      if(!beforeIsEmpty){
+        stateLabel = '<span style="font-size:9px;color:#b91c1c;background:#fef2f2;border:1px solid #fecaca;border-radius:99px;padding:1px 6px;">Will clear</span>';
+        valCell = `<div style="font-size:11px;color:#b91c1c;font-weight:600;line-height:1.3;">Will clear current value<br><span style="font-size:9px;color:#94a3b8;font-weight:500;">(${fmtVal(before)} → No preference)</span></div>`;
+      } else {
+        stateLabel = '<span style="font-size:9px;color:#7c3aed;background:#f5f3ff;border:1px solid #ddd6fe;border-radius:99px;padding:1px 6px;">N/A or override</span>';
+        valCell = `<span style="font-size:11px;color:#7c3aed;font-style:italic;">Mark as No Preference</span>`;
+      }
       // v208: even when AI proposes N/A, give the user an editor to put a
-      // value in. The Apply checkbox kind switches based on whether they
-      // type something — handled at apply time by checking the editor.
-      editorCell = _bcAiBuildEditor(col, before, resolvedKind, resolvedOptions);
-      acceptCell = `<input type="checkbox" data-kind="na" id="aiAccept_${col}" checked style="margin:0;cursor:pointer;"/>`;
+      // value in — typing into it during apply switches the kind to
+      // "value" via the apply path's empty-string check.
+      editorCell = _bcAiBuildEditor(col, '', resolvedKind, resolvedOptions);
+      acceptCell = `<input type="checkbox" data-kind="na" id="aiAccept_${col}" checked style="margin:0;cursor:pointer;" title="${beforeIsEmpty ? 'Apply will mark this field as No Preference.' : 'Apply will CLEAR the current value (' + String(before) + ') and mark No Preference. Type a new value above to override and write that instead.'}"/>`;
     } else if(isCurrentNa){
       stateLabel = '<span style="font-size:9px;color:#94a3b8;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:99px;padding:1px 6px;">already N/A — override</span>';
       valCell = `<span style="font-size:11px;color:#94a3b8;font-style:italic;">N/A</span>`;
@@ -32811,6 +32822,24 @@ window._bcAiAutoFillApply = async function(bcId, btn){
       userOverrides[col] = parsed;
       if(!proposed[col]) userOnlyCols.add(col);
     } else if(cb.dataset.kind === 'na'){
+      // v280: if the user typed an override into the editor on an NA
+      // row, treat it as a value-kind apply instead — match v208's
+      // original intent that NA rows can be overridden by typing.
+      const editEl = document.getElementById('aiVal_' + col);
+      const raw = editEl ? String(editEl.value ?? '').trim() : '';
+      if(raw){
+        const editType = editEl.dataset.editType || 'text';
+        let parsed;
+        if(editType === 'boolean')      parsed = raw === 'true';
+        else if(editType === 'number'){ const n = Number(raw.replace(/[^\d.\-]/g, '')); parsed = isFinite(n) ? n : null; }
+        else                             parsed = raw;
+        if(parsed != null && parsed !== ''){
+          acceptedValueCols.add(col);
+          userOverrides[col] = parsed;
+          if(!proposed[col]) userOnlyCols.add(col);
+          continue;
+        }
+      }
       acceptedNaCols.add(col);
     }
   }

@@ -32,6 +32,10 @@ for (const [name, value] of Object.entries(countyMap)) { window[name] = value; }
 // v262: agent-picker widget — 14 exports attached to window.
 for (const [name, value] of Object.entries(agentPicker)) { window[name] = value; }
 
+// v263: app-lists admin — 33 exports attached to window.
+import * as appLists from './admin/app-lists.js';
+for (const [name, value] of Object.entries(appLists)) { window[name] = value; }
+
 import {
   _stripCommas, _parseNum, _fmtNum, _phoneDigits, fmtMoney, fmtPct,
 } from './utils/format.js';

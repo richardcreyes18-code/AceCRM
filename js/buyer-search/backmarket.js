@@ -681,12 +681,16 @@ export function _bmParseNotes(notes){
   }
 
   // ── NJ COUNTIES ──────────────────────────────────────────
-  const window.NJ_COUNTIES = ['atlantic','bergen','burlington','camden','cape may','cumberland','essex',
+  // v267: this is a LOCAL lowercase variant for case-insensitive matching;
+  // the perl regex during migration mangled `const NJ_COUNTIES = [...]` into
+  // `const window.NJ_COUNTIES = [...]`. Renamed to `_njLower` to avoid the
+  // collision and preserve the original local-variable intent.
+  const _njLower = ['atlantic','bergen','burlington','camden','cape may','cumberland','essex',
     'gloucester','hudson','hunterdon','mercer','middlesex','monmouth','morris','ocean',
     'passaic','salem','somerset','sussex','union','warren'];
   // For "union" we need word boundaries — "union" is also a common noun
   const notesCounties = [];
-  for(const c of window.NJ_COUNTIES){
+  for(const c of _njLower){
     const re = new RegExp('\\b'+c+'\\b(?:\\s+county)?','i');
     if(re.test(text)){
       // Extra check for "union" — only count if followed by "county" or in a "counties:" list

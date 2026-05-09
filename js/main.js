@@ -52,6 +52,7 @@ import * as richText     from './widgets/rich-text.js';
 import * as assetCleanup from './asset-cleanup/asset-cleanup.js';
 import * as gmail         from './email/gmail.js';
 import * as emailTemplates from './email/templates.js';
+import * as emailLibrary  from './email/library.js';
 for (const [name, value] of Object.entries(workbench))      { window[name] = value; }
 for (const [name, value] of Object.entries(portfolios))     { window[name] = value; }
 for (const [name, value] of Object.entries(dashboard))      { window[name] = value; }
@@ -60,6 +61,7 @@ for (const [name, value] of Object.entries(richText))       { window[name] = val
 for (const [name, value] of Object.entries(assetCleanup))   { window[name] = value; }
 for (const [name, value] of Object.entries(gmail))          { window[name] = value; }
 for (const [name, value] of Object.entries(emailTemplates)) { window[name] = value; }
+for (const [name, value] of Object.entries(emailLibrary))   { window[name] = value; }
 
 // Sanity log so we can confirm in DevTools that the module graph loaded.
 // Counts confirm the schema data extraction is byte-complete.
@@ -94,4 +96,5 @@ console.log('[ace-modules] schemas + utils + core loaded', {
   assetCleanup: Object.keys(assetCleanup).length,
   gmail: Object.keys(gmail).length,
   emailTemplates: Object.keys(emailTemplates).length,
+  emailLibrary: Object.keys(emailLibrary).length,
 });

@@ -32351,6 +32351,17 @@ window._bcAiAutoFill = function(bcId){
         <input type="checkbox" id="bcAiOnlyFillEmpty" checked style="margin:0;"/>
         <label for="bcAiOnlyFillEmpty" style="cursor:pointer;">Only fill empty fields (uncheck to overwrite existing values too)</label>
       </div>
+      <div style="display:flex;align-items:center;gap:10px;margin-top:10px;font-size:11px;color:#475569;">
+        <label style="font-weight:600;color:#0f172a;">Model:</label>
+        <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;">
+          <input type="radio" name="bcAiModel" value="sonnet" id="bcAiModelSonnet" checked style="margin:0;"/>
+          Sonnet 4.6 <span style="color:#94a3b8;font-size:10px;">(accurate · ~$0.04/run)</span>
+        </label>
+        <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;">
+          <input type="radio" name="bcAiModel" value="haiku" id="bcAiModelHaiku" style="margin:0;"/>
+          Haiku 4.5 <span style="color:#94a3b8;font-size:10px;">(cheap · ~$0.013/run)</span>
+        </label>
+      </div>
       <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px;">
         <button onclick="document.getElementById('bcAiPromptModal')?.remove()"
           style="background:transparent;border:1px solid #cbd5e1;color:#64748b;padding:8px 14px;font-size:12px;border-radius:8px;cursor:pointer;font-family:inherit;">Cancel</button>
@@ -32365,6 +32376,8 @@ window._bcAiAutoFillRun = async function(bcId, btn){
   const promptModal = document.getElementById('bcAiPromptModal');
   const additionalText = document.getElementById('bcAiAdditionalText')?.value || '';
   const onlyFillEmpty = document.getElementById('bcAiOnlyFillEmpty')?.checked === true;
+  // v279: per-run model select. "sonnet" (default) or "haiku".
+  const modelChoice = document.querySelector('input[name="bcAiModel"]:checked')?.value || 'sonnet';
   if(btn){ btn.disabled = true; btn.textContent = '⏳ Reading…'; }
   // Swap the prompt modal for a loading state — same spinner the deal
   // version uses so the experience is consistent.
@@ -32406,6 +32419,7 @@ window._bcAiAutoFillRun = async function(bcId, btn){
         only_fill_empty: onlyFillEmpty,
         additional_text: additionalText,
         contact_tags: contactTags,    // v269
+        model: modelChoice,           // v279
       }),
     });
     resp = await r.json();
@@ -32421,6 +32435,7 @@ window._bcAiAutoFillRun = async function(bcId, btn){
     contact_tags: contactTags,
     additional_text: additionalText,
     only_fill_empty: onlyFillEmpty,
+    model_choice: modelChoice,    // v279 — what the user requested
     response: resp,
     ran_at: new Date().toISOString(),
   };
@@ -32463,6 +32478,7 @@ window._bcAiCopyDiagnostic = async function(btn){
       contact_tags:     diag.contact_tags || [],
       additional_text:  diag.additional_text || '',
       only_fill_empty:  diag.only_fill_empty,
+      model_choice:     diag.model_choice || null,    // v279 — user's request
       prompt_version:   resp.prompt_version || resp.diagnostic?.prompt_version || null,
       model:            resp.model || resp.diagnostic?.model || null,
       input_summary:    resp.diagnostic?.input_summary || null,

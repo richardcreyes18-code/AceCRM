@@ -23,7 +23,21 @@ const cors: Record<string, string> = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
 
-const MODEL = 'claude-sonnet-4-6'
+// v279: model is now per-request. Default = Sonnet 4.6 for accuracy;
+// callers can pass `model: "haiku"` to test the cheaper Haiku 4.5 path.
+const MODEL_DEFAULT = 'claude-sonnet-4-6'
+const MODEL_ALIASES: Record<string, string> = {
+  sonnet:           'claude-sonnet-4-6',
+  'sonnet-4-6':     'claude-sonnet-4-6',
+  'claude-sonnet-4-6': 'claude-sonnet-4-6',
+  haiku:            'claude-haiku-4-5',
+  'haiku-4-5':      'claude-haiku-4-5',
+  'claude-haiku-4-5': 'claude-haiku-4-5',
+}
+function resolveModel(raw: unknown): string {
+  if (typeof raw !== 'string' || !raw.trim()) return MODEL_DEFAULT
+  return MODEL_ALIASES[raw.trim().toLowerCase()] || MODEL_DEFAULT
+}
 const MAX_TOKENS = 4096
 const PROMPT_VERSION = 'bc-v1.5'
 
@@ -326,6 +340,7 @@ interface BodyShape {
   only_fill_empty?: boolean
   additional_text?: string
   contact_tags?: string[]   // v270
+  model?: string            // v279 — "sonnet" | "haiku" | full model id
 }
 
 function jsonResp(body: unknown, status = 200) {
@@ -1398,6 +1413,7 @@ Deno.serve(async (req: Request) => {
     const contact_tags: string[] = Array.isArray(body.contact_tags)
       ? body.contact_tags.map(s => String(s)).filter(Boolean).slice(0, 50)
       : []
+    const MODEL = resolveModel(body.model)   // v279 — per-request model
 
     if (!buyer_criteria_id || typeof buyer_criteria_id !== 'string') {
       return jsonResp({ ok: false, error: 'buyer_criteria_id (uuid) is required' }, 400)

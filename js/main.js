@@ -48,10 +48,12 @@ import * as workbench from './workbench/workbench.js';
 import * as portfolios from './portfolios/portfolios.js';
 import * as dashboard from './dashboard/dashboard.js';
 import * as geocoding from './geocoding/google.js';
+import * as richText from './widgets/rich-text.js';
 for (const [name, value] of Object.entries(workbench))  { window[name] = value; }
 for (const [name, value] of Object.entries(portfolios)) { window[name] = value; }
 for (const [name, value] of Object.entries(dashboard))  { window[name] = value; }
 for (const [name, value] of Object.entries(geocoding))  { window[name] = value; }
+for (const [name, value] of Object.entries(richText))   { window[name] = value; }
 
 // Sanity log so we can confirm in DevTools that the module graph loaded.
 // Counts confirm the schema data extraction is byte-complete.
@@ -82,4 +84,5 @@ console.log('[ace-modules] schemas + utils + core loaded', {
   portfolios: Object.keys(portfolios).length,
   dashboard: Object.keys(dashboard).length,
   geocoding: Object.keys(geocoding).length,
+  richText: Object.keys(richText).length,
 });

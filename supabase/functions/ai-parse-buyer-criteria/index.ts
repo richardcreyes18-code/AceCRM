@@ -25,7 +25,7 @@ const cors: Record<string, string> = {
 
 const MODEL = 'claude-sonnet-4-6'
 const MAX_TOKENS = 4096
-const PROMPT_VERSION = 'bc-v1.2'
+const PROMPT_VERSION = 'bc-v1.3'
 
 // Maps a FIELD_SPEC.group to the asset-class label(s) (from ASSET_TYPE_VOCAB)
 // that the field is scoped to. If the buyer's proposed/current
@@ -530,6 +530,11 @@ OTHER TAG RULES (apply when buy_intent is "buyer" or "both"):
   - U.S. STATE-NAME tags ("New Jersey", "Pennsylvania", "New York",
     "Florida", etc.) → include the 2-letter code in preferred_states.
     Cite: "tag: <Tag value>".
+  - COUNTY-NAME tags ("Union county", "Essex County", "Bergen County",
+    "Suffolk County", any tag matching "<Name> [Cc]ount[yi](?:es)?"):
+    promote into preferred_counties as "<Name> County, <ST>" — infer
+    the state from other state-level signals (state tag, notes,
+    state-name in the tag itself). Cite: "tag: <Tag value>".
   - PERSON-NAME tags (a tag that looks like "First Last", e.g.
     "Daniel Keenan") → IGNORE. These are usually the agent who created
     the contact, not a buy signal.
@@ -553,6 +558,31 @@ NOTES-READING RULES:
    - HISTORICAL ("we owned a strip mall in 2019", "I previously bought")
      → DO NOT fill. Past ownership is not buy-box.
 
+1a. STATED BUY-BOX ALWAYS WINS — PAST DEAL ACTIVITY DOES NOT OVERRIDE.
+   When the notes contain an explicit min/max range (especially if it
+   appears more than once: "Multi Fam 4-6 Units", "Multi Fam 4-6 Units"),
+   you MUST populate the structured min/max fields with that range,
+   even when other notes show the buyer pursued a deal slightly outside
+   the range ("sent 8U, sounded interested" when stated buy-box is 4-6).
+
+   Rationale: downstream buyer search applies a ±N "forgiveness" slider.
+   A 4-6 unit buyer with a ±2 forgiveness is found for any 2-8 unit
+   deal. If you leave mf_min_units / mf_max_units empty because of an
+   8-unit data point, the buyer becomes invisible to the search and
+   the forgiveness has nothing to flex against.
+
+   Specifically:
+   - If a stated range is repeated in 2+ notes, treat it as canonical
+     buy-box. Fill it with HIGH confidence. Mention any out-of-range
+     deal activity in other_requirements as a flexibility note —
+     "Showed interest in an 8-unit in Aug 2024, slightly above stated
+     4-6 range." Do NOT flag the min/max as uncertain.
+   - If two stated ranges conflict (e.g. "4-6 units" in 2024, "10-20
+     units" in 2026), the recent one wins per rule #2 (RECENCY).
+   - Only flag a stated range as uncertain when there is GENUINE
+     ambiguity in the most-recent stated buy-box itself, not when
+     past deal activity merely flexed beyond the stated range.
+
 2. RECENCY: When two notes conflict, prefer the more-recent one.
    created_at timestamps are provided in [brackets] before each note.
 
@@ -571,22 +601,53 @@ NOTES-READING RULES:
    no signal. Mark a field as "na" ONLY when the buyer EXPLICITLY
    excluded it ("no preference on X", "doesn't matter", "anything works").
 
-6. GEOGRAPHY MUST BE DECOMPOSED. When the notes describe a region in
+6. GEOGRAPHY MUST BE DECOMPOSED — ALL FOUR STRUCTURED FIELDS REQUIRED
+   WHEN THE SIGNALS ARE PRESENT. When the notes describe a region in
    prose ("Boston to Philadelphia corridor extending into central PA
    and the Hudson Valley"), do NOT just dump it into
-   location_preferences. Also fill the structured fields:
-     - preferred_states: comma-separated 2-letter codes covering the
-       prose. "Boston to Philly" implies MA, RI, CT, NY, NJ, PA.
-       "Hudson Valley" implies NY. Be over-inclusive at the state level.
-     - preferred_cities: any city named explicitly ("Pennsville",
-       "Burlington").
-     - preferred_counties: only if a county is named outright
-       ("Bergen County", "Suffolk County"). Don't infer counties from
-       cities.
-     - simple_area_preference: only if a curated region label is named
-       (e.g. "North NJ", "South FL"). Otherwise leave blank.
+   location_preferences. ALWAYS also fill these structured fields when
+   the signal exists:
+
+     - preferred_states (REQUIRED when ANY geographic signal exists):
+       Comma-separated 2-letter codes covering the prose. "Boston to
+       Philly" implies MA, RI, CT, NY, NJ, PA. "Hudson Valley" implies
+       NY. Be over-inclusive at the state level. State-name tags
+       ("Pennsylvania") add their 2-letter code.
+
+     - preferred_cities (REQUIRED when ANY city is named in the notes):
+       Every city the notes name by name MUST go here, comma-separated.
+       This is non-optional. If the call note says "Pennsville,
+       Burlington" — both cities. If the note says "looking in
+       Elizabeth" — Elizabeth. If 5 cities are named — all 5. The
+       only reason to leave this blank is if NO cities are named at
+       all in any note.
+
+     - preferred_counties (REQUIRED when a county is named outright):
+       Format: "<County> County, <ST>" — e.g. "Bergen County, NJ",
+       "Suffolk County, NY". Don't infer counties from cities. But
+       DO read county tags ("Union county", "Essex county", "Bergen
+       County") as direct signals — promote those into
+       preferred_counties.
+
+     - simple_area_preference (REQUIRED when notes use a curated
+       region phrase): The known curated labels are:
+         "North Jersey", "Central Jersey", "South Jersey",
+         "North NJ", "Central NJ", "South NJ",
+         "North FL", "Central FL", "South FL",
+         "Greater Boston", "Greater NYC", "Greater Philadelphia",
+         "Hudson Valley", "Capital Region", "Sun Belt",
+         "Mid-Atlantic", "Gulf Coast", "Bay Area", "Tri-State"
+       If the notes use one of these phrases (or close variants like
+       "South Jersey" or "developed RT in South Jersey"), put it
+       verbatim in simple_area_preference. The picker on the form
+       accepts these labels exactly. If multiple curated regions
+       appear, comma-separate them.
+
    The free-form location_preferences field stays for the full
-   description; the structured fields exist alongside it.
+   prose description; the structured fields exist ALONGSIDE it. NEVER
+   populate location_preferences while leaving preferred_cities or
+   preferred_states empty when the underlying signal is present in
+   the notes.
 
 ═══════════════════════════════════════════════════════════════════════
 STEP 2.4 — DESIRED PROPERTY TYPES: CATEGORIES + SUBTYPES
@@ -893,6 +954,7 @@ OUTPUT:
     "shopping_max_sf":         400000,
     "preferred_states":        "MA, RI, CT, NY, NJ, PA",
     "preferred_cities":        "Pennsville, Burlington",
+    "simple_area_preference":  "South Jersey",
     "location_preferences":    "Boston to Philadelphia corridor extending into central PA and the Hudson Valley/Capital region. South Jersey developed corridors (Pennsville, Burlington).",
     "other_requirements":      "Distressed or over-leveraged situations preferred. Owns 4 centers in NJ plus development sites in NJ. Exploring warehouse opportunities in South Jersey, smallest target ~140k SF (uncertain whether that minimum applies to warehouse, retail, or both)."
   },
@@ -903,6 +965,7 @@ OUTPUT:
     "shopping_max_sf":         "from note @ 2026-01-13: '100,000 to 400,000 SF'",
     "preferred_states":        "from note @ 2026-01-13: 'Boston to Philadelphia corridor extending out into central PA and up into the Hudson Valley/Capital region'; tag: Pennsylvania",
     "preferred_cities":        "from call @ 2026-01-19: 'Pennsville, Burlington'",
+    "simple_area_preference":  "from call @ 2026-01-19: 'South Jersey - Developed RT' and 'South Jersey'",
     "location_preferences":    "from note @ 2026-01-13: 'Boston to Philadelphia corridor...'; from call @ 2026-01-19: 'South Jersey - Developed RT, Pennsville, Burlington'",
     "other_requirements":      "from note @ 2026-01-13: 'Distressed/over leveraged is a plus'; from call @ 2026-01-19: 'Owns 4 centers in NJ and dev sites in NJ, Warehouse explore, Smallest 140K SqFt'"
   },
@@ -913,6 +976,7 @@ OUTPUT:
     "shopping_max_sf":         "high",
     "preferred_states":        "high",
     "preferred_cities":        "high",
+    "simple_area_preference":  "high",
     "location_preferences":    "high",
     "other_requirements":      "medium"
   },
@@ -936,6 +1000,91 @@ NOTES on what this example does NOT propose:
   - NO is_vip_buyer = true. "hl_engaged" alone is not a VIP signal.
   - NO "Daniel Keenan" or "fub export" influence on any field. They
     are noise.
+
+═══════════════════════════════════════════════════════════════════════
+
+EXAMPLE 4 — Stated buy-box vs out-of-range past activity.
+This case demonstrates rule 1a: when notes state an explicit range
+("Multi Fam 4-6 Units") and other notes show past activity outside
+that range ("sent 8U sounded interested"), the stated range still
+wins for the structured fields. The flexibility goes in
+other_requirements, not as a reason to leave the buy-box empty.
+
+INPUT TAGS:
+  ["Bounced", "Buyer", "asset - multi family", "Union county",
+   "Buyers - MULTI FAMILY", "hl_engaged"]
+  (Bounced = ignore; "Union county" = county tag → preferred_counties;
+   "Buyers - MULTI FAMILY" = collection tag, ignore for buy-box;
+   "hl_engaged" = engagement, not VIP.)
+
+INPUT NOTES:
+[note @ 2024-05-30] Buyer Elizabeth Multi Fam 4-6 Units. Just call.
+[note @ 2024-06-06] Buyer Elizabeth Multi Fam 4-6 Units. Just call.
+12M FUB - CM.
+[note @ 2024-08-12] Sent Elizabeth 8U sounded interested. AA
+[note @ 2026-04-06] 718 Monroe Ave, Elizabeth — Duplex + Bonus.
+560-562 3rd Ave, Elizabeth — 6 unit MF. Asking $1.45m.
+[note @ 2026-04-15] Offered: $785,000 net all cash quick close & $900,000
+net with financing. Said another guy offered him $1.2m.
+
+OUTPUT:
+{
+  "buy_intent": "buyer",
+  "top_level_notes": "Multifamily buyer in Elizabeth, NJ (Union County). Stated buy-box is repeatedly 4-6 units; one Aug 2024 note shows interest in an 8-unit. Stated range is canonical — flexibility goes in other_requirements.",
+  "fields": {
+    "desired_property_types":  "Multifamily",
+    "mf_min_units":            4,
+    "mf_max_units":            6,
+    "preferred_states":        "NJ",
+    "preferred_counties":      "Union County, NJ",
+    "preferred_cities":        "Elizabeth",
+    "location_preferences":    "Elizabeth, NJ (Union County)",
+    "financing_type":          "Mix",
+    "other_requirements":      "Stated buy-box: 4-6 unit multifamily in Elizabeth. Showed interest in an 8-unit in Aug 2024 — slightly above stated range, suggests some flex on the upper bound. Active deals in 2026: presented 718 Monroe Ave (duplex + bonus) and 560-562 3rd Ave (6-unit, $1.45M asking); buyer offered $785K all-cash or $900K with financing on at least one of them. 12-month FUB cadence."
+  },
+  "citations": {
+    "desired_property_types":  "tag: asset - multi family",
+    "mf_min_units":            "from note @ 2024-05-30: 'Multi Fam 4-6 Units' (repeated 2024-06-06)",
+    "mf_max_units":            "from note @ 2024-05-30: 'Multi Fam 4-6 Units' (repeated 2024-06-06)",
+    "preferred_states":        "from note @ 2024-05-30: 'Buyer Elizabeth' (Elizabeth is in NJ)",
+    "preferred_counties":      "tag: Union county",
+    "preferred_cities":        "from note @ 2024-05-30: 'Buyer Elizabeth Multi Fam'",
+    "location_preferences":    "from note @ 2024-05-30: 'Buyer Elizabeth Multi Fam'; tag: Union county",
+    "financing_type":          "from note @ 2026-04-15: '$785,000 net all cash quick close & $900,000 net with financing' — buyer offered both forms, indicating Mix",
+    "other_requirements":      "from note @ 2024-05-30: 'Multi Fam 4-6 Units'; from note @ 2024-08-12: 'Sent Elizabeth 8U sounded interested'; from note @ 2026-04-06: '718 Monroe Ave / 560-562 3rd Ave'; from note @ 2026-04-15: 'Offered $785,000 net all cash quick close & $900,000 net with financing'"
+  },
+  "confidence": {
+    "desired_property_types":  "high",
+    "mf_min_units":            "high",
+    "mf_max_units":            "high",
+    "preferred_states":        "high",
+    "preferred_counties":      "high",
+    "preferred_cities":        "high",
+    "location_preferences":    "high",
+    "financing_type":          "medium",
+    "other_requirements":      "high"
+  },
+  "explanations": {
+    "mf_min_units":            "Stated buy-box '4-6 units' repeated across two May/June 2024 notes — canonical range.",
+    "mf_max_units":            "Same source. Aug 2024 8-unit interest is past activity, not a redefinition of the buy-box; flexibility noted in other_requirements per rule 1a.",
+    "financing_type":          "Apr 2026 offer was structured as both all-cash and financing on the same deal — Mix is the closest enum match."
+  },
+  "na": [],
+  "uncertain": []
+}
+
+NOTES on what this example does NOT do:
+  - Does NOT leave mf_min_units / mf_max_units empty just because of
+    the 8-unit interest. The stated 4-6 range wins; the 8-unit
+    interest is past activity that goes in other_requirements.
+  - Does NOT propose max_purchase_price. The $1.45M ask, $1.2M outside
+    offer, and $785K-$900K offer are all DEAL-SPECIFIC numbers — none
+    are a stated portfolio budget. Leave max_purchase_price alone.
+    (If the buyer had said "I'm looking for deals up to $2M" — that's
+    a stated budget. Deal-specific offer/ask/competing-offer numbers
+    are not.)
+  - Does NOT flag mf_max_units as uncertain. There's no genuine
+    ambiguity in the stated buy-box itself.
 `
 
 function buildEligibleFieldsList(args: {

@@ -33675,9 +33675,61 @@ function bcToggleNeedsReviewFilter(){ bcCycleReviewFilter(); }
 // User picks N + filter + options, then submit kicks off the existing
 // batch flow with the bulk-AI auto-trigger flag set.
 // ════════════════════════════════════════════════════════════════════
-window._bcBulkAiAutoFillLauncher = function(){
-  if(!Array.isArray(allBuyerCriteria) || !allBuyerCriteria.length){
-    alert('Buyer criteria not loaded yet. Open the Buyer Criteria tab first, let it load, then come back here.');
+// v297: silent paginated BC list loader. Mirrors the on-demand loader
+// inside bcOpenExpanded so the bulk launcher can be opened from
+// Settings without first visiting the Buyer Criteria tab. Idempotent —
+// no-op when allBuyerCriteria is already populated.
+async function _bcEnsureBuyerCriteriaLoaded(){
+  if(Array.isArray(allBuyerCriteria) && allBuyerCriteria.length) return;
+  let rows = [], from = 0, batchSize = 1000;
+  while(true){
+    const batch = await _sbGet(SB_TABLES.buyerCriteria, `select=*&order=created_at.desc&limit=${batchSize}&offset=${from}`);
+    if(!batch || !batch.length) break;
+    rows = rows.concat(batch);
+    if(batch.length < batchSize) break;
+    from += batchSize;
+  }
+  allBuyerCriteria = rows.map(row => {
+    const fields = {};
+    for(const [snake, atLabel] of Object.entries(SB_BC_MAP)){
+      if(snake === 'id') continue;
+      const v = row[snake];
+      fields[atLabel] = (v === null || v === undefined) ? '' : v;
+    }
+    fields['Import Source'] = row.import_source || '';
+    fields['Buyer']         = row.contact_id ? [row.contact_id] : [];
+    fields['_contactId']    = row.contact_id;
+    return {
+      id: row.id,
+      fields,
+      extra_fields: (row.extra_fields && typeof row.extra_fields === 'object') ? row.extra_fields : {},
+    };
+  });
+}
+
+// v297: paginated loader for every Buyer-tagged contact's id. Used
+// by the bulk launcher's "no-BC" filter to compute the set difference
+// against existing BCs.
+async function _bcLoadBuyerTaggedContactIds(){
+  const ids = [];
+  let from = 0, batchSize = 1000;
+  while(true){
+    const batch = await _sbGet('ace_contacts', `deleted_at=is.null&fub_tags=cs.{Buyer}&select=id&limit=${batchSize}&offset=${from}`);
+    if(!batch || !batch.length) break;
+    for(const r of batch){ if(r && r.id) ids.push(r.id); }
+    if(batch.length < batchSize) break;
+    from += batchSize;
+  }
+  return ids;
+}
+
+window._bcBulkAiAutoFillLauncher = async function(){
+  // v297: if BCs aren't loaded (e.g. user opened Settings → Tools
+  // directly), fetch silently. The launcher needs them for the diff
+  // logic + the "untouched" filter.
+  try { await _bcEnsureBuyerCriteriaLoaded(); }
+  catch(e){
+    alert('Could not load buyer criteria: ' + (e.message || e));
     return;
   }
   const modal = document.createElement('div');
@@ -33711,6 +33763,10 @@ window._bcBulkAiAutoFillLauncher = function(){
         <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:#334155;margin-bottom:5px;cursor:pointer;">
           <input type="radio" name="bcBulkFilter" value="all" style="margin-top:2px;"/>
           <span><strong>All buyer-tagged contacts</strong><br><span style="color:#94a3b8;font-size:11px;">Random shuffle from the full buyer-criteria list.</span></span>
+        </label>
+        <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:#334155;margin-bottom:5px;cursor:pointer;background:#fef9c3;border:1px solid #fde68a;padding:8px 10px;border-radius:6px;">
+          <input type="radio" name="bcBulkFilter" value="no-bc" style="margin-top:2px;"/>
+          <span><strong>Buyer-tagged contacts without a BC yet</strong><br><span style="color:#854d0e;font-size:11px;">Auto-creates a blank BC for each, then walks through them with AI Auto-Fill. v297.</span></span>
         </label>
       </div>
 
@@ -33753,28 +33809,105 @@ window._bcBulkAiAutoFillStart = async function(btn){
   const model = document.querySelector('input[name="bcBulkModel"]:checked')?.value || 'auto';
   if(btn){ btn.disabled = true; btn.textContent = '⏳ Picking buyers…'; }
 
-  // Pick candidates from allBuyerCriteria. v285 v1: keep the candidate
-  // selection client-side and simple. Stratification across Haiku/Sonnet
-  // can come later if the simple version proves repetitive.
+  // Pick candidates from allBuyerCriteria. v285: stratification across
+  // Haiku/Sonnet can come later if the simple version proves repetitive.
+  // v297: new "no-bc" filter creates blank BCs on the fly for buyer-
+  // tagged contacts that don't have one yet.
   const lastAtKey = 'Last AI Autofill At';
-  const all = (allBuyerCriteria || []).filter(r => r && r.id && r.fields);
-  let candidates;
-  if(filter === 'untouched'){
-    candidates = all.filter(r => !r.fields[lastAtKey]);
+  let queue = [];
+
+  if(filter === 'no-bc'){
+    if(btn) btn.textContent = '⏳ Finding contacts without BCs…';
+    let buyerIds;
+    try { buyerIds = await _bcLoadBuyerTaggedContactIds(); }
+    catch(e){
+      if(btn){ btn.disabled = false; btn.textContent = '✦ Start bulk run'; }
+      alert('Failed to load buyer-tagged contacts: ' + (e.message || e));
+      return;
+    }
+    const existing = new Set(
+      (allBuyerCriteria || []).map(r => r.fields?._contactId).filter(Boolean)
+    );
+    let missing = buyerIds.filter(cid => !existing.has(cid));
+    if(!missing.length){
+      if(btn){ btn.disabled = false; btn.textContent = '✦ Start bulk run'; }
+      alert('All buyer-tagged contacts already have a BC. Nothing to create.');
+      return;
+    }
+    // Shuffle then take N.
+    for(let i = missing.length - 1; i > 0; i--){
+      const j = Math.floor(Math.random() * (i + 1));
+      [missing[i], missing[j]] = [missing[j], missing[i]];
+    }
+    const sample = missing.slice(0, size);
+    const proceed = confirm(
+      `Found ${missing.length} buyer-tagged contact${missing.length===1?'':'s'} without a BC.\n` +
+      `Create ${sample.length} blank BC${sample.length===1?'':'s'} now and walk through them with AI Auto-Fill?\n\n` +
+      `Each blank BC is a real DB row — they'll show up on the Buyer Criteria page.`
+    );
+    if(!proceed){
+      if(btn){ btn.disabled = false; btn.textContent = '✦ Start bulk run'; }
+      return;
+    }
+    if(btn) btn.textContent = `⏳ Creating ${sample.length} BCs…`;
+    const today = new Date().toISOString().split('T')[0];
+    const newIds = [];
+    for(const contactId of sample){
+      try {
+        const inserted = await _sbPost(SB_TABLES.buyerCriteria, {
+          contact_id: contactId,
+          date_added: today,
+        });
+        const newId = Array.isArray(inserted) ? inserted[0]?.id : inserted?.id;
+        if(newId) newIds.push({ id: newId, contact_id: contactId });
+      } catch(e){ console.warn('[bulk-ai] BC create failed for contact', contactId, e.message); }
+    }
+    if(!newIds.length){
+      if(btn){ btn.disabled = false; btn.textContent = '✦ Start bulk run'; }
+      alert('Failed to create any blank BCs. Check the console for details.');
+      return;
+    }
+    // Hydrate the in-memory cache so bcOpenExpanded can find each new BC.
+    for(const { id } of newIds){
+      try {
+        const fresh = await _sbGet(SB_TABLES.buyerCriteria, `id=eq.${id}&select=*&limit=1`);
+        const row = Array.isArray(fresh) && fresh[0];
+        if(!row) continue;
+        const fields = {};
+        for(const [snake, atLabel] of Object.entries(SB_BC_MAP)){
+          if(snake === 'id') continue;
+          const v = row[snake];
+          fields[atLabel] = (v === null || v === undefined) ? '' : v;
+        }
+        fields['Import Source'] = row.import_source || '';
+        fields['Buyer']         = row.contact_id ? [row.contact_id] : [];
+        fields['_contactId']    = row.contact_id;
+        allBuyerCriteria.unshift({
+          id: row.id, fields,
+          extra_fields: (row.extra_fields && typeof row.extra_fields === 'object') ? row.extra_fields : {},
+        });
+      } catch(e){ console.warn('[bulk-ai] BC hydrate failed for', id, e.message); }
+    }
+    queue = newIds.map(x => x.id);
   } else {
-    candidates = all.slice();
+    const all = (allBuyerCriteria || []).filter(r => r && r.id && r.fields);
+    let candidates;
+    if(filter === 'untouched'){
+      candidates = all.filter(r => !r.fields[lastAtKey]);
+    } else {
+      candidates = all.slice();
+    }
+    if(!candidates.length){
+      if(btn){ btn.disabled = false; btn.textContent = '✦ Start bulk run'; }
+      alert('No matching buyers found for that filter.');
+      return;
+    }
+    for(let i = candidates.length - 1; i > 0; i--){
+      const j = Math.floor(Math.random() * (i + 1));
+      [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+    }
+    queue = candidates.slice(0, size).map(r => r.id);
   }
-  if(!candidates.length){
-    if(btn){ btn.disabled = false; btn.textContent = '✦ Start bulk run'; }
-    alert('No matching buyers found for that filter.');
-    return;
-  }
-  // Shuffle (Fisher-Yates) so the user gets variety on each run.
-  for(let i = candidates.length - 1; i > 0; i--){
-    const j = Math.floor(Math.random() * (i + 1));
-    [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
-  }
-  const queue = candidates.slice(0, size).map(r => r.id);
   if(!queue.length){
     if(btn){ btn.disabled = false; btn.textContent = '✦ Start bulk run'; }
     alert('No buyers picked.');

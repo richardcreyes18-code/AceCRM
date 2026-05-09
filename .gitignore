@@ -28,3 +28,7 @@ node_modules/
 
 # Vercel
 .vercel/
+
+# Supabase CLI local cache
+supabase/.temp/
+supabase/.branches/

@@ -32269,12 +32269,36 @@ window._bcAiAutoFillRun = async function(bcId, btn){
       </div>`;
   }
   const cfg = getConfig();
+
+  // v269: pass contact tags to the AI. Tags are deterministic signals
+  // (`asset - multi family` → MF, `Buyer` confirms intent, `Seller`-alone
+  // means seller-only, `1031` biases financing, etc.) that the AI can't
+  // infer from notes alone. Fetched fresh — don't trust the cached
+  // contact object since the schema map doesn't include fub_tags.
+  let contactTags = [];
+  try {
+    const bc = (window.allBuyerCriteria || []).find(r => r.id === bcId);
+    const contactId = (bc?.fields?.['Buyer'] || [])[0] || bc?.fields?.['_contactId'];
+    if(contactId){
+      const rows = await _sbGet('ace_contacts',
+        `id=eq.${encodeURIComponent(contactId)}&select=fub_tags&limit=1`);
+      const r0 = Array.isArray(rows) && rows[0];
+      contactTags = Array.isArray(r0?.fub_tags) ? r0.fub_tags : [];
+    }
+  } catch(e){ console.warn('[BC AI] contact-tag fetch failed:', e.message); }
+
   let resp;
   try {
     const r = await fetch(`${cfg.url}/functions/v1/ai-parse-buyer-criteria`, {
       method: 'POST',
       headers: { 'Content-Type':'application/json', apikey: cfg.key, Authorization: 'Bearer '+cfg.key },
-      body: JSON.stringify({ buyer_criteria_id: bcId, dry_run: true, only_fill_empty: onlyFillEmpty, additional_text: additionalText }),
+      body: JSON.stringify({
+        buyer_criteria_id: bcId,
+        dry_run: true,
+        only_fill_empty: onlyFillEmpty,
+        additional_text: additionalText,
+        contact_tags: contactTags,    // v269
+      }),
     });
     resp = await r.json();
     if(!r.ok || !resp.ok) throw new Error(resp.error || `HTTP ${r.status}`);
@@ -32283,8 +32307,72 @@ window._bcAiAutoFillRun = async function(bcId, btn){
     alert('AI parse failed: ' + (e.message || e));
     return;
   }
+  // v269: stash the request inputs + response for the Copy Diagnostic button.
+  window._bcAiLastDiagnostic = {
+    buyer_criteria_id: bcId,
+    contact_tags: contactTags,
+    additional_text: additionalText,
+    only_fill_empty: onlyFillEmpty,
+    response: resp,
+    ran_at: new Date().toISOString(),
+  };
   // Render the review modal in place of the prompt modal.
   _bcAiRenderReviewModal(bcId, resp, promptModal);
+};
+
+// v269: gather everything from the current AI run + the user's accept/reject
+// state into a single JSON blob and copy to the clipboard. Pasted into Claude
+// Code chat, this is the artifact that lets us tune the system prompt with
+// no other context — the iteration loop the user wants for BC AI accuracy.
+window._bcAiCopyDiagnostic = async function(btn){
+  const orig = btn ? btn.textContent : '';
+  try {
+    const diag = window._bcAiLastDiagnostic || {};
+    const resp = diag.response || {};
+    // Snapshot the user's current accept/reject choices + any value overrides
+    // they've typed into the editor cells.
+    const userChoices = {};
+    document.querySelectorAll('input[id^="aiAccept_"]').forEach(cb => {
+      const col = cb.id.replace(/^aiAccept_/, '');
+      const editorEl = document.getElementById('aiVal_' + col);
+      const userVal = editorEl ? editorEl.value : null;
+      const propEntry = (resp.proposed_changes || {})[col];
+      const aiVal = propEntry ? propEntry.proposed : undefined;
+      const aiCite = propEntry ? propEntry.cite : undefined;
+      const overridden = (userVal != null && aiVal != null && String(userVal).trim() !== String(aiVal).trim());
+      userChoices[col] = {
+        accepted:    cb.checked,
+        ai_proposed: aiVal,
+        user_value:  userVal,
+        overridden:  overridden,
+        cite:        aiCite,
+      };
+    });
+
+    const blob = {
+      ran_at:           diag.ran_at,
+      buyer_criteria_id: diag.buyer_criteria_id,
+      contact_tags:     diag.contact_tags || [],
+      additional_text:  diag.additional_text || '',
+      only_fill_empty:  diag.only_fill_empty,
+      prompt_version:   resp.prompt_version || resp.diagnostic?.prompt_version || null,
+      model:            resp.model || resp.diagnostic?.model || null,
+      input_summary:    resp.diagnostic?.input_summary || null,
+      proposed_changes: resp.proposed_changes || {},
+      na_proposals:     resp.na_proposals || [],
+      uncertain_fields: resp.uncertain_fields || [],
+      source_breakdown: resp.source_breakdown || {},
+      user_choices:     userChoices,
+      // What the user thinks went wrong — the human-readable handoff:
+      user_note:        '',
+    };
+    await navigator.clipboard.writeText(JSON.stringify(blob, null, 2));
+    if(btn){ btn.textContent = '✓ Copied'; setTimeout(()=>{ if(btn) btn.textContent = orig || '📋 Copy diagnostic'; }, 1500); }
+  } catch(e){
+    console.error('[BC AI] copy diagnostic failed:', e);
+    alert('Copy failed: ' + (e.message || e));
+    if(btn) btn.textContent = orig;
+  }
 };
 
 function _bcAiRenderReviewModal(bcId, resp, hostModal){
@@ -32381,6 +32469,17 @@ function _bcAiRenderReviewModal(bcId, resp, hostModal){
       acceptCell = `<input type="checkbox" data-kind="value" id="aiAccept_${col}" style="margin:0;cursor:pointer;" title="Check to apply your manually-typed value for this row."/>`;
     }
     const explanation = (propEntry && propEntry.explanation) || (naEntry && naEntry.explanation) || '';
+    // v269: source-quote citation (when the edge function provides one).
+    // Rendered under the explanation as a small italic quote so the user
+    // can verify "AI said 20 units because of THIS note quote" without
+    // hunting through the Sources panel.
+    const cite = (propEntry && propEntry.cite) || (naEntry && naEntry.cite) || '';
+    // v269: confidence label (when provided by the edge function).
+    const conf = (propEntry && propEntry.confidence) || (naEntry && naEntry.confidence) || '';
+    const confBadge = conf ? `<span style="display:inline-block;font-size:8px;font-weight:700;padding:1px 5px;border-radius:99px;margin-left:4px;background:${conf==='high'?'#dcfce7':conf==='medium'?'#fef3c7':'#fee2e2'};color:${conf==='high'?'#15803d':conf==='medium'?'#92400e':'#991b1b'};text-transform:uppercase;letter-spacing:.04em;">${esc(conf)}</span>` : '';
+    const whyCell = explanation
+      ? `<div>${esc(explanation)}${confBadge}</div>${cite ? `<div style="margin-top:4px;font-size:10px;color:#64748b;font-style:normal;background:#f8fafc;border-left:2px solid #cbd5e1;padding:3px 6px;border-radius:0 3px 3px 0;">"${esc(cite)}"</div>` : ''}`
+      : (cite ? `<div style="font-size:10px;color:#64748b;font-style:normal;background:#f8fafc;border-left:2px solid #cbd5e1;padding:3px 6px;border-radius:0 3px 3px 0;">"${esc(cite)}"</div>` : '<span style="color:#cbd5e1;font-style:normal;">—</span>');
     // v208: all rows are at full opacity now since they're all editable.
     return `<tr style="border-top:1px solid #f1f5f9;">
       <td style="padding:7px 8px;font-size:11px;color:#0f172a;font-weight:500;vertical-align:top;width:160px;">
@@ -32390,7 +32489,7 @@ function _bcAiRenderReviewModal(bcId, resp, hostModal){
       <td style="padding:7px 8px;font-size:11px;color:#475569;vertical-align:top;width:130px;word-break:break-word;">${fmtVal(before)}</td>
       <td style="padding:7px 8px;vertical-align:top;width:160px;word-break:break-word;">${valCell}</td>
       <td style="padding:7px 8px;vertical-align:top;width:200px;">${editorCell}</td>
-      <td style="padding:7px 8px;font-size:10px;color:#475569;font-style:italic;line-height:1.4;vertical-align:top;word-break:break-word;">${explanation ? esc(explanation) : '<span style="color:#cbd5e1;font-style:normal;">—</span>'}</td>
+      <td style="padding:7px 8px;font-size:10px;color:#475569;font-style:italic;line-height:1.4;vertical-align:top;word-break:break-word;">${whyCell}</td>
       <td style="padding:7px 8px;text-align:center;vertical-align:top;width:90px;">${stateLabel}</td>
       <td style="padding:7px 8px;text-align:center;vertical-align:top;width:50px;">${acceptCell}</td>
     </tr>`;
@@ -32481,6 +32580,8 @@ function _bcAiRenderReviewModal(bcId, resp, hostModal){
         <div style="display:flex;gap:8px;">
           <button onclick="document.getElementById('bcAiReviewModal')?.remove()"
             style="background:transparent;border:1px solid #cbd5e1;color:#64748b;padding:7px 14px;font-size:12px;border-radius:8px;cursor:pointer;font-family:inherit;">Cancel</button>
+          <button onclick="_bcAiCopyDiagnostic(this)" title="Copy a JSON snapshot of this run (tags, prompt version, proposed values, citations, your accept/reject choices) for tuning the prompt with Claude Code."
+            style="background:#fef9c3;border:1px solid #fde68a;color:#854d0e;padding:7px 14px;font-size:12px;border-radius:8px;cursor:pointer;font-family:inherit;font-weight:600;">📋 Copy diagnostic</button>
           <button onclick="_bcAiSelectAll(true)"
             style="background:#f1f5f9;border:1px solid #cbd5e1;color:#0f172a;padding:7px 14px;font-size:12px;border-radius:8px;cursor:pointer;font-family:inherit;">Select all</button>
           <button onclick="_bcAiSelectAll(false)"

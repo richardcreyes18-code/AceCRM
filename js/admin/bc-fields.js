@@ -145,35 +145,58 @@ function esc(s){
 
 // ─── BC form integration ──────────────────────────────────────────────
 
-// Returns HTML for the extra fields of a given category, pre-filled
-// from record.extra_fields. Designed to slot into bcExpandedAssetSection
-// after the hardcoded fields. If no extras are defined for the
-// category, returns an empty string.
+// Returns HTML for the extra fields of a given chip text, pre-filled
+// from record.extra_fields. Slots into bcExpandedAssetSection after
+// the hardcoded fields.
 //
-// Inputs map keys are namespaced "bcf_extra_<category-slug>_<col>" so
-// the collector can find them regardless of category casing.
-export function _bcRenderExtraFields(category, record){
-  const defs = _bcFieldsGet(category);
-  if(!defs.length) return '';
+// chipText accepts EITHER a bare category ("Multifamily") or a full
+// "Category: Subtype" chip ("Multifamily: Garden/Low Rise"). When the
+// chip names a subtype, BOTH the category-level fields AND any
+// subtype-specific fields render, in that order — category-level first,
+// subtype below. v290.
+//
+// Input ids are namespaced "bcf_extra_<scope-slug>_<col>" so the
+// collector can disambiguate even when category + subtype define the
+// same column key (last writer in DOM wins for collection).
+export function _bcRenderExtraFields(chipText, record){
+  const chip = String(chipText || '').trim();
+  if(!chip) return '';
+  const colonIdx = chip.indexOf(':');
+  const category = colonIdx > 0 ? chip.slice(0, colonIdx).trim() : chip;
+  const subtype  = colonIdx > 0 ? chip.slice(colonIdx + 1).trim() : '';
+  const fullKey  = subtype ? `${category}: ${subtype}` : '';
+
+  const catDefs = _bcFieldsGet(category) || [];
+  const subDefs = fullKey ? (_bcFieldsGet(fullKey) || []) : [];
+  if(!catDefs.length && !subDefs.length) return '';
+
   const extra = (record?.extra_fields && typeof record.extra_fields === 'object')
     ? record.extra_fields
     : {};
-  const slug = _categorySlug(category);
-  const rows = defs.map(d => {
-    const id  = `bcf_extra_${slug}_${d.col}`;
-    const val = extra[d.col];
-    return _renderFieldRow(d, id, val);
-  }).join('');
-  return `
-    <div class="info-box" data-bc-extra-section="${esc(slug)}" style="margin-top:10px;border:1px dashed #c0d0e8;background:#fbfdff;">
-      <div class="info-box-title" style="display:flex;justify-content:space-between;align-items:center;">
-        <span>${esc(category)} — Custom Requirements</span>
-        <span style="font-size:9px;color:#94a3b8;font-weight:500;">${defs.length} field${defs.length===1?'':'s'} · runtime-defined</span>
-      </div>
-      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;">
-        ${rows}
-      </div>
-    </div>`;
+
+  const block = (scopeLabel, scopeKey, defs) => {
+    if(!defs.length) return '';
+    const slug = _categorySlug(scopeKey);
+    const rows = defs.map(d => {
+      const id  = `bcf_extra_${slug}_${d.col}`;
+      const val = extra[d.col];
+      return _renderFieldRow(d, id, val);
+    }).join('');
+    return `
+      <div class="info-box" data-bc-extra-section="${esc(slug)}" style="margin-top:10px;border:1px dashed #c0d0e8;background:#fbfdff;">
+        <div class="info-box-title" style="display:flex;justify-content:space-between;align-items:center;">
+          <span>${esc(scopeLabel)} — Custom Requirements</span>
+          <span style="font-size:9px;color:#94a3b8;font-weight:500;">${defs.length} field${defs.length===1?'':'s'} · runtime-defined</span>
+        </div>
+        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;">
+          ${rows}
+        </div>
+      </div>`;
+  };
+  return [
+    block(category, category, catDefs),
+    block(fullKey, fullKey, subDefs),
+  ].join('');
 }
 
 function _renderFieldRow(d, id, val){

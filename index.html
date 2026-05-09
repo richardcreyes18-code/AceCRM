@@ -31109,13 +31109,12 @@ function bcExpandedAssetSection(asset, f){
   // of the chip text ("industrial: warehouse" → "industrial_warehouse")
   // which never matched the canonical key ("warehouse").
   const sectionKey = _bcAssetSectionKey(assetClean);
-  // v288: append runtime-defined extra fields for the chip's bare
-  // category (e.g. "Multifamily" for "Multifamily: Garden"). Renders
-  // after the hardcoded fields. Empty string when no extras defined.
+  // v288/v290: append runtime-defined extra fields. Pass the FULL chip
+  // text — the renderer surfaces both category-level AND subtype-level
+  // fields when the chip names a subtype.
   let extraHtml = '';
   if(typeof window._bcRenderExtraFields === 'function'){
-    const bareCategory = String(assetClean || '').split(':')[0].trim();
-    try { extraHtml = window._bcRenderExtraFields(bareCategory, _bcCurrentRecord || {}) || ''; }
+    try { extraHtml = window._bcRenderExtraFields(assetClean, _bcCurrentRecord || {}) || ''; }
     catch(e){ console.warn('[bc-fields] render extras failed:', e.message); }
   }
   return `

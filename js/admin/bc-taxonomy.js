@@ -186,13 +186,20 @@ export function _bcAssetTaxonomyAdmin(){
         const sk = sectionKeyOf(fullChip);
         const has = !sk.startsWith('misc__');
         totalChips++; if(has) chipsWithSection++;
+        // v290: per-subtype custom-fields editor entry point. Same
+        // _bcFieldsAdminForCategory call as the category-level button,
+        // but the scope key is the full "Category: Subtype" chip text
+        // so storage stays cleanly partitioned.
+        const subFieldCount = (typeof window._bcFieldsGet === 'function')
+          ? (window._bcFieldsGet(fullChip) || []).length : 0;
         return `<tr style="border-top:1px solid #f1f5f9;">
           <td style="padding:5px 8px;color:#475569;">
             <input type="text" value="${esc(sub)}" data-sub-edit="${catIdx}|${subIdx}" style="width:100%;padding:3px 6px;font-size:11px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;"/>
           </td>
           <td style="padding:5px 8px;color:#94a3b8;font-family:ui-monospace,Menlo,monospace;font-size:10px;">${esc(sk)}${SECTION_LABELS[sk] ? ' <span style="color:#cbd5e1;">(' + esc(SECTION_LABELS[sk]) + ')</span>' : ''}</td>
           <td style="padding:5px 8px;font-size:11px;">${has ? '<span style="color:#15803d;">✓</span>' : '<span style="color:#b91c1c;">⚠ no section</span>'}</td>
-          <td style="padding:5px 8px;text-align:right;">
+          <td style="padding:5px 8px;text-align:right;white-space:nowrap;">
+            <button data-action="edit-sub-fields" data-cat-name="${esc(cat)}" data-sub-name="${esc(sub)}" title="Edit custom requirements fields for ${esc(fullChip)}" style="background:#ede9fe;border:1px solid #c4b5fd;color:#5b21b6;cursor:pointer;font-size:10px;padding:2px 8px;border-radius:4px;font-weight:600;margin-right:4px;">📋${subFieldCount?` ${subFieldCount}`:''}</button>
             <button data-action="del-sub" data-cat="${catIdx}" data-sub="${subIdx}" title="Delete subtype" style="background:transparent;border:none;color:#b91c1c;cursor:pointer;font-size:14px;padding:0 4px;">✕</button>
           </td>
         </tr>`;
@@ -314,6 +321,22 @@ export function _bcAssetTaxonomyAdmin(){
       if(!cat) return;
       if(typeof window._bcFieldsAdminForCategory === 'function'){
         window._bcFieldsAdminForCategory(cat, () => render());
+      } else {
+        alert('Fields admin not loaded yet.');
+      }
+      return;
+    }
+    if(action === 'edit-sub-fields'){
+      // v290: per-subtype fields scope. Same fields-admin function but
+      // the scope key is the full "Category: Subtype" chip text. Field
+      // defs are stored under that exact key in
+      // ace_ai_settings.bc_field_definitions.
+      const cat = t.getAttribute('data-cat-name');
+      const sub = t.getAttribute('data-sub-name');
+      if(!cat || !sub) return;
+      const scope = `${cat}: ${sub}`;
+      if(typeof window._bcFieldsAdminForCategory === 'function'){
+        window._bcFieldsAdminForCategory(scope, () => render());
       } else {
         alert('Fields admin not loaded yet.');
       }

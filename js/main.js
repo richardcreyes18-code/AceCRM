@@ -40,13 +40,17 @@ import {
 } from './core/auth.js';
 import { _showToast, showSaveConfirm } from './core/toast.js';
 
-// Phase 4: workbench feature module. Phase 4b deletes the legacy block in
-// index.html, so every export must be reachable from inline onclick handlers
-// in the rendered HTML — attach all exports to window.
+// Phase 4: feature modules. Each phase-4 module gets every export attached
+// to window so inline onclick handlers in rendered HTML resolve. Modules are
+// imported in topological order so any cross-module references (none today)
+// resolve at execution time.
 import * as workbench from './workbench/workbench.js';
-for (const [name, value] of Object.entries(workbench)) {
-  window[name] = value;
-}
+import * as portfolios from './portfolios/portfolios.js';
+for (const [name, value] of Object.entries(workbench))  { window[name] = value; }
+// Phase 4a-portfolios: parallel only — legacy block in index.html still owns
+// runtime, so DON'T attach portfolios exports to window yet (they'd shadow
+// the legacy function declarations and may break hover handlers etc.). The
+// import above proves the module parses; the cutover commit attaches them.
 
 // Sanity log so we can confirm in DevTools that the module graph loaded.
 // Counts confirm the schema data extraction is byte-complete.
@@ -72,6 +76,7 @@ console.log('[ace-modules] schemas + utils + core loaded', {
   sessionVersion: SESSION_VERSION,
   proxyUrl: PROXY_URL.endsWith('/crm-proxy'),
   config:  getConfig().isConnected,
-  // workbench module — exported function count
+  // feature modules — exported symbol counts
   workbench: Object.keys(workbench).length,
+  portfolios: Object.keys(portfolios).length,
 });

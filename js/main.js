@@ -47,10 +47,7 @@ import { _showToast, showSaveConfirm } from './core/toast.js';
 import * as workbench from './workbench/workbench.js';
 import * as portfolios from './portfolios/portfolios.js';
 for (const [name, value] of Object.entries(workbench))  { window[name] = value; }
-// Phase 4a-portfolios: parallel only — legacy block in index.html still owns
-// runtime, so DON'T attach portfolios exports to window yet (they'd shadow
-// the legacy function declarations and may break hover handlers etc.). The
-// import above proves the module parses; the cutover commit attaches them.
+for (const [name, value] of Object.entries(portfolios)) { window[name] = value; }
 
 // Sanity log so we can confirm in DevTools that the module graph loaded.
 // Counts confirm the schema data extraction is byte-complete.

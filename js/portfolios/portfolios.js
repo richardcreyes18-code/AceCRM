@@ -58,7 +58,11 @@ function _sbToAt(row, map) {
 // actions. Turn C adds the 📁 icon tag on Deal Board rows.
 
 // ── CACHE OF WHICH PORTFOLIO WE'RE VIEWING ─────────────────────────────
-let _currentPortfolioId = null;
+// _currentPortfolioId lives on window so the legacy router + sync handlers
+// in index.html (lines ~1619, 4319, 26261, 26291) read/write the same
+// value as this module. Bare references below resolve to window via the
+// global lookup chain — no module-scope `let` declared so there's no
+// shadowing.
 
 // ── CRUD HELPERS ───────────────────────────────────────────────────────
 // Creates a new portfolio row. fields uses Airtable-style display keys

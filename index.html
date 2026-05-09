@@ -804,25 +804,27 @@
   </div><!-- end config-box -->
 </div><!-- end config-overlay -->
 
-<!-- TOP NAV -->
+<!-- TOP NAV — v299: design-system .ds-brand wordmark; kill emoji clutter
+     on primary nav. Stage tabs become text-only. Tasks/Map/Agent keep
+     a single hairline accent (no emoji) so the slate ribbon reads as
+     Bloomberg-clean rather than emoji-soup. -->
 <div class="top-nav">
-  <div class="sidebar-logo" style="background:none;padding:0;border:none;margin-right:10px;">
-    <span style="font-size:20px;font-weight:bold;font-style:italic;color:#1a3a6e;">
-      <span style="color:#2060b0;">A</span>ce <span style="color:#2060b0;">A</span>cquisitions
-    </span>
-  </div>
-  <button class="nav-btn active" data-page="dashboard" onclick="setNav(this,'dashboard')">📊 Dashboard</button>
+  <span class="ds-brand" style="margin-right:14px;">
+    <span class="ds-brand-mark">A</span>
+    <span>Ace <span class="ds-brand-accent">CRM</span></span>
+  </span>
+  <button class="nav-btn active" data-page="dashboard" onclick="setNav(this,'dashboard')">Dashboard</button>
   <button class="nav-btn" data-page="home" onclick="setNav(this,'home')">Deals</button>
   <button class="nav-btn" data-page="pipeline" onclick="setNav(this,'pipeline')">Pipeline</button>
-  <button class="nav-btn" data-page="dealboard" onclick="setNav(this,'dealboard')" style="font-weight:bold;">Deal Board</button>
-  <button class="nav-btn" data-page="map" onclick="setNav(this,'map')" style="color:#059669;">🗺 Map</button>
+  <button class="nav-btn" data-page="dealboard" onclick="setNav(this,'dealboard')">Deal Board</button>
+  <button class="nav-btn" data-page="map" onclick="setNav(this,'map')">Map</button>
   <button class="nav-btn" data-page="contacts" onclick="setNav(this,'contacts')">Contacts</button>
   <button class="nav-btn" data-page="buyercriteria" onclick="setNav(this,'buyercriteria')">Buyer Criteria</button>
-  <button class="nav-btn" data-page="workbench" onclick="setNav(this,'workbench')" style="font-weight:600;">Workbench</button>
-  <button class="nav-btn" data-page="company" onclick="setNav(this,'company')">🏢 Company</button>
-  <button class="nav-btn" data-page="tasks-nav" onclick="setNav(this,'tasks-nav')" style="font-weight:600;color:#a78bfa;">☑ Tasks</button>
-  <a class="nav-btn" href="/ace-agent/" target="_blank" rel="noopener" style="font-weight:600;color:#ff5b3a;text-decoration:none;">🎙 Ace Agent</a>
-  <button class="nav-btn" id="navSettingsBtn" data-page="settings" onclick="setNav(this,'settings')" style="display:none;">⚙ Settings</button>
+  <button class="nav-btn" data-page="workbench" onclick="setNav(this,'workbench')">Workbench</button>
+  <button class="nav-btn" data-page="company" onclick="setNav(this,'company')">Company</button>
+  <button class="nav-btn" data-page="tasks-nav" onclick="setNav(this,'tasks-nav')">Tasks</button>
+  <a class="nav-btn" href="/ace-agent/" target="_blank" rel="noopener" style="text-decoration:none;">Ace Agent</a>
+  <button class="nav-btn" id="navSettingsBtn" data-page="settings" onclick="setNav(this,'settings')" style="display:none;">Settings</button>
   <!-- v102.33: Portfolios moved to a toggle inside the Deal Board header.
        Field Map moved to a button inside the Settings page (admin-only).
        Both routes still work via setNav() / URL fragment for backwards compat. -->

@@ -190,7 +190,7 @@ export function showDashboard(){
         onmouseenter="this.style.transform='translateY(-2px)'"
         onmouseleave="this.style.transform=''">
         <div style="font-size:11px;font-weight:700;color:${countColor};text-transform:uppercase;letter-spacing:.06em;">${label}</div>
-        <div style="font-size:34px;font-weight:800;color:${countColor};line-height:1.1;margin:6px 0 4px;">${count}</div>
+        <div style="font-size:34px;font-weight:800;color:${countColor};line-height:1.1;margin:6px 0 4px;font-family:'Source Code Pro',ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;letter-spacing:-0.02em;">${count}</div>
         <div style="font-size:11px;color:${countColor};font-weight:600;">${goalText}</div>
         <div style="font-size:9px;color:#94a3b8;margin-top:4px;">Click to edit goal</div>
       </div>`;
@@ -204,7 +204,7 @@ export function showDashboard(){
       flex:1;min-width:180px;background:#f0f9ff;border:2px solid #bae6fd;
       border-radius:12px;padding:18px 20px;">
       <div style="font-size:11px;font-weight:700;color:#0369a1;text-transform:uppercase;letter-spacing:.06em;">${label}</div>
-      <div id="${elId}" style="font-size:34px;font-weight:800;color:#0369a1;line-height:1.1;margin:6px 0 4px;">—</div>
+      <div id="${elId}" style="font-size:34px;font-weight:800;color:#0369a1;line-height:1.1;margin:6px 0 4px;font-family:'Source Code Pro',ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;letter-spacing:-0.02em;">—</div>
       <div style="font-size:11px;color:#0369a1;font-weight:600;">Buyer leads entered</div>
     </div>`;
 
@@ -212,7 +212,7 @@ export function showDashboard(){
   const statTile = (label, value, sublabel, color) => `
     <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px 18px;box-shadow:0 1px 2px rgba(0,0,0,0.03);">
       <div style="font-size:11px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.05em;">${label}</div>
-      <div style="font-size:28px;font-weight:800;color:${color};line-height:1.1;margin-top:4px;">${value}</div>
+      <div style="font-size:28px;font-weight:800;color:${color};line-height:1.1;margin-top:4px;font-family:'Source Code Pro',ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;letter-spacing:-0.02em;">${value}</div>
       ${sublabel ? `<div style="font-size:11px;color:#94a3b8;margin-top:2px;">${sublabel}</div>` : ''}
     </div>`;
 

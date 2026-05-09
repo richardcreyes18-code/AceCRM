@@ -48,20 +48,22 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   display:flex;flex-direction:column;
   overflow:hidden;
 }
+/* v299: sidebar logo — kill the gradient per the redesign brief, use
+   solid Bloomberg-black slate; gold accent on the lead "A" matches the
+   top-nav .ds-brand accent. */
 .sidebar-logo{
-  background:linear-gradient(135deg,#0f172a 0%,#1e3a8a 60%,#2563eb 100%);
+  background:#0f172a;
   padding:16px 14px 12px;
   text-align:center;
-  border-bottom:1px solid var(--border);
+  border-bottom:1px solid #1e293b;
 }
 .sidebar-logo .logo-text{
-  font-size:26px;font-weight:700;color:#fff;
+  font-size:26px;font-weight:800;color:#fff;
   font-style:italic;letter-spacing:-0.5px;
-  text-shadow:0 2px 8px rgba(0,0,0,0.4);
 }
 .sidebar-logo .logo-text span{color:#fbbf24;}
 .sidebar-logo .logo-sub{
-  font-size:9px;color:#93c5fd;letter-spacing:2.5px;margin-top:3px;font-weight:500;text-transform:uppercase;
+  font-size:9px;color:#94a3b8;letter-spacing:2.5px;margin-top:3px;font-weight:600;text-transform:uppercase;
 }
 .sidebar-welcome{
   background:var(--primary-light);

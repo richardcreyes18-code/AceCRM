@@ -23,20 +23,36 @@ const cors: Record<string, string> = {
   'Access-Control-Allow-Methods': 'POST, OPTIONS',
 }
 
-// v279: model is now per-request. Default = Sonnet 4.6 for accuracy;
-// callers can pass `model: "haiku"` to test the cheaper Haiku 4.5 path.
-const MODEL_DEFAULT = 'claude-sonnet-4-6'
+// v279: model is now per-request. Default = "auto" (Sonnet 4.6 for big
+// note sets, Haiku 4.5 for small ones). Callers can force "sonnet" or
+// "haiku" by passing the model field directly.
+const MODEL_SONNET = 'claude-sonnet-4-6'
+const MODEL_HAIKU  = 'claude-haiku-4-5'
+const MODEL_DEFAULT = MODEL_SONNET
 const MODEL_ALIASES: Record<string, string> = {
-  sonnet:           'claude-sonnet-4-6',
-  'sonnet-4-6':     'claude-sonnet-4-6',
-  'claude-sonnet-4-6': 'claude-sonnet-4-6',
-  haiku:            'claude-haiku-4-5',
-  'haiku-4-5':      'claude-haiku-4-5',
-  'claude-haiku-4-5': 'claude-haiku-4-5',
+  sonnet:               MODEL_SONNET,
+  'sonnet-4-6':         MODEL_SONNET,
+  'claude-sonnet-4-6':  MODEL_SONNET,
+  haiku:                MODEL_HAIKU,
+  'haiku-4-5':          MODEL_HAIKU,
+  'claude-haiku-4-5':   MODEL_HAIKU,
 }
-function resolveModel(raw: unknown): string {
-  if (typeof raw !== 'string' || !raw.trim()) return MODEL_DEFAULT
-  return MODEL_ALIASES[raw.trim().toLowerCase()] || MODEL_DEFAULT
+function resolveModel(raw: unknown): string | null {
+  // Returns null when the caller asked for "auto" (or didn't specify);
+  // routing is then decided after we know how much source text we have.
+  if (typeof raw !== 'string' || !raw.trim()) return null
+  const norm = raw.trim().toLowerCase()
+  if (norm === 'auto') return null
+  return MODEL_ALIASES[norm] || MODEL_DEFAULT
+}
+
+// v281: auto-routing thresholds. Big / multi-note buyers go to Sonnet so
+// dual-role detection + recency-conflict reasoning stays sharp; smaller
+// ones go to Haiku to save ~3x on tokens.
+const AUTO_ROUTING = {
+  // Either condition triggers Sonnet:
+  source_chars_threshold: 3000,
+  note_count_threshold:    5,
 }
 const MAX_TOKENS = 4096
 const PROMPT_VERSION = 'bc-v1.6'
@@ -1437,7 +1453,11 @@ Deno.serve(async (req: Request) => {
     const contact_tags: string[] = Array.isArray(body.contact_tags)
       ? body.contact_tags.map(s => String(s)).filter(Boolean).slice(0, 50)
       : []
-    const MODEL = resolveModel(body.model)   // v279 — per-request model
+    // v279/v281: model can be explicit ("sonnet" / "haiku") or "auto".
+    // Explicit choice locks immediately; auto routing is decided below
+    // once we know source_chars + note counts.
+    const explicitModel = resolveModel(body.model)
+    const modelChoiceRaw = (typeof body.model === 'string' && body.model.trim()) ? body.model.trim().toLowerCase() : 'auto'
 
     if (!buyer_criteria_id || typeof buyer_criteria_id !== 'string') {
       return jsonResp({ ok: false, error: 'buyer_criteria_id (uuid) is required' }, 400)
@@ -1562,6 +1582,32 @@ Deno.serve(async (req: Request) => {
 
     const contextText = sourceParts.join('\n\n')
     const source_chars = contextText.length
+
+    // v281: auto-routing — pick Sonnet for big / multi-note buyers,
+    // Haiku for smaller ones. Explicit body.model wins.
+    const _aceNotesCount = aceNotes.filter(n => n.body && String(n.body).trim()).length
+    const _fubNotesCount = fubNotes.filter(n => n.body && String(n.body).trim()).length
+    const _fubCallsCount = fubCalls.filter(c => c.note && String(c.note).trim()).length
+    const _totalNoteCount = _aceNotesCount + _fubNotesCount + _fubCallsCount
+    let MODEL: string
+    let modelRoutingReason: string
+    if (explicitModel) {
+      MODEL = explicitModel
+      modelRoutingReason = `explicit: caller requested "${modelChoiceRaw}"`
+    } else {
+      const bigBySource = source_chars >= AUTO_ROUTING.source_chars_threshold
+      const bigByCount  = _totalNoteCount >= AUTO_ROUTING.note_count_threshold
+      if (bigBySource || bigByCount) {
+        MODEL = MODEL_SONNET
+        const reasons: string[] = []
+        if (bigBySource) reasons.push(`source_chars=${source_chars} ≥ ${AUTO_ROUTING.source_chars_threshold}`)
+        if (bigByCount)  reasons.push(`notes=${_totalNoteCount} ≥ ${AUTO_ROUTING.note_count_threshold}`)
+        modelRoutingReason = `auto → sonnet (${reasons.join(', ')})`
+      } else {
+        MODEL = MODEL_HAIKU
+        modelRoutingReason = `auto → haiku (source_chars=${source_chars} < ${AUTO_ROUTING.source_chars_threshold}, notes=${_totalNoteCount} < ${AUTO_ROUTING.note_count_threshold})`
+      }
+    }
 
     const fieldStatusRaw = bc.field_status
     const fieldStatus: Record<string, unknown> =
@@ -1934,6 +1980,15 @@ Deno.serve(async (req: Request) => {
         guardrail_drops: {
           no_cite:              dropped.no_cite,
           out_of_scope_asset:   dropped.out_of_scope_asset,
+        },
+        // v281: auto-routing decision (which model + why).
+        model_routing: {
+          requested:  modelChoiceRaw,
+          decided:    MODEL,
+          reason:     modelRoutingReason,
+          source_chars,
+          note_count: _totalNoteCount,
+          thresholds: AUTO_ROUTING,
         },
       },
     })

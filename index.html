@@ -32351,15 +32351,19 @@ window._bcAiAutoFill = function(bcId){
         <input type="checkbox" id="bcAiOnlyFillEmpty" checked style="margin:0;"/>
         <label for="bcAiOnlyFillEmpty" style="cursor:pointer;">Only fill empty fields (uncheck to overwrite existing values too)</label>
       </div>
-      <div style="display:flex;align-items:center;gap:10px;margin-top:10px;font-size:11px;color:#475569;">
+      <div style="display:flex;align-items:center;gap:10px;margin-top:10px;font-size:11px;color:#475569;flex-wrap:wrap;">
         <label style="font-weight:600;color:#0f172a;">Model:</label>
         <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;">
-          <input type="radio" name="bcAiModel" value="sonnet" id="bcAiModelSonnet" checked style="margin:0;"/>
-          Sonnet 4.6 <span style="color:#94a3b8;font-size:10px;">(accurate · ~$0.04/run)</span>
+          <input type="radio" name="bcAiModel" value="auto" id="bcAiModelAuto" checked style="margin:0;"/>
+          Auto <span style="color:#94a3b8;font-size:10px;">(Sonnet for big notes, Haiku for short)</span>
+        </label>
+        <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;">
+          <input type="radio" name="bcAiModel" value="sonnet" id="bcAiModelSonnet" style="margin:0;"/>
+          Sonnet 4.6 <span style="color:#94a3b8;font-size:10px;">(force · accurate)</span>
         </label>
         <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;">
           <input type="radio" name="bcAiModel" value="haiku" id="bcAiModelHaiku" style="margin:0;"/>
-          Haiku 4.5 <span style="color:#94a3b8;font-size:10px;">(cheap · ~$0.013/run)</span>
+          Haiku 4.5 <span style="color:#94a3b8;font-size:10px;">(force · cheap)</span>
         </label>
       </div>
       <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:18px;">
@@ -32376,8 +32380,9 @@ window._bcAiAutoFillRun = async function(bcId, btn){
   const promptModal = document.getElementById('bcAiPromptModal');
   const additionalText = document.getElementById('bcAiAdditionalText')?.value || '';
   const onlyFillEmpty = document.getElementById('bcAiOnlyFillEmpty')?.checked === true;
-  // v279: per-run model select. "sonnet" (default) or "haiku".
-  const modelChoice = document.querySelector('input[name="bcAiModel"]:checked')?.value || 'sonnet';
+  // v279/v281: per-run model select. "auto" (default → server routes by
+  // note volume), "sonnet" (force accurate), or "haiku" (force cheap).
+  const modelChoice = document.querySelector('input[name="bcAiModel"]:checked')?.value || 'auto';
   if(btn){ btn.disabled = true; btn.textContent = '⏳ Reading…'; }
   // Swap the prompt modal for a loading state — same spinner the deal
   // version uses so the experience is consistent.
@@ -32478,7 +32483,8 @@ window._bcAiCopyDiagnostic = async function(btn){
       contact_tags:     diag.contact_tags || [],
       additional_text:  diag.additional_text || '',
       only_fill_empty:  diag.only_fill_empty,
-      model_choice:     diag.model_choice || null,    // v279 — user's request
+      model_choice:     diag.model_choice || null,    // v279 — user's request ("auto"/"sonnet"/"haiku")
+      model_routing:    resp.diagnostic?.model_routing || null,  // v281 — server decision + reason
       prompt_version:   resp.prompt_version || resp.diagnostic?.prompt_version || null,
       model:            resp.model || resp.diagnostic?.model || null,
       input_summary:    resp.diagnostic?.input_summary || null,

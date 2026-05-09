@@ -16,7 +16,13 @@ import {
   SB_TASK_MAP,
   SB_NOTIF_MAP,
   SB_MANUAL_COMP_MAP,
+  _sbToAt,
+  _atToSb,
 } from './schemas/index.js';
+// v260: legacy callers (not-yet-migrated features) still call _sbToAt/_atToSb
+// bare. Attach to window so they resolve.
+window._sbToAt = _sbToAt;
+window._atToSb = _atToSb;
 
 import {
   _stripCommas, _parseNum, _fmtNum, _phoneDigits, fmtMoney, fmtPct,

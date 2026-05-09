@@ -9,3 +9,4 @@ export { SB_CONTACT_MAP }    from './contacts.js';
 export { SB_BC_MAP }         from './buyer-criteria.js';
 export { SB_TASK_MAP, SB_NOTIF_MAP } from './tasks.js';
 export { SB_MANUAL_COMP_MAP } from './manual-comps.js';
+export { _sbToAt, _atToSb }  from './field-map.js';

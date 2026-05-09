@@ -21,28 +21,7 @@ import { SB_TABLES } from '../schemas/sb-tables.js';
 import { SB_PORTFOLIO_MAP } from '../schemas/portfolios.js';
 import { SB_PROP_MAP } from '../schemas/deals.js';
 import { _OFFER_TYPE_META } from '../schemas/offers.js';
-
-// Inline copies of field-map helpers (originally in legacy ~line 1363).
-// Kept private here until js/schemas/field-map.js is created in a later phase.
-function _atToSb(fields, map) {
-  const rev = Object.fromEntries(Object.entries(map).map(([k,v])=>[v,k]));
-  const out = {};
-  for (const [atField, val] of Object.entries(fields)) {
-    const sbCol = rev[atField];
-    if (!sbCol || sbCol === 'id') continue;
-    if (val === undefined) continue;
-    if (val === '') out[sbCol] = null;
-    else out[sbCol] = val;
-  }
-  return out;
-}
-function _sbToAt(row, map) {
-  const out = {};
-  for (const [sbCol, atField] of Object.entries(map)) {
-    if (row[sbCol] !== undefined && row[sbCol] !== null) out[atField] = row[sbCol];
-  }
-  return out;
-}
+import { _atToSb, _sbToAt } from '../schemas/field-map.js';
 
 // ═══════════════════════════════════════════════════════════════════════
 // LEGACY BLOCK BELOW — copied from index.html with `export` added to every

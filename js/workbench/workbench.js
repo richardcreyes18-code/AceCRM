@@ -22,6 +22,7 @@ import { showSaveConfirm } from '../core/toast.js';
 import { SB_TABLES } from '../schemas/sb-tables.js';
 import { SB_PROP_MAP } from '../schemas/deals.js';
 import { SB_BC_MAP } from '../schemas/buyer-criteria.js';
+import { _sbToAt } from '../schemas/field-map.js';
 
 // ═══════════════════════════════════════════════════════════════════════
 // MODULE STATE
@@ -42,16 +43,7 @@ let _workbenchActiveTab = 'properties'; // 'properties' | 'contacts' | 'meeting'
 // contact card or a buyer criteria card.
 const _wbContactPositions = new Map(); // contact_id -> position number
 
-// Inline copy of _sbToAt (originally in legacy script ~line 1363). Kept here
-// so this module stays self-contained until field-map helpers move into
-// js/schemas/field-map.js in a later phase.
-function _sbToAt(row, map) {
-  const out = {};
-  for (const [sbCol, atField] of Object.entries(map)) {
-    if (row[sbCol] !== undefined && row[sbCol] !== null) out[atField] = row[sbCol];
-  }
-  return out;
-}
+// _sbToAt now imported from js/schemas/field-map.js (Phase 4.5).
 
 // ═══════════════════════════════════════════════════════════════════════
 // CACHE WARM-UP (called by app boot, before any contact-add button paints)

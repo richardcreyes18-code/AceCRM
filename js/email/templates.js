@@ -22,6 +22,8 @@
 import { _sbGet, _sbPatch, _sbPost, _sbDelete } from '../core/supabase.js';
 import { showSaveConfirm } from '../core/toast.js';
 import { SB_TABLES } from '../schemas/sb-tables.js';
+import { SB_PROP_MAP } from '../schemas/deals.js';
+import { _sbToAt } from '../schemas/field-map.js';
 
 // ═══════════════════════════════════════════════════════════════════════
 // LEGACY BLOCK BELOW — copied from index.html with `export` added to top-

@@ -1358,31 +1358,9 @@ const SB_MANUAL_COMP_MAP = {
   created_at:'Created At', updated_at:'Updated At'
 };
 
-// ─── FIELD MAP HELPERS ─────────────────────────────────────────
-// Convert Supabase row → Airtable-style object (so all CRM code works unchanged)
-function _sbToAt(row, map) {
-  const out = {};
-  for (const [sbCol, atField] of Object.entries(map)) {
-    if (row[sbCol] !== undefined && row[sbCol] !== null) out[atField] = row[sbCol];
-  }
-  return out;
-}
-// Convert Airtable fields object → Supabase column object (for saves)
-function _atToSb(fields, map) {
-  const rev = Object.fromEntries(Object.entries(map).map(([k,v])=>[v,k]));
-  const out = {};
-  for (const [atField, val] of Object.entries(fields)) {
-    const sbCol = rev[atField];
-    if (!sbCol || sbCol === 'id') continue;
-    // Skip undefined — but keep null (clears field), false, 0
-    if (val === undefined) continue;
-    // Skip empty strings for fields that map to numeric/boolean columns
-    // (sending "" to an integer column causes Supabase errors)
-    if (val === '') out[sbCol] = null;
-    else out[sbCol] = val;
-  }
-  return out;
-}
+// v260: _sbToAt + _atToSb migrated to js/schemas/field-map.js.
+// They're attached to window.* by js/main.js so legacy bare callers
+// in this file (and any not-yet-migrated feature) still resolve.
 
 // ─── SUPABASE REST API HELPERS ─────────────────────────────────
 function _sbHeaders() {

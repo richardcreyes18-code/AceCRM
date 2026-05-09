@@ -63,7 +63,7 @@ const AUTO_ROUTING = {
   note_count_threshold:    6,
 }
 const MAX_TOKENS = 4096
-const PROMPT_VERSION = 'bc-v1.11'
+const PROMPT_VERSION = 'bc-v1.12'
 
 // Maps a FIELD_SPEC.group to the asset-class label(s) (from ASSET_TYPE_VOCAB)
 // that the field is scoped to. If the buyer's proposed/current
@@ -1811,7 +1811,7 @@ Deno.serve(async (req: Request) => {
     // reach the model via the eligible-fields list. Lookup keys against
     // the BC's desired_property_types so subtype chips inherit overrides
     // from the bare category.
-    const nativeOverridesByCol = new Map<string, { hidden?: boolean; label?: string; hint?: string }>()
+    const nativeOverridesByCol = new Map<string, { hidden?: boolean; label?: string; hint?: string; options?: string[] }>()
     try {
       const fieldRows2 = (await fetchSb(
         `${SUPABASE_URL}/rest/v1/ace_ai_settings?key=eq.bc_field_definitions&select=value&limit=1`,
@@ -1837,10 +1837,15 @@ Deno.serve(async (req: Request) => {
           for (const [col, ov] of Object.entries(perScope as Record<string, unknown>)) {
             if (!ov || typeof ov !== 'object' || Array.isArray(ov)) continue
             const o = ov as Record<string, unknown>
-            const out: { hidden?: boolean; label?: string; hint?: string } = {}
+            const out: { hidden?: boolean; label?: string; hint?: string; options?: string[] } = {}
             if (o.hidden === true) out.hidden = true
             if (typeof o.label === 'string' && o.label.trim()) out.label = o.label.trim()
             if (typeof o.hint  === 'string' && o.hint.trim())  out.hint  = o.hint.trim()
+            // v295: enum options override.
+            if (Array.isArray(o.options)) {
+              const opts = (o.options as unknown[]).map(s => String(s || '').trim()).filter(Boolean)
+              if (opts.length) out.options = opts
+            }
             // Last-write-wins across scopes; in practice scopes don't
             // overlap on the same col so this is fine.
             nativeOverridesByCol.set(col, out)
@@ -1859,8 +1864,15 @@ Deno.serve(async (req: Request) => {
           .filter(f => !nativeOverridesByCol.get(f.col)?.hidden)
           .map(f => {
             const ov = nativeOverridesByCol.get(f.col)
-            if (!ov || (!ov.label && !ov.hint)) return f
-            return { ...f, ...(ov.label ? { label: ov.label } : {}), ...(ov.hint ? { hint: ov.hint } : {}) }
+            if (!ov || (!ov.label && !ov.hint && !ov.options)) return f
+            return {
+              ...f,
+              ...(ov.label   ? { label:   ov.label   } : {}),
+              ...(ov.hint    ? { hint:    ov.hint    } : {}),
+              // v295: override options replace the hardcoded enum vocab
+              // for this request (model + validateEnumProposal both honor it).
+              ...(ov.options ? { options: ov.options } : {}),
+            }
           }),
         ...extraFieldDefs,
       ]

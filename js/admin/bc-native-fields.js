@@ -237,29 +237,44 @@ export function _bcRenderNativeFieldsPanel(scopeOrChip){
   const rows = fields.map(f => {
     const ov = overrides[f.col] || {};
     const isHidden = ov.hidden === true;
-    const labelOv  = ov.label || '';
-    const optsHtml = (f.type === 'enum' || f.type === 'multienum') && Array.isArray(f.options) && f.options.length
-      ? `<div style="font-size:10px;color:#64748b;margin-top:2px;">Options: ${f.options.map(esc_).join(' · ')}</div>`
+    const labelOv  = ov.label   || '';
+    const hintOv   = ov.hint    || '';
+    const optsOv   = Array.isArray(ov.options) && ov.options.length ? ov.options : null;
+    const isEnumLike = (f.type === 'enum' || f.type === 'multienum');
+
+    // Default option list (from the catalog) shown as a hint when no override exists.
+    const defaultOptsLine = (isEnumLike && Array.isArray(f.options) && f.options.length)
+      ? `Defaults: ${f.options.map(esc_).join(' · ')}`
       : '';
-    const hintHtml = f.hint
-      ? `<div style="font-size:10px;color:#94a3b8;font-style:italic;margin-top:3px;">${esc_(f.hint)}</div>`
+    // v295: enum options override editor — textarea (one per line).
+    const optionsEditor = isEnumLike
+      ? `<div style="grid-column:span 4;margin-top:4px;">
+           <label style="font-size:9px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;font-weight:600;">Override options (one per line — blank uses defaults)</label>
+           <textarea data-native-override="${esc_(f.col)}" data-native-prop="options" rows="${Math.max(2, optsOv ? optsOv.length : 0)}" placeholder="${esc_((f.options || []).join('\n'))}" style="width:100%;padding:5px 8px;font-size:11px;border:1px solid #cbd5e1;border-radius:4px;font-family:ui-monospace,Menlo,monospace;resize:vertical;">${esc_(optsOv ? optsOv.join('\n') : '')}</textarea>
+           ${defaultOptsLine ? `<div style="font-size:9px;color:#94a3b8;margin-top:2px;">${defaultOptsLine}</div>` : ''}
+         </div>`
       : '';
+    const defaultHintLine = f.hint
+      ? `<div style="font-size:9px;color:#94a3b8;margin-top:2px;">Default hint: <em>${esc_(f.hint)}</em></div>`
+      : '';
+
     return `
-      <div style="border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px;background:${isHidden ? '#fef2f2' : '#fff'};display:grid;grid-template-columns:auto 1fr 1fr 70px;gap:10px;align-items:center;">
-        <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:11px;color:${isHidden?'#b91c1c':'#475569'};font-weight:600;white-space:nowrap;" title="Uncheck to hide this field on every BC for this asset class">
+      <div style="border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px;background:${isHidden ? '#fef2f2' : '#fff'};display:grid;grid-template-columns:auto 1fr 1fr 70px;gap:10px;align-items:start;">
+        <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:11px;color:${isHidden?'#b91c1c':'#475569'};font-weight:600;white-space:nowrap;align-self:center;" title="Uncheck to hide this field on every BC for this asset class">
           <input type="checkbox" data-native-override="${esc_(f.col)}" data-native-prop="hidden" ${isHidden ? '' : 'checked'} style="margin:0;"/>
           ${isHidden ? 'Hidden' : 'Visible'}
         </label>
         <div>
           <div style="font-size:11px;color:#0f172a;font-weight:600;">${esc_(f.label)} <span style="color:#94a3b8;font-weight:400;">(default)</span></div>
-          ${optsHtml}
-          ${hintHtml}
+          <div style="font-size:9px;color:#94a3b8;font-family:ui-monospace,Menlo,monospace;margin-top:2px;">${esc_(f.col)} · ${esc_(f.type)}</div>
         </div>
         <div>
           <input type="text" data-native-override="${esc_(f.col)}" data-native-prop="label" value="${esc_(labelOv)}" placeholder="Override label (blank = use default)" style="width:100%;padding:5px 8px;font-size:11px;border:1px solid #cbd5e1;border-radius:4px;font-family:inherit;" title="Override the label shown to the user. Leave blank to use the default."/>
-          <div style="font-size:9px;color:#94a3b8;font-family:ui-monospace,Menlo,monospace;margin-top:2px;">${esc_(f.col)} · ${esc_(f.type)}</div>
+          <input type="text" data-native-override="${esc_(f.col)}" data-native-prop="hint" value="${esc_(hintOv)}" placeholder="${esc_(f.hint || 'Override placeholder text (blank = use default)')}" style="width:100%;padding:5px 8px;font-size:11px;border:1px solid #cbd5e1;border-radius:4px;font-family:inherit;margin-top:4px;" title="Override the placeholder / hint text. Leave blank to use the default."/>
+          ${defaultHintLine}
         </div>
-        <button data-native-override="${esc_(f.col)}" data-native-prop="reset" style="background:transparent;border:1px solid #e2e8f0;color:#64748b;cursor:pointer;font-size:10px;padding:4px 8px;border-radius:4px;font-family:inherit;" title="Clear all overrides for this field — restore default visibility + label.">Reset</button>
+        <button data-native-override="${esc_(f.col)}" data-native-prop="reset" style="background:transparent;border:1px solid #e2e8f0;color:#64748b;cursor:pointer;font-size:10px;padding:4px 8px;border-radius:4px;font-family:inherit;align-self:start;" title="Clear all overrides for this field — restore default visibility + label + hint + options.">Reset</button>
+        ${optionsEditor}
       </div>`;
   }).join('');
 
@@ -331,8 +346,44 @@ export function _bcNativeApplyOverrides(html, scopeOrChip){
       const labelEl = wrap.querySelector('.bc-label');
       if(labelEl) labelEl.textContent = ov.label.trim();
     }
+    // v295: hint override → updates the input's placeholder. For
+    // <select> there's no placeholder so we set `title` (tooltip).
+    if(typeof ov.hint === 'string' && ov.hint.trim()){
+      if(el.tagName === 'SELECT') el.setAttribute('title', ov.hint.trim());
+      else el.setAttribute('placeholder', ov.hint.trim());
+    }
+    // v295: enum options override → replace the <option> children of
+    // the <select>. Only applies to enum-like fields (helpers render
+    // them as <select>). Preserves the currently-selected value when
+    // it's still in the new options list.
+    if(Array.isArray(ov.options) && ov.options.length && el.tagName === 'SELECT'){
+      const currentValue = el.getAttribute('value') ||
+        (el.querySelector('option[selected]')?.getAttribute('value') ?? '');
+      const isMulti = !!el.multiple;
+      const newOpts = ov.options;
+      // Helper renders the empty value as f.value === o.v matching ''
+      // — preserve the legacy "(empty)" behavior by keeping a blank
+      // option at the top (matches what the original `sel()` does
+      // implicitly for unfilled enums via the existing { v:'', l:'Any' }
+      // patterns when present in the defaults).
+      const optionsHtml = newOpts.map(o => {
+        const sel = String(o) === String(currentValue);
+        return `<option value="${cssEscape(String(o))}"${sel ? ' selected' : ''}>${escHtml(String(o))}</option>`;
+      }).join('');
+      el.innerHTML = optionsHtml;
+      if(!isMulti){
+        // Best-effort restoration of the selected value if still present.
+        if(currentValue && newOpts.some(o => String(o) === String(currentValue))){
+          el.value = String(currentValue);
+        }
+      }
+    }
   }
   return tmp.innerHTML;
+}
+
+function escHtml(s){
+  return String(s==null?'':s).replace(/[<&>"]/g, c => ({'<':'&lt;','&':'&amp;','>':'&gt;','"':'&quot;'}[c]));
 }
 
 function cssEscape(s){

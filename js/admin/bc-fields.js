@@ -212,6 +212,19 @@ function _normalize(defs){
           if(ov.hidden === true) ovOut.hidden = true;
           if(typeof ov.label === 'string' && ov.label.trim()) ovOut.label = ov.label.trim();
           if(typeof ov.hint  === 'string' && ov.hint.trim())  ovOut.hint  = ov.hint.trim();
+          // v295: enum options override — array of strings, deduped + trimmed.
+          if(Array.isArray(ov.options)){
+            const seen = new Set();
+            const opts = [];
+            for(const o of ov.options){
+              const s = String(o || '').trim();
+              if(!s) continue;
+              const k = s.toLowerCase();
+              if(seen.has(k)) continue;
+              seen.add(k); opts.push(s);
+            }
+            if(opts.length) ovOut.options = opts;
+          }
           if(Object.keys(ovOut).length) cleanPerScope[col] = ovOut;
         }
         if(Object.keys(cleanPerScope).length) cleanMeta[scopeKey] = cleanPerScope;
@@ -570,6 +583,10 @@ export function _bcFieldsAdminForCategory(category, onClose){
           if(ov.hidden === true) out.hidden = true;
           if(typeof ov.label === 'string' && ov.label.trim()) out.label = ov.label.trim();
           if(typeof ov.hint  === 'string' && ov.hint.trim())  out.hint  = ov.hint.trim();
+          // v295: enum options override.
+          if(Array.isArray(ov.options) && ov.options.length){
+            out.options = ov.options.map(s => String(s || '').trim()).filter(Boolean);
+          }
           if(Object.keys(out).length) cleanScope[col] = out;
         }
         if(Object.keys(cleanScope).length){
@@ -633,6 +650,30 @@ export function _bcFieldsAdminForCategory(category, onClose){
       const v = String(t.value || '').trim();
       const ov = nativeOverrides[col] || {};
       if(v) ov.label = v; else delete ov.label;
+      if(Object.keys(ov).length) nativeOverrides[col] = ov;
+      else delete nativeOverrides[col];
+      dirty = true;
+      return;
+    }
+    // v295: hint override edits.
+    if(t.matches('[data-native-override][data-native-prop="hint"]')){
+      const col = t.getAttribute('data-native-override');
+      if(!col) return;
+      const v = String(t.value || '').trim();
+      const ov = nativeOverrides[col] || {};
+      if(v) ov.hint = v; else delete ov.hint;
+      if(Object.keys(ov).length) nativeOverrides[col] = ov;
+      else delete nativeOverrides[col];
+      dirty = true;
+      return;
+    }
+    // v295: enum options override edits (textarea, one per line).
+    if(t.matches('[data-native-override][data-native-prop="options"]')){
+      const col = t.getAttribute('data-native-override');
+      if(!col) return;
+      const lines = String(t.value || '').split(/\n/).map(s => s.trim()).filter(Boolean);
+      const ov = nativeOverrides[col] || {};
+      if(lines.length) ov.options = lines; else delete ov.options;
       if(Object.keys(ov).length) nativeOverrides[col] = ov;
       else delete nativeOverrides[col];
       dirty = true;

@@ -63,7 +63,7 @@ const AUTO_ROUTING = {
   note_count_threshold:    6,
 }
 const MAX_TOKENS = 4096
-const PROMPT_VERSION = 'bc-v1.7'
+const PROMPT_VERSION = 'bc-v1.8'
 
 // Maps a FIELD_SPEC.group to the asset-class label(s) (from ASSET_TYPE_VOCAB)
 // that the field is scoped to. If the buyer's proposed/current
@@ -442,7 +442,10 @@ function matchOption(raw: string, options: string[]): string | null {
   return null
 }
 
-function validateEnumProposal(value: unknown, type: FieldType, options: string[]): string | null {
+function validateEnumProposal(value: unknown, type: FieldType, options: string[], subtypeMap?: Record<string, string[]>): string | null {
+  // v287: subtypeMap optional override (used for runtime taxonomy from
+  // ace_ai_settings). Defaults to the module-level ASSET_SUBTYPES const.
+  const subMap = subtypeMap || ASSET_SUBTYPES
   if (value === null || value === undefined) return null
   const str = typeof value === 'string'
     ? value
@@ -455,7 +458,7 @@ function validateEnumProposal(value: unknown, type: FieldType, options: string[]
   for (const p of parts) {
     // v272: support "Category: Subtype" chips (e.g. "Retail: Grocery
     // Anchored", "Industrial: Self Storage"). Validate the category against
-    // the vocab; if a subtype is present and recognized in ASSET_SUBTYPES,
+    // the vocab; if a subtype is present and recognized in subMap,
     // re-attach it. If the subtype isn't recognized, fall back to the bare
     // category rather than dropping the chip entirely.
     const colonIdx = p.indexOf(':')
@@ -464,7 +467,7 @@ function validateEnumProposal(value: unknown, type: FieldType, options: string[]
       const sub = p.slice(colonIdx + 1).trim()
       const matchedCat = matchOption(cat, options)
       if (matchedCat) {
-        const subVocab = ASSET_SUBTYPES[matchedCat] || []
+        const subVocab = subMap[matchedCat] || []
         const matchedSub = sub ? matchOption(sub, subVocab) : null
         const canonical = matchedSub ? `${matchedCat}: ${matchedSub}` : matchedCat
         if (!matched.includes(canonical)) matched.push(canonical)
@@ -1668,6 +1671,39 @@ Deno.serve(async (req: Request) => {
       }
     } catch (_) { /* table may not exist yet — ignore */ }
 
+    // v287: pull the runtime BC asset taxonomy from ace_ai_settings.
+    // If a row exists, its categories + subtypes override the hardcoded
+    // ASSET_TYPE_VOCAB / ASSET_SUBTYPES for THIS request. The vocab is
+    // also injected into the user message as an "AUTHORITATIVE VOCAB"
+    // block so the model sees the override, not just the static prompt.
+    let activeVocab: string[] = ASSET_TYPE_VOCAB
+    let activeSubtypes: Record<string, string[]> = ASSET_SUBTYPES
+    let taxonomyRuntimeOverride = false
+    try {
+      const taxRows = (await fetchSb(
+        `${SUPABASE_URL}/rest/v1/ace_ai_settings?key=eq.bc_taxonomy&select=value&limit=1`,
+        SERVICE_KEY,
+      )) as Array<{ value?: unknown }>
+      const raw = taxRows?.[0]?.value
+      if (raw && typeof raw === 'object' && !Array.isArray(raw)) {
+        const dynCats: string[] = []
+        const dynSubs: Record<string, string[]> = {}
+        for (const [k, v] of Object.entries(raw as Record<string, unknown>)) {
+          const cat = String(k || '').trim()
+          if (!cat) continue
+          dynCats.push(cat)
+          dynSubs[cat] = Array.isArray(v)
+            ? (v as unknown[]).map(s => String(s || '').trim()).filter(Boolean)
+            : []
+        }
+        if (dynCats.length > 0) {
+          activeVocab = dynCats
+          activeSubtypes = dynSubs
+          taxonomyRuntimeOverride = true
+        }
+      }
+    } catch (_) { /* fall back to hardcoded */ }
+
     const buildAllFields = (proposedMap: Record<string, { proposed: unknown; before: unknown; explanation?: string; cite?: string; confidence?: string }>,
                              naProps: Array<{ col: string; reason: string }>) =>
       FIELD_SPEC.map(f => ({
@@ -1711,7 +1747,7 @@ Deno.serve(async (req: Request) => {
       })
     }
 
-    const userMessage = buildUserMessage({
+    let userMessage = buildUserMessage({
       contactName,
       contactTags: effective_tags,
       context: contextText,
@@ -1721,6 +1757,30 @@ Deno.serve(async (req: Request) => {
       guardrails: userGuardrails,
       additional_text,
     })
+
+    // v287: prepend an AUTHORITATIVE VOCAB block when the runtime
+    // taxonomy differs from the hardcoded one. The model is told this
+    // list wins over Step 2.4 in the static prompt — lets the user
+    // edit the taxonomy in Settings without redeploying the prompt.
+    if (taxonomyRuntimeOverride) {
+      const subtypeLines = activeVocab
+        .map(cat => `  ${cat}: ${(activeSubtypes[cat] || []).join(', ') || '(no subtypes)'}`)
+        .join('\n')
+      const overrideBlock =
+        `═══════════════════════════════════════════════════════════════════════\n` +
+        `AUTHORITATIVE ASSET-TYPE VOCAB (runtime override — replaces Step 2.4)\n` +
+        `═══════════════════════════════════════════════════════════════════════\n` +
+        `desired_property_types is multi-select against THIS list ONLY. The\n` +
+        `Step 2.4 list in the system prompt is the historical baseline; if\n` +
+        `they disagree, this list wins. The agent edited the taxonomy at\n` +
+        `runtime via Settings → Tools → BC Asset Taxonomy.\n\n` +
+        `Categories (${activeVocab.length}):\n` +
+        `  ${activeVocab.join(' | ')}\n\n` +
+        `Subtypes (use as "Category: Subtype" chips when notes warrant):\n` +
+        subtypeLines +
+        `\n\n═══════════════════════════════════════════════════════════════════════\n\n`
+      userMessage = overrideBlock + userMessage
+    }
 
     // v270: prompt caching on the static system block. Anthropic's ephemeral
     // cache gives ~90% off cached input tokens for 5 minutes. Keeps cost flat
@@ -1831,7 +1891,13 @@ Deno.serve(async (req: Request) => {
       if (propV === null || propV === undefined) continue
       if (typeof propV === 'string' && propV.trim() === '') continue
       if ((f.type === 'enum' || f.type === 'multienum') && f.options) {
-        const matched = validateEnumProposal(propV, f.type, f.options)
+        // v287: desired_property_types validates against the runtime
+        // taxonomy override (categories + subtypes from ace_ai_settings).
+        // Other enum/multienum fields keep their hardcoded vocab.
+        const isAssetField = f.col === 'desired_property_types'
+        const opts    = isAssetField ? activeVocab    : f.options
+        const subMap  = isAssetField ? activeSubtypes : undefined
+        const matched = validateEnumProposal(propV, f.type, opts, subMap)
         if (!matched) continue
         propV = matched
       }
@@ -2022,6 +2088,12 @@ Deno.serve(async (req: Request) => {
           source_chars,
           note_count: _totalNoteCount,
           thresholds: AUTO_ROUTING,
+        },
+        // v287: was the runtime taxonomy override active for this run?
+        taxonomy: {
+          source:               taxonomyRuntimeOverride ? 'ace_ai_settings.bc_taxonomy' : 'hardcoded',
+          category_count:       activeVocab.length,
+          subtype_total:        Object.values(activeSubtypes).reduce((n, arr) => n + (arr?.length || 0), 0),
         },
       },
     })

@@ -53,6 +53,7 @@ import * as gmail           from './email/gmail.js';
 import * as emailTemplates  from './email/templates.js';
 import * as emailLibrary    from './email/library.js';
 import * as appLists        from './admin/app-lists.js';
+import * as bcTaxonomy      from './admin/bc-taxonomy.js';
 import * as backmarket      from './buyer-search/backmarket.js';
 import * as fub             from './fub/fub.js';
 import * as relationships   from './contacts/relationships.js';
@@ -83,6 +84,7 @@ for (const [name, value] of Object.entries(gmail))          { window[name] = val
 for (const [name, value] of Object.entries(emailTemplates)) { window[name] = value; }
 for (const [name, value] of Object.entries(emailLibrary))   { window[name] = value; }
 for (const [name, value] of Object.entries(appLists))       { window[name] = value; }
+for (const [name, value] of Object.entries(bcTaxonomy))     { window[name] = value; }
 for (const [name, value] of Object.entries(backmarket))     { window[name] = value; }
 for (const [name, value] of Object.entries(fub))            { window[name] = value; }
 for (const [name, value] of Object.entries(relationships))  { window[name] = value; }
@@ -123,6 +125,7 @@ console.log('[ace-modules] all modules loaded', {
   emailTemplates: Object.keys(emailTemplates).length,
   emailLibrary:   Object.keys(emailLibrary).length,
   appLists:       Object.keys(appLists).length,
+  bcTaxonomy:     Object.keys(bcTaxonomy).length,
   backmarket:     Object.keys(backmarket).length,
   fub:            Object.keys(fub).length,
   relationships:  Object.keys(relationships).length,

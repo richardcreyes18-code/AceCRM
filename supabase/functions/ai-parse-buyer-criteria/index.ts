@@ -25,7 +25,7 @@ const cors: Record<string, string> = {
 
 const MODEL = 'claude-sonnet-4-6'
 const MAX_TOKENS = 4096
-const PROMPT_VERSION = 'bc-v1.3'
+const PROMPT_VERSION = 'bc-v1.4'
 
 // Maps a FIELD_SPEC.group to the asset-class label(s) (from ASSET_TYPE_VOCAB)
 // that the field is scoped to. If the buyer's proposed/current
@@ -546,6 +546,55 @@ OTHER TAG RULES (apply when buy_intent is "buyer" or "both"):
     in combination with explicit VIP language in the notes.
 
 ═══════════════════════════════════════════════════════════════════════
+STEP 1.5 — DETECT DUAL-ROLE (BUYER + SELLER) CONTACTS
+═══════════════════════════════════════════════════════════════════════
+A contact tagged "Buyer" can ALSO be the seller of a specific property
+within the same set of notes. This is common: a contact's 2024 notes
+show their buy-box ("Multi Fam 4-6 Units") and their 2026 notes show
+them selling their own property. When this happens, you MUST identify
+which notes are buyer-side vs seller-side and treat them as separate
+data streams.
+
+SELLER-SIDE PHRASING (the contact owns the property being discussed):
+  - "Asking: $X" / "He's asking $X" / "the asking is $X"
+  - "owes $X in a loan" / "current debt is $X" / "mortgage balance"
+  - "his property" / "his building" / "her listing" / "their unit"
+  - "Offered him $X" / "I offered him $X" / "another guy offered him"
+  - "he wants $X for it" / "she'll take $X net"
+  - Detailed financials about ONE specific property (rent roll,
+    NOI breakdown, expenses, parking income, tax/insurance/water)
+    when the conversational frame is about that single property
+  - "I told him to move on the offer" / "told her to take it"
+
+BUYER-SIDE PHRASING (the contact wants to buy):
+  - "Looking for X-Y units" / "Multi Fam 4-6 Units"
+  - "Sent him a property" / "sent <address> to him"
+  - "He sounded interested" / "she'd like to see"
+  - "In the market for", "wants to buy", "seeking"
+  - Stated criteria with NO specific property attached
+  - "1031 exchange", "1031 buyer"
+
+Rules:
+  - When BOTH kinds appear → buy_intent stays "buyer" (or upgrade to
+    "both" when there's also a Seller tag). But you MUST mark each
+    note in your reasoning as BUYER-SIDE or SELLER-SIDE before
+    extracting any values.
+  - SELLER-SIDE notes contribute ZERO to buy-box fields. Asking
+    prices, offer amounts, debt balances, and rent rolls on the
+    contact's OWN property NEVER feed: max_purchase_price,
+    min_purchase_price, financing_type, mf_min_units, any *_sf
+    field, minimum_cap_rate, etc. Even if those numbers are the
+    only price signal in the entire note set.
+  - SELLER-SIDE activity goes in other_requirements as context only:
+    "Note: contact also has seller-side activity — owns/sells
+    [address] [period]. Numbers from that side were not used for
+    the buy-box."
+  - NEVER hallucinate a buyer-side reading of seller-side data. Do
+    not treat "Asking: $1.45m -owes $250K" as "buyer is pursuing a
+    $1.45M deal." That is the contact's ASKING price on a property
+    THEY own. It is NOT their buy-box.
+
+═══════════════════════════════════════════════════════════════════════
 STEP 2 — READ THE NOTES, FILL FIELDS
 ═══════════════════════════════════════════════════════════════════════
 
@@ -805,6 +854,28 @@ RULES THAT NEVER BEND
 3. min_purchase_price / max_purchase_price are TOTAL prices for the whole
    property. NEVER put $/SF, $/acre, or $/unit numbers there. Per-foot
    land pricing goes in "other_requirements".
+3a. PURCHASE PRICE FIELDS REQUIRE A STATED PORTFOLIO BUDGET — NOT
+   DEAL-SPECIFIC NUMBERS. min_purchase_price / max_purchase_price
+   may ONLY be filled when the buyer has stated their own budget /
+   ceiling / floor in general terms:
+     OK: "I'm looking up to $4M total", "max budget is $10M",
+         "anything between $1M and $3M", "won't pay over $2M"
+     NOT OK: an asking price on a specific property, a competing
+         offer, the buyer's own offer on a specific deal, NOI
+         multiples, a seller's net number. These are deal-specific
+         data points, not portfolio buy-box budgets.
+   If the only price signal is an asking price ("Asking: $1.45m") —
+   leave max_purchase_price empty. If the contact is the SELLER of
+   the property the asking price is attached to (per Step 1.5),
+   the asking price is GUARANTEED not the contact's buy-box.
+3b. financing_type is the BUYER'S preferred way to fund their
+   acquisitions. Offer amounts STRUCTURED with cash/financing
+   options that someone offered ON the contact's own property
+   (e.g. "Offered: $785K all cash quick close & $900K with
+   financing") tell you NOTHING about the contact's BUYING
+   financing preference. Those are seller-side numbers — leave
+   financing_type empty unless the buyer's own pattern is stated
+   ("I always pay cash", "1031 buyer", "needs financing").
 4. SF / RANGE / TARGET-SF:
    a) EXPLICIT range with TWO numbers ("5,000 to 20,000 SF",
       "between 1k and 10k", "5-20k") → set *_min_sf and *_max_sf.
@@ -1003,12 +1074,13 @@ NOTES on what this example does NOT propose:
 
 ═══════════════════════════════════════════════════════════════════════
 
-EXAMPLE 4 — Stated buy-box vs out-of-range past activity.
-This case demonstrates rule 1a: when notes state an explicit range
-("Multi Fam 4-6 Units") and other notes show past activity outside
-that range ("sent 8U sounded interested"), the stated range still
-wins for the structured fields. The flexibility goes in
-other_requirements, not as a reason to leave the buy-box empty.
+EXAMPLE 4 — Dual-role contact: buyer in 2024, seller in 2026.
+This case demonstrates Step 1.5 (dual-role detection) AND rule 1a.
+The contact has clear buyer signals from 2024 ("Multi Fam 4-6 Units")
+AND seller signals from 2026 (his own property at 560-562 3rd Ave,
+asking $1.45M, owes $250K in a loan, being offered $785K all-cash
+and $900K with financing). The 2026 numbers are SELLER-SIDE — they
+contribute zero to the buy-box.
 
 INPUT TAGS:
   ["Bounced", "Buyer", "asset - multi family", "Union county",
@@ -1019,18 +1091,29 @@ INPUT TAGS:
 
 INPUT NOTES:
 [note @ 2024-05-30] Buyer Elizabeth Multi Fam 4-6 Units. Just call.
-[note @ 2024-06-06] Buyer Elizabeth Multi Fam 4-6 Units. Just call.
-12M FUB - CM.
+  → BUYER-SIDE. Stated buy-box.
+[note @ 2024-06-06] Buyer Elizabeth Multi Fam 4-6 Units. 12M FUB.
+  → BUYER-SIDE. Stated buy-box repeated.
 [note @ 2024-08-12] Sent Elizabeth 8U sounded interested. AA
+  → BUYER-SIDE. Past deal sent to him; he sounded interested.
+    Out-of-range vs the stated 4-6 range (rule 1a).
 [note @ 2026-04-06] 718 Monroe Ave, Elizabeth — Duplex + Bonus.
-560-562 3rd Ave, Elizabeth — 6 unit MF. Asking $1.45m.
-[note @ 2026-04-15] Offered: $785,000 net all cash quick close & $900,000
-net with financing. Said another guy offered him $1.2m.
+560-562 3rd Ave, Elizabeth — 6 unit MF. Rent $8650/m. NOI $65,834.
+Asking: $1.45m. owes $250,000 in a loan.
+  → SELLER-SIDE. "Asking $1.45m" + "owes $250K in a loan" + detailed
+    rent roll/NOI on this single property = contact is the OWNER
+    selling 560-562 3rd Ave. ZERO contribution to buy-box.
+[note @ 2026-04-15] Offered: $785K net all cash quick close & $900K
+net with financing. Another guy offered him $1.2m.
+  → SELLER-SIDE. "Offered him $1.2m" pronoun targets the contact —
+    he's the SELLER receiving offers. The "$785K all cash & $900K
+    with financing" is the agent (or competing buyer) offering
+    structures TO BUY from him. ZERO contribution to buy-box.
 
 OUTPUT:
 {
   "buy_intent": "buyer",
-  "top_level_notes": "Multifamily buyer in Elizabeth, NJ (Union County). Stated buy-box is repeatedly 4-6 units; one Aug 2024 note shows interest in an 8-unit. Stated range is canonical — flexibility goes in other_requirements.",
+  "top_level_notes": "Multifamily buyer in Elizabeth, NJ (Union County). Stated buy-box: 4-6 units (repeated). ALSO has seller-side activity in 2026 (sells 560-562 3rd Ave at $1.45M asking) — those numbers are not used for the buy-box.",
   "fields": {
     "desired_property_types":  "Multifamily",
     "mf_min_units":            4,
@@ -1039,8 +1122,7 @@ OUTPUT:
     "preferred_counties":      "Union County, NJ",
     "preferred_cities":        "Elizabeth",
     "location_preferences":    "Elizabeth, NJ (Union County)",
-    "financing_type":          "Mix",
-    "other_requirements":      "Stated buy-box: 4-6 unit multifamily in Elizabeth. Showed interest in an 8-unit in Aug 2024 — slightly above stated range, suggests some flex on the upper bound. Active deals in 2026: presented 718 Monroe Ave (duplex + bonus) and 560-562 3rd Ave (6-unit, $1.45M asking); buyer offered $785K all-cash or $900K with financing on at least one of them. 12-month FUB cadence."
+    "other_requirements":      "Stated buy-box: 4-6 unit multifamily in Elizabeth. Showed interest in an 8-unit in Aug 2024 — slightly above stated range, suggests some flex on the upper bound. 12-month FUB cadence noted. Note: contact also has seller-side activity in Apr 2026 — owns 560-562 3rd Ave (6-unit, $1.45M asking) and 718 Monroe Ave; numbers from those listings were not used for the buy-box per dual-role rule."
   },
   "citations": {
     "desired_property_types":  "tag: asset - multi family",
@@ -1050,8 +1132,7 @@ OUTPUT:
     "preferred_counties":      "tag: Union county",
     "preferred_cities":        "from note @ 2024-05-30: 'Buyer Elizabeth Multi Fam'",
     "location_preferences":    "from note @ 2024-05-30: 'Buyer Elizabeth Multi Fam'; tag: Union county",
-    "financing_type":          "from note @ 2026-04-15: '$785,000 net all cash quick close & $900,000 net with financing' — buyer offered both forms, indicating Mix",
-    "other_requirements":      "from note @ 2024-05-30: 'Multi Fam 4-6 Units'; from note @ 2024-08-12: 'Sent Elizabeth 8U sounded interested'; from note @ 2026-04-06: '718 Monroe Ave / 560-562 3rd Ave'; from note @ 2026-04-15: 'Offered $785,000 net all cash quick close & $900,000 net with financing'"
+    "other_requirements":      "from note @ 2024-05-30: 'Multi Fam 4-6 Units'; from note @ 2024-08-12: 'Sent Elizabeth 8U sounded interested'; from note @ 2026-04-06 (seller-side): 'Asking: $1.45m'; from note @ 2026-04-15 (seller-side): 'Offered him $1.2m'"
   },
   "confidence": {
     "desired_property_types":  "high",
@@ -1061,28 +1142,33 @@ OUTPUT:
     "preferred_counties":      "high",
     "preferred_cities":        "high",
     "location_preferences":    "high",
-    "financing_type":          "medium",
     "other_requirements":      "high"
   },
   "explanations": {
     "mf_min_units":            "Stated buy-box '4-6 units' repeated across two May/June 2024 notes — canonical range.",
     "mf_max_units":            "Same source. Aug 2024 8-unit interest is past activity, not a redefinition of the buy-box; flexibility noted in other_requirements per rule 1a.",
-    "financing_type":          "Apr 2026 offer was structured as both all-cash and financing on the same deal — Mix is the closest enum match."
+    "other_requirements":      "Captures buy-box flexibility AND flags seller-side activity so future agents know not to confuse the asking price for a buying budget."
   },
   "na": [],
   "uncertain": []
 }
 
 NOTES on what this example does NOT do:
+  - Does NOT propose max_purchase_price = $1.45M. The asking price
+    on the contact's OWN property is seller-side data — never a
+    buying budget. Per rule 3a, only stated portfolio budgets
+    qualify. Leave the field empty.
+  - Does NOT propose financing_type = "Mix" from the "$785K all cash
+    & $900K with financing" line. Those are someone else's offers
+    TO the contact for HIS property — not his own buying preference.
+    Per rule 3b, leave financing_type empty.
+  - Does NOT propose minimum_cap_rate from the NOI / asking ratio.
+    The implied yield on a property the contact is SELLING tells
+    you nothing about what cap rate he'd accept on a property he'd
+    BUY.
   - Does NOT leave mf_min_units / mf_max_units empty just because of
     the 8-unit interest. The stated 4-6 range wins; the 8-unit
     interest is past activity that goes in other_requirements.
-  - Does NOT propose max_purchase_price. The $1.45M ask, $1.2M outside
-    offer, and $785K-$900K offer are all DEAL-SPECIFIC numbers — none
-    are a stated portfolio budget. Leave max_purchase_price alone.
-    (If the buyer had said "I'm looking for deals up to $2M" — that's
-    a stated budget. Deal-specific offer/ask/competing-offer numbers
-    are not.)
   - Does NOT flag mf_max_units as uncertain. There's no genuine
     ambiguity in the stated buy-box itself.
 `

@@ -89,7 +89,17 @@ export function _bcFieldsGet(category){
   if(!category) return _cache;
   if(category === META_KEY) return [];          // v292: meta key is not a scope
   if(category === NATIVE_META_KEY) return [];   // v294: meta key is not a scope
+  if(category === NATIVE_ORDER_KEY) return [];  // v296: meta key is not a scope
   return Array.isArray(_cache[category]) ? _cache[category].slice() : [];
+}
+
+// v296: per-scope native-field render order. Returns a fresh array,
+// or [] when no order is stored. Consumers should fall back to the
+// catalog's natural order for cols not present in this array.
+export function _bcNativeOrderGet(scope){
+  const meta = (_cache && _cache[NATIVE_ORDER_KEY]) || {};
+  const arr  = meta[scope];
+  return Array.isArray(arr) ? arr.slice() : [];
 }
 
 // v294: per-scope native-field overrides ({ col: { hidden?, label?, hint? } }).
@@ -188,6 +198,7 @@ export async function _bcFieldsSave(definitions){
 // arrays. Getters skip the meta keys when iterating scopes.
 const META_KEY = '_other_notes';
 const NATIVE_META_KEY = '_native_overrides';   // v294
+const NATIVE_ORDER_KEY = '_native_orders';     // v296 — { [scope]: [col, col, ...] }
 const OTHER_NOTES_DEFAULT_PLACEHOLDER = 'Anything else specific to this asset class…';
 
 function _normalize(defs){
@@ -195,6 +206,29 @@ function _normalize(defs){
   for(const [rawCat, rawList] of Object.entries(defs || {})){
     const cat = String(rawCat || '').trim();
     if(!cat) continue;
+    if(cat === NATIVE_ORDER_KEY){
+      // v296: per-scope native-field render order. Shape:
+      //   { [scope]: [col, col, ...] }
+      // Cols listed here render in this order; cols not listed fall
+      // back to natural catalog order at the end. Hidden cols (per
+      // _native_overrides) are dropped from the rendered list.
+      const meta = (rawList && typeof rawList === 'object' && !Array.isArray(rawList)) ? rawList : {};
+      const cleanMeta = {};
+      for(const [scope, arrRaw] of Object.entries(meta)){
+        const scopeKey = String(scope || '').trim();
+        if(!scopeKey) continue;
+        const seen = new Set();
+        const cleanArr = [];
+        for(const v of (Array.isArray(arrRaw) ? arrRaw : [])){
+          const col = String(v || '').trim();
+          if(!col || seen.has(col)) continue;
+          seen.add(col); cleanArr.push(col);
+        }
+        if(cleanArr.length) cleanMeta[scopeKey] = cleanArr;
+      }
+      out[NATIVE_ORDER_KEY] = cleanMeta;
+      continue;
+    }
     if(cat === NATIVE_META_KEY){
       // v294: per-scope native-field overrides — { scope: { col: { hidden?, label?, hint? } } }
       const meta = (rawList && typeof rawList === 'object' && !Array.isArray(rawList)) ? rawList : {};
@@ -444,7 +478,40 @@ export function _bcFieldsAdminForCategory(category, onClose){
   const isSubtypeScope = String(category || '').includes(':');
   const nativeOverrideScope = isSubtypeScope ? category.split(':')[0].trim() : category;
   const nativeOverrides = _bcNativeOverridesGet(nativeOverrideScope);
+  // v296: per-scope native render order. Lives at the bare-category
+  // scope just like the overrides.
+  let nativeOrder = _bcNativeOrderGet(nativeOverrideScope);
   let dirty = false;
+
+  // v296: helpers to bubble a native or custom field up/down by one slot.
+  // Native uses a separate `nativeOrder` list (cols-only); custom uses
+  // the in-place `defs` array (full field objects).
+  function _bcMoveNative(col, delta){
+    if(!col) return;
+    // Compute the effective rendered order by merging current
+    // nativeOrder with catalog natural order for cols not yet ordered.
+    const catalogCols = (typeof window._bcNativeFieldsForScope === 'function')
+      ? window._bcNativeFieldsForScope(nativeOverrideScope).map(f => f.col) : [];
+    const effective = [];
+    const seen = new Set();
+    for(const c of nativeOrder){ if(catalogCols.includes(c) && !seen.has(c)){ effective.push(c); seen.add(c); } }
+    for(const c of catalogCols){ if(!seen.has(c)){ effective.push(c); seen.add(c); } }
+    const i = effective.indexOf(col);
+    if(i < 0) return;
+    const j = i + delta;
+    if(j < 0 || j >= effective.length) return;
+    const tmp = effective[i]; effective[i] = effective[j]; effective[j] = tmp;
+    nativeOrder = effective;
+    dirty = true;
+    rerender();
+  }
+  function _bcMoveCustom(idx, delta){
+    const j = idx + delta;
+    if(idx < 0 || idx >= defs.length || j < 0 || j >= defs.length) return;
+    const tmp = defs[idx]; defs[idx] = defs[j]; defs[j] = tmp;
+    dirty = true;
+    rerender();
+  }
 
   const modal = document.createElement('div');
   modal.id = 'bcFieldsAdminModal';
@@ -464,9 +531,15 @@ export function _bcFieldsAdminForCategory(category, onClose){
              <textarea data-field-edit="${idx}" data-prop="options" rows="3" style="width:100%;padding:6px 9px;font-size:11px;border:1px solid #cbd5e1;border-radius:6px;font-family:ui-monospace,Menlo,monospace;">${esc((d.options || []).join('\n'))}</textarea>
            </div>`
         : '';
+      const isFirstCustom = idx === 0;
+      const isLastCustom  = idx === defs.length - 1;
       return `
         <div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:10px;background:#fff;">
-          <div style="display:grid;grid-template-columns:1fr 1fr 100px auto;gap:8px;align-items:end;">
+          <div style="display:grid;grid-template-columns:auto 1fr 1fr 100px auto;gap:8px;align-items:end;">
+            <div style="display:flex;flex-direction:column;gap:2px;align-self:end;padding-bottom:5px;">
+              <button data-field-action="move-up" data-field-idx="${idx}" ${isFirstCustom ? 'disabled' : ''} title="Move up" style="background:${isFirstCustom?'#f1f5f9':'#eef2ff'};border:1px solid ${isFirstCustom?'#e2e8f0':'#c7d2fe'};color:${isFirstCustom?'#cbd5e1':'#3730a3'};cursor:${isFirstCustom?'not-allowed':'pointer'};font-size:12px;padding:1px 7px;border-radius:3px;line-height:1;">▲</button>
+              <button data-field-action="move-down" data-field-idx="${idx}" ${isLastCustom ? 'disabled' : ''} title="Move down" style="background:${isLastCustom?'#f1f5f9':'#eef2ff'};border:1px solid ${isLastCustom?'#e2e8f0':'#c7d2fe'};color:${isLastCustom?'#cbd5e1':'#3730a3'};cursor:${isLastCustom?'not-allowed':'pointer'};font-size:12px;padding:1px 7px;border-radius:3px;line-height:1;">▼</button>
+            </div>
             <div>
               <label style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;font-weight:600;">Label (shown to user)</label>
               <input type="text" data-field-edit="${idx}" data-prop="label" value="${esc(d.label)}" style="width:100%;padding:6px 9px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;"/>
@@ -595,6 +668,15 @@ export function _bcFieldsAdminForCategory(category, onClose){
           delete nativeMeta[nativeOverrideScope];
         }
         next[NATIVE_META_KEY] = nativeMeta;
+        // v296: persist native-field render order alongside overrides.
+        const orderMeta = (next[NATIVE_ORDER_KEY] && typeof next[NATIVE_ORDER_KEY] === 'object' && !Array.isArray(next[NATIVE_ORDER_KEY]))
+          ? Object.assign({}, next[NATIVE_ORDER_KEY]) : {};
+        if(Array.isArray(nativeOrder) && nativeOrder.length){
+          orderMeta[nativeOverrideScope] = nativeOrder.slice();
+        } else {
+          delete orderMeta[nativeOverrideScope];
+        }
+        next[NATIVE_ORDER_KEY] = orderMeta;
         _bcFieldsSave(next).then(() => {
           dirty = false;
           if(typeof showSaveConfirm === 'function') showSaveConfirm('✓ Fields saved');
@@ -618,20 +700,32 @@ export function _bcFieldsAdminForCategory(category, onClose){
     } else if(target.matches('[data-native-override][data-native-prop="reset"]')){
       // v294: clear all overrides for this native field.
       const col = target.getAttribute('data-native-override');
-      if(col && nativeOverrides[col]){
-        delete nativeOverrides[col];
+      if(col){
+        if(nativeOverrides[col]) delete nativeOverrides[col];
+        // v296: also drop from the order so the field returns to its natural position.
+        nativeOrder = nativeOrder.filter(c => c !== col);
         dirty = true;
         rerender();
       }
+    } else if(target.matches('[data-native-override][data-native-prop="move-up"]')){
+      // v296: reorder native — bubble the col up by one slot.
+      _bcMoveNative(target.getAttribute('data-native-override'), -1);
+    } else if(target.matches('[data-native-override][data-native-prop="move-down"]')){
+      _bcMoveNative(target.getAttribute('data-native-override'), 1);
     } else if(target.matches('[data-field-action]')){
       const idx = parseInt(target.getAttribute('data-field-idx'), 10);
-      if(target.getAttribute('data-field-action') === 'del'){
+      const action = target.getAttribute('data-field-action');
+      if(action === 'del'){
         const f = defs[idx];
         if(!f) return;
         if(!confirm(`Delete field "${f.label}"? Existing values stored under extra_fields.${f.col} will remain in the DB but become orphaned.`)) return;
         defs.splice(idx, 1);
         dirty = true;
         rerender();
+      } else if(action === 'move-up'){
+        _bcMoveCustom(idx, -1);
+      } else if(action === 'move-down'){
+        _bcMoveCustom(idx, 1);
       }
     }
   });

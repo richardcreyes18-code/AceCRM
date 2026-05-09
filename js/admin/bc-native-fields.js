@@ -206,13 +206,14 @@ export function _bcNativeFieldsForScope(scopeOrChip){
 
 // Returns HTML for the editable "Built-in fields" panel. Empty string
 // when the scope has no native section (e.g. Agricultural, Senior
-// Housing). v294: each row now has a hide checkbox + label override
-// input. Inputs carry `data-native-override="<col>"` and
-// `data-native-prop="<hidden|label|hint>"` so the bc-fields.js admin
-// modal can collect them on Save.
+// Housing). v294: each row has a hide checkbox + label override input.
+// v295: hint override + enum options editor. v296: up/down reorder
+// buttons. Inputs carry `data-native-override="<col>"` and
+// `data-native-prop="<hidden|label|hint|options|reset|move-up|move-down>"`
+// so the bc-fields.js admin modal can collect them on Save.
 export function _bcRenderNativeFieldsPanel(scopeOrChip){
-  const fields = _bcNativeFieldsForScope(scopeOrChip);
-  if(!fields.length) return '';
+  const allFields = _bcNativeFieldsForScope(scopeOrChip);
+  if(!allFields.length) return '';
 
   const sectionKey = _sectionKeyOf(scopeOrChip);
   const sectionLabel = SECTION_LABEL_BY_KEY[sectionKey] || sectionKey;
@@ -226,6 +227,13 @@ export function _bcRenderNativeFieldsPanel(scopeOrChip){
   const overrides = (typeof window._bcNativeOverridesGet === 'function')
     ? window._bcNativeOverridesGet(overrideScope) : {};
 
+  // v296: apply user-defined render order. Cols listed in
+  // _native_orders[scope] render in that order; cols absent from the
+  // array fall back to natural catalog order at the end.
+  const order = (typeof window._bcNativeOrderGet === 'function')
+    ? window._bcNativeOrderGet(overrideScope) : [];
+  const fields = _orderFields(allFields, order);
+
   const headerHint = isSubtypeScope
     ? `Inherited from <strong>${esc(sectionLabel)}</strong> — Built-in fields (${fields.length})`
     : `Built-in fields (${fields.length})`;
@@ -234,7 +242,7 @@ export function _bcRenderNativeFieldsPanel(scopeOrChip){
     : 'Hide unused fields, override labels per-scope. Saving applies to every BC of this asset class.';
 
   const esc_ = esc;
-  const rows = fields.map(f => {
+  const rows = fields.map((f, idx) => {
     const ov = overrides[f.col] || {};
     const isHidden = ov.hidden === true;
     const labelOv  = ov.label   || '';
@@ -258,8 +266,14 @@ export function _bcRenderNativeFieldsPanel(scopeOrChip){
       ? `<div style="font-size:9px;color:#94a3b8;margin-top:2px;">Default hint: <em>${esc_(f.hint)}</em></div>`
       : '';
 
+    const isFirst = idx === 0;
+    const isLast  = idx === fields.length - 1;
     return `
-      <div style="border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px;background:${isHidden ? '#fef2f2' : '#fff'};display:grid;grid-template-columns:auto 1fr 1fr 70px;gap:10px;align-items:start;">
+      <div style="border:1px solid #e2e8f0;border-radius:6px;padding:8px 12px;background:${isHidden ? '#fef2f2' : '#fff'};display:grid;grid-template-columns:auto auto 1fr 1fr 70px;gap:10px;align-items:start;">
+        <div style="display:flex;flex-direction:column;gap:2px;align-self:center;">
+          <button data-native-override="${esc_(f.col)}" data-native-prop="move-up" ${isFirst ? 'disabled' : ''} title="Move up" style="background:${isFirst?'#f1f5f9':'#eef2ff'};border:1px solid ${isFirst?'#e2e8f0':'#c7d2fe'};color:${isFirst?'#cbd5e1':'#3730a3'};cursor:${isFirst?'not-allowed':'pointer'};font-size:11px;padding:1px 6px;border-radius:3px;line-height:1;">▲</button>
+          <button data-native-override="${esc_(f.col)}" data-native-prop="move-down" ${isLast ? 'disabled' : ''} title="Move down" style="background:${isLast?'#f1f5f9':'#eef2ff'};border:1px solid ${isLast?'#e2e8f0':'#c7d2fe'};color:${isLast?'#cbd5e1':'#3730a3'};cursor:${isLast?'not-allowed':'pointer'};font-size:11px;padding:1px 6px;border-radius:3px;line-height:1;">▼</button>
+        </div>
         <label style="display:inline-flex;align-items:center;gap:5px;cursor:pointer;font-size:11px;color:${isHidden?'#b91c1c':'#475569'};font-weight:600;white-space:nowrap;align-self:center;" title="Uncheck to hide this field on every BC for this asset class">
           <input type="checkbox" data-native-override="${esc_(f.col)}" data-native-prop="hidden" ${isHidden ? '' : 'checked'} style="margin:0;"/>
           ${isHidden ? 'Hidden' : 'Visible'}
@@ -323,6 +337,43 @@ export function _bcNativeApplyOverrides(html, scopeOrChip){
   // round-trips correctly for the helpers' simple <div>...</div> output.
   const tmp = document.createElement('div');
   tmp.innerHTML = html;
+
+  // v296: reorder native field wrappers based on the user's saved
+  // _native_orders[scope] list. The hardcoded bcExpandedAssetSection
+  // groups fields into multiple grid containers per category — we
+  // reorder WITHIN each parent grid only, so layout segregation is
+  // preserved (e.g. notes stay in their full-width grid).
+  const orderArr = (typeof window._bcNativeOrderGet === 'function')
+    ? window._bcNativeOrderGet(baseScope) : [];
+  if(Array.isArray(orderArr) && orderArr.length){
+    const colToInputId = new Map(fields.filter(f => f.inputId).map(f => [f.col, f.inputId]));
+    // Group fields by their parent container.
+    const byParent = new Map();   // parentEl → [{col, wrap}, ...]
+    for(const f of fields){
+      const id = colToInputId.get(f.col);
+      if(!id) continue;
+      const el = tmp.querySelector(`#${cssEscape(id)}`);
+      if(!el) continue;
+      const wrap = el.parentElement;
+      if(!wrap) continue;
+      const parent = wrap.parentElement;
+      if(!parent) continue;
+      if(!byParent.has(parent)) byParent.set(parent, []);
+      byParent.get(parent).push({ col: f.col, wrap });
+    }
+    // Per parent: order its members by orderArr index (cols not listed
+    // sort to the end in their original order).
+    const orderIdx = new Map(orderArr.map((c, i) => [c, i]));
+    for(const [parent, members] of byParent.entries()){
+      members.sort((a, b) => {
+        const ai = orderIdx.has(a.col) ? orderIdx.get(a.col) : Infinity;
+        const bi = orderIdx.has(b.col) ? orderIdx.get(b.col) : Infinity;
+        return ai - bi;
+      });
+      for(const m of members) parent.appendChild(m.wrap);
+    }
+  }
+
   for(const f of fields){
     const ov = overrides[f.col];
     if(!ov) continue;
@@ -384,6 +435,24 @@ export function _bcNativeApplyOverrides(html, scopeOrChip){
 
 function escHtml(s){
   return String(s==null?'':s).replace(/[<&>"]/g, c => ({'<':'&lt;','&':'&amp;','>':'&gt;','"':'&quot;'}[c]));
+}
+
+// v296: order a catalog field list by a user-defined col sequence.
+// Cols listed in `order` come first in that sequence; the rest follow
+// in catalog order. Unknown cols in `order` are ignored.
+function _orderFields(catalog, order){
+  if(!Array.isArray(order) || !order.length) return catalog.slice();
+  const byCol = new Map(catalog.map(f => [f.col, f]));
+  const used = new Set();
+  const ordered = [];
+  for(const col of order){
+    if(byCol.has(col) && !used.has(col)){
+      ordered.push(byCol.get(col));
+      used.add(col);
+    }
+  }
+  for(const f of catalog){ if(!used.has(f.col)) ordered.push(f); }
+  return ordered;
 }
 
 function cssEscape(s){

@@ -24,6 +24,11 @@ import {
 window._sbToAt = _sbToAt;
 window._atToSb = _atToSb;
 
+// v261: county map — 11 exports needed on window so legacy callers (lots of
+// them — Pipeline filter UI, county canonicalization at write time, BC
+// region resolution, etc.) resolve via global env lookup.
+for (const [name, value] of Object.entries(countyMap)) { window[name] = value; }
+
 import {
   _stripCommas, _parseNum, _fmtNum, _phoneDigits, fmtMoney, fmtPct,
 } from './utils/format.js';
@@ -31,6 +36,9 @@ import {
 import {
   _normalizeAddr, _addrMatches, cleanAddress, parseAddress,
 } from './utils/address.js';
+
+// Phase 4.5 shared helpers
+import * as countyMap from './schemas/county-map.js';
 
 // Phase 3: core layer
 import { _proxyCall, PROXY_URL, SB_AUTH_URL, SB_ANON_KEY } from './core/proxy.js';

@@ -806,12 +806,12 @@
 /* ─────────────────────────────────────────────────────────────
    .cal-grid / .agenda — Calendar tab.
    ─────────────────────────────────────────────────────────── */
-.cal-grid {
+.cal-month-grid {
   display: grid;
   grid-template-columns: repeat(7, 1fr);
   border-top: 1px solid var(--border);
 }
-.cal-dow {
+.cal-month-grid .cal-dow {
   background: var(--surface-2);
   font-size: 10px;
   font-weight: 700;
@@ -823,8 +823,8 @@
   border-bottom: 1px solid var(--border);
   text-align: left;
 }
-.cal-dow:nth-child(7n) { border-right: none; }
-.cal-cell {
+.cal-month-grid .cal-dow:nth-child(7n) { border-right: none; }
+.cal-month-grid .cal-cell {
   min-height: 96px;
   padding: 6px 6px 8px;
   border-right: 1px solid var(--border);
@@ -834,9 +834,9 @@
   flex-direction: column;
   gap: 3px;
 }
-.cal-cell.empty { background: var(--surface-2); }
-.cal-cell:nth-child(7n) { border-right: none; }
-.cal-cell.today .cal-day {
+.cal-month-grid .cal-cell.empty { background: var(--surface-2); }
+.cal-month-grid .cal-cell:nth-child(7n) { border-right: none; }
+.cal-month-grid .cal-cell.today .cal-day-mark {
   background: var(--primary);
   color: #fff;
   width: 22px;
@@ -846,13 +846,13 @@
   justify-content: center;
   border-radius: 50%;
 }
-.cal-day {
+.cal-month-grid .cal-day-mark {
   font-size: 11px;
   font-weight: 600;
   color: var(--fg-2);
   font-family: var(--font-mono);
 }
-.cal-event {
+.cal-month-grid .cal-event {
   font-size: 10.5px;
   padding: 2px 6px;
   border-left: 2px solid;
@@ -863,17 +863,17 @@
   font-weight: 500;
   cursor: pointer;
 }
-.cal-event:hover { filter: brightness(0.96); }
-.cal-event .mono {
+.cal-month-grid .cal-event:hover { filter: brightness(0.96); }
+.cal-month-grid .cal-event .mono {
   font-family: var(--font-mono);
   font-weight: 700;
   margin-right: 4px;
 }
-.cal-event.evt-showing  { background: var(--primary-light);  color: var(--primary-darker);  border-left-color: var(--primary); }
-.cal-event.evt-call     { background: var(--green-bg);       color: var(--green-dark);      border-left-color: var(--green); }
-.cal-event.evt-internal { background: var(--yellow-bg);      color: var(--yellow-dark);     border-left-color: var(--yellow); }
-.cal-event.evt-deadline { background: var(--red-bg);         color: var(--red-dark);        border-left-color: var(--red); }
-.cal-event.evt-other    { background: var(--surface-2);      color: var(--fg-2);            border-left-color: var(--fg-3); }
+.cal-month-grid .cal-event.evt-showing  { background: var(--primary-light);  color: var(--primary-darker);  border-left-color: var(--primary); }
+.cal-month-grid .cal-event.evt-call     { background: var(--green-bg);       color: var(--green-dark);      border-left-color: var(--green); }
+.cal-month-grid .cal-event.evt-internal { background: var(--yellow-bg);      color: var(--yellow-dark);     border-left-color: var(--yellow); }
+.cal-month-grid .cal-event.evt-deadline { background: var(--red-bg);         color: var(--red-dark);        border-left-color: var(--red); }
+.cal-month-grid .cal-event.evt-other    { background: var(--surface-2);      color: var(--fg-2);            border-left-color: var(--fg-3); }
 
 .agenda { padding: 0; }
 .agenda-row {
@@ -1426,6 +1426,100 @@
 .tab-content button[style*="linear-gradient(180deg,#059669,#047857)"]:hover {
   background: var(--green-dark) !important;
 }
+
+/* ─────────────────────────────────────────────────────────────
+   Phase 5 (v305): Notes / Tasks / Calendar tab cleanups.
+   ─────────────────────────────────────────────────────────── */
+
+/* Notes — Next Steps card border drops the green callout in
+   favor of a neutral .section-style card with a primary
+   left-border accent. (Same treatment as the Summary nsCard.) */
+.tab-content [data-note-key="ns"]:not(.ns-edit-active),
+.tab-content > div[style*="border:1px solid #bbf7d0"][style*="border-left:4px solid #408040"] {
+  border: 1px solid var(--border) !important;
+  border-left: 3px solid var(--green) !important;
+  background: var(--surface) !important;
+  border-radius: var(--radius) !important;
+}
+.tab-content [style*="color:#408040"] {
+  color: var(--green-dark) !important;
+}
+
+/* Notes — blob entry cards: drop bluish border-left accent,
+   match the .note-card silhouette. */
+.tab-content [data-note-key]:not([data-note-key="ns"]) {
+  border-radius: var(--radius-sm) !important;
+}
+
+/* Notes — caret in History expander */
+.tab-content .ns-hist-caret {
+  font-size: 10px;
+  color: var(--fg-3);
+}
+
+/* Tasks tab — view-toggle row + new-task button get the .btn
+   group treatment automatically once the existing markup uses
+   .tab-content .btn classes. The inline-styled task-table
+   inherits .data-table re-skin. Add the strikethrough state
+   for done rows. */
+.tab-content tr.task-done td,
+.tab-content tr[data-task-done="1"] td {
+  color: var(--fg-3);
+}
+.tab-content tr.task-done .task-title,
+.tab-content tr[data-task-done="1"] .task-title {
+  text-decoration: line-through;
+}
+
+/* Calendar tab — re-skin the legacy .cal-grid / .cal-day used
+   by renderCalendarTab(). Different markup from the design's
+   .cal-month-grid above; this just re-skins the existing stub. */
+.tab-content .cal-grid {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  gap: 0 !important;
+  background: var(--border);
+}
+.tab-content .cal-grid .cal-hdr {
+  background: var(--surface-2) !important;
+  color: var(--fg-2) !important;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 7px 10px;
+  border-radius: 0;
+  border-bottom: 1px solid var(--border);
+}
+.tab-content .cal-grid .cal-day {
+  background: var(--surface);
+  border: none;
+  min-height: 80px;
+  padding: 5px 7px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.tab-content .cal-grid .cal-day.today {
+  background: var(--primary-light);
+  border: none;
+}
+.tab-content .cal-grid .cal-day.today .cal-day-num {
+  color: var(--primary-darker);
+}
+.tab-content .cal-grid .cal-day.other-month {
+  background: var(--surface-2);
+  color: var(--fg-4);
+}
+.tab-content .cal-grid .cal-day-num {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-2);
+}
+
+/* Calendar header buttons (◀ Prev / Next ▶ / + Add Event) use
+   .save-btn — already reskinned via Phase 2 to match the new
+   .btn aesthetic. */
 
 /* Section header row (full-width tab headings between sections,
    distinct from .section-hd which is INSIDE .section). */

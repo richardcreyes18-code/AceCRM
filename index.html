@@ -2675,13 +2675,13 @@ function applyToken(){
   }
   _store.set('at_key', val);
   syncData();
+}
+
 // v252: Dashboard module migrated to js/dashboard/dashboard.js.
 // Every former export is now attached to window.* by js/main.js.
 // Snooze functions (snoozeDealToday/Until, _snoozeConfirm, unsnoozeDeal,
 // _saveSnoozeToDB, _isSnoozedToday) stayed in legacy — they are deal-level
 // concerns and migrate with the deals feature.
-    </div>`;
-}
 
 // ─── SIDEBAR ──────────────────────────────────────────────────
 let _sideView = 'all'; // 'all' | 'starred' | 'snoozed'

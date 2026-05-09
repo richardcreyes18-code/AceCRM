@@ -50,14 +50,16 @@ import * as dashboard    from './dashboard/dashboard.js';
 import * as geocoding    from './geocoding/google.js';
 import * as richText     from './widgets/rich-text.js';
 import * as assetCleanup from './asset-cleanup/asset-cleanup.js';
-import * as gmail        from './email/gmail.js';
-for (const [name, value] of Object.entries(workbench))    { window[name] = value; }
-for (const [name, value] of Object.entries(portfolios))   { window[name] = value; }
-for (const [name, value] of Object.entries(dashboard))    { window[name] = value; }
-for (const [name, value] of Object.entries(geocoding))    { window[name] = value; }
-for (const [name, value] of Object.entries(richText))     { window[name] = value; }
-for (const [name, value] of Object.entries(assetCleanup)) { window[name] = value; }
-for (const [name, value] of Object.entries(gmail))        { window[name] = value; }
+import * as gmail         from './email/gmail.js';
+import * as emailTemplates from './email/templates.js';
+for (const [name, value] of Object.entries(workbench))      { window[name] = value; }
+for (const [name, value] of Object.entries(portfolios))     { window[name] = value; }
+for (const [name, value] of Object.entries(dashboard))      { window[name] = value; }
+for (const [name, value] of Object.entries(geocoding))      { window[name] = value; }
+for (const [name, value] of Object.entries(richText))       { window[name] = value; }
+for (const [name, value] of Object.entries(assetCleanup))   { window[name] = value; }
+for (const [name, value] of Object.entries(gmail))          { window[name] = value; }
+for (const [name, value] of Object.entries(emailTemplates)) { window[name] = value; }
 
 // Sanity log so we can confirm in DevTools that the module graph loaded.
 // Counts confirm the schema data extraction is byte-complete.
@@ -91,4 +93,5 @@ console.log('[ace-modules] schemas + utils + core loaded', {
   richText: Object.keys(richText).length,
   assetCleanup: Object.keys(assetCleanup).length,
   gmail: Object.keys(gmail).length,
+  emailTemplates: Object.keys(emailTemplates).length,
 });

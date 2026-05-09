@@ -29,6 +29,9 @@ window._atToSb = _atToSb;
 // region resolution, etc.) resolve via global env lookup.
 for (const [name, value] of Object.entries(countyMap)) { window[name] = value; }
 
+// v262: agent-picker widget — 14 exports attached to window.
+for (const [name, value] of Object.entries(agentPicker)) { window[name] = value; }
+
 import {
   _stripCommas, _parseNum, _fmtNum, _phoneDigits, fmtMoney, fmtPct,
 } from './utils/format.js';
@@ -39,6 +42,7 @@ import {
 
 // Phase 4.5 shared helpers
 import * as countyMap from './schemas/county-map.js';
+import * as agentPicker from './widgets/agent-picker.js';
 
 // Phase 3: core layer
 import { _proxyCall, PROXY_URL, SB_AUTH_URL, SB_ANON_KEY } from './core/proxy.js';

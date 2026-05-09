@@ -25,7 +25,29 @@ const cors: Record<string, string> = {
 
 const MODEL = 'claude-sonnet-4-6'
 const MAX_TOKENS = 4096
-const PROMPT_VERSION = 'bc-v1.0'
+const PROMPT_VERSION = 'bc-v1.1'
+
+// Maps a FIELD_SPEC.group to the asset-class label(s) (from ASSET_TYPE_VOCAB)
+// that the field is scoped to. If the buyer's proposed/current
+// desired_property_types doesn't include at least one of these, the field is
+// out of scope and dropped server-side. Groups not in this map are NEVER
+// asset-gated (Asset Types / Pricing / Location / Misc / Development).
+const GROUP_REQUIRED_ASSET: Record<string, string[]> = {
+  'Multifamily':       ['Multifamily'],
+  'Warehouse':         ['Warehouse / Industrial'],
+  'Office':            ['Office'],
+  // Retail-grouped fields apply to either retail variant.
+  'Retail':            ['Retail Strip Mall', 'Shopping Center'],
+  'Shopping Center':   ['Shopping Center'],
+  'Mixed Use':         ['Mixed Use'],
+  'Land':              ['Land'],
+  'Automotive':        ['Automotive'],
+  'Mobile Home Park':  ['Mobile Home Park'],
+  'Self Storage':      ['Self Storage'],
+  'Hotel':             ['Hotel'],
+  'Healthcare':        ['Healthcare'],
+  'Special Purpose':   ['Special Purpose'],
+}
 
 type FieldType = 'number' | 'text' | 'boolean' | 'csv' | 'enum' | 'multienum'
 interface FieldDef { col: string; label: string; type: FieldType; group: string; hint: string; options?: string[] }
@@ -428,9 +450,25 @@ OTHER TAG RULES (apply when buy_intent is "buyer" or "both"):
     matching asset class. Always include the matched type in
     desired_property_types. Set the cite for desired_property_types as
     "tag: asset - <type>" so it's clear the source was a tag.
+    Mapping: "asset - retail" → "Retail Strip Mall" AND/OR "Shopping Center"
+    (use BOTH if notes don't disambiguate; use just "Shopping Center" if
+    notes mention 100k+ SF or grocery-anchored or "centers"). Other
+    mappings are 1:1 with the obvious vocab entry.
   - "1031 Investor" or "1031" → bias financing_type to "1031".
   - "VIP" → set is_vip_buyer = true. Cite: "tag: VIP".
   - "Bounced" → ignore. Email deliverability flag, not a buying signal.
+  - U.S. STATE-NAME tags ("New Jersey", "Pennsylvania", "New York",
+    "Florida", etc.) → include the 2-letter code in preferred_states.
+    Cite: "tag: <Tag value>".
+  - PERSON-NAME tags (a tag that looks like "First Last", e.g.
+    "Daniel Keenan") → IGNORE. These are usually the agent who created
+    the contact, not a buy signal.
+  - SYSTEM / CRM tags ("fub export", "hl_engaged", "imported",
+    "Bounced", any tag starting with a lowercase prefix that looks
+    like a system flag) → IGNORE. Not buy signals.
+  - HIGH-ENGAGEMENT tags ("hl_engaged", "engaged buyer", "active buyer",
+    "warm") → on their own DO NOT trigger is_vip_buyer. Use them only
+    in combination with explicit VIP language in the notes.
 
 ═══════════════════════════════════════════════════════════════════════
 STEP 2 — READ THE NOTES, FILL FIELDS
@@ -462,6 +500,51 @@ NOTES-READING RULES:
 5. EMPTY ≠ N/A: Leave a field unset (omit from "fields") when there's
    no signal. Mark a field as "na" ONLY when the buyer EXPLICITLY
    excluded it ("no preference on X", "doesn't matter", "anything works").
+
+6. GEOGRAPHY MUST BE DECOMPOSED. When the notes describe a region in
+   prose ("Boston to Philadelphia corridor extending into central PA
+   and the Hudson Valley"), do NOT just dump it into
+   location_preferences. Also fill the structured fields:
+     - preferred_states: comma-separated 2-letter codes covering the
+       prose. "Boston to Philly" implies MA, RI, CT, NY, NJ, PA.
+       "Hudson Valley" implies NY. Be over-inclusive at the state level.
+     - preferred_cities: any city named explicitly ("Pennsville",
+       "Burlington").
+     - preferred_counties: only if a county is named outright
+       ("Bergen County", "Suffolk County"). Don't infer counties from
+       cities.
+     - simple_area_preference: only if a curated region label is named
+       (e.g. "North NJ", "South FL"). Otherwise leave blank.
+   The free-form location_preferences field stays for the full
+   description; the structured fields exist alongside it.
+
+═══════════════════════════════════════════════════════════════════════
+STEP 2.5 — ASSET-CLASS SCOPE GATE
+═══════════════════════════════════════════════════════════════════════
+Each asset-class field group (Multifamily / Warehouse / Office / Retail /
+Shopping Center / Mixed Use / Land / Automotive / Mobile Home Park /
+Self Storage / Hotel / Healthcare / Special Purpose) is RESERVED for
+buyers who actually want that asset class.
+
+Rules:
+  - You may ONLY propose a value for a field in group X if X (or its
+    matching asset-vocab entry) appears in your proposed
+    desired_property_types.
+  - If the buyer is retail-only ("asset - retail" tag, only retail
+    notes), DO NOT propose ANY values in the Multifamily, Office,
+    Warehouse, Hotel, Storage, MHP, Healthcare, Automotive, Land, or
+    Special Purpose groups. Even if those fields have stale "before"
+    values from a prior bad fill, leave them alone — the apply path
+    has a clear-field option and the user will use it.
+  - If a buyer mentions a second asset class only in passing ("we
+    might also explore warehouse"), include that second class in
+    desired_property_types so its fields become eligible. But only
+    fill specific fields in that secondary class if there's a real
+    signal (e.g. "Smallest 140K SqFt" attached to the warehouse
+    mention → could fill warehouse_min_sf with high uncertainty;
+    prefer marking it uncertain unless the attribution is unambiguous).
+  - This rule has no exceptions. Out-of-scope fields are the most
+    common form of bad output.
 
 ═══════════════════════════════════════════════════════════════════════
 STEP 3 — CITE EVERY VALUE
@@ -517,6 +600,10 @@ For enum / multienum, use ONLY values from the field's ALLOWED VALUES.
 ═══════════════════════════════════════════════════════════════════════
 RULES THAT NEVER BEND
 ═══════════════════════════════════════════════════════════════════════
+0. ASSET-CLASS SCOPE: Never propose a value in an asset-class field
+   group whose asset isn't in your proposed desired_property_types.
+   See Step 2.5. This is the single most common failure mode and the
+   server WILL drop these silently — saving them costs you the slot.
 1. Never invent. If a value is not stated or strongly implied, omit it.
 2. Every field in "fields" needs a matching entry in "citations".
 3. min_purchase_price / max_purchase_price are TOTAL prices for the whole
@@ -634,6 +721,86 @@ OUTPUT:
     { "field": "desired_property_types", "reason": "Mentioned MF in Florida but only conditionally; no concrete buy-box." }
   ]
 }
+
+═══════════════════════════════════════════════════════════════════════
+
+EXAMPLE 3 — Retail-only buyer with noisy tags + multi-state corridor.
+This case demonstrates: tag noise filtering, asset-class scope (no MF
+fields proposed even though stale "before" values exist), and geography
+decomposition (corridor prose → preferred_states + preferred_cities).
+
+INPUT TAGS:
+  ["Daniel Keenan", "Buyer", "asset - retail", "Pennsylvania",
+   "hl_engaged", "fub export"]
+  (Daniel Keenan = the agent who created this contact, IGNORE.
+   "fub export" = system tag, IGNORE.
+   "hl_engaged" = engagement-only flag, NOT a VIP signal on its own.
+   "Pennsylvania" = state-name tag → preferred_states gets "PA".)
+
+INPUT NOTES:
+[note @ 2026-01-13] Preferably grocery anchored retail, 100,000 to
+400,000 SF, generally in the Boston to Philadelphia corridor extending
+out into central PA and up into the Hudson Valley/Capital region.
+Distressed/over leveraged is a plus.
+
+[call @ 2026-01-19] Owns 4 centers in NJ and dev sites in NJ.
+Warehouse explore. South Jersey - Developed RT. Pennsville, Burlington.
+South Jersey. Smallest 140K SqFt.
+
+OUTPUT:
+{
+  "buy_intent": "buyer",
+  "top_level_notes": "Retail buyer (Shopping Center scale, 100k-400k SF, grocery-anchored). Mentions warehouse exploration in passing — included as a secondary asset class but no concrete warehouse buy-box numbers (140k SqFt is ambiguous between retail and warehouse).",
+  "fields": {
+    "desired_property_types":  "Shopping Center, Warehouse / Industrial",
+    "retail_anchor_preference":"Anchored",
+    "shopping_min_sf":         100000,
+    "shopping_max_sf":         400000,
+    "preferred_states":        "MA, RI, CT, NY, NJ, PA",
+    "preferred_cities":        "Pennsville, Burlington",
+    "location_preferences":    "Boston to Philadelphia corridor extending into central PA and the Hudson Valley/Capital region. South Jersey developed corridors (Pennsville, Burlington).",
+    "other_requirements":      "Distressed or over-leveraged situations preferred. Owns 4 centers in NJ plus development sites in NJ. Exploring warehouse opportunities in South Jersey, smallest target ~140k SF (uncertain whether that minimum applies to warehouse, retail, or both)."
+  },
+  "citations": {
+    "desired_property_types":  "tag: asset - retail; from call @ 2026-01-19: 'Warehouse explore'",
+    "retail_anchor_preference":"from note @ 2026-01-13: 'Preferably grocery anchored retail'",
+    "shopping_min_sf":         "from note @ 2026-01-13: '100,000 to 400,000 SF'",
+    "shopping_max_sf":         "from note @ 2026-01-13: '100,000 to 400,000 SF'",
+    "preferred_states":        "from note @ 2026-01-13: 'Boston to Philadelphia corridor extending out into central PA and up into the Hudson Valley/Capital region'; tag: Pennsylvania",
+    "preferred_cities":        "from call @ 2026-01-19: 'Pennsville, Burlington'",
+    "location_preferences":    "from note @ 2026-01-13: 'Boston to Philadelphia corridor...'; from call @ 2026-01-19: 'South Jersey - Developed RT, Pennsville, Burlington'",
+    "other_requirements":      "from note @ 2026-01-13: 'Distressed/over leveraged is a plus'; from call @ 2026-01-19: 'Owns 4 centers in NJ and dev sites in NJ, Warehouse explore, Smallest 140K SqFt'"
+  },
+  "confidence": {
+    "desired_property_types":  "high",
+    "retail_anchor_preference":"high",
+    "shopping_min_sf":         "high",
+    "shopping_max_sf":         "high",
+    "preferred_states":        "high",
+    "preferred_cities":        "high",
+    "location_preferences":    "high",
+    "other_requirements":      "medium"
+  },
+  "explanations": {
+    "desired_property_types":  "Retail tag + 100k-400k SF maps cleanly to Shopping Center scale. Warehouse added as secondary because of the call-note 'Warehouse explore' line.",
+    "preferred_states":        "Boston→Philly corridor covers MA/RI/CT/NY/NJ/PA; Hudson Valley adds NY. PA also confirmed by tag.",
+    "shopping_min_sf":         "Explicit 100k floor in 2026-01-13 note.",
+    "shopping_max_sf":         "Explicit 400k ceiling in same note."
+  },
+  "na": [],
+  "uncertain": [
+    { "field": "warehouse_min_sf", "reason": "'Warehouse explore' and 'Smallest 140K SqFt' appear in the same call note, but it's ambiguous whether 140k applies to warehouse, retail, or both." },
+    { "field": "financing_type",   "reason": "No financing method mentioned." }
+  ]
+}
+
+NOTES on what this example does NOT propose:
+  - NO mf_* fields. There is zero multifamily signal — even though a
+    stale "Garden" or other MF value might be present in "before",
+    leave it alone. The Step 2.5 scope gate forbids proposing MF here.
+  - NO is_vip_buyer = true. "hl_engaged" alone is not a VIP signal.
+  - NO "Daniel Keenan" or "fub export" influence on any field. They
+    are noise.
 `
 
 function buildEligibleFieldsList(args: {
@@ -1016,6 +1183,13 @@ Deno.serve(async (req: Request) => {
       cite?: string
       confidence?: string
     }> = {}
+    // v271: server-side guardrail counters — surfaced in diagnostic so the
+    // user can see what the safety nets dropped vs what the model proposed.
+    const dropped: Record<string, string[]> = {
+      no_cite: [],
+      out_of_scope_asset: [],
+    }
+
     for (const f of FIELD_SPEC) {
       if (currentNa.includes(f.col)) continue
       if (!(f.col in fieldsRaw)) continue
@@ -1034,12 +1208,51 @@ Deno.serve(async (req: Request) => {
       const cite = typeof citationsRaw[f.col] === 'string' ? citationsRaw[f.col].slice(0, 280) : undefined
       const confRaw = typeof confidenceRaw[f.col] === 'string' ? confidenceRaw[f.col].toLowerCase().trim() : ''
       const confidence = (['high', 'medium', 'low'] as const).find(x => x === confRaw)
+
+      // v271 GUARDRAIL: no cite = no proposal. The system prompt requires
+      // a citation for every field; if the model skipped one, drop the
+      // field rather than ship a value the user can't trace.
+      if (!cite || !cite.trim()) {
+        dropped.no_cite.push(f.col)
+        continue
+      }
+
       proposed_changes[f.col] = {
         proposed: propV,
         before,
         ...(expl ? { explanation: expl } : {}),
-        ...(cite ? { cite } : {}),
+        cite,
         ...(confidence ? { confidence } : {}),
+      }
+    }
+
+    // v271 GUARDRAIL: asset-class scope. After we've materialized
+    // proposed_changes, look at what desired_property_types ended up being
+    // (proposed value if present, else current bc.desired_property_types).
+    // For every field whose group is asset-gated, drop the proposal if
+    // none of its required asset-vocab entries appear in the active
+    // desired_property_types set.
+    const dptProposed = proposed_changes['desired_property_types']?.proposed
+    const dptCurrent  = bc['desired_property_types']
+    const dptActiveStr = (typeof dptProposed === 'string' && dptProposed.trim())
+      ? dptProposed
+      : (typeof dptCurrent === 'string' ? dptCurrent : '')
+    const activeAssets = new Set(
+      String(dptActiveStr || '')
+        .split(/[,;]+/)
+        .map(s => s.trim())
+        .filter(Boolean)
+    )
+    if (activeAssets.size > 0) {
+      for (const f of FIELD_SPEC) {
+        const required = GROUP_REQUIRED_ASSET[f.group]
+        if (!required) continue
+        if (!proposed_changes[f.col]) continue
+        const inScope = required.some(a => activeAssets.has(a))
+        if (!inScope) {
+          dropped.out_of_scope_asset.push(f.col)
+          delete proposed_changes[f.col]
+        }
       }
     }
 
@@ -1127,6 +1340,8 @@ Deno.serve(async (req: Request) => {
       model: MODEL,
       stop_reason,
       // v270: diagnostic block for the Copy diagnostic flow.
+      // v271: now also reports server-side guardrail drops so the user
+      // can see when the model proposed something invalid.
       diagnostic: {
         input_summary: {
           tags: effective_tags,
@@ -1141,6 +1356,10 @@ Deno.serve(async (req: Request) => {
         },
         buy_intent:       String(parsed.buy_intent || ''),
         top_level_notes:  String(parsed.top_level_notes || ''),
+        guardrail_drops: {
+          no_cite:              dropped.no_cite,
+          out_of_scope_asset:   dropped.out_of_scope_asset,
+        },
       },
     })
   } catch (e) {

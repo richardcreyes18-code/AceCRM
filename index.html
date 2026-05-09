@@ -25,6 +25,10 @@
      buttons). Layered approach: most layout stays; this file changes
      the visual language. STAGING-only rollout for visual review. -->
 <link rel="stylesheet" href="css/design-system.css"/>
+<!-- v300: deal-detail Bloomberg ticker header + clean tab strip.
+     Loads after design-system.css so deal-detail-specific overrides
+     win the cascade. STAGING-only rollout. -->
+<link rel="stylesheet" href="css/deal-detail-redesign.css"/>
 </head>
 <body>
 
@@ -4056,135 +4060,126 @@ function renderDealPage(){
   // v113.32: owner row HTML is now built by _ownerHeaderInnerHTML(d) — handles
   // the linked-owner case AND the "⚠ No owner assigned" placeholder.
 
+  // v300: deal-header refactored to Bloomberg "ticker" layout —
+  // ID + address + meta on row 1, 6-cell stat strip on row 2,
+  // badges + action buttons on row 3. All existing onclick wiring,
+  // IDs, and dropdowns preserved; this is purely a layout/style swap.
+  // Pre-compute meta-row pieces to keep the template readable.
+  const _ownerName  = (d['Owner Name'] || d['_ownerName'] || '').trim();
+  const _ownerPhone = (d['Owner Phone'] || '').trim();
+  const _capRate    = d['Cap Rate (CRM)'] || d['Cap Rate'] || '';
+  const _lastEdit   = d['Updated At']
+    ? new Date(d['Updated At']).toLocaleDateString('en-US',{month:'short',day:'numeric'})
+    : '—';
+  const _assetTxt   = (d['CRM Asset Classification']||d['Simple Text Property Type']||'').split('|').map(t=>t.trim()).filter(Boolean).join(', ');
+  const _isSnoozed  = _isSnoozedToday(d);
+  const _snoozeUntil = d['Snooze Until Date']||'';
+  const _snoozeFuture = _snoozeUntil && new Date(_snoozeUntil+'T00:00:00') > new Date();
+  const _snoozeDateLbl = _isSnoozed && _snoozeFuture
+    ? `<div style="font-size:9px;font-weight:600;color:var(--yellow-dark);text-align:center;margin-top:2px;white-space:nowrap;">until ${new Date(_snoozeUntil+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div>`
+    : '';
+  const _inMyPipeline = _isInMyPipeline(d.id);
+
   document.getElementById('mainArea').innerHTML=`
-    <!-- DEAL HEADER -->
-    <div class="deal-header">
+    <!-- DEAL HEADER (v300 ticker layout) -->
+    <div class="deal-header dh-ticker">
 
       <!-- UNSAVED CHANGES BANNER -->
       <div id="unsavedBanner" style="display:none;position:absolute;top:0;left:50%;transform:translateX(-50%);
-        background:#c05000;color:#fff;font-size:11px;font-weight:bold;
-        padding:4px 18px;border-radius:0 0 6px 6px;z-index:100;
-        box-shadow:0 2px 8px rgba(0,0,0,0.4);white-space:nowrap;pointer-events:none;">
-        ⚠ Unsaved Changes
+        background:var(--yellow-dark);color:#fff;font-size:11px;font-weight:700;
+        padding:4px 18px;border-radius:0 0 var(--radius-xs) var(--radius-xs);z-index:100;
+        box-shadow:var(--shadow-md);white-space:nowrap;pointer-events:none;letter-spacing:0.04em;">
+        UNSAVED CHANGES
       </div>
 
-      <!-- ROW 1: Address block + Action buttons -->
-      <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:10px;">
+      <!-- ROW 1: ID + Address + meta (contact / phone / dates) -->
+      <div class="dh-row1">
+        <span class="dh-id"><span class="lbl">ID</span> ${leadId}</span>
+        <div id="dealHeaderPhoto" style="display:none;flex-shrink:0;"></div>
+        <div id="headerAddressText" class="dh-addr" title="${addr}">${addr}</div>
+        <div class="dh-addr-actions">
+          <button id="headerEditAddrBtn" onclick="openEditAddressModal()" title="Edit property name &amp; address">Edit</button>
+          <button id="headerMapsBtn" class="dh-maps-btn" onclick="openGoogleMaps('${addr.replace(/'/g,"\\'")}');" title="Open in Google Maps (Street View)">Maps</button>
+        </div>
+        <div class="dh-meta">
+          ${_ownerName ? `<span class="item">${_ownerName}</span>` : ''}
+          ${_ownerName && _ownerPhone ? '<span class="sep"></span>' : ''}
+          ${_ownerPhone ? `<span class="item mono">${_ownerPhone}</span>` : ''}
+          ${(_ownerName||_ownerPhone) ? '<span class="sep"></span>' : ''}
+          <span class="item">Entered ${entered}</span>
+          <span class="sep"></span>
+          <span class="item">Edited ${_lastEdit}</span>
+        </div>
+      </div>
 
-        <!-- LEFT: Photo thumbnail + Address + owner + badge -->
-        <div style="display:flex;align-items:flex-start;gap:10px;flex:1;min-width:0;">
+      <!-- ROW 2: 6-cell stat strip — Bloomberg ticker -->
+      <div class="dh-row2">
+        <div class="dh-stat">
+          <span class="lbl">Asking</span>
+          <span class="val">${_dealAskingDisplay(d) || '<span class="muted">—</span>'}</span>
+        </div>
+        <div class="dh-stat">
+          <span class="lbl">Offer</span>
+          <span class="val">${fmtMoney(d['Offer Price']) || '<span class="muted">—</span>'}</span>
+        </div>
+        <div class="dh-stat">
+          <span class="lbl">NOI</span>
+          <span class="val">${fmtMoney(d['NOI']) || '<span class="muted">—</span>'}</span>
+        </div>
+        <div class="dh-stat">
+          <span class="lbl">Cap Rate</span>
+          <span class="val">${_capRate ? (_capRate+'%') : '<span class="muted">—</span>'}</span>
+        </div>
+        <div class="dh-stat">
+          <span class="lbl">Commission</span>
+          <span class="val green">${estCommission(d)}</span>
+        </div>
+        <div class="dh-stat">
+          <span class="lbl">Close Prob.</span>
+          <span class="val">${prob}%</span>
+          <div class="progress-mini"><div style="width:${prob}%"></div></div>
+        </div>
+      </div>
 
-          <!-- Main photo thumbnail (hidden if no photo) -->
-          <div id="dealHeaderPhoto" style="display:none;flex-shrink:0;margin-top:2px;"></div>
-
-          <div style="flex:1;min-width:0;">
-          <div style="font-size:11px;color:var(--text3);margin-bottom:3px;">
-            Lead ID: <strong style="color:var(--primary);">${leadId}</strong>
-            <span style="margin-left:8px;">Entered ${entered}</span>
-          </div>
-          <div style="display:flex;align-items:center;gap:8px;margin-bottom:2px;flex-wrap:wrap;">
-            <div id="headerAddressText" style="font-size:17px;font-weight:700;color:var(--text);line-height:1.25;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;min-width:0;flex:1;" title="${addr}">${addr}</div>
-            <button id="headerEditAddrBtn" onclick="openEditAddressModal()" title="Edit property name &amp; address" style="flex-shrink:0;background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:5px 10px;border-radius:6px;font-size:13px;cursor:pointer;white-space:nowrap;">✏️</button>
-            <button id="headerMapsBtn" onclick="openGoogleMaps('${addr.replace(/'/g,"\\'")}');" title="Open in Google Maps (Street View)" style="flex-shrink:0;background:#1a73e8;color:#fff;border:none;padding:5px 12px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;white-space:nowrap;">🗺 Maps</button>
-          </div>
-          <div id="headerOwnerName" style="font-size:13px;color:var(--text2);margin-bottom:6px;">${_ownerHeaderInnerHTML(d)}</div>
-          <div style="display:flex;align-items:center;gap:8px;flex-wrap:wrap;">
-            ${stageBadge(stage)}
-            ${_pfIconHtml(d)}
-            ${d['Deal Tag'] ? `<span style="border-radius:99px;padding:2px 10px;font-size:11px;font-weight:600;background:#fef2f2;color:#dc2626;border:1px solid #fca5a5;">${d['Deal Tag']}</span>` : ''}
-            <span id="headerAssetTypeBadge" onclick="openEditAssetTypeModal()" title="Click to edit asset type" style="font-size:12px;color:var(--text2);cursor:pointer;padding:2px 8px;border:1px dashed #c0cce0;border-radius:99px;background:#fafbff;" onmouseenter="this.style.background='#eef2fb'" onmouseleave="this.style.background='#fafbff'">${(()=>{const v=d['CRM Asset Classification']||d['Simple Text Property Type']||'';return v?'🏷️ <strong>'+v.split('|').map(t=>t.trim()).join(', ')+'</strong>':'🏷️ <em style="color:#888;">Set asset type</em>';})()}</span>
-            ${d['Simple County'] ? `<span id="headerCountyBadge" style="font-size:12px;color:var(--text3);">📍 ${d['Simple County']}, NJ</span>` : `<span id="headerCountyBadge" style="font-size:12px;color:var(--text3);"></span>`}
-            ${_renderAgentPill(d.id, d['Assigned Agent']||'', 'sm')}
-            ${d['Top Priority'] ? `<span style="background:#fef3c7;color:#92400e;font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;">⭐ Priority</span>` : ''}
-            ${d['Is Archived'] ? `<span style="background:#fef2f2;color:#dc2626;font-size:11px;font-weight:600;padding:2px 8px;border-radius:99px;">📦 Archived</span>` : ''}
-          </div>
-          </div><!-- end inner address col -->
-        </div><!-- end left flex (photo + address) -->
-
-        <!-- RIGHT: Action buttons -->
-        <div style="display:flex;flex-wrap:wrap;gap:6px;align-items:flex-start;flex-shrink:0;justify-content:flex-end;max-width:340px;">
+      <!-- ROW 3: stage badges + action buttons -->
+      <div class="dh-row3">
+        <div class="dh-badges">
+          ${stageBadge(stage)}
+          ${_pfIconHtml(d)}
+          ${d['Deal Tag'] ? `<span class="tag-pill" style="background:var(--red-bg);color:var(--red-dark);border-color:var(--red-border);">${d['Deal Tag']}</span>` : ''}
+          <span id="headerAssetTypeBadge" class="tag-pill dashed" onclick="openEditAssetTypeModal()" title="Click to edit asset type">${_assetTxt ? `<strong>${_assetTxt}</strong>` : '<em style="color:var(--fg-3);">Set asset type</em>'}</span>
+          ${d['Simple County'] ? `<span id="headerCountyBadge" class="tag-pill">${d['Simple County']}, NJ</span>` : `<span id="headerCountyBadge"></span>`}
+          ${_renderAgentPill(d.id, d['Assigned Agent']||'', 'sm')}
+          ${d['Top Priority'] ? `<span class="tag-pill" style="background:var(--yellow-bg);color:var(--yellow-dark);border-color:var(--yellow-border);">Priority</span>` : ''}
+          ${d['Is Archived'] ? `<span class="tag-pill" style="background:var(--red-bg);color:var(--red-dark);border-color:var(--red-border);">Archived</span>` : ''}
+          <span id="headerOwnerName" class="tag-pill" style="background:transparent;border:none;color:var(--fg-2);padding-left:0;">${_ownerHeaderInnerHTML(d)}</span>
+        </div>
+        <div class="dh-actions">
           <!-- v113.69: AI Auto-Fill — runs ai-parse-deal-v2 in dry-run mode
                and opens the review modal so the user can pick which value
                proposals + N/A proposals to apply. -->
-          <button onclick="_aiAutoFillDeal('${d.id}')" title="Use AI to fill every Property Details + Financial Analysis field from the description text" style="
-            background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border:none;
-            padding:5px 10px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;white-space:nowrap;">
-            ✦ AI Auto-Fill
-          </button>
-          <button class="action-btn" onclick="alert('Message feature coming soon')" style="font-size:12px;padding:5px 10px;">✉ Message</button>
-          <button onclick="openCreateTaskModal('${d.id}','${addr.replace(/'/g,"\\'")}','deal')" style="background:#7c3aed;color:#fff;border:none;padding:5px 10px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;white-space:nowrap;">☑ Task</button>
-          <!-- Snooze dropdown -->
-          <div style="position:relative;display:inline-block;">
-            ${(()=>{
-              const snoozed = _isSnoozedToday(d);
-              const until = d['Snooze Until Date']||'';
-              const isFuture = until && new Date(until+'T00:00:00') > new Date();
-              const btnColor = snoozed ? '#ea580c' : '#64748b'; // orange if snoozed, grey if not
-              const dateLabel = snoozed && isFuture
-                ? `<div style="font-size:9px;font-weight:600;color:#ea580c;text-align:center;margin-top:2px;white-space:nowrap;">until ${new Date(until+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric'})}</div>`
-                : '';
-              return `<button id="snoozeMenuBtn_${d.id}" onclick="document.getElementById('snoozeMenu_${d.id}').style.display=document.getElementById('snoozeMenu_${d.id}').style.display==='block'?'none':'block'" style="background:${btnColor};color:#fff;border:none;padding:5px 10px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;white-space:nowrap;">
-                💤 ${snoozed?'Snoozed':'Snooze'}
-              </button>${dateLabel}`;
-            })()}
-            <div id="snoozeMenu_${d.id}" style="display:none;position:absolute;right:0;top:100%;margin-top:4px;background:var(--surface);border:1px solid var(--border);border-radius:var(--radius-sm);box-shadow:var(--shadow-md);z-index:999;min-width:200px;overflow:hidden;">
-              ${_isSnoozedToday(d)
-                ? `<div style="padding:8px 12px;font-size:11px;color:var(--text2);">Snoozed until: <strong>${d['Snooze Until Date']||'—'}</strong></div>
-                   <button onclick="document.getElementById('snoozeMenu_${d.id}').style.display='none';unsnoozeDeal('${d.id}')" style="width:100%;padding:8px 12px;border:none;background:var(--green-bg);color:var(--green);font-size:12px;font-weight:600;cursor:pointer;text-align:left;border-top:1px solid var(--border);">✓ Un-snooze (move to active)</button>`
-                : `<button onclick="document.getElementById('snoozeMenu_${d.id}').style.display='none';snoozeDealToday('${d.id}')" style="width:100%;padding:8px 12px;border:none;background:none;font-size:12px;cursor:pointer;text-align:left;color:var(--text);">Done for today (until tomorrow)</button>
-                   <button onclick="document.getElementById('snoozeMenu_${d.id}').style.display='none';snoozeDealUntil('${d.id}')" style="width:100%;padding:8px 12px;border:none;background:none;font-size:12px;cursor:pointer;text-align:left;color:var(--text);border-top:1px solid var(--border);">Snooze until a date...</button>`
+          <button class="dh-btn primary" onclick="_aiAutoFillDeal('${d.id}')" title="Use AI to fill every Property Details + Financial Analysis field from the description text">✦ AI Auto-Fill</button>
+          <button class="dh-btn" onclick="alert('Message feature coming soon')">Message</button>
+          <button class="dh-btn" onclick="openCreateTaskModal('${d.id}','${addr.replace(/'/g,"\\'")}','deal')">Task</button>
+          <div class="dh-snooze-wrap">
+            <button id="snoozeMenuBtn_${d.id}" class="dh-btn ${_isSnoozed?'warning':''}" onclick="document.getElementById('snoozeMenu_${d.id}').style.display=document.getElementById('snoozeMenu_${d.id}').style.display==='block'?'none':'block'">${_isSnoozed?'Snoozed':'Snooze'}</button>
+            ${_snoozeDateLbl}
+            <div id="snoozeMenu_${d.id}" class="dh-snooze-menu">
+              ${_isSnoozed
+                ? `<div style="padding:8px 12px;font-size:11px;color:var(--fg-2);">Snoozed until: <strong>${_snoozeUntil||'—'}</strong></div>
+                   <button onclick="document.getElementById('snoozeMenu_${d.id}').style.display='none';unsnoozeDeal('${d.id}')" style="background:var(--green-bg);color:var(--green-dark);font-weight:600;">✓ Un-snooze (move to active)</button>`
+                : `<button onclick="document.getElementById('snoozeMenu_${d.id}').style.display='none';snoozeDealToday('${d.id}')">Done for today (until tomorrow)</button>
+                   <button onclick="document.getElementById('snoozeMenu_${d.id}').style.display='none';snoozeDealUntil('${d.id}')">Snooze until a date…</button>`
               }
             </div>
           </div>
-          <button id="headerWorkbenchBtn_${d.id}" onclick="addToWorkbench('${d.id}', this)" style="
-            background:#1e3a8a;color:#fff;border:none;padding:5px 10px;font-size:12px;font-weight:600;
-            border-radius:6px;cursor:pointer;white-space:nowrap;">
-            + Add to Workbench
-          </button>
+          <button id="headerWorkbenchBtn_${d.id}" class="dh-btn" onclick="addToWorkbench('${d.id}', this)">+ Workbench</button>
           <!-- v113.1: Personal Pipeline toggle -->
-          <button class="my-pipeline-btn" data-my-pipeline-deal="${d.id}"
+          <button class="dh-btn ${_inMyPipeline?'success':''} my-pipeline-btn" data-my-pipeline-deal="${d.id}"
             onclick="toggleMyPipelineHeader('${d.id}', this, '${addr.replace(/'/g,"\\'")}')"
-            title="${_isInMyPipeline(d.id)?'In your personal pipeline — click to remove':'Add this deal to your personal pipeline'}" style="
-            background:${_isInMyPipeline(d.id)?'#16a34a':'#1e3a8a'};color:#fff;border:none;padding:5px 10px;font-size:12px;font-weight:600;
-            border-radius:6px;cursor:pointer;white-space:nowrap;">
-            ${_isInMyPipeline(d.id)?'✓ In My Pipeline':'+ Add to My Pipeline'}
-          </button>
-          <button id="headerStarBtn" onclick="toggleStar('${d.id}')" style="
-            background:${d['Top Priority']?'#f59e0b':'#94a3b8'};
-            color:#fff;border:none;padding:5px 10px;font-size:12px;font-weight:600;
-            border-radius:6px;cursor:pointer;white-space:nowrap;">
-            ${d['Top Priority']?'⭐ Priority':'☆ Priority'}
-          </button>
-          <button onclick="deleteDeal('${d.id}','${(d['Address']||'').replace(/'/g,'\\\'')}')" style="
-            background:#dc2626;color:#fff;border:none;
-            padding:5px 10px;font-size:12px;font-weight:600;
-            border-radius:6px;cursor:pointer;white-space:nowrap;">
-            🗑
-          </button>
-        </div>
-      </div>
-
-      <!-- ROW 2: Key stats strip -->
-      <div style="display:flex;gap:0;border:1px solid var(--border);border-radius:var(--radius-sm);overflow:hidden;background:var(--surface2);flex-wrap:wrap;">
-        <div style="flex:1;min-width:120px;padding:7px 14px;border-right:1px solid var(--border);">
-          <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px;">Commission</div>
-          <div style="font-size:14px;font-weight:700;color:var(--green);">${estCommission(d)}</div>
-        </div>
-        <div style="flex:1;min-width:120px;padding:7px 14px;border-right:1px solid var(--border);">
-          <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px;">Asking Price</div>
-          <div style="font-size:14px;font-weight:700;color:var(--text);">${_dealAskingDisplay(d)}</div>
-        </div>
-        <div style="flex:1;min-width:120px;padding:7px 14px;border-right:1px solid var(--border);">
-          <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px;">Offer Price</div>
-          <div style="font-size:14px;font-weight:700;color:var(--text);">${fmtMoney(d['Offer Price'])}</div>
-        </div>
-        <div style="flex:1;min-width:120px;padding:7px 14px;border-right:1px solid var(--border);">
-          <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:2px;">NOI</div>
-          <div style="font-size:14px;font-weight:700;color:var(--text);">${fmtMoney(d['NOI'])}</div>
-        </div>
-        <div style="flex:1;min-width:160px;padding:7px 14px;">
-          <div style="font-size:10px;font-weight:600;color:var(--text3);text-transform:uppercase;letter-spacing:0.05em;margin-bottom:4px;">Close Probability: ${prob}%</div>
-          <div class="progress-bar"><div class="progress-fill" style="width:${prob}%"></div></div>
+            title="${_inMyPipeline?'In your personal pipeline — click to remove':'Add this deal to your personal pipeline'}">${_inMyPipeline?'✓ My Pipeline':'+ My Pipeline'}</button>
+          <button id="headerStarBtn" class="dh-btn ${d['Top Priority']?'warning':''}" onclick="toggleStar('${d.id}')">${d['Top Priority']?'★ Priority':'☆ Priority'}</button>
+          <button class="dh-btn danger icon-only" onclick="deleteDeal('${d.id}','${(d['Address']||'').replace(/'/g,'\\\'')}')" title="Delete deal">🗑</button>
         </div>
       </div>
 
@@ -4194,36 +4189,34 @@ function renderDealPage(){
           <strong>${addr}</strong><br>
           ${d['Simple County']||''}${d['Simple County']?', ':''} NJ<br>
           ${d['Region for County']||''}<br>
-          <a onclick="alert('Map feature coming soon')">🗺 Map</a>
+          <a onclick="alert('Map feature coming soon')">Map</a>
         </div>
         <div class="deal-photo">
-            <span>📷<br>No Image</span>
-          </div>
+          <span>No Image</span>
         </div>
       </div>
     </div>
 
-    <!-- TABS -->
-    <div class="tabs-section">
-      <div class="tabs-row" id="tabsRow1" style="display:flex;align-items:center;flex-wrap:wrap;gap:0;">
-        <button class="tab-btn active" onclick="switchTab('summary',this)" style="font-weight:bold;color:#1a3a6e;">📋 Summary</button>
+    <!-- TABS — v300: clean text-only labels, single blue active accent.
+         All emojis stripped per the redesign brief. Notes tab keeps a
+         count badge in mono tabular-nums via .count. -->
+    <div class="tabs-section dh-tabs">
+      <div class="tabs-row" id="tabsRow1">
+        <button class="tab-btn active" onclick="switchTab('summary',this)">Summary</button>
         <button class="tab-btn" onclick="switchTab('property',this)">Property Details</button>
         <!-- v168: Offers / Tenant Mix / Comps now live inside Financial Analysis as sub-tabs. -->
         <button class="tab-btn" onclick="switchTab('financial',this)">Financial Analysis</button>
         <button class="tab-btn" onclick="switchTab('documents',this)">Documents</button>
-        <button class="tab-btn" onclick="switchTab('dealstatus',this)">Deal Status / Pipeline</button>
-        <button class="tab-btn" onclick="switchTab('contacts',this)">Contacts / Buyers</button>
-        <button class="tab-btn" onclick="switchTab('notes',this)">Notes (${notesCount(d)})</button>
-        <button class="tab-btn" onclick="switchTab('tasks',this)" style="font-weight:600;color:#7c3aed;">☑ Tasks</button>
+        <button class="tab-btn" onclick="switchTab('dealstatus',this)">Deal Status</button>
+        <button class="tab-btn" onclick="switchTab('contacts',this)">Contacts &amp; Buyers</button>
+        <button class="tab-btn" onclick="switchTab('notes',this)">Notes <span class="count">${notesCount(d)}</span></button>
+        <button class="tab-btn" onclick="switchTab('tasks',this)">Tasks</button>
         <button class="tab-btn" onclick="switchTab('calendar',this)">Calendar</button>
-        <button class="tab-btn" style="color:#6a0dad;" onclick="switchTab('aicomm',this)">✦ AI Communication</button>
-        <button class="tab-btn" style="color:#1a7a3a;font-weight:bold;" onclick="switchTab('buyermatch',this)">🎯 Buyer Match</button>
-        <button class="tab-btn" style="color:#b8912a;font-weight:bold;" onclick="switchTab('brochure',this)">📄 OM & Flyer Creator</button>
-        <button class="tab-btn" style="color:#1a3a6e;font-weight:bold;" onclick="switchTab('pitchout',this)">📊 Buyer Pitch</button>
-        <button id="fmToggleBtn" onclick="toggleFieldMapDrawer()" title="Show where each field is stored in Airtable"
-          style="margin-left:auto;padding:4px 10px;font-size:10px;font-weight:bold;background:#f0f4ff;border:1px solid #4a90d9;color:#1a3a6e;border-radius:3px;cursor:pointer;white-space:nowrap;">
-          🗂 Field Map
-        </button>
+        <button class="tab-btn" onclick="switchTab('aicomm',this)">AI Communication</button>
+        <button class="tab-btn" onclick="switchTab('buyermatch',this)">Buyer Match</button>
+        <button class="tab-btn" onclick="switchTab('brochure',this)">OM &amp; Flyer</button>
+        <button class="tab-btn" onclick="switchTab('pitchout',this)">Buyer Pitch</button>
+        <button id="fmToggleBtn" class="field-map-btn" onclick="toggleFieldMapDrawer()" title="Show where each field is stored in Airtable">Field Map</button>
       </div>
     </div>
 

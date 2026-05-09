@@ -63,7 +63,7 @@ const AUTO_ROUTING = {
   note_count_threshold:    6,
 }
 const MAX_TOKENS = 4096
-const PROMPT_VERSION = 'bc-v1.6'
+const PROMPT_VERSION = 'bc-v1.7'
 
 // Maps a FIELD_SPEC.group to the asset-class label(s) (from ASSET_TYPE_VOCAB)
 // that the field is scoped to. If the buyer's proposed/current
@@ -860,7 +860,6 @@ Rules:
       "auto repair" / "mechanic shop"    → "Automotive: Auto Repair / Mechanic"
       "auto body" / "body shop"          → "Automotive: Auto Body Shop"
       "tire shop"                        → "Automotive: Tire Shop"
-      "car wash"                         → "Automotive: Car Wash"
       "gas station"                      → "Special Purpose: Gas Station"
       "parking lot" / "parking garage"   → "Special Purpose: Parking Lot/Garage"
       "church" / "religious building"    → "Special Purpose: Church/Religious"
@@ -869,6 +868,32 @@ Rules:
   - You may include MULTIPLE chips when the buyer's interest spans
     several categories. Comma-separated.
   - Do NOT invent categories outside the list above.
+
+AMBIGUOUS SUBTYPES — when a keyword appears under multiple categories,
+propose ALL matching chips (the user picks the right one in the UI; we
+don't guess for them). Specifically:
+      "car wash"                  → "Automotive: Car Wash" AND
+                                    "Special Purpose: Car Wash"
+                                    (both chips, comma-separated)
+      "strip mall" / "strip center"
+                                  → "Retail: Strip Mall" AND
+                                    "Shopping Center: Strip Center"
+      "neighborhood center"       → "Retail: Neighborhood Center" AND
+                                    "Shopping Center: Neighborhood Center"
+      "power center"              → "Retail: Power Center" AND
+                                    "Shopping Center: Power Center"
+      "community center"          → "Retail: Community Center" AND
+                                    "Shopping Center: Community Center" AND
+                                    "Special Purpose: Community Center"
+      "regional mall"             → "Retail: Regional Mall" AND
+                                    "Shopping Center: Regional Mall"
+      "R&D" / "research and development"
+                                  → "Office: R&D" AND
+                                    "Industrial: R&D"
+General rule: if you'd reasonably pick one of N category-disambiguated
+chips for a keyword and there's no contextual signal narrowing it to
+just one, output ALL N. The user toggles the right ones in the review
+modal — never guess for them.
 
 ═══════════════════════════════════════════════════════════════════════
 STEP 2.5 — ASSET-CLASS SCOPE GATE

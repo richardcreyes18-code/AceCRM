@@ -26960,6 +26960,18 @@ function showSettingsPage(){
           <button onclick="_bcBulkAiAutoFillLauncher()" style="background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Open bulk launcher →</button>
         </section>
 
+        <!-- v286: BC Asset Taxonomy Audit -->
+        <section data-settings-tab="tools" style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
+          <div style="font-size:28px;flex-shrink:0;">🗂</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:15px;font-weight:700;color:#0f172a;">BC Asset Taxonomy Audit</div>
+            <div style="font-size:12px;color:#64748b;margin-top:3px;line-height:1.5;">
+              Lists every asset category and subtype the buyer-criteria picker exposes, alongside whether a dedicated requirements field-section exists for each. Gaps show up in red — fix by adding the missing branch in <code>bcExpandedAssetSection</code> + a matching key in <code>_bcAssetSectionKey</code>.
+            </div>
+          </div>
+          <button onclick="_bcAssetTaxonomyAudit()" style="background:#0f172a;color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Open audit →</button>
+        </section>
+
         <!-- v119: AI Auto-Fill catalog tile -->
         <section data-settings-tab="tools" style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
           <div style="font-size:28px;flex-shrink:0;">✦</div>
@@ -32895,8 +32907,33 @@ function _bcAiRenderReviewModal(bcId, resp, hostModal){
       }).join('')
     : `<div style="padding:24px;text-align:center;font-size:11px;color:#94a3b8;">No notes / call transcripts on this contact yet — AI had nothing to read from. Add context in the prompt above to seed the run.</div>`;
 
+  // v286: pull the contact name so the review modal header shows
+  // whose buyer-criteria the user is reviewing. Look up via the linked
+  // contact_id from the cached BC + the cached allContacts list.
+  const _bcModalContactName = (() => {
+    try {
+      // First try the source_breakdown — already has "Contact: <name>" baked in.
+      const cr = (resp.source_breakdown && resp.source_breakdown.contact_record) || '';
+      const m = String(cr).match(/^Contact:\s*([^\n]+)/);
+      if(m && m[1] && m[1].trim() !== '(no name)') return m[1].trim();
+      // Fall back to the in-memory cache.
+      const bcRow = (window.allBuyerCriteria || []).find(r => r.id === bcId);
+      const cid = bcRow?.fields?.['Buyer']?.[0] || bcRow?.fields?.['_contactId'];
+      if(cid && Array.isArray(window.allContacts)){
+        const c = window.allContacts.find(x => x.id === cid);
+        if(c?.fields?.['Full Name']) return c.fields['Full Name'];
+        if(c?.fields?.['Name']) return c.fields['Name'];
+      }
+    } catch(_){}
+    return '';
+  })();
+
   root.innerHTML = `
     <div style="background:#fff;border-radius:12px;padding:0;max-width:1500px;width:98%;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 25px 60px rgba(0,0,0,0.25);font-family:'Inter',system-ui,sans-serif;">
+      ${_bcModalContactName ? `<div style="padding:10px 22px;background:linear-gradient(135deg,#1a3a6e,#0e2244);color:#fff;display:flex;align-items:center;gap:10px;border-radius:12px 12px 0 0;">
+        <span style="font-size:11px;text-transform:uppercase;letter-spacing:.05em;color:#aad4ff;font-weight:600;">Reviewing</span>
+        <span style="font-size:16px;font-weight:700;color:#fff;">${esc(_bcModalContactName)}</span>
+      </div>` : ''}
       <div style="padding:16px 22px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
         <div>
           <div style="font-size:16px;font-weight:700;color:#0f172a;">✦ AI Auto-Fill — Review &amp; Apply</div>
@@ -33551,6 +33588,137 @@ function bcCycleReviewFilter(){
 
 // Legacy alias — in case any handler still references the old name
 function bcToggleNeedsReviewFilter(){ bcCycleReviewFilter(); }
+
+// ════════════════════════════════════════════════════════════════════
+// v286: BC Asset Taxonomy Audit.
+// Settings → Tools → "Open audit →" launches this. For every category +
+// subtype in ASSET_SUBTYPES, runs the chip text through
+// _bcAssetSectionKey() to see which requirements section it resolves
+// to — flags any that fall through to the "misc__*" no-section bucket.
+// ════════════════════════════════════════════════════════════════════
+window._bcAssetTaxonomyAudit = function(){
+  if(typeof ASSET_SUBTYPES !== 'object' || !ASSET_SUBTYPES){
+    alert('ASSET_SUBTYPES not loaded yet.');
+    return;
+  }
+  if(typeof _bcAssetSectionKey !== 'function'){
+    alert('_bcAssetSectionKey not loaded yet.');
+    return;
+  }
+
+  // Section key → human label, in the order the BC form renders them.
+  const SECTION_LABELS = {
+    multifamily: 'Multifamily',
+    warehouse:   'Warehouse / Industrial',
+    shopping:    'Shopping Center',
+    retail:      'Retail',
+    office:      'Office',
+    land:        'Land',
+    mixed:       'Mixed Use',
+    automotive:  'Automotive',
+    hotel:       'Hotel',
+    storage:     'Self Storage',
+    mhp:         'Mobile Home Park',
+    healthcare:  'Healthcare',
+    special:     'Special Purpose',
+    development: 'Development',
+  };
+
+  const esc = s => String(s==null?'':s).replace(/[<&>"]/g, c => ({'<':'&lt;','&':'&amp;','>':'&gt;','"':'&quot;'}[c]));
+
+  // For each category, classify all chip variants (bare + each subtype).
+  let totalChips = 0;
+  let chipsWithSection = 0;
+  const blocks = [];
+
+  for(const [category, subtypes] of Object.entries(ASSET_SUBTYPES)){
+    const rows = [];
+    // Bare category chip
+    const bareKey = _bcAssetSectionKey(category);
+    const bareLabel = SECTION_LABELS[bareKey] || null;
+    const bareHasSection = !bareKey.startsWith('misc__');
+    totalChips++;
+    if(bareHasSection) chipsWithSection++;
+    rows.push({
+      chip: category,
+      sectionKey: bareKey,
+      sectionLabel: bareLabel,
+      hasSection: bareHasSection,
+      isBare: true,
+    });
+    // Subtype chips
+    for(const sub of subtypes){
+      const chipText = `${category}: ${sub}`;
+      const k = _bcAssetSectionKey(chipText);
+      const lbl = SECTION_LABELS[k] || null;
+      const has = !k.startsWith('misc__');
+      totalChips++;
+      if(has) chipsWithSection++;
+      rows.push({
+        chip: chipText,
+        sectionKey: k,
+        sectionLabel: lbl,
+        hasSection: has,
+        isBare: false,
+      });
+    }
+    const allCovered  = rows.every(r => r.hasSection);
+    const noneCovered = rows.every(r => !r.hasSection);
+    const headerColor = allCovered ? '#15803d' : noneCovered ? '#b91c1c' : '#b45309';
+    const headerBg    = allCovered ? '#ecfdf5' : noneCovered ? '#fef2f2' : '#fef9c3';
+    const headerBorder= allCovered ? '#86efac' : noneCovered ? '#fecaca' : '#fde68a';
+    const status = allCovered ? '✓ all chips covered' : noneCovered ? '⚠ no requirements section for any chip' : `⚠ ${rows.filter(r => !r.hasSection).length}/${rows.length} chips have no section`;
+    blocks.push(`
+      <details ${noneCovered || !allCovered ? 'open' : ''} style="border:1px solid ${headerBorder};border-radius:8px;margin-bottom:10px;background:#fff;overflow:hidden;">
+        <summary style="padding:10px 14px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;background:${headerBg};">
+          <span style="font-size:13px;font-weight:700;color:${headerColor};">${esc(category)}</span>
+          <span style="font-size:11px;color:${headerColor};font-weight:600;">${status}</span>
+        </summary>
+        <table style="width:100%;border-collapse:collapse;font-size:11px;">
+          <thead>
+            <tr style="background:#f8fafc;color:#64748b;text-transform:uppercase;letter-spacing:.04em;font-size:10px;">
+              <th style="padding:7px 12px;text-align:left;border-bottom:1px solid #e2e8f0;">Chip</th>
+              <th style="padding:7px 12px;text-align:left;border-bottom:1px solid #e2e8f0;">Resolves to section</th>
+              <th style="padding:7px 12px;text-align:left;border-bottom:1px solid #e2e8f0;">Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(r => `
+              <tr style="border-top:1px solid #f1f5f9;">
+                <td style="padding:7px 12px;color:${r.isBare?'#0f172a':'#475569'};font-weight:${r.isBare?'700':'400'};">${esc(r.chip)}</td>
+                <td style="padding:7px 12px;color:#475569;font-family:ui-monospace,Menlo,monospace;font-size:10px;">${esc(r.sectionKey)}${r.sectionLabel && r.sectionLabel.toLowerCase() !== r.sectionKey ? ' <span style="color:#94a3b8;">(' + esc(r.sectionLabel) + ')</span>' : ''}</td>
+                <td style="padding:7px 12px;">${r.hasSection
+                  ? '<span style="color:#15803d;font-weight:600;">✓ has section</span>'
+                  : '<span style="color:#b91c1c;font-weight:600;">⚠ no section — falls back to generic "no specific fields" message</span>'}</td>
+              </tr>`).join('')}
+          </tbody>
+        </table>
+      </details>`);
+  }
+
+  const coveragePct = totalChips ? Math.round((chipsWithSection / totalChips) * 100) : 0;
+  const modal = document.createElement('div');
+  modal.id = 'bcTaxonomyAuditModal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:99998;display:flex;align-items:center;justify-content:center;padding:20px;font-family:Inter,system-ui,sans-serif;';
+  modal.onclick = (e) => { if(e.target === modal) modal.remove(); };
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;max-width:1100px;width:96%;max-height:92vh;display:flex;flex-direction:column;box-shadow:0 25px 60px rgba(0,0,0,0.25);">
+      <div style="padding:16px 22px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;">
+        <div>
+          <div style="font-size:16px;font-weight:700;color:#0f172a;">🗂 BC Asset Taxonomy Audit</div>
+          <div style="font-size:11px;color:#64748b;margin-top:2px;">${chipsWithSection}/${totalChips} chip variants resolve to a requirements section (${coveragePct}% coverage)</div>
+        </div>
+        <button onclick="document.getElementById('bcTaxonomyAuditModal')?.remove()" style="background:#f1f5f9;border:1px solid #cbd5e1;color:#0f172a;padding:7px 14px;font-size:12px;border-radius:8px;cursor:pointer;font-family:inherit;">Close</button>
+      </div>
+      <div style="flex:1;min-height:0;overflow:auto;padding:16px 22px;background:#f8fafc;">
+        ${blocks.join('')}
+      </div>
+      <div style="padding:10px 22px;border-top:1px solid #e2e8f0;font-size:11px;color:#64748b;background:#fff;">
+        <strong style="color:#0f172a;">How to fix gaps:</strong> add a new <code>else if</code> branch to <code>bcExpandedAssetSection</code> (~line 30820) for the missing category, plus a matching <code>lc.includes(...)</code> branch in <code>_bcAssetSectionKey</code> (~line 31088) so the form router maps the chip to the new section. Backing columns may also need to be added to <code>ace_buyer_criteria</code> + the <code>SB_BC_MAP</code>.
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+};
 
 // ════════════════════════════════════════════════════════════════════
 // v285: Bulk AI Auto-Fill launcher.

@@ -40,6 +40,9 @@ import {
 } from './core/auth.js';
 import { _showToast, showSaveConfirm } from './core/toast.js';
 
+// Phase 4a: feature module — workbench (parallel; legacy still owns runtime)
+import * as workbench from './workbench/workbench.js';
+
 // Sanity log so we can confirm in DevTools that the module graph loaded.
 // Counts confirm the schema data extraction is byte-complete.
 console.log('[ace-modules] schemas + utils + core loaded', {
@@ -64,4 +67,6 @@ console.log('[ace-modules] schemas + utils + core loaded', {
   sessionVersion: SESSION_VERSION,
   proxyUrl: PROXY_URL.endsWith('/crm-proxy'),
   config:  getConfig().isConnected,
+  // workbench module — exported function count
+  workbench: Object.keys(workbench).length,
 });

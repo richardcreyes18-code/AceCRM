@@ -54,6 +54,26 @@ function _sbToAt(row, map) {
 }
 
 // ═══════════════════════════════════════════════════════════════════════
+// CACHE WARM-UP (called by app boot, before any contact-add button paints)
+// ═══════════════════════════════════════════════════════════════════════
+// v102.39: keep the Workbench contact-id cache primed so "+ Add to Workbench"
+// buttons render in their already-added state without a DB roundtrip.
+// Called during initial syncData(); silent failure is OK — UI just falls
+// back to all buttons rendering as "+ Add to Workbench".
+export async function _wbWarmContactCache(){
+  const cu = window._currentUser;
+  if(!cu || !cu.id) return;
+  const wbRows = await _sbGet(SB_TABLES.workbench,
+    'select=contact_id,position'
+    + '&user_id=eq.' + encodeURIComponent(cu.id)
+    + '&item_type=eq.contact&limit=500');
+  if(Array.isArray(wbRows)){
+    _wbContactPositions.clear();
+    wbRows.forEach(r => { if(r.contact_id) _wbContactPositions.set(r.contact_id, r.position); });
+  }
+}
+
+// ═══════════════════════════════════════════════════════════════════════
 // CONTACT ADD-BUTTON SYNC
 // ═══════════════════════════════════════════════════════════════════════
 // Apply the cached state to every contact-add button currently on screen.

@@ -40,8 +40,13 @@ import {
 } from './core/auth.js';
 import { _showToast, showSaveConfirm } from './core/toast.js';
 
-// Phase 4a: feature module — workbench (parallel; legacy still owns runtime)
+// Phase 4: workbench feature module. Phase 4b deletes the legacy block in
+// index.html, so every export must be reachable from inline onclick handlers
+// in the rendered HTML — attach all exports to window.
 import * as workbench from './workbench/workbench.js';
+for (const [name, value] of Object.entries(workbench)) {
+  window[name] = value;
+}
 
 // Sanity log so we can confirm in DevTools that the module graph loaded.
 // Counts confirm the schema data extraction is byte-complete.

@@ -1110,6 +1110,117 @@
   padding: 14px 18px;
 }
 
+/* ─────────────────────────────────────────────────────────────
+   Legacy class re-skins — make .info-box, .data-table, and the
+   bleeding .section-hdr look like the new design system without
+   touching the dozens of call sites that use them. Targeted
+   inside .tab-content so we don't accidentally re-style modals
+   or other surfaces.
+   ─────────────────────────────────────────────────────────── */
+
+/* .info-box — Property Details / Financial / Documents wrapping
+   container. Match the .section card silhouette: hairline border,
+   8px radius, tighter padding. Drop the legacy gradient header. */
+.tab-content .info-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0;
+  margin-bottom: 14px;
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+.tab-content .info-box > .info-box-title,
+.tab-content .info-box > :first-child:not(.info-box-title) ~ .info-box-title {
+  /* leave default — fall through */
+}
+.tab-content .info-box-title {
+  background: var(--surface-2);
+  color: var(--fg-1);
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+  margin: 0 0 0 0;
+}
+/* Body padding wraps any element that follows the title inside
+   an info-box. Easier than retrofitting every call site. */
+.tab-content .info-box > *:not(.info-box-title) {
+  padding-left: 16px;
+  padding-right: 16px;
+}
+.tab-content .info-box > *:not(.info-box-title):first-child,
+.tab-content .info-box > .info-box-title + * {
+  padding-top: 14px;
+}
+.tab-content .info-box > *:not(.info-box-title):last-child {
+  padding-bottom: 14px;
+}
+
+/* .section-hdr — full-bleed primary-light strip the existing tabs
+   use as a "between sections" separator. Re-skin to a slim
+   surface-2 eyebrow so it stops competing with the .section /
+   .info-box chrome around it. */
+.tab-content .section-hdr {
+  background: var(--surface-2) !important;
+  color: var(--fg-1) !important;
+  font-size: 11.5px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.06em !important;
+  text-transform: uppercase !important;
+  padding: 8px 14px !important;
+  border-radius: var(--radius-sm) !important;
+  border: 1px solid var(--border) !important;
+  margin: 14px 0 10px !important;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tab-content .section-hdr .icon {
+  color: var(--primary);
+}
+
+/* .data-table (legacy) — re-skin to .dt look without forcing
+   class swap. Header row gets surface-2 eyebrow caps; cells get
+   the dt's 32px-ish row height + hairline borders. */
+.tab-content .data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.tab-content .data-table thead th {
+  background: var(--surface-2);
+  color: var(--fg-2);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.tab-content .data-table tbody td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-1);
+  font-size: 12px;
+}
+.tab-content .data-table tbody tr:last-child td { border-bottom: none; }
+.tab-content .data-table tbody tr:hover td { background: var(--surface-2); }
+
+/* Form inputs inside tabs — focus ring + tighter density. The
+   :focus rule from design-system.css already wires the primary
+   border + focus shadow; this just tightens the default border. */
+.tab-content .form-input,
+.tab-content .form-select,
+.tab-content .form-textarea {
+  border-color: var(--border);
+  border-radius: var(--radius-xs);
+  font-size: 12.5px;
+}
+
 /* Section header row (full-width tab headings between sections,
    distinct from .section-hd which is INSIDE .section). */
 .tab-content .section-hdr {

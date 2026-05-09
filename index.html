@@ -26948,6 +26948,18 @@ function showSettingsPage(){
           <button onclick="openBulkGeocodeModal()" style="background:linear-gradient(135deg,#1e3a8a,#2563eb);color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Open geocode tool →</button>
         </section>
 
+        <!-- v285: Bulk AI Auto-Fill launcher (Buyer Criteria) -->
+        <section data-settings-tab="tools" style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
+          <div style="font-size:28px;flex-shrink:0;">✦</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:15px;font-weight:700;color:#0f172a;">Bulk AI Auto-Fill (Buyer Criteria)</div>
+            <div style="font-size:12px;color:#64748b;margin-top:3px;line-height:1.5;">
+              Walk through N buyers one at a time using the same ✦ AI Auto-Fill flow that runs on a single buyer — same edge function, same model auto-router, same review modal. While you review one, the AI is already running on the next so Save &amp; Next is near-instant. You apply or skip each one as you go.
+            </div>
+          </div>
+          <button onclick="_bcBulkAiAutoFillLauncher()" style="background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Open bulk launcher →</button>
+        </section>
+
         <!-- v119: AI Auto-Fill catalog tile -->
         <section data-settings-tab="tools" style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
           <div style="font-size:28px;flex-shrink:0;">✦</div>
@@ -30691,6 +30703,118 @@ async function bcOpenExpanded(recordId){
     if(typeof _bcFieldStatusInit === 'function') _bcFieldStatusInit(record);
     if(typeof _bcAttachFieldStatusListeners === 'function') _bcAttachFieldStatusListeners();
   });
+
+  // v285: bulk AI mode — auto-pop the review modal for this buyer using
+  // the cached prefetch (fast path) or kick off a fresh fetch. Either
+  // way, also start a prefetch for the NEXT buyer in the queue so
+  // Save & Next is near-instant. This is the entire pipelining mechanic.
+  if(_bcBatchAutoTriggerAi){
+    setTimeout(() => _bcBatchAiTriggerForCurrent(recordId), 250);
+  }
+}
+
+// v285: auto-pop the AI review modal for the buyer currently in batch
+// mode. Resolves the prefetched response when available, else fetches
+// fresh. Always kicks off a prefetch for the next buyer in the queue.
+async function _bcBatchAiTriggerForCurrent(bcId){
+  if(!_bcBatchAutoTriggerAi || !_bcBatchAiOpts) return;
+
+  // Build a "Reading the buyer…" overlay so the user knows AI is running
+  // (or that we're awaiting an in-flight prefetch).
+  let overlay = document.getElementById('bcBatchAiOverlay');
+  if(!overlay){
+    overlay = document.createElement('div');
+    overlay.id = 'bcBatchAiOverlay';
+    overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:99998;display:flex;align-items:center;justify-content:center;padding:20px;font-family:Inter,system-ui,sans-serif;';
+    overlay.innerHTML = `
+      <div style="background:#fff;border-radius:12px;padding:30px;max-width:500px;text-align:center;box-shadow:0 25px 60px rgba(0,0,0,0.25);">
+        <div style="font-size:28px;margin-bottom:10px;">✦</div>
+        <div style="font-size:14px;font-weight:600;color:#0f172a;margin-bottom:6px;">Reading the buyer…</div>
+        <div id="bcBatchAiOverlayHint" style="font-size:12px;color:#64748b;">Claude is scanning communication notes. Takes 10–20 seconds.</div>
+      </div>`;
+    document.body.appendChild(overlay);
+  }
+  // Mark this overlay as belonging to bcId so a stale Save & Next doesn't
+  // tear down a fresh one.
+  overlay.dataset.forBcId = bcId;
+
+  // Resolve the AI response: cached → in-flight → fresh fetch.
+  let entry = _bcBatchAiPrefetch.get(bcId);
+  if(!entry){
+    entry = { promise: window._bcAiFetchOnly(bcId, _bcBatchAiOpts) };
+    _bcBatchAiPrefetch.set(bcId, entry);
+  } else if(entry.promise && !entry.resp && !entry.error){
+    const hint = overlay.querySelector('#bcBatchAiOverlayHint');
+    if(hint) hint.textContent = 'AI prefetch is finishing — review modal will pop in a moment.';
+  }
+
+  let fetched;
+  try {
+    fetched = entry.resp ? { resp: entry.resp, contactTags: entry.contactTags || [] }
+                         : await entry.promise;
+    entry.resp = fetched.resp;
+    entry.contactTags = fetched.contactTags;
+  } catch(e){
+    entry.error = String((e && e.message) || e);
+    if(overlay.dataset.forBcId === bcId) overlay.remove();
+    alert('AI parse failed for this buyer: ' + entry.error + '\nClick Save & Next to continue, or Skip.');
+    // Even on error, kick off the prefetch for the next buyer so the user
+    // isn't slowed down by this one's failure.
+    _bcBatchAiKickoffPrefetch(_bcBatchIndex + 1);
+    return;
+  }
+
+  // Stash the diagnostic for Copy diagnostic, same as single-buyer flow.
+  window._bcAiLastDiagnostic = {
+    buyer_criteria_id: bcId,
+    contact_tags: fetched.contactTags || [],
+    additional_text: _bcBatchAiOpts.additional_text || '',
+    only_fill_empty: !!_bcBatchAiOpts.only_fill_empty,
+    model_choice: _bcBatchAiOpts.model || 'auto',
+    response: fetched.resp,
+    ran_at: new Date().toISOString(),
+  };
+
+  // Tear down the loading overlay only if it still belongs to this bcId.
+  if(overlay.dataset.forBcId === bcId) overlay.remove();
+
+  // Render the review modal. If a stale modal from a previous buyer is
+  // still in the DOM (rare, but possible if the user clicks Save & Next
+  // very fast), kill it first.
+  const stale = document.getElementById('bcAiReviewModal');
+  if(stale) stale.remove();
+  // Build a fresh host modal so _bcAiRenderReviewModal can populate it.
+  const host = document.createElement('div');
+  host.id = 'bcAiPromptModal';
+  host.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:99998;display:flex;align-items:center;justify-content:center;padding:20px;';
+  document.body.appendChild(host);
+  _bcAiRenderReviewModal(bcId, fetched.resp, host);
+
+  // Kick off prefetch for the next buyer in the queue.
+  _bcBatchAiKickoffPrefetch(_bcBatchIndex + 1);
+}
+
+// v285: start a fetch for the buyer at queueIndex (if any) and stash
+// the promise in _bcBatchAiPrefetch so the next bcOpenExpanded resolves
+// it instantly.
+function _bcBatchAiKickoffPrefetch(queueIndex){
+  if(!_bcBatchQueue || !_bcBatchAiOpts) return;
+  if(queueIndex < 0 || queueIndex >= _bcBatchQueue.length) return;
+  const nextId = _bcBatchQueue[queueIndex];
+  if(!nextId) return;
+  if(_bcBatchAiPrefetch.has(nextId)) return;  // already prefetched / in-flight
+  const promise = window._bcAiFetchOnly(nextId, _bcBatchAiOpts)
+    .then(fetched => {
+      const e = _bcBatchAiPrefetch.get(nextId);
+      if(e){ e.resp = fetched.resp; e.contactTags = fetched.contactTags; }
+      return fetched;
+    })
+    .catch(err => {
+      const e = _bcBatchAiPrefetch.get(nextId);
+      if(e){ e.error = String((err && err.message) || err); }
+      throw err;
+    });
+  _bcBatchAiPrefetch.set(nextId, { promise });
 }
 
 function bcExpandedAssetSection(asset, f){
@@ -31867,6 +31991,17 @@ let _bcBatchQueue = null;         // array of criteria ids, or null when not in 
 let _bcBatchIndex = 0;            // current position in the queue
 let _bcBatchStats = { applied:0, skipped:0, manual:0 };  // running counts for the summary screen
 
+// v285: bulk AI auto-fill batch state. When _bcBatchAutoTriggerAi is true,
+// bcOpenExpanded auto-pops the AI review modal for each buyer instead of
+// waiting for the user to click ✦ AI Auto-Fill. _bcBatchAiPrefetch caches
+// in-flight + completed AI responses by bc_id so the next buyer's review
+// modal opens instantly when the user clicks Save & Next. _bcBatchAiOpts
+// holds the model + only_fill_empty choice the user picked once at the
+// launcher; every buyer in the run uses those same options.
+let _bcBatchAutoTriggerAi = false;
+let _bcBatchAiPrefetch = new Map();   // bc_id -> { promise, resp?, error? }
+let _bcBatchAiOpts = null;            // { model, only_fill_empty, additional_text }
+
 function _bcAutoSave(){
   if(!_bcCurrentRecordId) return;
   clearTimeout(_bcAutoSaveTimer);
@@ -32385,6 +32520,49 @@ window._bcAiAutoFill = function(bcId){
   document.body.appendChild(modal);
 };
 
+// v285: pure fetch helper, no DOM coupling. Fetches the linked contact's
+// fub_tags fresh, then POSTs to /functions/v1/ai-parse-buyer-criteria
+// with the standard payload. Used by both the single-buyer
+// _bcAiAutoFillRun (below) and the bulk launcher's prefetch loop —
+// they share the exact same request shape, so behavior stays identical
+// across both code paths.
+window._bcAiFetchOnly = async function(bcId, opts){
+  const cfg = getConfig();
+  const additionalText = (opts && typeof opts.additional_text === 'string') ? opts.additional_text : '';
+  const onlyFillEmpty  = !!(opts && opts.only_fill_empty);
+  const modelChoice    = (opts && opts.model) || 'auto';
+  // Tags: pass through if caller provided, else look up from cache + DB.
+  let contactTags = (opts && Array.isArray(opts.contact_tags)) ? opts.contact_tags : null;
+  if(!contactTags){
+    contactTags = [];
+    try {
+      const bc = (window.allBuyerCriteria || []).find(r => r.id === bcId);
+      const contactId = (bc?.fields?.['Buyer'] || [])[0] || bc?.fields?.['_contactId'];
+      if(contactId){
+        const rows = await _sbGet('ace_contacts',
+          `id=eq.${encodeURIComponent(contactId)}&select=fub_tags&limit=1`);
+        const r0 = Array.isArray(rows) && rows[0];
+        contactTags = Array.isArray(r0?.fub_tags) ? r0.fub_tags : [];
+      }
+    } catch(e){ console.warn('[BC AI] contact-tag fetch failed:', e.message); }
+  }
+  const r = await fetch(`${cfg.url}/functions/v1/ai-parse-buyer-criteria`, {
+    method: 'POST',
+    headers: { 'Content-Type':'application/json', apikey: cfg.key, Authorization: 'Bearer '+cfg.key },
+    body: JSON.stringify({
+      buyer_criteria_id: bcId,
+      dry_run: true,
+      only_fill_empty: onlyFillEmpty,
+      additional_text: additionalText,
+      contact_tags: contactTags,
+      model: modelChoice,
+    }),
+  });
+  const resp = await r.json();
+  if(!r.ok || !resp.ok) throw new Error(resp.error || `HTTP ${r.status}`);
+  return { resp, contactTags, additionalText, onlyFillEmpty, modelChoice };
+};
+
 window._bcAiAutoFillRun = async function(bcId, btn){
   const promptModal = document.getElementById('bcAiPromptModal');
   const additionalText = document.getElementById('bcAiAdditionalText')?.value || '';
@@ -32403,46 +32581,21 @@ window._bcAiAutoFillRun = async function(bcId, btn){
         <div style="font-size:12px;color:#64748b;">Claude is scanning communication notes for buyer-criteria fields. Takes 10–20 seconds.</div>
       </div>`;
   }
-  const cfg = getConfig();
 
-  // v269: pass contact tags to the AI. Tags are deterministic signals
-  // (`asset - multi family` → MF, `Buyer` confirms intent, `Seller`-alone
-  // means seller-only, `1031` biases financing, etc.) that the AI can't
-  // infer from notes alone. Fetched fresh — don't trust the cached
-  // contact object since the schema map doesn't include fub_tags.
-  let contactTags = [];
+  let fetched;
   try {
-    const bc = (window.allBuyerCriteria || []).find(r => r.id === bcId);
-    const contactId = (bc?.fields?.['Buyer'] || [])[0] || bc?.fields?.['_contactId'];
-    if(contactId){
-      const rows = await _sbGet('ace_contacts',
-        `id=eq.${encodeURIComponent(contactId)}&select=fub_tags&limit=1`);
-      const r0 = Array.isArray(rows) && rows[0];
-      contactTags = Array.isArray(r0?.fub_tags) ? r0.fub_tags : [];
-    }
-  } catch(e){ console.warn('[BC AI] contact-tag fetch failed:', e.message); }
-
-  let resp;
-  try {
-    const r = await fetch(`${cfg.url}/functions/v1/ai-parse-buyer-criteria`, {
-      method: 'POST',
-      headers: { 'Content-Type':'application/json', apikey: cfg.key, Authorization: 'Bearer '+cfg.key },
-      body: JSON.stringify({
-        buyer_criteria_id: bcId,
-        dry_run: true,
-        only_fill_empty: onlyFillEmpty,
-        additional_text: additionalText,
-        contact_tags: contactTags,    // v269
-        model: modelChoice,           // v279
-      }),
+    fetched = await window._bcAiFetchOnly(bcId, {
+      model: modelChoice,
+      only_fill_empty: onlyFillEmpty,
+      additional_text: additionalText,
     });
-    resp = await r.json();
-    if(!r.ok || !resp.ok) throw new Error(resp.error || `HTTP ${r.status}`);
   } catch(e){
     if(promptModal) promptModal.remove();
     alert('AI parse failed: ' + (e.message || e));
     return;
   }
+  const resp = fetched.resp;
+  const contactTags = fetched.contactTags;
   // v269: stash the request inputs + response for the Copy Diagnostic button.
   window._bcAiLastDiagnostic = {
     buyer_criteria_id: bcId,
@@ -33399,6 +33552,138 @@ function bcCycleReviewFilter(){
 // Legacy alias — in case any handler still references the old name
 function bcToggleNeedsReviewFilter(){ bcCycleReviewFilter(); }
 
+// ════════════════════════════════════════════════════════════════════
+// v285: Bulk AI Auto-Fill launcher.
+// Settings → Tools → "Open bulk launcher →" calls _bcBulkAiAutoFillLauncher().
+// User picks N + filter + options, then submit kicks off the existing
+// batch flow with the bulk-AI auto-trigger flag set.
+// ════════════════════════════════════════════════════════════════════
+window._bcBulkAiAutoFillLauncher = function(){
+  if(!Array.isArray(allBuyerCriteria) || !allBuyerCriteria.length){
+    alert('Buyer criteria not loaded yet. Open the Buyer Criteria tab first, let it load, then come back here.');
+    return;
+  }
+  const modal = document.createElement('div');
+  modal.id = 'bcBulkAiLauncherModal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:99998;display:flex;align-items:center;justify-content:center;padding:20px;font-family:Inter,system-ui,sans-serif;';
+  modal.onclick = (e) => { if(e.target === modal) modal.remove(); };
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;padding:26px 30px;max-width:560px;width:96%;box-shadow:0 25px 60px rgba(0,0,0,0.25);">
+      <div style="font-size:18px;font-weight:700;color:#0f172a;margin-bottom:6px;">✦ Bulk AI Auto-Fill (Buyer Criteria)</div>
+      <div style="font-size:12px;color:#64748b;line-height:1.5;margin-bottom:18px;">
+        Walks through N buyers one at a time. The AI runs in the background on the next buyer while you review the current one — Save &amp; Next is near-instant after the first.
+      </div>
+
+      <div style="margin-bottom:14px;">
+        <div style="font-size:11px;font-weight:700;color:#0f172a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">How many buyers?</div>
+        <div style="display:flex;gap:6px;flex-wrap:wrap;">
+          ${[5,15,25,50].map((n,i) => `
+            <label style="display:inline-flex;align-items:center;gap:5px;padding:6px 12px;border:1.5px solid ${n===15?'#7c3aed':'#cbd5e1'};background:${n===15?'#ede9fe':'#fff'};color:${n===15?'#5b21b6':'#475569'};border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;">
+              <input type="radio" name="bcBulkSize" value="${n}" ${n===15?'checked':''} style="margin:0;"/>
+              ${n}
+            </label>`).join('')}
+        </div>
+      </div>
+
+      <div style="margin-bottom:14px;">
+        <div style="font-size:11px;font-weight:700;color:#0f172a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Pick from</div>
+        <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:#334155;margin-bottom:5px;cursor:pointer;">
+          <input type="radio" name="bcBulkFilter" value="untouched" checked style="margin-top:2px;"/>
+          <span><strong>Buyers I haven't AI-autofilled yet</strong><br><span style="color:#94a3b8;font-size:11px;">Filters to BCs where last_ai_autofill_at is empty. Newest first.</span></span>
+        </label>
+        <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:#334155;margin-bottom:5px;cursor:pointer;">
+          <input type="radio" name="bcBulkFilter" value="all" style="margin-top:2px;"/>
+          <span><strong>All buyer-tagged contacts</strong><br><span style="color:#94a3b8;font-size:11px;">Random shuffle from the full buyer-criteria list.</span></span>
+        </label>
+      </div>
+
+      <div style="margin-bottom:14px;border-top:1px solid #e2e8f0;padding-top:14px;">
+        <div style="font-size:11px;font-weight:700;color:#0f172a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">AI options (applied to every buyer in the run)</div>
+        <label style="display:inline-flex;align-items:center;gap:6px;font-size:12px;color:#334155;cursor:pointer;margin-right:14px;">
+          <input type="checkbox" id="bcBulkOnlyFillEmpty" checked style="margin:0;"/>
+          <span>Only fill empty fields <span style="color:#94a3b8;">(uncheck to allow overrides)</span></span>
+        </label>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:8px;font-size:12px;color:#334155;flex-wrap:wrap;">
+          <strong style="color:#0f172a;">Model:</strong>
+          <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;">
+            <input type="radio" name="bcBulkModel" value="auto" checked style="margin:0;"/>
+            Auto <span style="color:#94a3b8;font-size:10px;">(Sonnet for big notes, Haiku for short)</span>
+          </label>
+          <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;">
+            <input type="radio" name="bcBulkModel" value="sonnet" style="margin:0;"/>
+            Sonnet 4.6
+          </label>
+          <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;">
+            <input type="radio" name="bcBulkModel" value="haiku" style="margin:0;"/>
+            Haiku 4.5
+          </label>
+        </div>
+      </div>
+
+      <div style="display:flex;justify-content:flex-end;gap:10px;margin-top:14px;">
+        <button onclick="document.getElementById('bcBulkAiLauncherModal')?.remove()" style="background:transparent;border:1px solid #cbd5e1;color:#64748b;padding:8px 14px;font-size:12px;border-radius:8px;cursor:pointer;font-family:inherit;">Cancel</button>
+        <button onclick="_bcBulkAiAutoFillStart(this)" style="background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border:none;padding:8px 18px;font-size:12px;font-weight:700;border-radius:8px;cursor:pointer;font-family:inherit;">✦ Start bulk run</button>
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+};
+
+window._bcBulkAiAutoFillStart = async function(btn){
+  const modal = document.getElementById('bcBulkAiLauncherModal');
+  const size = parseInt(document.querySelector('input[name="bcBulkSize"]:checked')?.value || '15', 10);
+  const filter = document.querySelector('input[name="bcBulkFilter"]:checked')?.value || 'untouched';
+  const onlyFillEmpty = document.getElementById('bcBulkOnlyFillEmpty')?.checked === true;
+  const model = document.querySelector('input[name="bcBulkModel"]:checked')?.value || 'auto';
+  if(btn){ btn.disabled = true; btn.textContent = '⏳ Picking buyers…'; }
+
+  // Pick candidates from allBuyerCriteria. v285 v1: keep the candidate
+  // selection client-side and simple. Stratification across Haiku/Sonnet
+  // can come later if the simple version proves repetitive.
+  const lastAtKey = 'Last AI Autofill At';
+  const all = (allBuyerCriteria || []).filter(r => r && r.id && r.fields);
+  let candidates;
+  if(filter === 'untouched'){
+    candidates = all.filter(r => !r.fields[lastAtKey]);
+  } else {
+    candidates = all.slice();
+  }
+  if(!candidates.length){
+    if(btn){ btn.disabled = false; btn.textContent = '✦ Start bulk run'; }
+    alert('No matching buyers found for that filter.');
+    return;
+  }
+  // Shuffle (Fisher-Yates) so the user gets variety on each run.
+  for(let i = candidates.length - 1; i > 0; i--){
+    const j = Math.floor(Math.random() * (i + 1));
+    [candidates[i], candidates[j]] = [candidates[j], candidates[i]];
+  }
+  const queue = candidates.slice(0, size).map(r => r.id);
+  if(!queue.length){
+    if(btn){ btn.disabled = false; btn.textContent = '✦ Start bulk run'; }
+    alert('No buyers picked.');
+    return;
+  }
+
+  // Set up bulk-AI batch state.
+  _bcBatchQueue = queue;
+  _bcBatchIndex = 0;
+  _bcBatchStats = { applied:0, skipped:0, manual:0 };
+  _bcBatchAutoTriggerAi = true;
+  _bcBatchAiPrefetch = new Map();
+  _bcBatchAiOpts = {
+    model,
+    only_fill_empty: onlyFillEmpty,
+    additional_text: '',
+  };
+
+  if(modal) modal.remove();
+
+  // Open the first buyer. bcOpenExpanded sees _bcBatchAutoTriggerAi=true
+  // and auto-pops the AI review modal; meanwhile it also kicks off the
+  // prefetch for buyer 2.
+  bcOpenExpanded(queue[0]);
+};
+
 async function bcStartBatchReview(){
   // Make sure we have the full buyer criteria list loaded
   if(!allBuyerCriteria || !allBuyerCriteria.length){
@@ -33568,6 +33853,11 @@ function bcBatchExit(){
   if(remaining > 0 && !confirm(`Exit batch review? ${remaining} buyer${remaining!==1?'s':''} still in queue. You can restart the batch later.`)) return;
   _bcBatchQueue = null;
   _bcBatchIndex = 0;
+  // v285: clear bulk-AI state so a normal manual review session afterward
+  // doesn't auto-trigger AI or re-use stale prefetches.
+  _bcBatchAutoTriggerAi = false;
+  _bcBatchAiPrefetch = new Map();
+  _bcBatchAiOpts = null;
   showBuyerCriteriaPage();
 }
 
@@ -33608,6 +33898,11 @@ function bcBatchShowSummary(){
     </div>`;
   _bcBatchQueue = null;
   _bcBatchIndex = 0;
+  // v285: same cleanup as bcBatchExit so a natural queue-finish leaves
+  // the bulk-AI flags clean.
+  _bcBatchAutoTriggerAi = false;
+  _bcBatchAiPrefetch = new Map();
+  _bcBatchAiOpts = null;
 }
 
 // ════════════════════════════════════════════════════════════════════

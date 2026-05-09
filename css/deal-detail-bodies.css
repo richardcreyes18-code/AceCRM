@@ -1330,6 +1330,103 @@
   color: var(--fg-3);
 }
 
+/* ─────────────────────────────────────────────────────────────
+   Phase 4 (v304): Documents, Deal Status, Contacts tab cleanups.
+   Mostly targeted color overrides — the .info-box / .section-hdr
+   re-skins from Phase 2 already handle the structural look.
+   ─────────────────────────────────────────────────────────── */
+
+/* Documents — photo gallery: drop the bluish dashed/fill bg */
+.tab-content #photoGallery {
+  border-color: var(--border-2) !important;
+  background: var(--surface-2) !important;
+}
+.tab-content #photoGallery .photo-tile {
+  border-color: var(--border) !important;
+  border-radius: var(--radius-sm);
+}
+.tab-content #photoGallery .photo-tile[style*="3px solid #1a3a6e"] {
+  border-color: var(--primary) !important;
+}
+
+/* Deal Status — Personal Pipeline purple border (legacy #7c3aed)
+   becomes a primary-blue accent so it matches the rest of the
+   redesign. */
+.tab-content .info-box[style*="border-color:#7c3aed"] {
+  border-color: var(--primary) !important;
+}
+.tab-content .info-box-title[style*="color:#6d28d9"] {
+  color: var(--primary-darker) !important;
+}
+
+/* Pipeline tracker dots — the inline-styled circles already
+   pick up stage colors via the STAGE_COLORS map. Just clean up
+   the connecting line so it matches the design's hairline. */
+.tab-content .info-box > div[style*="height:2px"] {
+  background: var(--border) !important;
+}
+
+/* Stage / tag selector buttons — soften the inline borders to
+   match the .btn aesthetic. The active state (which uses the
+   stage color inline) stays untouched. */
+.tab-content button[onclick*="changeStage"],
+.tab-content button[onclick*="setDealTag"],
+.tab-content button[onclick*="changeMyPipelineStage"] {
+  font-family: var(--font-sans);
+  transition: var(--t);
+}
+.tab-content button[onclick*="changeStage"]:hover,
+.tab-content button[onclick*="setDealTag"]:hover,
+.tab-content button[onclick*="changeMyPipelineStage"]:hover {
+  filter: brightness(0.96);
+}
+
+/* Contacts/Buyers — re-skin the role pills + buyer rows. Most
+   chrome here flows from .data-table re-skin (Phase 2) and
+   .info-box re-skin. Add a generic role-badge fallback. */
+.tab-content .role-badge,
+.tab-content .role-pill {
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--surface-2);
+  color: var(--fg-2);
+  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+/* Documents — folder/section accent: drop legacy slate gradient
+   on Upload buttons in favor of flat primary blue. */
+.tab-content label[style*="linear-gradient(180deg,#1a3a6e,#0e2244)"],
+.tab-content button[style*="linear-gradient(180deg,#1a3a6e,#0e2244)"]:not(.ds-keep-legacy) {
+  background: var(--primary) !important;
+  background-image: none !important;
+  border: 1px solid var(--primary-dark) !important;
+  border-radius: var(--radius-sm) !important;
+}
+.tab-content label[style*="linear-gradient(180deg,#1a3a6e,#0e2244)"]:hover,
+.tab-content button[style*="linear-gradient(180deg,#1a3a6e,#0e2244)"]:hover {
+  background: var(--primary-dark) !important;
+}
+
+/* Documents — Pull Street View green gradient stays semantic but
+   gets flattened to match the .btn.success aesthetic. */
+.tab-content button[style*="linear-gradient(180deg,#059669,#047857)"]:not(.ds-keep-legacy) {
+  background: var(--green) !important;
+  background-image: none !important;
+  border: 1px solid var(--green-dark) !important;
+  border-radius: var(--radius-sm) !important;
+}
+.tab-content button[style*="linear-gradient(180deg,#059669,#047857)"]:hover {
+  background: var(--green-dark) !important;
+}
+
 /* Section header row (full-width tab headings between sections,
    distinct from .section-hd which is INSIDE .section). */
 .tab-content .section-hdr {

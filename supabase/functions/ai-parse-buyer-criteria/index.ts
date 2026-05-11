@@ -2210,6 +2210,31 @@ Deno.serve(async (req: Request) => {
         `If the notes mention multiple subtypes under the same category,\n` +
         `emit a chip per subtype — do NOT collapse into a single bare\n` +
         `category chip when subtype detail is present.\n` +
+        `\nNORMALIZATION-FIRST RULE: agents type abbreviations constantly.\n` +
+        `BEFORE checking the SUBTYPE KEYWORD TRIGGERS list, expand every\n` +
+        `abbreviation in the notes to its canonical word, then re-check the\n` +
+        `trigger list against the expanded text. Common expansions:\n` +
+        `  WH / wh                    → warehouse\n` +
+        `  MF / mf                    → multifamily\n` +
+        `  MHP / mhp                  → mobile home park\n` +
+        `  SNF / snf                  → skilled nursing facility / skilled nursing\n` +
+        `  CCRC / ccrc                → continuing care retirement community\n` +
+        `  MOB / mob                  → medical office\n` +
+        `  NNN / triple net           → single tenant (NNN Retail subtype)\n` +
+        `  STNL / stnl                → single tenant net lease\n` +
+        `  STRIP / strip mall         → strip mall\n` +
+        `  IOS                        → industrial outdoor storage\n` +
+        `  QSR                        → restaurant (quick-service)\n` +
+        `  Dev / dev                  → development\n` +
+        `  Bizz / business            → (no clean vocab match — see UNKNOWN rule)\n` +
+        `If your own explanation text says "X is a warehouse" / "X is a\n` +
+        `laundromat" / "X is a mobile home park" / etc., that is a TELL\n` +
+        `that you normalized but forgot to apply the SUBTYPE-PRIORITY RULE.\n` +
+        `Go back and graduate the chip to "Category: Subtype". The rule\n` +
+        `applies to EVERY category in the taxonomy — Industrial, Special\n` +
+        `Purpose, Automotive, Residential Income, Senior Housing, Health\n` +
+        `Care, Hotel & Motel, Retail, Shopping Center, Multifamily, Mixed\n` +
+        `Use, Office — no exceptions.\n` +
         `\n═══════════════════════════════════════════════════════════════════════\n\n`
       userMessage = overrideBlock + userMessage
     }

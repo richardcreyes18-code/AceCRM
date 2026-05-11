@@ -32969,6 +32969,13 @@ function _bcAiRenderReviewModal(bcId, resp, hostModal){
             style="background:#f1f5f9;border:1px solid #cbd5e1;color:#0f172a;padding:7px 14px;font-size:12px;border-radius:8px;cursor:pointer;font-family:inherit;">Select all</button>
           <button onclick="_bcAiSelectAll(false)"
             style="background:#f1f5f9;border:1px solid #cbd5e1;color:#0f172a;padding:7px 14px;font-size:12px;border-radius:8px;cursor:pointer;font-family:inherit;">Clear</button>
+          <!-- v308: Skip button. In bulk mode advances to the next buyer
+               (and backfills "Needs Classification" if the BC has no asset
+               chips yet). In single mode just closes the modal. The button
+               also doubles as the "Nothing selected" escape hatch — if the
+               user hits Apply with nothing checked, we re-route to this. -->
+          <button onclick="_bcAiAutoFillSkip('${bcId}', this)"
+            style="background:#fff;border:1px solid #cbd5e1;color:#475569;padding:7px 14px;font-size:12px;font-weight:600;border-radius:8px;cursor:pointer;font-family:inherit;">⏭ Skip</button>
           <button onclick="_bcAiAutoFillApply('${bcId}', this)"
             style="background:#1a3a6e;color:#fff;border:none;padding:7px 18px;font-size:12px;font-weight:700;border-radius:8px;cursor:pointer;font-family:inherit;">✓ Apply Selected</button>
         </div>
@@ -33070,6 +33077,18 @@ window._bcAiAutoFillApply = async function(bcId, btn){
     }
   }
   if(acceptedValueCols.size === 0 && acceptedNaCols.size === 0){
+    // v308: in bulk mode, treat "Apply with nothing selected" as a Skip
+    // so the user isn't stuck on an empty-suggestion buyer (e.g. notes
+    // are deal-response phrases like "I will look at it" with no buy-box
+    // signal — AI correctly returns 0 suggestions). The skip handler
+    // marks review_status='needs_human_review', backfills "Needs
+    // Classification" on the asset chips if the BC has none, and
+    // advances to the next buyer.
+    if(typeof _bcBatchQueue !== 'undefined' && _bcBatchQueue
+       && _bcBatchQueue[_bcBatchIndex] === bcId
+       && _bcBatchAutoTriggerAi){
+      return _bcAiAutoFillSkip(bcId, btn);
+    }
     alert('Nothing selected.');
     return;
   }
@@ -33253,6 +33272,75 @@ window._bcAiAutoFillApply = async function(bcId, btn){
   } catch(e){
     if(btn){ btn.disabled = false; btn.textContent = '✓ Apply Selected'; }
     alert('Apply failed: ' + (e.message || e));
+  }
+};
+
+// v308: skip handler for the BC AI review modal.
+// - In single-deal mode: just closes the modal.
+// - In bulk mode: patches review_status='needs_human_review' (so the
+//   buyer isn't re-picked next bulk run), backfills "Needs
+//   Classification" on desired_property_types IF the BC has no asset
+//   chips yet (so an otherwise-blank BC at least carries a placeholder
+//   asset class the agent can sort later), bumps the skipped counter,
+//   and advances to the next buyer via bcBatchNext().
+window._bcAiAutoFillSkip = async function(bcId, btn){
+  const modal = document.getElementById('bcAiReviewModal');
+  const inBulk = (typeof _bcBatchQueue !== 'undefined' && _bcBatchQueue
+                  && _bcBatchQueue[_bcBatchIndex] === bcId
+                  && _bcBatchAutoTriggerAi);
+  if(!inBulk){
+    // Single-deal mode — Skip is the same as Cancel.
+    if(modal) modal.remove();
+    return;
+  }
+  if(btn){ btn.disabled = true; btn.textContent = 'Skipping…'; }
+  try {
+    // Check whether the BC currently has any asset chips. The cache
+    // entry's `Desired Property Types` field is a comma-joined string
+    // (per SB_BC_MAP → _atToSb roundtrip).
+    let currentAssets = '';
+    try {
+      const cur = await _sbGet(SB_TABLES.buyerCriteria, `id=eq.${bcId}&select=desired_property_types&limit=1`);
+      currentAssets = (Array.isArray(cur) && cur[0]?.desired_property_types) || '';
+    } catch(e){ console.warn('[bc-ai] skip: asset lookup failed:', e.message); }
+    const hasNoAssets = !String(currentAssets || '').trim();
+
+    const patch = {
+      review_status: 'needs_human_review',
+      reviewed_at: new Date().toISOString(),
+      reviewed_by: (typeof _currentUser !== 'undefined' && _currentUser?.fub_name) || null,
+    };
+    if(hasNoAssets){
+      // v308: place a "Needs Classification" placeholder so the BC is
+      // findable / sortable even though nothing else was filled. The
+      // agent's custom taxonomy includes this category — see Screenshot
+      // 3 in the original report.
+      patch.desired_property_types = 'Needs Classification';
+    }
+
+    await _sbPatch(SB_TABLES.buyerCriteria, bcId, patch);
+
+    // Update the in-memory cache so the next BC list render reflects
+    // the skip + (optional) placeholder without a refetch.
+    try {
+      if(Array.isArray(allBuyerCriteria)){
+        const idx = allBuyerCriteria.findIndex(r => r.id === bcId);
+        if(idx >= 0){
+          if(hasNoAssets) allBuyerCriteria[idx].fields['Desired Property Types'] = 'Needs Classification';
+        }
+      }
+    } catch(e){ /* non-fatal */ }
+
+    if(typeof showSaveConfirm === 'function'){
+      showSaveConfirm(hasNoAssets ? '⏭ Skipped · marked Needs Classification' : '⏭ Skipped · flagged for human review');
+    }
+
+    if(_bcBatchStats) _bcBatchStats.skipped++;
+    if(modal) modal.remove();
+    bcBatchNext();
+  } catch(e){
+    if(btn){ btn.disabled = false; btn.textContent = '⏭ Skip'; }
+    alert('Skip failed: ' + (e.message || e));
   }
 };
 

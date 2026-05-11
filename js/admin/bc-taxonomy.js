@@ -496,6 +496,27 @@ export function _bcAssetTaxonomyAdmin(){
       const catKey = sectionKeyOf(cat);
       const catHasSection = !catKey.startsWith('misc__');
       totalChips++; if(catHasSection) chipsWithSection++;
+      // v321: synthetic row for the BARE category chip (e.g. "Multifamily"
+      // with no subtype). Lots of legacy records are tagged at the
+      // category level only; this surfaces them in the same table as
+      // the subtypes so the agent can view + reassign them without
+      // deleting the whole category. Label is read-only, no per-fields
+      // button (handled by the header's 📋 Fields button), and the
+      // delete is replaced with a Reassign-only action because removing
+      // the bare chip = removing the category (which the header
+      // already supports).
+      const bareSk = sectionKeyOf(cat);
+      const bareHas = !bareSk.startsWith('misc__');
+      const bareUsage = _countBadgeHTML(usage, cat);
+      const bareRow = `<tr style="border-top:1px solid #f1f5f9;background:#fafbff;">
+        <td style="padding:5px 8px;color:#94a3b8;font-style:italic;font-size:11px;">(no subtype — bare "${esc(cat)}")</td>
+        <td style="padding:5px 8px;color:#94a3b8;font-family:ui-monospace,Menlo,monospace;font-size:10px;">${esc(bareSk)}${SECTION_LABELS[bareSk] ? ' <span style="color:#cbd5e1;">(' + esc(SECTION_LABELS[bareSk]) + ')</span>' : ''}</td>
+        <td style="padding:5px 8px;font-size:11px;">${bareHas ? '<span style="color:#15803d;">✓</span>' : '<span style="color:#b91c1c;">⚠ no section</span>'}</td>
+        <td style="padding:5px 8px;text-align:left;">${bareUsage}</td>
+        <td style="padding:5px 8px;text-align:right;white-space:nowrap;">
+          <button data-action="reassign-bare" data-cat-name="${esc(cat)}" title="Reassign the records currently tagged with bare &quot;${esc(cat)}&quot; (no subtype) to a different chip. Category itself stays in the taxonomy — use the header's Delete button to remove it entirely." style="background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;cursor:pointer;font-size:10px;padding:2px 8px;border-radius:4px;font-weight:600;">↪ Reassign</button>
+        </td>
+      </tr>`;
       const subRows = (subs || []).map((sub, subIdx) => {
         const fullChip = `${cat}: ${sub}`;
         const sk = sectionKeyOf(fullChip);
@@ -554,6 +575,7 @@ export function _bcAssetTaxonomyAdmin(){
             </tr>
           </thead>
           <tbody>
+            ${bareRow}
             ${subRows || '<tr><td colspan="5" style="padding:8px 12px;color:#94a3b8;font-style:italic;">No subtypes yet — add one below.</td></tr>'}
             <tr style="border-top:1px solid #e2e8f0;background:#f8fafc;">
               <td colspan="5" style="padding:6px 8px;">
@@ -665,6 +687,25 @@ export function _bcAssetTaxonomyAdmin(){
     if(action === 'view-usage'){
       const chip = t.getAttribute('data-chip');
       if(chip) _openViewTaggedModal(chip, usage);
+      return;
+    }
+    if(action === 'reassign-bare'){
+      // v321: reassign records tagged with the BARE category chip (no
+      // subtype) to a different chip. Does NOT remove the category
+      // itself — that's what the header's Delete button is for.
+      const cat = t.getAttribute('data-cat-name');
+      if(!cat) return;
+      const count = _usageCount(usage, cat).total;
+      if(count === 0){
+        alert(`Nothing to reassign — no BCs or deals are tagged with bare "${cat}".`);
+        return;
+      }
+      _openReassignModal(cat, usage, taxonomy).then(async ok => {
+        if(!ok) return;
+        try { usage = await _bcTaxonomyLoadUsage(); } catch(_) {}
+        if(typeof showSaveConfirm === 'function') showSaveConfirm(`✓ Bare "${cat}" records reassigned`);
+        render();
+      });
       return;
     }
     if(action === 'del-cat'){

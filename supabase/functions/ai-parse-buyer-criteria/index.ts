@@ -2126,6 +2126,55 @@ Deno.serve(async (req: Request) => {
           `\n`
         : ''
 
+      // v316: dynamically build a SUBTYPE KEYWORD TRIGGERS map from the
+      // runtime taxonomy. The static prompt's Step 2.4 has a frozen
+      // keyword map, but the user can add new subtypes via Settings →
+      // BC Asset Taxonomy (e.g. "Laundromat" under Special Purpose).
+      // The AI was emitting the bare category when those new subtype
+      // names appeared in notes because it had no trigger to graduate
+      // them to "Category: Subtype" form.
+      //
+      // Group by lowercase subtype name so collisions across categories
+      // (e.g. Car Wash is under both Automotive AND Special Purpose)
+      // become one line with an OR clause — model can choose or
+      // propose both.
+      const subtypeTriggers = new Map<string, string[]>()  // lowercase keyword → ["Cat: Sub", ...]
+      for (const cat of activeVocab) {
+        const subList = activeSubtypes[cat] || []
+        for (const sub of subList) {
+          const key = sub.toLowerCase().trim()
+          if (!key) continue
+          // Skip if the subtype is identical to its parent category — the
+          // bare category chip is correct in that case (e.g. Land under Land).
+          if (key === cat.toLowerCase()) continue
+          // Skip subtype keywords that ARE a top-level category by themselves
+          // (handled by the DISAMBIGUATION block above — they should emit
+          // the standalone chip, not "Parent: Word").
+          if (catLowerSet.has(key)) continue
+          const chip = `${cat}: ${sub}`
+          const arr = subtypeTriggers.get(key) || []
+          if (!arr.includes(chip)) arr.push(chip)
+          subtypeTriggers.set(key, arr)
+        }
+      }
+      // Sort keys alphabetically so the prompt is deterministic (helps
+      // the v270 ephemeral prompt cache stay warm between requests).
+      const subtypeTriggerKeys = [...subtypeTriggers.keys()].sort()
+      const subtypeTriggerLines = subtypeTriggerKeys
+        .map(key => {
+          const chips = subtypeTriggers.get(key) || []
+          if (chips.length === 1) return `  "${key}" → "${chips[0]}"`
+          // Multi-category collision — propose both unless notes disambiguate.
+          return `  "${key}" → ${chips.map(c => `"${c}"`).join(' OR ')} (pick whichever fits the notes; if ambiguous, propose both)`
+        })
+        .join('\n')
+      const subtypeTriggerBlock = subtypeTriggerKeys.length
+        ? `\nSUBTYPE KEYWORD TRIGGERS (auto-built from your runtime taxonomy —\n` +
+          `${subtypeTriggerKeys.length} keywords across ${activeVocab.length} categories):\n` +
+          subtypeTriggerLines +
+          `\n`
+        : ''
+
       const overrideBlock =
         `═══════════════════════════════════════════════════════════════════════\n` +
         `AUTHORITATIVE ASSET-TYPE VOCAB (runtime override — replaces Step 2.4)\n` +
@@ -2140,6 +2189,7 @@ Deno.serve(async (req: Request) => {
         subtypeLines +
         `\n` +
         ambiguousLines +
+        subtypeTriggerBlock +
         `\nLIST-OF-ASSETS RULE: when notes enumerate multiple property types\n` +
         `as a comma- or "and"-separated list ("multifamily, land, and\n` +
         `development"), emit one chip per listed type, each as the BARE\n` +
@@ -2147,6 +2197,19 @@ Deno.serve(async (req: Request) => {
         `two list items into a "Parent: Sub" chip unless the notes\n` +
         `EXPLICITLY tie one to the other ("land for development", "land\n` +
         `with development potential" → "Land: Development" stands).\n` +
+        `\nSUBTYPE-PRIORITY RULE: when a note contains ANY keyword from the\n` +
+        `SUBTYPE KEYWORD TRIGGERS list above, the resulting chip MUST be in\n` +
+        `the "Category: Subtype" form — NEVER the bare category alone.\n` +
+        `Bare-category chips are only correct when the notes describe the\n` +
+        `buyer's interest at the category level WITHOUT naming a specific\n` +
+        `subtype:\n` +
+        `  - "interested in special purpose properties"  → bare "Special Purpose"\n` +
+        `  - "laundromat investor"                       → "Special Purpose: Laundromat"\n` +
+        `  - "they buy mechanic shops and tire shops"    → BOTH "Automotive: Auto Repair / Mechanic"\n` +
+        `                                                  AND "Automotive: Tire Shop"\n` +
+        `If the notes mention multiple subtypes under the same category,\n` +
+        `emit a chip per subtype — do NOT collapse into a single bare\n` +
+        `category chip when subtype detail is present.\n` +
         `\n═══════════════════════════════════════════════════════════════════════\n\n`
       userMessage = overrideBlock + userMessage
     }

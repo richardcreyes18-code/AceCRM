@@ -2213,20 +2213,144 @@ Deno.serve(async (req: Request) => {
         `\nNORMALIZATION-FIRST RULE: agents type abbreviations constantly.\n` +
         `BEFORE checking the SUBTYPE KEYWORD TRIGGERS list, expand every\n` +
         `abbreviation in the notes to its canonical word, then re-check the\n` +
-        `trigger list against the expanded text. Common expansions:\n` +
-        `  WH / wh                    → warehouse\n` +
-        `  MF / mf                    → multifamily\n` +
-        `  MHP / mhp                  → mobile home park\n` +
-        `  SNF / snf                  → skilled nursing facility / skilled nursing\n` +
-        `  CCRC / ccrc                → continuing care retirement community\n` +
-        `  MOB / mob                  → medical office\n` +
-        `  NNN / triple net           → single tenant (NNN Retail subtype)\n` +
-        `  STNL / stnl                → single tenant net lease\n` +
-        `  STRIP / strip mall         → strip mall\n` +
-        `  IOS                        → industrial outdoor storage\n` +
-        `  QSR                        → restaurant (quick-service)\n` +
-        `  Dev / dev                  → development\n` +
-        `  Bizz / business            → (no clean vocab match — see UNKNOWN rule)\n` +
+        `trigger list against the expanded text. Full CRE expansion table:\n` +
+        `\n` +
+        `  GENERAL PROPERTY TYPES\n` +
+        `  ──────────────────────\n` +
+        `  MF / mf / MFR / multifam       → multifamily\n` +
+        `  apts / apt / apartments        → multifamily (Garden/Mid/High based on context)\n` +
+        `  SFR / SFH / SFD                → single family rental (Residential Income)\n` +
+        `  TH / townhouse / townhome      → townhome (Multifamily: Townhome)\n` +
+        `  duplex / 2-plex / 2plex        → Multifamily: Duplex OR Residential Income: Duplex\n` +
+        `  triplex / 3-plex / 3plex       → Multifamily: Triplex OR Residential Income: Triplex\n` +
+        `  fourplex / 4-plex / 4plex / quad → Multifamily: Fourplex OR Residential Income: Fourplex\n` +
+        `  GA / garden / garden-style     → Multifamily: Garden/Low Rise\n` +
+        `  LR / low rise                  → Multifamily: Garden/Low Rise\n` +
+        `  MR / mid rise / mid-rise       → Multifamily: Mid Rise\n` +
+        `  HR / high rise / high-rise     → Multifamily: High Rise\n` +
+        `  BTR / build to rent            → Multifamily: Garden/Low Rise (BTR is a development pattern, route to MF)\n` +
+        `  LIHTC / Section 42 / sec 42    → Multifamily: Affordable Housing\n` +
+        `  affordable / workforce housing → Multifamily: Affordable Housing\n` +
+        `  student / student housing      → Multifamily: Student Housing\n` +
+        `  military / on-base / barracks  → Multifamily: Military Housing\n` +
+        `  MHP / mobile home park / MH    → Residential Income: Mobile Home Park\n` +
+        `  manufactured home / man. home  → Residential Income: Mobile Home Park\n` +
+        `  RV park                        → (no exact subtype — bare Residential Income + note in other_requirements)\n` +
+        `\n` +
+        `  INDUSTRIAL\n` +
+        `  ──────────\n` +
+        `  WH / whse / wh                 → Industrial: Warehouse\n` +
+        `  warehouse / w/h                → Industrial: Warehouse\n` +
+        `  distro / distribution / DC     → Industrial: Distribution\n` +
+        `  fulfillment center / FC        → Industrial: Distribution\n` +
+        `  mfg / manufacturing / mfr      → Industrial: Manufacturing\n` +
+        `  flex / flex space / flex industrial → Industrial: Flex\n` +
+        `  cold storage / refrigerated / freezer → Industrial: Cold Storage\n` +
+        `  data center / DC tier-3        → Industrial: Data Center\n` +
+        `  truck terminal / T-park / truck park / truck parking → Industrial: Truck Terminal\n` +
+        `  IOS / outdoor storage / industrial outdoor → Industrial: Truck Terminal (closest existing subtype unless taxonomy has "Outdoor Storage")\n` +
+        `  self storage / SS / mini storage / storage units → Industrial: Self Storage\n` +
+        `  R&D / R and D / research & development → Industrial: R&D OR Office: R&D (route based on prose)\n` +
+        `  showroom / showroom space      → Industrial: Showroom\n` +
+        `\n` +
+        `  OFFICE\n` +
+        `  ──────\n` +
+        `  CBD / downtown office          → Office: CBD\n` +
+        `  suburban office / subOff       → Office: Suburban\n` +
+        `  medical office / MOB           → Office: Medical OR Health Care: Medical Office (emit BOTH if unsure)\n` +
+        `  creative office / loft / brick-and-beam → Office: Creative/Flex\n` +
+        `  govt / government / fed lease  → Office: Government\n` +
+        `  owner-user / OU / owner occupied → Office: Owner/User\n` +
+        `\n` +
+        `  RETAIL / SHOPPING CENTER\n` +
+        `  ────────────────────────\n` +
+        `  RT / retail                    → Retail (use subtype if specified)\n` +
+        `  strip / strip mall / strip ctr → Retail: Strip Mall OR Shopping Center: Strip Center\n` +
+        `  VAS / value-add strip          → Retail: Value Add Strip\n` +
+        `  power center                   → Retail: Power Center OR Shopping Center: Power Center\n` +
+        `  neighborhood ctr / neighborhood center → Shopping Center: Neighborhood Center OR Retail: Neighborhood Center\n` +
+        `  community center               → Shopping Center: Community Center OR Retail: Community Center\n` +
+        `  lifestyle ctr / lifestyle center → Shopping Center: Lifestyle Center\n` +
+        `  regional mall / mall           → Shopping Center: Regional Mall\n` +
+        `  outlet / outlet mall / outlet ctr → Shopping Center: Outlet Center\n` +
+        `  grocery anchored / grocery-anchored / GAC → Retail: Grocery Anchored\n` +
+        `  STNL / NNN / triple net / single tenant net lease → Retail: NNN Retail or Retail: Single Tenant (emit both if unsure)\n` +
+        `  drug store / CVS / Walgreens / Rite Aid → Retail: Drug Store\n` +
+        `  bank branch / bank             → Retail: Bank\n` +
+        `  restaurant / sit-down / fast casual → Retail: Restaurant\n` +
+        `  QSR / quick service / drive thru / fast food → Retail: Restaurant\n` +
+        `  auto dealer / dealership / car dealer → Retail: Auto Dealership OR Automotive: Auto Dealership (New) / (Used)\n` +
+        `\n` +
+        `  MIXED USE\n` +
+        `  ─────────\n` +
+        `  MU / mixed use / mixed-use     → Mixed Use\n` +
+        `  ground floor retail + apts     → Mixed Use: Ground Floor Retail + Apartments\n` +
+        `  live-work / live/work          → Mixed Use: Live-Work\n` +
+        `\n` +
+        `  HOTEL & MOTEL\n` +
+        `  ─────────────\n` +
+        `  hotel / motel / inn            → Hotel & Motel (use subtype if specified)\n` +
+        `  full service / FS hotel        → Hotel & Motel: Full Service\n` +
+        `  select service / SS hotel      → Hotel & Motel: Select Service\n` +
+        `  extended stay / ES / ext stay  → Hotel & Motel: Extended Stay\n` +
+        `  budget / economy / motel 6 / red roof → Hotel & Motel: Budget/Economy\n` +
+        `  boutique / lifestyle hotel     → Hotel & Motel: Boutique\n` +
+        `  resort                         → Hotel & Motel: Resort\n` +
+        `  B&B / bed and breakfast        → Hotel & Motel: Hostel (closest) — or note in other_requirements\n` +
+        `\n` +
+        `  SENIOR HOUSING / HEALTH CARE\n` +
+        `  ────────────────────────────\n` +
+        `  ILF / independent living       → Senior Housing: Independent Living\n` +
+        `  ALF / assisted living          → Senior Housing: Assisted Living\n` +
+        `  MC / memory care               → Senior Housing: Memory Care\n` +
+        `  SNF / skilled nursing / nursing home → Senior Housing: Skilled Nursing\n` +
+        `  CCRC / life plan community     → Senior Housing: CCRC\n` +
+        `  55+ / active adult / age-restricted → Senior Housing: Active Adult\n` +
+        `  urgent care / UC               → Health Care: Urgent Care\n` +
+        `  surgery / ASC / ambulatory surgery → Health Care: Surgery Center\n` +
+        `  hospital                       → Health Care: Hospital\n` +
+        `  rehab / rehabilitation         → Health Care: Rehabilitation\n` +
+        `  behavioral / psych / mental health → Health Care: Behavioral Health\n` +
+        `  lab / life science / R&D lab   → Health Care: Lab/Life Science\n` +
+        `\n` +
+        `  AUTOMOTIVE\n` +
+        `  ──────────\n` +
+        `  ABS / body shop / collision    → Automotive: Auto Body Shop\n` +
+        `  mechanic / auto repair / garage / shop → Automotive: Auto Repair / Mechanic\n` +
+        `  dealer / dealership            → Automotive: Auto Dealership (New) or (Used) — pick by context\n` +
+        `  parts store / NAPA / AutoZone / O'Reilly → Automotive: Auto Parts Store\n` +
+        `  tire shop / tire store / tire center → Automotive: Tire Shop\n` +
+        `  oil change / lube / Jiffy Lube → Automotive: Oil Change / Lube\n` +
+        `  towing / tow yard              → Automotive: Towing Facility\n` +
+        `  auction / auto auction         → Automotive: Auto Auction\n` +
+        `  CW / car wash / wash           → Automotive: Car Wash AND/OR Special Purpose: Car Wash (emit both unless prose disambiguates)\n` +
+        `\n` +
+        `  SPECIAL PURPOSE / LAND / OTHER\n` +
+        `  ──────────────────────────────\n` +
+        `  gas / gas station / convenience / c-store → Special Purpose: Gas Station\n` +
+        `  parking lot / parking garage / pkg → Special Purpose: Parking Lot/Garage\n` +
+        `  cemetery                       → Special Purpose: Cemetery\n` +
+        `  church / religious / synagogue / mosque → Special Purpose: Church/Religious\n` +
+        `  school / daycare / charter school → Special Purpose: School\n` +
+        `  funeral home / mortuary        → Special Purpose: Funeral Home\n` +
+        `  laundromat / wash & fold       → Special Purpose: Laundromat (if in taxonomy)\n` +
+        `  cellular / cell tower / cell site → Special Purpose (note subtype in other_requirements)\n` +
+        `  arena / stadium                → Sport & Entertainment: Arena/Stadium\n` +
+        `  theater / cinema / movie       → Sport & Entertainment: Movie Theater\n` +
+        `  bowling / bowling alley        → Sport & Entertainment: Bowling\n` +
+        `  golf / golf course             → Sport & Entertainment: Golf Course\n` +
+        `  gym / fitness / 24-hour fitness / planet fitness → Sport & Entertainment: Fitness/Gym\n` +
+        `  marina / boat slip             → Sport & Entertainment: Marina\n` +
+        `  event venue / banquet hall     → Sport & Entertainment: Event Venue\n` +
+        `  Dev / dev / development        → Development (top-level if in taxonomy) OR Land: Development\n` +
+        `  Resi / residential land        → Land: Residential\n` +
+        `  Comm / commercial land         → Land: Commercial\n` +
+        `  Indy land / industrial land    → Land: Industrial\n` +
+        `  Ag / agricultural land         → Land: Agricultural OR Agricultural (top-level)\n` +
+        `  infill / urban infill          → Land: Infill\n` +
+        `  pad site                       → Land: Pad Site\n` +
+        `  Bizz / business                → no clean vocab match (note in other_requirements)\n` +
+        `\n` +
         `If your own explanation text says "X is a warehouse" / "X is a\n` +
         `laundromat" / "X is a mobile home park" / etc., that is a TELL\n` +
         `that you normalized but forgot to apply the SUBTYPE-PRIORITY RULE.\n` +
@@ -2234,7 +2358,31 @@ Deno.serve(async (req: Request) => {
         `applies to EVERY category in the taxonomy — Industrial, Special\n` +
         `Purpose, Automotive, Residential Income, Senior Housing, Health\n` +
         `Care, Hotel & Motel, Retail, Shopping Center, Multifamily, Mixed\n` +
-        `Use, Office — no exceptions.\n` +
+        `Use, Office, Sport & Entertainment, Agricultural, Land — no\n` +
+        `exceptions.\n` +
+        `\nMULTI-CHIP IS GOOD: agents search the buyer list by both bare\n` +
+        `category AND Category: Subtype. A buyer interested in "warehouse\n` +
+        `and truck parking" should appear in BOTH "Industrial: Warehouse"\n` +
+        `AND "Industrial: Truck Terminal" search results — so emit BOTH\n` +
+        `chips, not just one. The bar for adding a chip is LOW: if the\n` +
+        `notes name any subtype, that's enough. Bias toward MORE chips,\n` +
+        `not fewer. Worked examples:\n` +
+        `  Notes: "looking for WH, distro, and flex space in NJ"\n` +
+        `    → "Industrial: Warehouse", "Industrial: Distribution",\n` +
+        `      "Industrial: Flex"  (3 chips, not 1)\n` +
+        `  Notes: "MOB or surgery center, North Jersey"\n` +
+        `    → "Health Care: Medical Office", "Health Care: Surgery Center"\n` +
+        `      (2 chips — possibly also "Office: Medical" if MOB might\n` +
+        `      be the office-leasing version of the same property)\n` +
+        `  Notes: "car wash buyer up to $1M"\n` +
+        `    → "Automotive: Car Wash" AND "Special Purpose: Car Wash"\n` +
+        `      (both — agent disambiguates in review)\n` +
+        `  Notes: "MHP and SFR portfolio"\n` +
+        `    → "Residential Income: Mobile Home Park",\n` +
+        `      "Residential Income: Single Family Rental"\n` +
+        `  Notes: "buys multifamily 4-6 units and student housing"\n` +
+        `    → "Multifamily: Fourplex", "Multifamily: Small Multifamily (5-20)"\n` +
+        `      (if those subtypes exist), AND "Multifamily: Student Housing"\n` +
         `\n═══════════════════════════════════════════════════════════════════════\n\n`
       userMessage = overrideBlock + userMessage
     }

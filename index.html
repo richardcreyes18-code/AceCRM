@@ -31052,18 +31052,20 @@ function _bcShortContactLabel(bcId){
 function _bcTagsToChips(rawTags){
   if(!Array.isArray(rawTags) || !rawTags.length) return [];
   const TAG_MAP = {
-    // ── Multifamily / Residential Income ─────────────────────────
+    // ── Multifamily ──────────────────────────────────────────────
+    // v329: agent retired the "Residential Income" top-level category
+    // and folded Mobile Home Park + SFR variants under Multifamily.
     'asset - multi family':    'Multifamily',
     'asset - multifamily':     'Multifamily',
     'asset - mf':              'Multifamily',
-    'asset - residential':     'Residential Income',
+    'asset - residential':     'Multifamily',
     'asset - condo':           'Multifamily',
-    'asset - mobile home':     'Residential Income: Mobile Home Park',
-    'asset - mobile home park':'Residential Income: Mobile Home Park',
-    'asset - mhp':             'Residential Income: Mobile Home Park',
-    'asset - rv park':         'Residential Income: Mobile Home Park',
-    'asset - sfr':             'Residential Income: Single Family Rental',
-    'asset - single family':   'Residential Income: Single Family Rental',
+    'asset - mobile home':     'Multifamily: Mobile Home Park',
+    'asset - mobile home park':'Multifamily: Mobile Home Park',
+    'asset - mhp':             'Multifamily: Mobile Home Park',
+    'asset - rv park':         'Multifamily: Mobile Home Park',
+    'asset - sfr':             'Multifamily',
+    'asset - single family':   'Multifamily',
 
     // ── Industrial ──────────────────────────────────────────────
     'asset - industrial':      'Industrial',
@@ -31154,9 +31156,40 @@ function _bcTagsToChips(rawTags){
     validChips.add(cat.toLowerCase());
     for(const s of (subs || [])) validChips.add(`${cat}: ${s}`.toLowerCase());
   }
-  const out = [];
+  // v329: pre-split compound tags. FUB sometimes concatenates two
+  // tags into one string, e.g. "asset - warehouse asset - residential"
+  // (373 contacts in the user's data). Split on the second "asset -"
+  // boundary so each subpart can match the TAG_MAP independently.
+  const expandedTags = [];
   for(const t of rawTags){
-    const key = String(t || '').trim().toLowerCase();
+    const s = String(t || '').trim();
+    if(!s) continue;
+    // Find every occurrence of /asset\s*-/ (case-insensitive) and
+    // split into separate tokens.
+    const lc = s.toLowerCase();
+    const positions = [];
+    const re = /asset\s*-/g;
+    let m;
+    while((m = re.exec(lc)) !== null){
+      positions.push(m.index);
+      // Avoid infinite loop on zero-length matches.
+      if(re.lastIndex === m.index) re.lastIndex++;
+    }
+    if(positions.length <= 1){
+      expandedTags.push(s);
+    } else {
+      for(let i = 0; i < positions.length; i++){
+        const start = positions[i];
+        const end = (i + 1 < positions.length) ? positions[i + 1] : s.length;
+        const part = s.slice(start, end).trim();
+        if(part) expandedTags.push(part);
+      }
+    }
+  }
+
+  const out = [];
+  for(const t of expandedTags){
+    const key = String(t || '').trim().toLowerCase().replace(/\s+/g, ' ');
     if(!key) continue;
     const chip = TAG_MAP[key];
     if(!chip) continue;

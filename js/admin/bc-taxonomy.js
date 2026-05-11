@@ -131,11 +131,326 @@ function esc(s){
   return String(s==null?'':s).replace(/[<&>"]/g, c => ({'<':'&lt;','&':'&amp;','>':'&gt;','"':'&quot;'}[c]));
 }
 
+// ─── Usage scanning ───────────────────────────────────────────────────
+//
+// v320: scans ace_buyer_criteria.desired_property_types and
+// ace_properties.crm_asset_classification (+ property_type_text fallback)
+// to count which chips are actually in use. Powers the count badges,
+// the "view tagged" click-through, and the safe-delete-with-reassign
+// flow in the taxonomy admin.
+
+// Normalize a chip token for matching (lowercase + collapsed whitespace).
+function _normChip(s){
+  return String(s == null ? '' : s).toLowerCase().replace(/\s+/g, ' ').trim();
+}
+
+// Split a multi-chip field value (BC uses commas, deals use pipes) into
+// individual chip strings. Returns an array of trimmed non-empty tokens.
+function _splitChips(val, sep){
+  if(val == null) return [];
+  return String(val).split(sep).map(s => s.trim()).filter(Boolean);
+}
+
+// Build a usage report for the taxonomy admin. Returns:
+//   {
+//     bcsByChip:    Map<lowercaseChip, Array<{id, name, value}>>,
+//     dealsByChip:  Map<lowercaseChip, Array<{id, address, value}>>,
+//   }
+// Each value array holds the records tagged with that chip. Use
+// .length for counts, render the rows for the view-tagged modal.
+async function _bcTaxonomyLoadUsage(){
+  const out = { bcsByChip: new Map(), dealsByChip: new Map() };
+  // Pull both populations in parallel.
+  const tbl = (window.SB_TABLES && window.SB_TABLES.buyerCriteria) || 'ace_buyer_criteria';
+  const propTbl = (window.SB_TABLES && window.SB_TABLES.properties) || 'ace_properties';
+  let bcRows = [], dealRows = [];
+  try {
+    [bcRows, dealRows] = await Promise.all([
+      _sbGet(tbl, 'desired_property_types=not.is.null&select=id,contact_id,desired_property_types&limit=10000').catch(() => []),
+      _sbGet(propTbl, 'select=id,address,crm_asset_classification,property_type_text&limit=20000').catch(() => []),
+    ]);
+  } catch(e){ console.warn('[bc-taxonomy] usage load failed:', e.message); }
+
+  // Need contact names for BC rows so the view-tagged modal is useful.
+  const contactIds = [...new Set((bcRows || []).map(r => r.contact_id).filter(Boolean))];
+  const contactsById = new Map();
+  if(contactIds.length){
+    const CHUNK = 100;
+    for(let i = 0; i < contactIds.length; i += CHUNK){
+      const chunk = contactIds.slice(i, i + CHUNK);
+      try {
+        const cs = await _sbGet('ace_contacts', `id=in.(${chunk.join(',')})&select=id,name`);
+        for(const c of (cs || [])){ contactsById.set(c.id, c.name || ''); }
+      } catch(e){ /* skip */ }
+    }
+  }
+
+  for(const r of (bcRows || [])){
+    const chips = _splitChips(r.desired_property_types, ',');
+    for(const chip of chips){
+      const key = _normChip(chip);
+      if(!key) continue;
+      const list = out.bcsByChip.get(key) || [];
+      list.push({
+        id: r.id,
+        contactId: r.contact_id,
+        name: contactsById.get(r.contact_id) || '(no name)',
+        value: chip,
+      });
+      out.bcsByChip.set(key, list);
+    }
+  }
+  for(const r of (dealRows || [])){
+    // Deals use pipe-joined CRM Asset Classification; fall back to
+    // property_type_text (comma-joined) when classification is empty.
+    const chips = r.crm_asset_classification
+      ? _splitChips(r.crm_asset_classification, '|')
+      : _splitChips(r.property_type_text, ',');
+    for(const chip of chips){
+      const key = _normChip(chip);
+      if(!key) continue;
+      const list = out.dealsByChip.get(key) || [];
+      list.push({ id: r.id, address: r.address || '(no address)', value: chip });
+      out.dealsByChip.set(key, list);
+    }
+  }
+  return out;
+}
+
+// Look up tagged records for a category. Returns array of {bcs, deals}
+// joined into a flat list so the view-tagged modal can show both.
+function _usageForChip(usage, chipText){
+  const key = _normChip(chipText);
+  return {
+    bcs:   usage.bcsByChip.get(key)   || [],
+    deals: usage.dealsByChip.get(key) || [],
+  };
+}
+
+// Count helper.
+function _usageCount(usage, chipText){
+  const u = _usageForChip(usage, chipText);
+  return { bcs: u.bcs.length, deals: u.deals.length, total: u.bcs.length + u.deals.length };
+}
+
+// Render a small count chip used inline next to taxonomy rows.
+function _countBadgeHTML(usage, chipText){
+  const c = _usageCount(usage, chipText);
+  if(c.total === 0){
+    return `<span title="No BCs or deals tagged with this chip" style="font-size:10px;color:#94a3b8;font-family:ui-monospace,Menlo,monospace;padding:1px 6px;border-radius:99px;background:#f1f5f9;border:1px solid #e2e8f0;">0</span>`;
+  }
+  const parts = [];
+  if(c.bcs) parts.push(`<span style="color:#1e40af;">${c.bcs} BC${c.bcs===1?'':'s'}</span>`);
+  if(c.deals) parts.push(`<span style="color:#15803d;">${c.deals} deal${c.deals===1?'':'s'}</span>`);
+  return `<span data-action="view-usage" data-chip="${esc(chipText)}" title="Click to view tagged BCs / deals" style="font-size:10px;font-family:ui-monospace,Menlo,monospace;padding:1px 6px;border-radius:99px;background:#eff6ff;border:1px solid #bfdbfe;cursor:pointer;">${parts.join(' · ')}</span>`;
+}
+
+// View-tagged modal — opens on top of the taxonomy admin. Read-only
+// list of every BC + deal tagged with the chip. Each row has an
+// "Open" link that navigates to the record.
+function _openViewTaggedModal(chipText, usage){
+  const u = _usageForChip(usage, chipText);
+  const total = u.bcs.length + u.deals.length;
+  const modal = document.createElement('div');
+  modal.id = 'bcTaxViewTaggedModal';
+  modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.65);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;font-family:Inter,system-ui,sans-serif;';
+  modal.onclick = (e) => { if(e.target === modal) modal.remove(); };
+  const bcRows = u.bcs.map(r => `
+    <tr style="border-top:1px solid #f1f5f9;">
+      <td style="padding:6px 12px;color:#0f172a;font-weight:600;">${esc(r.name)}</td>
+      <td style="padding:6px 12px;color:#475569;">${esc(r.value)}</td>
+      <td style="padding:6px 12px;text-align:right;">
+        <button onclick="document.getElementById('bcTaxViewTaggedModal')?.remove();document.getElementById('bcTaxonomyAdminModal')?.remove();if(typeof bcOpenExpanded==='function')bcOpenExpanded('${esc(r.id)}');" style="background:#f1f5f9;border:1px solid #cbd5e1;color:#0f172a;padding:3px 10px;font-size:11px;font-weight:600;border-radius:6px;cursor:pointer;">Open BC →</button>
+      </td>
+    </tr>`).join('');
+  const dealRows = u.deals.map(r => `
+    <tr style="border-top:1px solid #f1f5f9;">
+      <td style="padding:6px 12px;color:#0f172a;font-weight:600;">${esc(r.address)}</td>
+      <td style="padding:6px 12px;color:#475569;">${esc(r.value)}</td>
+      <td style="padding:6px 12px;text-align:right;">
+        <button onclick="document.getElementById('bcTaxViewTaggedModal')?.remove();document.getElementById('bcTaxonomyAdminModal')?.remove();if(typeof openDeal==='function')openDeal('${esc(r.id)}');" style="background:#f1f5f9;border:1px solid #cbd5e1;color:#0f172a;padding:3px 10px;font-size:11px;font-weight:600;border-radius:6px;cursor:pointer;">Open Deal →</button>
+      </td>
+    </tr>`).join('');
+  modal.innerHTML = `
+    <div style="background:#fff;border-radius:12px;max-width:900px;width:96%;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 25px 60px rgba(0,0,0,0.25);">
+      <div style="padding:16px 22px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;gap:12px;">
+        <div>
+          <div style="font-size:16px;font-weight:700;color:#0f172a;">Tagged with "${esc(chipText)}"</div>
+          <div style="font-size:11px;color:#64748b;margin-top:2px;">${u.bcs.length} BC${u.bcs.length===1?'':'s'} · ${u.deals.length} deal${u.deals.length===1?'':'s'} · ${total} total</div>
+        </div>
+        <button onclick="document.getElementById('bcTaxViewTaggedModal')?.remove();" style="background:transparent;border:1px solid #cbd5e1;color:#64748b;padding:7px 14px;font-size:12px;border-radius:8px;cursor:pointer;font-family:inherit;">Close</button>
+      </div>
+      <div style="flex:1;overflow:auto;padding:0;">
+        ${u.bcs.length ? `
+          <div style="padding:10px 22px;background:#eff6ff;font-size:11px;font-weight:700;color:#1e40af;text-transform:uppercase;letter-spacing:.06em;">Buyer Criteria (${u.bcs.length})</div>
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <thead>
+              <tr style="background:#f8fafc;color:#64748b;text-transform:uppercase;letter-spacing:.04em;font-size:10px;">
+                <th style="padding:7px 12px;text-align:left;border-bottom:1px solid #e2e8f0;">Contact</th>
+                <th style="padding:7px 12px;text-align:left;border-bottom:1px solid #e2e8f0;">Tag value</th>
+                <th style="padding:7px 12px;text-align:right;border-bottom:1px solid #e2e8f0;"></th>
+              </tr>
+            </thead>
+            <tbody>${bcRows}</tbody>
+          </table>` : ''}
+        ${u.deals.length ? `
+          <div style="padding:10px 22px;background:#f0fdf4;font-size:11px;font-weight:700;color:#15803d;text-transform:uppercase;letter-spacing:.06em;">Deals (${u.deals.length})</div>
+          <table style="width:100%;border-collapse:collapse;font-size:12px;">
+            <thead>
+              <tr style="background:#f8fafc;color:#64748b;text-transform:uppercase;letter-spacing:.04em;font-size:10px;">
+                <th style="padding:7px 12px;text-align:left;border-bottom:1px solid #e2e8f0;">Address</th>
+                <th style="padding:7px 12px;text-align:left;border-bottom:1px solid #e2e8f0;">Tag value</th>
+                <th style="padding:7px 12px;text-align:right;border-bottom:1px solid #e2e8f0;"></th>
+              </tr>
+            </thead>
+            <tbody>${dealRows}</tbody>
+          </table>` : ''}
+        ${total === 0 ? `<div style="padding:40px;text-align:center;color:#94a3b8;font-size:13px;">No BCs or deals tagged with this chip — safe to delete.</div>` : ''}
+      </div>
+    </div>`;
+  document.body.appendChild(modal);
+}
+
+// Reassign-before-delete flow. When a chip with usage is targeted for
+// deletion, this modal lists the affected records + a replacement
+// picker. On confirm: every BC's desired_property_types is rewritten
+// to swap chipText → replacementChip (or remove if "(delete chip
+// without replacement)" is picked), every deal's crm_asset_classification
+// gets the same treatment, then resolve(true) so the caller can drop
+// the chip from the taxonomy. Resolve(false) on cancel.
+function _openReassignModal(chipText, usage, taxonomy){
+  return new Promise(resolve => {
+    const u = _usageForChip(usage, chipText);
+    const total = u.bcs.length + u.deals.length;
+    if(total === 0){ resolve(true); return; }
+    const modal = document.createElement('div');
+    modal.id = 'bcTaxReassignModal';
+    modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.65);z-index:99999;display:flex;align-items:center;justify-content:center;padding:20px;font-family:Inter,system-ui,sans-serif;';
+    // Build replacement picker — every chip in taxonomy EXCEPT the one
+    // being deleted. Includes both bare categories and Category: Subtype.
+    const candidates = [];
+    for(const [cat, subs] of Object.entries(taxonomy || {})){
+      if(_normChip(cat) !== _normChip(chipText)) candidates.push(cat);
+      for(const sub of (subs || [])){
+        const fullChip = `${cat}: ${sub}`;
+        if(_normChip(fullChip) !== _normChip(chipText)) candidates.push(fullChip);
+      }
+    }
+    candidates.sort((a, b) => a.localeCompare(b));
+    const options = candidates.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('');
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:12px;max-width:640px;width:96%;max-height:88vh;display:flex;flex-direction:column;box-shadow:0 25px 60px rgba(0,0,0,0.25);">
+        <div style="padding:16px 22px;border-bottom:1px solid #e2e8f0;">
+          <div style="font-size:16px;font-weight:700;color:#0f172a;">Reassign before delete</div>
+          <div style="font-size:12px;color:#64748b;margin-top:4px;line-height:1.5;">
+            <strong>"${esc(chipText)}"</strong> is tagged on ${u.bcs.length} BC${u.bcs.length===1?'':'s'} and ${u.deals.length} deal${u.deals.length===1?'':'s'}. Pick a replacement chip and click "Reassign &amp; delete" — every tagged record will be rewritten before the chip is removed.
+          </div>
+        </div>
+        <div style="flex:1;overflow:auto;padding:16px 22px;">
+          <div style="font-size:11px;font-weight:700;color:#0f172a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Replace with</div>
+          <select id="bcTaxReassignPick" style="width:100%;padding:8px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:13px;font-family:inherit;background:#fff;margin-bottom:14px;">
+            <option value="__remove__">— Remove the chip without replacement (records lose this tag entirely) —</option>
+            ${options}
+          </select>
+          <div style="font-size:11px;color:#64748b;line-height:1.5;background:#fef9c3;border:1px solid #fde68a;padding:10px 12px;border-radius:6px;">
+            <strong style="color:#854d0e;">Heads up:</strong> this rewrites <strong>${total}</strong> live record${total===1?'':'s'} in the database. Cannot be undone in bulk — you'd have to revert each record manually. Make sure the replacement chip is a sensible substitute, or pick "Remove without replacement" if the chip is genuinely meaningless.
+          </div>
+        </div>
+        <div style="padding:14px 22px;border-top:1px solid #e2e8f0;display:flex;justify-content:flex-end;gap:8px;">
+          <button id="bcTaxReassignCancel" style="background:transparent;border:1px solid #cbd5e1;color:#64748b;padding:8px 14px;font-size:12px;border-radius:8px;cursor:pointer;font-family:inherit;">Cancel</button>
+          <button id="bcTaxReassignGo" style="background:#b91c1c;color:#fff;border:none;padding:8px 18px;font-size:12px;font-weight:700;border-radius:8px;cursor:pointer;font-family:inherit;">Reassign &amp; delete</button>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+
+    const cleanup = () => modal.remove();
+    modal.querySelector('#bcTaxReassignCancel').onclick = () => { cleanup(); resolve(false); };
+    modal.querySelector('#bcTaxReassignGo').onclick = async () => {
+      const pick = modal.querySelector('#bcTaxReassignPick').value;
+      const goBtn = modal.querySelector('#bcTaxReassignGo');
+      goBtn.disabled = true; goBtn.textContent = 'Rewriting…';
+      try {
+        await _applyReassign(chipText, pick === '__remove__' ? null : pick, u);
+        cleanup();
+        resolve(true);
+      } catch(e){
+        alert('Reassign failed: ' + (e.message || e));
+        goBtn.disabled = false; goBtn.textContent = 'Reassign & delete';
+      }
+    };
+  });
+}
+
+// Actually rewrite the tagged records. For each BC: split, swap or
+// remove the chip, rejoin, _sbPatch. Same for each deal but with
+// pipe separators.
+async function _applyReassign(oldChip, newChip, usage){
+  const oldNorm = _normChip(oldChip);
+  // BCs.
+  for(const r of usage.bcs){
+    try {
+      const cur = await _sbGet('ace_buyer_criteria', `id=eq.${r.id}&select=desired_property_types&limit=1`);
+      const val = (Array.isArray(cur) && cur[0]?.desired_property_types) || '';
+      const chips = _splitChips(val, ',');
+      const kept = [];
+      for(const c of chips){
+        if(_normChip(c) === oldNorm){
+          if(newChip && !kept.some(k => _normChip(k) === _normChip(newChip))) kept.push(newChip);
+        } else {
+          if(!kept.some(k => _normChip(k) === _normChip(c))) kept.push(c);
+        }
+      }
+      await _sbPatch('ace_buyer_criteria', r.id, { desired_property_types: kept.join(', ') });
+    } catch(e){ console.warn('[bc-taxonomy] BC reassign failed for', r.id, e.message); }
+  }
+  // Deals — use pipe separator in crm_asset_classification.
+  for(const r of usage.deals){
+    try {
+      const cur = await _sbGet('ace_properties', `id=eq.${r.id}&select=crm_asset_classification,property_type_text&limit=1`);
+      const row = (Array.isArray(cur) && cur[0]) || {};
+      const patch = {};
+      if(row.crm_asset_classification){
+        const chips = _splitChips(row.crm_asset_classification, '|');
+        const kept = [];
+        let touched = false;
+        for(const c of chips){
+          if(_normChip(c) === oldNorm){
+            touched = true;
+            if(newChip && !kept.some(k => _normChip(k) === _normChip(newChip))) kept.push(newChip);
+          } else {
+            if(!kept.some(k => _normChip(k) === _normChip(c))) kept.push(c);
+          }
+        }
+        if(touched) patch.crm_asset_classification = kept.join(' | ');
+      }
+      if(row.property_type_text){
+        const chips = _splitChips(row.property_type_text, ',');
+        const kept = [];
+        let touched = false;
+        for(const c of chips){
+          if(_normChip(c) === oldNorm){
+            touched = true;
+            if(newChip && !kept.some(k => _normChip(k) === _normChip(newChip))) kept.push(newChip);
+          } else {
+            if(!kept.some(k => _normChip(k) === _normChip(c))) kept.push(c);
+          }
+        }
+        if(touched) patch.property_type_text = kept.join(', ');
+      }
+      if(Object.keys(patch).length){
+        await _sbPatch('ace_properties', r.id, patch);
+      }
+    } catch(e){ console.warn('[bc-taxonomy] deal reassign failed for', r.id, e.message); }
+  }
+}
+
 // ─── Admin modal ──────────────────────────────────────────────────────
 
 export function _bcAssetTaxonomyAdmin(){
   const taxonomy = _clone(_bcTaxonomyGet());
   let dirty = false;
+  let usage = { bcsByChip: new Map(), dealsByChip: new Map() };
+  let usageLoading = true;
 
   const modal = document.createElement('div');
   modal.id = 'bcTaxonomyAdminModal';
@@ -192,24 +507,28 @@ export function _bcAssetTaxonomyAdmin(){
         // so storage stays cleanly partitioned.
         const subFieldCount = (typeof window._bcFieldsGet === 'function')
           ? (window._bcFieldsGet(fullChip) || []).length : 0;
+        const subUsage = _countBadgeHTML(usage, fullChip);
         return `<tr style="border-top:1px solid #f1f5f9;">
           <td style="padding:5px 8px;color:#475569;">
             <input type="text" value="${esc(sub)}" data-sub-edit="${catIdx}|${subIdx}" style="width:100%;padding:3px 6px;font-size:11px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;"/>
           </td>
           <td style="padding:5px 8px;color:#94a3b8;font-family:ui-monospace,Menlo,monospace;font-size:10px;">${esc(sk)}${SECTION_LABELS[sk] ? ' <span style="color:#cbd5e1;">(' + esc(SECTION_LABELS[sk]) + ')</span>' : ''}</td>
           <td style="padding:5px 8px;font-size:11px;">${has ? '<span style="color:#15803d;">✓</span>' : '<span style="color:#b91c1c;">⚠ no section</span>'}</td>
+          <td style="padding:5px 8px;text-align:left;">${subUsage}</td>
           <td style="padding:5px 8px;text-align:right;white-space:nowrap;">
             <button data-action="edit-sub-fields" data-cat-name="${esc(cat)}" data-sub-name="${esc(sub)}" title="Edit custom requirements fields for ${esc(fullChip)}" style="background:#ede9fe;border:1px solid #c4b5fd;color:#5b21b6;cursor:pointer;font-size:10px;padding:2px 8px;border-radius:4px;font-weight:600;margin-right:4px;">📋${subFieldCount?` ${subFieldCount}`:''}</button>
-            <button data-action="del-sub" data-cat="${catIdx}" data-sub="${subIdx}" title="Delete subtype" style="background:transparent;border:none;color:#b91c1c;cursor:pointer;font-size:14px;padding:0 4px;">✕</button>
+            <button data-action="del-sub" data-cat="${catIdx}" data-sub="${subIdx}" data-chip="${esc(fullChip)}" title="Delete subtype" style="background:transparent;border:none;color:#b91c1c;cursor:pointer;font-size:14px;padding:0 4px;">✕</button>
           </td>
         </tr>`;
       }).join('');
+      const catUsageBadge = _countBadgeHTML(usage, cat);
       return `
       <details ${subs.length === 0 || !catHasSection ? 'open' : ''} style="border:1px solid #e2e8f0;border-radius:8px;margin-bottom:10px;background:#fff;overflow:hidden;">
         <summary style="padding:10px 14px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;background:#f8fafc;gap:8px;">
           <div style="display:flex;align-items:center;gap:8px;flex:1;">
             <input type="text" value="${safeCat}" data-cat-edit="${catIdx}" onclick="event.stopPropagation()" style="font-size:13px;font-weight:700;color:#0f172a;padding:4px 8px;border:1px solid transparent;border-radius:4px;background:transparent;flex:1;max-width:280px;" onfocus="this.style.background='#fff';this.style.border='1px solid #cbd5e1';" onblur="this.style.background='transparent';this.style.border='1px solid transparent';"/>
             <span style="font-size:10px;color:${catHasSection?'#15803d':'#b91c1c'};font-weight:600;">${catHasSection ? '✓ section: ' + esc(catKey) : '⚠ no section'}</span>
+            ${catUsageBadge}
           </div>
           <div style="display:flex;gap:6px;align-items:center;">
             <span style="font-size:11px;color:#64748b;">${subs.length} subtype${subs.length===1?'':'s'}</span>
@@ -221,7 +540,7 @@ export function _bcAssetTaxonomyAdmin(){
                 ? (window._bcFieldsGet(cat) || []).length : 0;
               return `<button data-action="edit-fields" data-cat-name="${esc(cat)}" onclick="event.stopPropagation()" title="Edit custom requirements fields for ${esc(cat)}" style="background:#ede9fe;border:1px solid #c4b5fd;color:#5b21b6;cursor:pointer;font-size:11px;padding:3px 10px;border-radius:4px;font-weight:600;">📋 Fields${fieldCount?` (${fieldCount})`:''}</button>`;
             })()}
-            <button data-action="del-cat" data-cat="${catIdx}" onclick="event.stopPropagation()" title="Delete category" style="background:transparent;border:1px solid #fecaca;color:#b91c1c;cursor:pointer;font-size:11px;padding:3px 8px;border-radius:4px;">Delete</button>
+            <button data-action="del-cat" data-cat="${catIdx}" data-chip="${esc(cat)}" onclick="event.stopPropagation()" title="Delete category" style="background:transparent;border:1px solid #fecaca;color:#b91c1c;cursor:pointer;font-size:11px;padding:3px 8px;border-radius:4px;">Delete</button>
           </div>
         </summary>
         <table style="width:100%;border-collapse:collapse;font-size:11px;">
@@ -230,13 +549,14 @@ export function _bcAssetTaxonomyAdmin(){
               <th style="padding:6px 8px;text-align:left;border-bottom:1px solid #e2e8f0;">Subtype</th>
               <th style="padding:6px 8px;text-align:left;border-bottom:1px solid #e2e8f0;">Resolves to</th>
               <th style="padding:6px 8px;text-align:left;border-bottom:1px solid #e2e8f0;">Status</th>
+              <th style="padding:6px 8px;text-align:left;border-bottom:1px solid #e2e8f0;">Usage</th>
               <th style="padding:6px 8px;text-align:right;border-bottom:1px solid #e2e8f0;width:36px;"></th>
             </tr>
           </thead>
           <tbody>
-            ${subRows || '<tr><td colspan="4" style="padding:8px 12px;color:#94a3b8;font-style:italic;">No subtypes yet — add one below.</td></tr>'}
+            ${subRows || '<tr><td colspan="5" style="padding:8px 12px;color:#94a3b8;font-style:italic;">No subtypes yet — add one below.</td></tr>'}
             <tr style="border-top:1px solid #e2e8f0;background:#f8fafc;">
-              <td colspan="4" style="padding:6px 8px;">
+              <td colspan="5" style="padding:6px 8px;">
                 <input type="text" placeholder="New subtype name…" data-add-sub="${catIdx}" style="width:60%;padding:4px 8px;font-size:11px;border:1px solid #cbd5e1;border-radius:4px;"/>
                 <button data-action="add-sub" data-cat="${catIdx}" style="background:#1a3a6e;color:#fff;border:none;padding:4px 12px;font-size:11px;font-weight:600;border-radius:4px;cursor:pointer;margin-left:6px;">+ Add subtype</button>
               </td>
@@ -342,15 +662,44 @@ export function _bcAssetTaxonomyAdmin(){
       }
       return;
     }
+    if(action === 'view-usage'){
+      const chip = t.getAttribute('data-chip');
+      if(chip) _openViewTaggedModal(chip, usage);
+      return;
+    }
     if(action === 'del-cat'){
       const idx = parseInt(t.getAttribute('data-cat'), 10);
       const cats = Object.keys(taxonomy);
       const cat = cats[idx];
       if(!cat) return;
-      if(!confirm(`Delete category "${cat}" and its ${taxonomy[cat].length} subtypes? (Won't be saved until you click Save.)`)) return;
-      delete taxonomy[cat];
-      dirty = true;
-      render();
+      // v320: also check usage across subtypes — deleting a category
+      // implicitly orphans every "Category: Subtype" chip too. Sum up
+      // category + all its subtypes for the confirmation.
+      const subList = taxonomy[cat] || [];
+      let totalTagged = _usageCount(usage, cat).total;
+      for(const sub of subList) totalTagged += _usageCount(usage, `${cat}: ${sub}`).total;
+      if(totalTagged === 0){
+        if(!confirm(`Delete category "${cat}" and its ${subList.length} subtypes? No BCs or deals are tagged with these chips — safe to delete. (Won't be saved until you click Save.)`)) return;
+        delete taxonomy[cat];
+        dirty = true;
+        render();
+        return;
+      }
+      // Has usage — open the reassign modal scoped to the BARE category
+      // chip. Subtype chips would need separate reassignment if the user
+      // wants to be precise; for now, deleting a category with N
+      // category-level taggings reassigns just those.
+      _openReassignModal(cat, usage, taxonomy).then(async ok => {
+        if(!ok) return;
+        // After reassign succeeds, refetch usage so subsequent decisions
+        // see the latest state, then drop the category from the cached
+        // taxonomy.
+        try { usage = await _bcTaxonomyLoadUsage(); } catch(_) {}
+        delete taxonomy[cat];
+        dirty = true;
+        if(typeof showSaveConfirm === 'function') showSaveConfirm(`✓ "${cat}" reassigned; click Save to commit taxonomy change`);
+        render();
+      });
       return;
     }
     if(action === 'del-sub'){
@@ -358,9 +707,26 @@ export function _bcAssetTaxonomyAdmin(){
       const sIdx = parseInt(t.getAttribute('data-sub'), 10);
       const cat = Object.keys(taxonomy)[cIdx];
       if(!cat) return;
-      taxonomy[cat] = (taxonomy[cat] || []).filter((_, i) => i !== sIdx);
-      dirty = true;
-      render();
+      const sub = (taxonomy[cat] || [])[sIdx];
+      if(!sub) return;
+      const fullChip = `${cat}: ${sub}`;
+      const count = _usageCount(usage, fullChip).total;
+      if(count === 0){
+        // No records tagged — drop immediately.
+        taxonomy[cat] = (taxonomy[cat] || []).filter((_, i) => i !== sIdx);
+        dirty = true;
+        render();
+        return;
+      }
+      // Has usage — open the reassign modal before allowing the drop.
+      _openReassignModal(fullChip, usage, taxonomy).then(async ok => {
+        if(!ok) return;
+        try { usage = await _bcTaxonomyLoadUsage(); } catch(_) {}
+        taxonomy[cat] = (taxonomy[cat] || []).filter((_, i) => i !== sIdx);
+        dirty = true;
+        if(typeof showSaveConfirm === 'function') showSaveConfirm(`✓ "${fullChip}" reassigned; click Save to commit taxonomy change`);
+        render();
+      });
       return;
     }
     if(action === 'add-sub'){
@@ -412,4 +778,17 @@ export function _bcAssetTaxonomyAdmin(){
 
   document.body.appendChild(modal);
   render();
+
+  // v320: fetch usage counts in the background. First render shows
+  // placeholder "0" chips for every row; once the usage promise
+  // resolves we re-render with real counts. Non-fatal on failure —
+  // taxonomy CRUD still works without the badges.
+  _bcTaxonomyLoadUsage().then(u => {
+    usage = u;
+    usageLoading = false;
+    render();
+  }).catch(e => {
+    usageLoading = false;
+    console.warn('[bc-taxonomy] usage scan failed:', e.message);
+  });
 }

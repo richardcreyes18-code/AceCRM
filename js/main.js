@@ -59,6 +59,7 @@ import * as appLists        from './admin/app-lists.js';
 import * as bcTaxonomy      from './admin/bc-taxonomy.js';
 import * as bcFields        from './admin/bc-fields.js';
 import * as bcNativeFields  from './admin/bc-native-fields.js';
+import * as bcAiActivity    from './admin/bc-ai-activity.js';
 import * as backmarket      from './buyer-search/backmarket.js';
 import * as fub             from './fub/fub.js';
 import * as relationships   from './contacts/relationships.js';
@@ -95,6 +96,7 @@ for (const [name, value] of Object.entries(appLists))       { window[name] = val
 for (const [name, value] of Object.entries(bcTaxonomy))     { window[name] = value; }
 for (const [name, value] of Object.entries(bcFields))       { window[name] = value; }
 for (const [name, value] of Object.entries(bcNativeFields)) { window[name] = value; }
+for (const [name, value] of Object.entries(bcAiActivity))   { window[name] = value; }
 for (const [name, value] of Object.entries(backmarket))     { window[name] = value; }
 for (const [name, value] of Object.entries(fub))            { window[name] = value; }
 for (const [name, value] of Object.entries(relationships))  { window[name] = value; }
@@ -140,6 +142,7 @@ console.log('[ace-modules] all modules loaded', {
   bcTaxonomy:     Object.keys(bcTaxonomy).length,
   bcFields:       Object.keys(bcFields).length,
   bcNativeFields: Object.keys(bcNativeFields).length,
+  bcAiActivity:   Object.keys(bcAiActivity).length,
   backmarket:     Object.keys(backmarket).length,
   fub:            Object.keys(fub).length,
   relationships:  Object.keys(relationships).length,

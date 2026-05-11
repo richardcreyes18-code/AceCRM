@@ -26944,6 +26944,18 @@ function showSettingsPage(){
           <button onclick="_bcBulkAiAutoFillLauncher()" style="background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Open bulk launcher →</button>
         </section>
 
+        <!-- v314: BC AI Auto-Fill activity log (running list of buyers + timestamps) -->
+        <section data-settings-tab="tools" style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
+          <div style="font-size:28px;flex-shrink:0;">🗒</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:15px;font-weight:700;color:#0f172a;">AI Auto-Fill activity log</div>
+            <div style="font-size:12px;color:#64748b;margin-top:3px;line-height:1.5;">
+              Running list of every buyer that's been AI auto-filled — contact name, when, how many values applied, and which mode (auto-apply vs. reviewed). Reverse-chronological. Useful for spot-checking recent bulk runs.
+            </div>
+          </div>
+          <button onclick="_bcAiActivityOpen()" style="background:#0ea5e9;color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Open activity log →</button>
+        </section>
+
         <!-- v287: BC Asset Taxonomy admin (Phase 1 — categories + subtypes CRUD) -->
         <section data-settings-tab="tools" style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
           <div style="font-size:28px;flex-shrink:0;">🗂</div>
@@ -30813,6 +30825,23 @@ async function _bcBatchAiTriggerForCurrent(bcId){
     ran_at: new Date().toISOString(),
   };
 
+  // v313: prefetch lookahead distance bumped from +1 to +2 so two
+  // buyers are always in flight. At steady state, when the user
+  // clicks Apply/Skip on buyer N, both N+1 (already cached) AND N+2
+  // (in-flight or ready) are ready — the user never sees the
+  // "Reading the buyer…" overlay again until the queue empties.
+  _bcBatchAiKickoffPrefetch(_bcBatchIndex + 1);
+  _bcBatchAiKickoffPrefetch(_bcBatchIndex + 2);
+
+  // v314: auto-apply mode — skip the review modal entirely. Apply
+  // every proposed value + N/A silently and advance to the next
+  // buyer. Empty-AI buyers go through the same Skip + Needs
+  // Classification backfill path the manual flow uses.
+  if(_bcBatchAutoApply){
+    if(overlay.dataset.forBcId === bcId) overlay.remove();
+    return _bcAutoApplyProposalsAndAdvance(bcId, fetched.resp);
+  }
+
   // Tear down the loading overlay only if it still belongs to this bcId.
   if(overlay.dataset.forBcId === bcId) overlay.remove();
 
@@ -30827,17 +30856,134 @@ async function _bcBatchAiTriggerForCurrent(bcId){
   host.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:99998;display:flex;align-items:center;justify-content:center;padding:20px;';
   document.body.appendChild(host);
   _bcAiRenderReviewModal(bcId, fetched.resp, host);
+}
 
-  // v313: prefetch lookahead distance bumped from +1 to +2 so two
-  // buyers are always in flight. At steady state, when the user
-  // clicks Apply/Skip on buyer N, both N+1 (already cached) AND N+2
-  // (in-flight or ready) are ready — the user never sees the
-  // "Reading the buyer…" overlay again until the queue empties.
-  // Trade-off: more concurrent Anthropic calls = slightly higher
-  // wasted spend if the user cancels mid-batch, but the throughput
-  // win on a 15-50 buyer run is large.
-  _bcBatchAiKickoffPrefetch(_bcBatchIndex + 1);
-  _bcBatchAiKickoffPrefetch(_bcBatchIndex + 2);
+// v314: auto-apply path used by bulk mode when the user checked
+// "Auto-apply (no review per buyer)" in the launcher. Builds the same
+// patch the review modal would build with every checkbox checked,
+// writes through, advances. If the AI returned nothing, falls back to
+// the v308 Skip path so the BC gets the "Needs Classification"
+// placeholder and review_status='needs_human_review'.
+async function _bcAutoApplyProposalsAndAdvance(bcId, resp){
+  const proposed = (resp && resp.proposed_changes) || {};
+  const naProposals = (resp && resp.na_proposals) || [];
+  const valueCount = Object.keys(proposed).length;
+  const naCount = naProposals.length;
+
+  // Nothing to apply → route to the existing Skip handler so the BC
+  // gets the placeholder + review_status='needs_human_review' and the
+  // skipped counter is incremented (not applied).
+  if(valueCount === 0 && naCount === 0){
+    if(typeof _showToast === 'function'){
+      _showToast(`⏭ ${_bcShortContactLabel(bcId)} — AI returned 0 suggestions; auto-skipped.`, 'info', 2400);
+    }
+    return _bcAiAutoFillSkip(bcId, null);
+  }
+
+  // Build the same patch _bcAiAutoFillApply builds with all proposals
+  // accepted. Native vs extra_fields routing mirrors the manual path.
+  const nativeValuePatch = {};
+  const extraValuePatch = {};
+  for(const [col, entry] of Object.entries(proposed)){
+    const v = entry?.proposed;
+    if(v === null || v === undefined || v === '') continue;
+    if(entry?._extra) extraValuePatch[col] = v;
+    else              nativeValuePatch[col] = v;
+  }
+  const patch = { ...nativeValuePatch };
+  if(Object.keys(extraValuePatch).length){
+    try {
+      const cur = await _sbGet(SB_TABLES.buyerCriteria, `id=eq.${bcId}&select=extra_fields&limit=1`);
+      const existingExtras = (Array.isArray(cur) && cur[0]?.extra_fields) || {};
+      patch.extra_fields = { ...existingExtras, ...extraValuePatch };
+    } catch(e){ patch.extra_fields = extraValuePatch; }
+  }
+  // N/A flags → field_status JSONB merge (same logic as manual path).
+  const acceptedNa = naProposals.map(p => p.col).filter(Boolean);
+  if(acceptedNa.length){
+    try {
+      const cur = await _sbGet(SB_TABLES.buyerCriteria, `id=eq.${bcId}&select=field_status&limit=1`);
+      const existing = (Array.isArray(cur) && cur[0]?.field_status) || {};
+      const merged = { ...(typeof existing === 'object' && existing ? existing : {}) };
+      for(const c of acceptedNa){ merged[c] = 'no_preference'; }
+      patch.field_status = merged;
+    } catch(e){ console.warn('[bc-ai] auto-apply field_status merge failed:', e.message); }
+  }
+  // Audit log entry — same shape the manual path writes so the
+  // Settings activity log can read either uniformly.
+  const nowIso = new Date().toISOString();
+  const changes = [];
+  for(const [col, entry] of Object.entries(proposed)){
+    changes.push({
+      col,
+      label: col.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase()),
+      before: entry?.before ?? null,
+      proposed: entry?.proposed ?? null,
+      applied: entry?.proposed ?? null,
+      applied_na: false,
+      skipped: false,
+      explanation: entry?.explanation || null,
+      user_override: false,
+    });
+  }
+  for(const p of naProposals){
+    changes.push({
+      col: p.col, label: p.col, before: null, proposed: null,
+      applied: null, applied_na: true, skipped: false,
+      explanation: p.reason || p.explanation || null,
+      user_override: false,
+    });
+  }
+  const logEntry = {
+    at: nowIso, applied_count: valueCount, na_count: naCount,
+    changes, mode: 'auto_apply',
+  };
+  try {
+    const cur = await _sbGet(SB_TABLES.buyerCriteria, `id=eq.${bcId}&select=ai_autofill_log,contact_id&limit=1`);
+    const existing = (Array.isArray(cur) && cur[0]?.ai_autofill_log) || [];
+    const arr = Array.isArray(existing) ? existing : [];
+    arr.push(logEntry);
+    patch.ai_autofill_log = arr;
+    patch.last_ai_autofill_at = nowIso;
+    // Stamp the linked contact too (best-effort, same as manual path).
+    const linkedContactId = (Array.isArray(cur) && cur[0]?.contact_id) || null;
+    if(linkedContactId){
+      try { await _sbPatch('ace_contacts', linkedContactId, { last_ai_autofill_at: nowIso }); }
+      catch(e){ console.warn('[bc-ai] contact stamp failed:', e.message); }
+    }
+  } catch(e){ console.warn('[bc-ai] auto-apply log build failed:', e.message); }
+
+  // Stamp the bulk review_status so this BC won't get re-picked.
+  patch.review_status = 'ai_suggestions_applied';
+  patch.reviewed_at = nowIso;
+  patch.reviewed_by = (typeof _currentUser !== 'undefined' && _currentUser?.fub_name) || null;
+
+  try {
+    await _sbPatch(SB_TABLES.buyerCriteria, bcId, patch);
+    if(typeof _showToast === 'function'){
+      _showToast(`✓ ${_bcShortContactLabel(bcId)} — ${valueCount} values · ${naCount} N/A applied.`, 'success', 2000);
+    }
+  } catch(e){
+    console.warn('[bc-ai] auto-apply patch failed:', e.message);
+    if(typeof _showToast === 'function'){
+      _showToast(`Auto-apply failed for ${_bcShortContactLabel(bcId)}: ${e.message}`, 'warn', 4000);
+    }
+  }
+
+  if(_bcBatchStats) _bcBatchStats.applied++;
+  bcBatchNext();
+}
+
+// Small label helper for auto-apply toasts — pulls the contact name
+// from the cache if available, else shortens the BC id.
+function _bcShortContactLabel(bcId){
+  try {
+    const rec = (window.allBuyerCriteria || []).find(r => r.id === bcId);
+    const cid = rec?.fields?._contactId;
+    const c = cid && (window.allBuyerContacts || {})[cid];
+    if(c?.name) return c.name;
+  } catch(_){}
+  return String(bcId).slice(0, 8);
 }
 
 // v285: start a fetch for the buyer at queueIndex (if any) and stash
@@ -32066,6 +32212,7 @@ let _bcBatchStats = { applied:0, skipped:0, manual:0 };  // running counts for t
 // holds the model + only_fill_empty choice the user picked once at the
 // launcher; every buyer in the run uses those same options.
 let _bcBatchAutoTriggerAi = false;
+let _bcBatchAutoApply = false;        // v314: skip the review modal per buyer
 let _bcBatchAiPrefetch = new Map();   // bc_id -> { promise, resp?, error? }
 let _bcBatchAiOpts = null;            // { model, only_fill_empty, additional_text }
 
@@ -33894,7 +34041,15 @@ window._bcBulkAiAutoFillLauncher = async function(){
           <input type="checkbox" id="bcBulkOnlyFillEmpty" checked style="margin:0;"/>
           <span>Only fill empty fields <span style="color:#94a3b8;">(uncheck to allow overrides)</span></span>
         </label>
-        <div style="display:flex;align-items:center;gap:10px;margin-top:8px;font-size:12px;color:#334155;flex-wrap:wrap;">
+        <!-- v314: Auto-apply mode — skip the review modal per buyer.
+             Every proposed value + N/A gets applied silently and the
+             runner moves to the next buyer immediately. Per-buyer
+             review still possible by leaving this unchecked. -->
+        <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:#334155;cursor:pointer;margin-top:10px;background:#fef9c3;border:1px solid #fde68a;padding:8px 10px;border-radius:6px;">
+          <input type="checkbox" id="bcBulkAutoApply" style="margin-top:2px;"/>
+          <span><strong>✦ Auto-apply mode (no review per buyer)</strong><br><span style="color:#854d0e;font-size:11px;">Skip the review modal entirely. Every proposed value + N/A is applied silently and the runner advances. Empty-AI buyers get the "Needs Classification" placeholder per the v308 skip path. Use when you trust the AI for this run — typically with "Only fill empty" checked.</span></span>
+        </label>
+        <div style="display:flex;align-items:center;gap:10px;margin-top:10px;font-size:12px;color:#334155;flex-wrap:wrap;">
           <strong style="color:#0f172a;">Model:</strong>
           <label style="display:inline-flex;align-items:center;gap:4px;cursor:pointer;">
             <input type="radio" name="bcBulkModel" value="auto" checked style="margin:0;"/>
@@ -33924,6 +34079,8 @@ window._bcBulkAiAutoFillStart = async function(btn){
   const size = parseInt(document.querySelector('input[name="bcBulkSize"]:checked')?.value || '15', 10);
   const filter = document.querySelector('input[name="bcBulkFilter"]:checked')?.value || 'untouched';
   const onlyFillEmpty = document.getElementById('bcBulkOnlyFillEmpty')?.checked === true;
+  // v314: auto-apply flag — skips per-buyer review modal entirely.
+  const autoApply = document.getElementById('bcBulkAutoApply')?.checked === true;
   const model = document.querySelector('input[name="bcBulkModel"]:checked')?.value || 'auto';
   if(btn){ btn.disabled = true; btn.textContent = '⏳ Picking buyers…'; }
 
@@ -34037,6 +34194,7 @@ window._bcBulkAiAutoFillStart = async function(btn){
   _bcBatchIndex = 0;
   _bcBatchStats = { applied:0, skipped:0, manual:0 };
   _bcBatchAutoTriggerAi = true;
+  _bcBatchAutoApply = autoApply;  // v314
   _bcBatchAiPrefetch = new Map();
   _bcBatchAiOpts = {
     model,
@@ -34224,6 +34382,7 @@ function bcBatchExit(){
   // v285: clear bulk-AI state so a normal manual review session afterward
   // doesn't auto-trigger AI or re-use stale prefetches.
   _bcBatchAutoTriggerAi = false;
+  _bcBatchAutoApply = false;
   _bcBatchAiPrefetch = new Map();
   _bcBatchAiOpts = null;
   showBuyerCriteriaPage();
@@ -34269,6 +34428,7 @@ function bcBatchShowSummary(){
   // v285: same cleanup as bcBatchExit so a natural queue-finish leaves
   // the bulk-AI flags clean.
   _bcBatchAutoTriggerAi = false;
+  _bcBatchAutoApply = false;
   _bcBatchAiPrefetch = new Map();
   _bcBatchAiOpts = null;
 }

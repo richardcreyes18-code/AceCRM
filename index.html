@@ -30785,10 +30785,12 @@ async function _bcBatchAiTriggerForCurrent(bcId){
       } else {
         console.warn('[bc-ai] bulk AI fetch failed; auto-skipping:', entry.error);
       }
-      // Kick off prefetch for the next buyer BEFORE the skip handler
-      // calls bcBatchNext (which will trigger _bcBatchAiOpenAiReviewModal
-      // on the next buyer and resolve from the prefetch cache if ready).
+      // Kick off prefetch for the next two buyers BEFORE the skip
+      // handler calls bcBatchNext (which will trigger the next review
+      // modal and resolve from the prefetch cache if ready). v313:
+      // bumped from +1 to +2 to match the steady-state lookahead.
       _bcBatchAiKickoffPrefetch(_bcBatchIndex + 1);
+      _bcBatchAiKickoffPrefetch(_bcBatchIndex + 2);
       _bcAiAutoFillSkip(bcId, null);
       return;
     }
@@ -30826,8 +30828,16 @@ async function _bcBatchAiTriggerForCurrent(bcId){
   document.body.appendChild(host);
   _bcAiRenderReviewModal(bcId, fetched.resp, host);
 
-  // Kick off prefetch for the next buyer in the queue.
+  // v313: prefetch lookahead distance bumped from +1 to +2 so two
+  // buyers are always in flight. At steady state, when the user
+  // clicks Apply/Skip on buyer N, both N+1 (already cached) AND N+2
+  // (in-flight or ready) are ready — the user never sees the
+  // "Reading the buyer…" overlay again until the queue empties.
+  // Trade-off: more concurrent Anthropic calls = slightly higher
+  // wasted spend if the user cancels mid-batch, but the throughput
+  // win on a 15-50 buyer run is large.
   _bcBatchAiKickoffPrefetch(_bcBatchIndex + 1);
+  _bcBatchAiKickoffPrefetch(_bcBatchIndex + 2);
 }
 
 // v285: start a fetch for the buyer at queueIndex (if any) and stash

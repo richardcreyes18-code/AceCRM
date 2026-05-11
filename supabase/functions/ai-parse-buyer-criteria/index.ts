@@ -62,7 +62,11 @@ const AUTO_ROUTING = {
   source_chars_threshold: 1800,
   note_count_threshold:    6,
 }
-const MAX_TOKENS = 4096
+// v313: BC responses are typically 500-1500 output tokens (15-25 fields
+// + na/uncertain arrays). 4096 was generous and slowed wall time because
+// Claude keeps emitting until it decides it's done. 2048 is still ~2x
+// headroom over the largest observed real response. Direct latency win.
+const MAX_TOKENS = 2048
 const PROMPT_VERSION = 'bc-v1.12'
 
 // Maps a FIELD_SPEC.group to the asset-class label(s) (from ASSET_TYPE_VOCAB)
@@ -1672,7 +1676,21 @@ Deno.serve(async (req: Request) => {
     const bc = bcRows[0]
     const contact_id = bc.contact_id as string | null
 
+    // v313: Step 1 — fetch the contact row (needed because fub_contact_id
+    // is the join key for fub_calls / fub_notes). Other fetches that
+    // don't depend on the contact row can start once we have the
+    // contact_id (which we already have from the BC row), in parallel.
+    // Saves 2-3 round-trips of serial latency per request (~150-400ms).
     let contact: Record<string, unknown> | null = null
+    const aceNotesPromise: Promise<Array<{ body?: string | null; kind?: string | null; created_at?: string | null }>> | null =
+      contact_id
+        ? (fetchSb(
+            `${SUPABASE_URL}/rest/v1/ace_contact_notes?contact_id=eq.${encodeURIComponent(contact_id)}&select=body,kind,created_at&order=created_at.desc&limit=50`,
+            SERVICE_KEY,
+          ) as Promise<Array<{ body?: string | null; kind?: string | null; created_at?: string | null }>>)
+            .catch(() => [] as Array<{ body?: string | null; kind?: string | null; created_at?: string | null }>)
+        : null
+
     if (contact_id) {
       // v270: also pull fub_tags here as a server-side fallback if the client
       // didn't include contact_tags in the body. The client SHOULD pass them,
@@ -1693,35 +1711,29 @@ Deno.serve(async (req: Request) => {
 
     const fubId = contact?.fub_contact_id ? String(contact.fub_contact_id) : ''
 
-    let fubCalls: Array<{ note?: string | null; created_at?: string | null }> = []
-    if (fubId) {
-      try {
-        fubCalls = (await fetchSb(
+    // v313: fub_calls + fub_notes can run in parallel with each other
+    // (both keyed on the same fubId, no interdependency). aceNotes was
+    // already kicked off above — await all three together.
+    const fubCallsPromise: Promise<Array<{ note?: string | null; created_at?: string | null }>> = fubId
+      ? (fetchSb(
           `${SUPABASE_URL}/rest/v1/fub_calls?person_id=eq.${encodeURIComponent(fubId)}&select=note,created_at&order=created_at.desc&limit=30`,
           SERVICE_KEY,
-        )) as Array<{ note?: string | null; created_at?: string | null }>
-      } catch (_) { fubCalls = [] }
-    }
-
-    let fubNotes: Array<{ body?: string | null; created_at?: string | null }> = []
-    if (fubId) {
-      try {
-        fubNotes = (await fetchSb(
+        ) as Promise<Array<{ note?: string | null; created_at?: string | null }>>)
+          .catch(() => [] as Array<{ note?: string | null; created_at?: string | null }>)
+      : Promise.resolve([])
+    const fubNotesPromise: Promise<Array<{ body?: string | null; created_at?: string | null }>> = fubId
+      ? (fetchSb(
           `${SUPABASE_URL}/rest/v1/fub_notes?person_id=eq.${encodeURIComponent(fubId)}&select=body,created_at&order=created_at.desc&limit=30`,
           SERVICE_KEY,
-        )) as Array<{ body?: string | null; created_at?: string | null }>
-      } catch (_) { fubNotes = [] }
-    }
+        ) as Promise<Array<{ body?: string | null; created_at?: string | null }>>)
+          .catch(() => [] as Array<{ body?: string | null; created_at?: string | null }>)
+      : Promise.resolve([])
 
-    let aceNotes: Array<{ body?: string | null; kind?: string | null; created_at?: string | null }> = []
-    if (contact_id) {
-      try {
-        aceNotes = (await fetchSb(
-          `${SUPABASE_URL}/rest/v1/ace_contact_notes?contact_id=eq.${encodeURIComponent(contact_id)}&select=body,kind,created_at&order=created_at.desc&limit=50`,
-          SERVICE_KEY,
-        )) as Array<{ body?: string | null; kind?: string | null; created_at?: string | null }>
-      } catch (_) { aceNotes = [] }
-    }
+    const [fubCalls, fubNotes, aceNotes] = await Promise.all([
+      fubCallsPromise,
+      fubNotesPromise,
+      aceNotesPromise || Promise.resolve([] as Array<{ body?: string | null; kind?: string | null; created_at?: string | null }>),
+    ])
 
     const sourceParts: string[] = []
     const source_breakdown: Record<string, string> = {}

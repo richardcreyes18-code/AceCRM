@@ -820,6 +820,35 @@ NOTES-READING RULES:
 ═══════════════════════════════════════════════════════════════════════
 STEP 2.4 — DESIRED PROPERTY TYPES: CATEGORIES + SUBTYPES
 ═══════════════════════════════════════════════════════════════════════
+⚠ THIS IS THE MOST IMPORTANT FIELD. Asset types are the agent's
+primary tool for matching buyers to deals — every other field is
+secondary. You MUST:
+  1. SCAN EVERY LINE of every note, every call note body, every
+     contact tag, and every email/message snippet for asset-type
+     mentions. Do not stop at the first match.
+  2. BIAS TOWARD INCLUSION. If a note says "Mixed Use Buyer
+     $500K–$2.5M" alongside an "asset - multi family" tag,
+     emit BOTH "Multifamily" AND "Mixed Use". A buyer can want
+     several categories — chips are additive, not mutually
+     exclusive.
+  3. Any of these phrasings = a chip MUST be added:
+       "X buyer" / "buys X" / "buying X"
+       "looking for X" / "wants X" / "interested in X"
+       "active in X" / "does X" / "focuses on X"
+       "X investor" (e.g. "MF investor", "retail investor")
+       a bare list ("MF, retail, mixed use")
+       "X buyer $A-$B" (price range pattern — chip + price hint)
+       an asset name appearing in a profile / summary line
+         ("Mixed Use Buyer", "Self Storage Investor")
+       an "asset - X" tag (per Step 2.0 mapping)
+  4. ABSENCE in the notes is NOT a reason to drop an existing
+     chip (per rule 5a above). But PRESENCE in the notes is
+     ALWAYS a reason to add a chip when one isn't there yet.
+  5. If you finish parsing and desired_property_types has fewer
+     chips than the count of distinct asset-type mentions you
+     saw, GO BACK and add the missed ones. Better to add a
+     bare category that's only mentioned once than to omit it.
+
 desired_property_types is multi-select against this canonical category
 vocab (matches the BC blank-form picker exactly):
 

@@ -340,7 +340,17 @@ export function _bcRenderExtraFields(chipText, record){
 
   const catDefs = _bcFieldsGet(category) || [];
   const subDefs = fullKey ? (_bcFieldsGet(fullKey) || []) : [];
-  if(!catDefs.length && !subDefs.length) return '';
+  // v325 fix: don't early-return purely on missing custom-field defs.
+  // A scope can have 0 custom fields but Other Notes ENABLED — the
+  // block() call needs to run so the Other Notes textarea renders.
+  // Previously this returned '' for "Other Notes only" scopes, which
+  // is why Special Purpose: Gas Station showed no textarea despite
+  // the admin checkbox being on.
+  const catOn = _bcOtherNotesGet(category);
+  const subOn = fullKey ? _bcOtherNotesGet(fullKey) : { enabled: false };
+  const anyFields = catDefs.length || subDefs.length;
+  const anyNotes  = catOn?.enabled || subOn?.enabled;
+  if(!anyFields && !anyNotes) return '';
 
   const extra = (record?.extra_fields && typeof record.extra_fields === 'object')
     ? record.extra_fields

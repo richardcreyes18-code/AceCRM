@@ -1061,12 +1061,81 @@ Return EXACTLY this JSON shape — no preamble, no code fences:
     ...
   },
   "na":        [ { "field": "<col>", "reason": "<why explicitly excluded>" } ],
-  "uncertain": [ { "field": "<col>", "reason": "<what's ambiguous>" } ]
+  "uncertain": [ { "field": "<col>", "reason": "<what's ambiguous>" } ],
+  "field_suggestions": [
+    { "scope": "<Category>" | "<Category>: <Subtype>",
+      "label": "<what to call the field>",
+      "type":  "text" | "number" | "boolean" | "enum",
+      "options": ["<opt1>","<opt2>"]  // only when type=enum
+      "reason": "<one sentence on why this is worth a dedicated field>" }
+  ]
 }
 
 Numbers as numbers (no $, no commas). Percentages as 0-100.
 Booleans as true/false. CSV fields as a single comma-separated string.
 For enum / multienum, use ONLY values from the field's ALLOWED VALUES.
+
+═══════════════════════════════════════════════════════════════════════
+STEP 4a — ROUTING ASSET-SPECIFIC COMMENTARY
+═══════════════════════════════════════════════════════════════════════
+When the notes contain commentary tied to a SPECIFIC asset class (e.g.
+"wants to operate the gas station himself", "needs 5+ acre lots for
+truck terminal use", "MF garden-style only, no high rise"), DO NOT
+dump it into the global other_requirements field. Route it into the
+per-asset Other Notes field for that asset's scope. The available
+fields appear in your eligible-fields list as:
+
+  other_notes_<slug>   (label: "Other Notes — <Category>"
+                         or "Other Notes — <Category>: <Subtype>")
+
+Where <slug> is the lowercased-and-snakecased version of the scope.
+Examples:
+  Notes mention "owner-operator gas station buyer"
+    → field "other_notes_special_purpose_gas_station"
+    NOT "other_requirements"
+  Notes mention "looking for warehouse with truck terminal access"
+    → "other_notes_industrial_truck_terminal" (if that subtype scope
+       has Other Notes enabled) or "other_notes_industrial"
+  Notes mention "no high rise, garden style only"
+    → "other_notes_multifamily_garden_low_rise" or
+       "other_notes_multifamily"
+
+Reserve global other_requirements for commentary that's NOT tied to a
+specific asset class — e.g. "1031 buyer", "needs assumable financing",
+"agent should call before sending listings", or buy-box flexibility
+notes that span multiple asset classes.
+
+═══════════════════════════════════════════════════════════════════════
+STEP 4b — FIELD SUGGESTIONS
+═══════════════════════════════════════════════════════════════════════
+When you notice information in the notes that looks STRUCTURED (a
+choice from a small set of values, a yes/no flag, a number with a
+clear unit) but doesn't fit any existing field for that asset's scope
+AND would plausibly recur on other buyers in the same scope, propose
+a new field via the "field_suggestions" array.
+
+Triggering patterns (not exhaustive — use judgment):
+  - "owner-operator" vs "investor" for asset classes typically owned
+    by one or the other (gas stations, car washes, laundromats,
+    restaurants, smaller commercial)
+  - 1031-deadline / cash / financing-source patterns for high-volume
+    buyers
+  - Brand preferences ("Shell, Exxon only" for gas stations; "Marriott
+    flag only" for hotels)
+  - Lot-size / pad-size minima for retail single-tenant chains
+  - Tenant credit / lease term thresholds for NNN buyers
+  - Build-year cutoffs ("pre-1990 only", "no pre-WWII") for value-add MF
+
+Each suggestion: scope = the asset class chip the field would live
+under (bare "Gas Station" → use the full "Special Purpose: Gas
+Station" form so the agent knows where to add it). type = text /
+number / boolean / enum. options[] required when type=enum. reason =
+one sentence explaining why this is worth promoting from free-text
+into a dedicated field.
+
+Cap suggestions at 3 per response — only the strongest ones. Empty
+array if nothing notable. The agent reviews these in the modal and
+decides whether to wire them into the BC Asset Taxonomy admin.
 
 ═══════════════════════════════════════════════════════════════════════
 RULES THAT NEVER BEND
@@ -2437,6 +2506,16 @@ Deno.serve(async (req: Request) => {
       explanations?: Record<string, string>
       na?: Array<{ field: string; reason: string }>
       uncertain?: Array<{ field: string; reason: string }>
+      // v325: field_suggestions — proposes new dedicated fields for
+      // recurring structured-looking values currently dumped in
+      // free-text notes (per STEP 4b).
+      field_suggestions?: Array<{
+        scope: string
+        label: string
+        type: string
+        options?: string[]
+        reason: string
+      }>
     } = {}
     try { parsed = JSON.parse(rawText) }
     catch (_) {
@@ -2462,6 +2541,20 @@ Deno.serve(async (req: Request) => {
       ? (parsed.confidence as Record<string, string>) : {}
     const naRaw = Array.isArray(parsed.na) ? parsed.na : []
     const uncertainRaw = Array.isArray(parsed.uncertain) ? parsed.uncertain : []
+    // v325: pass-through for field_suggestions. Lightly validate shape;
+    // anything malformed gets dropped silently.
+    const fieldSuggestionsRaw = Array.isArray(parsed.field_suggestions)
+      ? parsed.field_suggestions
+          .map(s => s && typeof s === 'object' ? s : null)
+          .filter((s): s is { scope: string; label: string; type: string; options?: string[]; reason: string } => {
+            if (!s) return false
+            const ss = s as Record<string, unknown>
+            return typeof ss.scope === 'string' && !!ss.scope.trim()
+              && typeof ss.label === 'string' && !!ss.label.trim()
+              && typeof ss.type === 'string' && !!ss.type.trim()
+          })
+          .slice(0, 3)
+      : []
 
     const proposed_changes: Record<string, {
       proposed: unknown
@@ -2665,6 +2758,9 @@ Deno.serve(async (req: Request) => {
       na_proposals,
       current_na_fields: currentNa,
       uncertain_fields,
+      // v325: pass through the model's field_suggestions so the
+      // frontend can render them in the review modal.
+      field_suggestions: fieldSuggestionsRaw,
       all_fields: buildAllFields(proposed_changes, na_proposals.map(p => ({ col: p.col, reason: p.explanation || '' }))),
       source_chars,
       source_breakdown,

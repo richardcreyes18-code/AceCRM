@@ -33085,6 +33085,31 @@ function _bcAiRenderReviewModal(bcId, resp, hostModal){
       </ul>
     </div>` : '';
 
+  // v325: surface AI-proposed FIELD SUGGESTIONS. The model can flag
+  // patterns in this buyer's notes that look like recurring structured
+  // values (owner-operator vs investor, gas brand preference, 1031
+  // status, etc.) currently dumped in free-text. The agent can decide
+  // whether to wire them into the BC Asset Taxonomy admin afterwards.
+  const fieldSuggestions = Array.isArray(resp.field_suggestions) ? resp.field_suggestions : [];
+  const suggestionsBlock = fieldSuggestions.length ? `
+    <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:8px;padding:10px 14px;margin-bottom:10px;">
+      <div style="font-size:11px;font-weight:700;color:#1e40af;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">💡 AI suggests adding dedicated fields</div>
+      <ul style="margin:0;padding-left:18px;font-size:11px;color:#1e3a8a;line-height:1.6;">
+        ${fieldSuggestions.map(s => {
+          const typeChip = `<span style="display:inline-block;padding:0 6px;border-radius:99px;background:#dbeafe;color:#1e40af;font-size:9px;font-weight:700;font-family:ui-monospace,Menlo,monospace;text-transform:uppercase;letter-spacing:.04em;margin-left:4px;">${esc(s.type||'text')}</span>`;
+          const optsLine = (s.type === 'enum' && Array.isArray(s.options) && s.options.length)
+            ? `<div style="font-size:10px;color:#3730a3;margin-top:2px;">Options: ${s.options.map(o => `<code style="background:#dbeafe;padding:0 4px;border-radius:3px;font-size:10px;">${esc(o)}</code>`).join(' · ')}</div>` : '';
+          return `<li>
+            <strong>${esc(s.label||'(unlabeled)')}</strong>${typeChip}
+            on <code style="background:#dbeafe;padding:0 4px;border-radius:3px;font-size:10px;">${esc(s.scope||'(no scope)')}</code><br>
+            <span style="color:#3730a3;">${esc(s.reason||'')}</span>
+            ${optsLine}
+          </li>`;
+        }).join('')}
+      </ul>
+      <div style="font-size:10px;color:#64748b;margin-top:6px;font-style:italic;">Add via Settings → Tools → BC Asset Taxonomy → 📋 Fields on the matching scope.</div>
+    </div>` : '';
+
   const root = hostModal || document.createElement('div');
   if(!hostModal){
     root.id = 'bcAiReviewModal';
@@ -33179,6 +33204,7 @@ function _bcAiRenderReviewModal(bcId, resp, hostModal){
         <!-- LEFT: field review table -->
         <div style="flex:1 1 62%;min-width:0;overflow:auto;padding:18px 22px;background:#f8fafc;">
           ${uncertainBlock}
+          ${suggestionsBlock}
           ${groupBlocks || '<div style="color:#94a3b8;font-size:12px;text-align:center;padding:30px;">AI returned no suggestions — try adding more context above.</div>'}
         </div>
         <!-- RIGHT: source notes the AI read from -->

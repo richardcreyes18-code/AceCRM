@@ -34090,15 +34090,15 @@ window._bcBulkAiAutoFillLauncher = async function(){
         <div style="font-size:11px;font-weight:700;color:#0f172a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Pick from</div>
         <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:#334155;margin-bottom:5px;cursor:pointer;">
           <input type="radio" name="bcBulkFilter" value="untouched" checked style="margin-top:2px;"/>
-          <span><strong>Buyers I haven't AI-autofilled yet</strong><br><span style="color:#94a3b8;font-size:11px;">Filters to BCs where last_ai_autofill_at is empty. Newest first.</span></span>
+          <span style="flex:1;"><strong>Buyers I haven't AI-autofilled yet</strong><span id="bcBulkCntUntouched" style="margin-left:6px;display:inline-block;padding:1px 7px;border-radius:99px;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;font-size:10px;font-weight:700;font-family:'Source Code Pro',ui-monospace,Menlo,monospace;">…</span><br><span style="color:#94a3b8;font-size:11px;">Filters to BCs where last_ai_autofill_at is empty. Newest first.</span></span>
         </label>
         <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:#334155;margin-bottom:5px;cursor:pointer;">
           <input type="radio" name="bcBulkFilter" value="all" style="margin-top:2px;"/>
-          <span><strong>All buyer-tagged contacts</strong><br><span style="color:#94a3b8;font-size:11px;">Random shuffle from the full buyer-criteria list.</span></span>
+          <span style="flex:1;"><strong>All buyer-tagged contacts</strong><span id="bcBulkCntAll" style="margin-left:6px;display:inline-block;padding:1px 7px;border-radius:99px;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;font-size:10px;font-weight:700;font-family:'Source Code Pro',ui-monospace,Menlo,monospace;">…</span><br><span style="color:#94a3b8;font-size:11px;">Random shuffle from the full buyer-criteria list.</span></span>
         </label>
         <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:#334155;margin-bottom:5px;cursor:pointer;background:#fef9c3;border:1px solid #fde68a;padding:8px 10px;border-radius:6px;">
           <input type="radio" name="bcBulkFilter" value="no-bc" style="margin-top:2px;"/>
-          <span><strong>Buyer-tagged contacts without a BC yet</strong><br><span style="color:#854d0e;font-size:11px;">Auto-creates a blank BC for each, then walks through them with AI Auto-Fill. v297.</span></span>
+          <span style="flex:1;"><strong>Buyer-tagged contacts without a BC yet</strong><span id="bcBulkCntNoBc" style="margin-left:6px;display:inline-block;padding:1px 7px;border-radius:99px;background:#fef3c7;color:#854d0e;border:1px solid #fde68a;font-size:10px;font-weight:700;font-family:'Source Code Pro',ui-monospace,Menlo,monospace;">…</span><br><span style="color:#854d0e;font-size:11px;">Auto-creates a blank BC for each, then walks through them with AI Auto-Fill. v297.</span></span>
         </label>
       </div>
 
@@ -34139,6 +34139,40 @@ window._bcBulkAiAutoFillLauncher = async function(){
       </div>
     </div>`;
   document.body.appendChild(modal);
+
+  // v323: populate per-filter counts on the three "Pick from" radios
+  // so the agent sees how many buyers each option would draw from
+  // before clicking Start. Stats are populated lazily — the modal
+  // renders immediately with "…" placeholders and the counts fill in
+  // as soon as the queries resolve.
+  (async () => {
+    try {
+      // BC counts derive from the stats we already pulled above plus
+      // a derived "untouched" = total - filled.
+      const untouched = Math.max(0, (stats.total || 0) - (stats.filled || 0));
+      const elUntouched = document.getElementById('bcBulkCntUntouched');
+      const elAll = document.getElementById('bcBulkCntAll');
+      if(elUntouched) elUntouched.textContent = String(untouched);
+      if(elAll)       elAll.textContent       = String(stats.total || 0);
+
+      // No-BC count: fetch buyer-tagged contact IDs, subtract the
+      // contact_ids the existing BCs are already linked to. Uses the
+      // same helper the no-bc filter runs at start time, so the count
+      // shown here matches the population the run would actually pick
+      // from.
+      const elNoBc = document.getElementById('bcBulkCntNoBc');
+      try {
+        const buyerIds = await _bcLoadBuyerTaggedContactIds();
+        const existing = new Set(
+          (allBuyerCriteria || []).map(r => r.fields?._contactId).filter(Boolean)
+        );
+        const missing = (buyerIds || []).filter(cid => !existing.has(cid));
+        if(elNoBc) elNoBc.textContent = String(missing.length);
+      } catch(e){
+        if(elNoBc) elNoBc.textContent = '?';
+      }
+    } catch(e){ console.warn('[bulk-ai] per-filter counts failed:', e.message); }
+  })();
 };
 
 window._bcBulkAiAutoFillStart = async function(btn){

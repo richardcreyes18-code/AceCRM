@@ -388,10 +388,19 @@ function isEmptyValue(v: unknown): boolean {
 }
 
 function tryRepairJson(raw: string): string {
+  // v309: handle more Claude failure modes — trailing commas (common when
+  // the response gets cut off mid-list), smart quotes, and stray content
+  // before/after the JSON object. The caller still wraps this in a JSON.parse
+  // try/catch so anything not fixable bubbles up as 502.
   let s = raw.replace(/```json|```/g, '').trim()
   const first = s.indexOf('{')
   const last = s.lastIndexOf('}')
   if (first !== -1 && last !== -1 && last > first) s = s.slice(first, last + 1)
+  // Replace common smart quotes that LLMs sometimes emit when echoing user prose.
+  s = s.replace(/[\u201c\u201d]/g, '"').replace(/[\u2018\u2019]/g, "'")
+  // Strip trailing commas before } or ] (most common LLM mistake when
+  // a list is being progressively built and the response is cut early).
+  s = s.replace(/,(\s*[}\]])/g, '$1')
   return s
 }
 

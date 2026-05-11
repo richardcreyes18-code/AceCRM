@@ -30769,7 +30769,31 @@ async function _bcBatchAiTriggerForCurrent(bcId){
   } catch(e){
     entry.error = String((e && e.message) || e);
     if(overlay.dataset.forBcId === bcId) overlay.remove();
-    alert('AI parse failed for this buyer: ' + entry.error + '\nClick Save & Next to continue, or Skip.');
+    // v309: in bulk mode, AI fetch errors (e.g. "Model returned non-JSON"
+    // — Claude occasionally emits a stray code fence or truncates JSON)
+    // would strand the user on this buyer with no review modal and no
+    // way to advance. Auto-skip: mark needs_human_review, backfill
+    // "Needs Classification" if no asset chips yet, advance to next.
+    // Single-deal mode keeps the alert path so the agent sees the
+    // error and can retry manually.
+    const inBulk = (typeof _bcBatchQueue !== 'undefined' && _bcBatchQueue
+                    && _bcBatchQueue[_bcBatchIndex] === bcId
+                    && _bcBatchAutoTriggerAi);
+    if(inBulk && typeof _bcAiAutoFillSkip === 'function'){
+      if(typeof _showToast === 'function'){
+        _showToast(`AI fetch failed for this buyer — skipping. (${entry.error})`, 'warn', 4000);
+      } else {
+        console.warn('[bc-ai] bulk AI fetch failed; auto-skipping:', entry.error);
+      }
+      // Kick off prefetch for the next buyer BEFORE the skip handler
+      // calls bcBatchNext (which will trigger _bcBatchAiOpenAiReviewModal
+      // on the next buyer and resolve from the prefetch cache if ready).
+      _bcBatchAiKickoffPrefetch(_bcBatchIndex + 1);
+      _bcAiAutoFillSkip(bcId, null);
+      return;
+    }
+    alert('AI parse failed for this buyer: ' + entry.error
+      + '\nDetails: this is usually a transient model error — try running again.');
     // Even on error, kick off the prefetch for the next buyer so the user
     // isn't slowed down by this one's failure.
     _bcBatchAiKickoffPrefetch(_bcBatchIndex + 1);

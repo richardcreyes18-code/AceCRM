@@ -30963,6 +30963,20 @@ async function _bcAutoApplyProposalsAndAdvance(bcId, resp){
     if(typeof _showToast === 'function'){
       _showToast(`✓ ${_bcShortContactLabel(bcId)} — ${valueCount} values · ${naCount} N/A applied.`, 'success', 2000);
     }
+    // v324 fix: update the in-memory allBuyerCriteria cache so the
+    // NEXT bulk run's "untouched" filter doesn't re-pick this buyer.
+    // Without this, the auto-apply path wrote last_ai_autofill_at to
+    // the DB but the cache still showed it as empty, causing the same
+    // buyer to be picked again on the next bulk run.
+    try {
+      if(Array.isArray(allBuyerCriteria)){
+        const idx = allBuyerCriteria.findIndex(r => r.id === bcId);
+        if(idx >= 0){
+          allBuyerCriteria[idx].fields['Last AI Autofill At'] = nowIso;
+          allBuyerCriteria[idx].fields['Review Status'] = 'ai_suggestions_applied';
+        }
+      }
+    } catch(_){}
   } catch(e){
     console.warn('[bc-ai] auto-apply patch failed:', e.message);
     if(typeof _showToast === 'function'){
@@ -33503,11 +33517,15 @@ window._bcAiAutoFillSkip = async function(bcId, btn){
 
     // Update the in-memory cache so the next BC list render reflects
     // the skip + (optional) placeholder without a refetch.
+    // v324: also stamp Review Status so the next bulk run's "untouched"
+    // filter excludes this skipped buyer (otherwise it'd be re-picked
+    // every run since last_ai_autofill_at is null on skip).
     try {
       if(Array.isArray(allBuyerCriteria)){
         const idx = allBuyerCriteria.findIndex(r => r.id === bcId);
         if(idx >= 0){
           if(hasNoAssets) allBuyerCriteria[idx].fields['Desired Property Types'] = 'Needs Classification';
+          allBuyerCriteria[idx].fields['Review Status'] = 'needs_human_review';
         }
       }
     } catch(e){ /* non-fatal */ }
@@ -34147,9 +34165,11 @@ window._bcBulkAiAutoFillLauncher = async function(){
   // as soon as the queries resolve.
   (async () => {
     try {
-      // BC counts derive from the stats we already pulled above plus
-      // a derived "untouched" = total - filled.
-      const untouched = Math.max(0, (stats.total || 0) - (stats.filled || 0));
+      // v324: untouched = total - filled - needsReview. Subtracting
+      // needsReview matches the v324 fix that excludes skipped buyers
+      // from re-pick — so the badge count equals the population the
+      // run would actually draw from.
+      const untouched = Math.max(0, (stats.total || 0) - (stats.filled || 0) - (stats.needsReview || 0));
       const elUntouched = document.getElementById('bcBulkCntUntouched');
       const elAll = document.getElementById('bcBulkCntAll');
       if(elUntouched) elUntouched.textContent = String(untouched);
@@ -34269,7 +34289,25 @@ window._bcBulkAiAutoFillStart = async function(btn){
     const all = (allBuyerCriteria || []).filter(r => r && r.id && r.fields);
     let candidates;
     if(filter === 'untouched'){
-      candidates = all.filter(r => !r.fields[lastAtKey]);
+      // v324 fix: never trust the cache for "untouched" — it can be
+      // stale after auto-apply / skip runs in the current session, and
+      // it never carries review_status so skipped buyers got re-picked.
+      // Hit the DB for authoritative "touched" IDs and subtract.
+      if(btn) btn.textContent = '⏳ Checking who\'s already been touched…';
+      let touchedIds = new Set();
+      try {
+        const [filledRows, reviewRows] = await Promise.all([
+          _sbGet(SB_TABLES.buyerCriteria, 'last_ai_autofill_at=not.is.null&select=id&limit=10000').catch(() => []),
+          _sbGet(SB_TABLES.buyerCriteria, 'review_status=eq.needs_human_review&select=id&limit=10000').catch(() => []),
+        ]);
+        for(const r of (filledRows || [])) touchedIds.add(r.id);
+        for(const r of (reviewRows || [])) touchedIds.add(r.id);
+      } catch(e){
+        console.warn('[bulk-ai] touched-id fetch failed; falling back to cache:', e.message);
+      }
+      candidates = touchedIds.size > 0
+        ? all.filter(r => !touchedIds.has(r.id))
+        : all.filter(r => !r.fields[lastAtKey]);
     } else {
       candidates = all.slice();
     }

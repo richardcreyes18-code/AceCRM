@@ -585,6 +585,31 @@ OTHER TAG RULES (apply when buy_intent is "buyer" or "both"):
       "asset - mobile home"     → "Residential Income" (with subtype
                                   "Mobile Home Park" if notes warrant)
       "asset - self storage"    → "Industrial: Self Storage"
+      "asset - repair shop"     → "Automotive: Auto Repair / Mechanic"
+      "asset - auto repair"     → "Automotive: Auto Repair / Mechanic"
+      "asset - mechanic"        → "Automotive: Auto Repair / Mechanic"
+      "asset - body shop"       → "Automotive: Auto Body Shop"
+      "asset - auto body"       → "Automotive: Auto Body Shop"
+      "asset - car wash"        → "Automotive: Car Wash" (sometimes
+                                  also "Special Purpose: Car Wash"
+                                  — keep both if BC already has both)
+      "asset - tire shop"       → "Automotive: Tire Shop"
+      "asset - dealership"      → "Automotive: Auto Dealership (New)" or "(Used)"
+      "asset - gas station"     → "Special Purpose: Gas Station"
+      "asset - mixed use"       → "Mixed Use"
+      "asset - medical"         → "Health Care: Medical Office"
+      "asset - mhp"             → "Residential Income: Mobile Home Park"
+      "asset - business"        → leave existing chips; "Business" isn't
+                                  a vocab category by itself — needs notes
+                                  to disambiguate which Automotive /
+                                  Special Purpose / Industrial bucket fits
+      UNKNOWN "asset - X" tag — if X doesn't match any mapping above,
+      do NOT clear or change desired_property_types. Find the closest
+      vocab category in your judgment and ADD it to the existing
+      chips (don't replace). If no obvious match exists, leave
+      desired_property_types untouched and put "Tag 'asset - X' had
+      no clean vocab match — agent should classify manually" in
+      other_requirements.
   - "1031 Investor" or "1031" → bias financing_type to "1031".
   - "VIP" → set is_vip_buyer = true. Cite: "tag: VIP".
   - "Bounced" → ignore. Email deliverability flag, not a buying signal.
@@ -710,6 +735,30 @@ NOTES-READING RULES:
 5. EMPTY ≠ N/A: Leave a field unset (omit from "fields") when there's
    no signal. Mark a field as "na" ONLY when the buyer EXPLICITLY
    excluded it ("no preference on X", "doesn't matter", "anything works").
+
+5a. NEVER PROPOSE N/A FOR desired_property_types WHEN CHIPS OR TAGS
+   EXIST. Existing asset-class chips on the BC and "asset - <type>"
+   tags on the contact are source-of-truth — agents curate them
+   deliberately. You are FORBIDDEN from proposing
+   desired_property_types as "na" / "no_preference" / "no_pref" /
+   "any" / "doesn't matter" when EITHER:
+     (a) the BC's current desired_property_types value is non-empty
+         (the BEFORE column in the review modal shows chips), OR
+     (b) the contact has ANY "asset - <type>" tag.
+   Sparse / transactional call notes ("send property X to him",
+   "left voicemail", "looking at deal") are NOT evidence the buyer
+   has no asset preference — they're evidence the agent didn't
+   restate the buy-box in that call. The chips and tags ARE the
+   buy-box. Preserve them.
+   The only legitimate way for desired_property_types to lose a
+   chip is if the buyer EXPLICITLY says "I don't do <X> anymore"
+   or "drop <X> from my criteria" — and even then, propose a
+   targeted edit (remove just that chip) via a top_level_notes
+   line; do NOT clear the whole field.
+   If you're tempted to write "Will clear current value" or
+   "no_preference" on desired_property_types because the call
+   notes are thin — STOP. Omit the field from "fields" entirely
+   and from "na". The existing value stays.
 
 6. GEOGRAPHY MUST BE DECOMPOSED — ALL FOUR STRUCTURED FIELDS REQUIRED
    WHEN THE SIGNALS ARE PRESENT. When the notes describe a region in

@@ -33229,6 +33229,26 @@ window._bcAiAutoFillApply = async function(bcId, btn){
         }
       }
     } catch(e){ console.warn('[bc-ai] post-apply cache refresh failed:', e.message); }
+    // v306 fix: in bulk AI auto-fill mode, advance to the next buyer in the
+    // queue instead of re-opening the same one. Mark this BC as
+    // ai_suggestions_applied (same status bcBatchSaveAndNext writes), bump
+    // the applied counter, then hand off to bcBatchNext() — which will
+    // either open the next queued BC (auto-triggering its prefetched AI
+    // review modal) or show the batch-complete summary screen.
+    if(typeof _bcBatchQueue !== 'undefined' && _bcBatchQueue
+       && _bcBatchQueue[_bcBatchIndex] === bcId
+       && _bcBatchAutoTriggerAi){
+      try {
+        await _sbPatch(SB_TABLES.buyerCriteria, bcId, {
+          review_status: 'ai_suggestions_applied',
+          reviewed_at: new Date().toISOString(),
+          reviewed_by: (typeof _currentUser !== 'undefined' && _currentUser?.fub_name) || null,
+        });
+      } catch(e){ console.warn('[bc-ai] bulk review_status patch failed:', e.message); }
+      if(_bcBatchStats) _bcBatchStats.applied++;
+      bcBatchNext();
+      return;
+    }
     bcOpenExpanded(bcId);
   } catch(e){
     if(btn){ btn.disabled = false; btn.textContent = '✓ Apply Selected'; }

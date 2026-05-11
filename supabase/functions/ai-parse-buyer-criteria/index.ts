@@ -2521,14 +2521,56 @@ Deno.serve(async (req: Request) => {
     catch (_) {
       try { parsed = JSON.parse(tryRepairJson(rawText)) }
       catch (_) {
-        return jsonResp({
-          ok: false,
-          error: 'Model returned non-JSON',
-          prompt_version: PROMPT_VERSION,
-          stop_reason,
-          raw_head: rawText.slice(0, 600),
-          raw_tail: rawText.slice(-600),
-        }, 502)
+        // v326: one-shot retry with a stricter user-message instruction
+        // before surfacing the 502. The retry costs one extra Anthropic
+        // call when the first response was malformed (~rare); the
+        // alternative is the user seeing the buyer auto-skip with
+        // "Model returned non-JSON" via the v309 catch path.
+        let retryParsed: typeof parsed | null = null
+        try {
+          const retryUserMessage = userMessage +
+            `\n\n═══════════════════════════════════════════════════════════════════════\n` +
+            `RETRY NOTICE — your previous response was not valid JSON.\n` +
+            `═══════════════════════════════════════════════════════════════════════\n` +
+            `Respond with VALID JSON ONLY — no preamble, no commentary, no code\n` +
+            `fences, no trailing prose. Start with "{" and end with "}". Every\n` +
+            `string is double-quoted. No trailing commas. The earlier instructions\n` +
+            `still apply; this is purely a formatting fix.\n`
+          const retryResp = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': ANTHROPIC_KEY,
+              'anthropic-version': '2023-06-01',
+            },
+            body: JSON.stringify({
+              model: MODEL,
+              max_tokens: MAX_TOKENS,
+              system: [{ type: 'text', text: SYSTEM_PROMPT_STATIC, cache_control: { type: 'ephemeral' } }],
+              messages: [{ role: 'user', content: retryUserMessage }],
+            }),
+          })
+          if (retryResp.ok) {
+            const retryData = await retryResp.json()
+            const retryRaw: string = (retryData?.content?.[0]?.text || '{}').replace(/```json|```/g, '').trim()
+            try { retryParsed = JSON.parse(retryRaw) }
+            catch (_) {
+              try { retryParsed = JSON.parse(tryRepairJson(retryRaw)) } catch (_) { retryParsed = null }
+            }
+          }
+        } catch (_) { retryParsed = null }
+        if (retryParsed) {
+          parsed = retryParsed
+        } else {
+          return jsonResp({
+            ok: false,
+            error: 'Model returned non-JSON (retry also failed)',
+            prompt_version: PROMPT_VERSION,
+            stop_reason,
+            raw_head: rawText.slice(0, 600),
+            raw_tail: rawText.slice(-600),
+          }, 502)
+        }
       }
     }
 
@@ -2750,6 +2792,76 @@ Deno.serve(async (req: Request) => {
       })
     }
 
+    // v326: persist field_suggestions to ace_ai_settings.bc_field_suggestions
+    // so the Settings → Tools "💡 AI field suggestions inbox" tile can
+    // surface accumulated suggestions across runs. Dedup key:
+    // `${scope}::${normalized label}`. Pending entries gain seen_count
+    // on each repeat; accepted/dismissed entries stay in the array as
+    // audit history but drop off the inbox view.
+    if (fieldSuggestionsRaw.length) {
+      try {
+        const sugRows = (await fetchSb(
+          `${SUPABASE_URL}/rest/v1/ace_ai_settings?key=eq.bc_field_suggestions&select=id,value&limit=1`,
+          SERVICE_KEY,
+        )) as Array<{ id?: string; value?: unknown }>
+        const existing: Array<Record<string, unknown>> =
+          (sugRows?.[0]?.value && Array.isArray(sugRows[0].value))
+            ? sugRows[0].value as Array<Record<string, unknown>>
+            : []
+        const norm = (s: string) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim()
+        const byKey = new Map<string, Record<string, unknown>>()
+        for (const e of existing) {
+          const k = `${norm(String(e.scope || ''))}::${norm(String(e.label || ''))}`
+          if (k) byKey.set(k, e)
+        }
+        const nowIso = new Date().toISOString()
+        for (const s of fieldSuggestionsRaw) {
+          const k = `${norm(s.scope)}::${norm(s.label)}`
+          if (!k) continue
+          const prior = byKey.get(k)
+          if (prior) {
+            // Bump the recurrence counters; don't overwrite status.
+            prior.seen_count    = (Number(prior.seen_count) || 0) + 1
+            prior.last_seen_at  = nowIso
+            prior.last_buyer_id = buyer_criteria_id
+            // Keep latest type/options/reason in case the model has
+            // refined them on this run.
+            prior.type    = s.type
+            prior.options = s.options || prior.options || null
+            prior.reason  = s.reason
+          } else {
+            byKey.set(k, {
+              scope:         s.scope,
+              label:         s.label,
+              type:          s.type,
+              options:       s.options || null,
+              reason:        s.reason,
+              seen_count:    1,
+              first_seen_at: nowIso,
+              last_seen_at:  nowIso,
+              last_buyer_id: buyer_criteria_id,
+              status:        'pending',
+            })
+          }
+        }
+        const merged = [...byKey.values()]
+        const payload = { key: 'bc_field_suggestions', value: merged, updated_at: nowIso }
+        if (sugRows?.[0]?.id) {
+          await fetch(`${SUPABASE_URL}/rest/v1/ace_ai_settings?id=eq.${sugRows[0].id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, Prefer: 'return=minimal' },
+            body: JSON.stringify(payload),
+          })
+        } else {
+          await fetch(`${SUPABASE_URL}/rest/v1/ace_ai_settings`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, Prefer: 'return=minimal' },
+            body: JSON.stringify(payload),
+          })
+        }
+      } catch (e) { /* suggestion persistence is best-effort */ }
+    }
+
     return jsonResp({
       ok: true,
       prompt_version: PROMPT_VERSION,
@@ -2761,6 +2873,9 @@ Deno.serve(async (req: Request) => {
       // v325: pass through the model's field_suggestions so the
       // frontend can render them in the review modal.
       field_suggestions: fieldSuggestionsRaw,
+      // v326: pass along the contact tags so the frontend's tag
+      // fallback (auto-apply path) doesn't have to re-fetch them.
+      contact_tags: effective_tags,
       all_fields: buildAllFields(proposed_changes, na_proposals.map(p => ({ col: p.col, reason: p.explanation || '' }))),
       source_chars,
       source_breakdown,

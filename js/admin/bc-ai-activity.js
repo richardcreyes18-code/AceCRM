@@ -131,9 +131,9 @@ async function _load(){
     // _sbGet appends the filter directly; we want the OR as one expression
     // alongside a select/order. Build the query string manually.
     const bcsAuto = await _sbGet(tbl,
-      `last_ai_autofill_at=not.is.null&select=id,contact_id,last_ai_autofill_at,reviewed_at,review_status,ai_autofill_log&order=last_ai_autofill_at.desc&limit=${PAGE_SIZE}`);
+      `last_ai_autofill_at=not.is.null&select=id,contact_id,last_ai_autofill_at,reviewed_at,review_status,ai_autofill_log,extra_fields&order=last_ai_autofill_at.desc&limit=${PAGE_SIZE}`);
     const bcsNeedsReview = await _sbGet(tbl,
-      `review_status=eq.needs_human_review&select=id,contact_id,last_ai_autofill_at,reviewed_at,review_status,ai_autofill_log&order=reviewed_at.desc&limit=${PAGE_SIZE}`);
+      `review_status=eq.needs_human_review&select=id,contact_id,last_ai_autofill_at,reviewed_at,review_status,ai_autofill_log,extra_fields&order=reviewed_at.desc&limit=${PAGE_SIZE}`);
     // Merge, dedupe by id (a buyer can be in both — e.g. v309 catch
     // path stamps needs_human_review on top of a prior auto-apply).
     const byId = new Map();
@@ -185,6 +185,12 @@ async function _load(){
       const whenIso = needsReviewActive
         ? (r.reviewed_at || r.last_ai_autofill_at)
         : (r.last_ai_autofill_at || r.reviewed_at);
+      // v326: pull skip_reason from extra_fields so the chip can show
+      // WHY this BC ended up in review (user_skip / nothing_selected /
+      // ai_no_signal / ai_parse_error).
+      const ef = (r.extra_fields && typeof r.extra_fields === 'object' && !Array.isArray(r.extra_fields)) ? r.extra_fields : {};
+      const skipReason = needsReviewActive ? (ef.last_skip_reason || null) : null;
+      const lastAiError = ef.last_ai_error || null;
       return {
         bcId: r.id,
         contactId: r.contact_id,
@@ -195,6 +201,8 @@ async function _load(){
         applied: needsReviewActive ? 0 : (latest.applied_count || 0),
         na: needsReviewActive ? 0 : (latest.na_count || 0),
         mode,
+        skipReason,
+        lastAiError,
         totalRuns: log.length,
       };
     });
@@ -252,10 +260,28 @@ function _render(rows){
       </thead>
       <tbody>
         ${rows.map(r => {
+          // v326: when mode='needs_review', append the skip_reason as a
+          // separator-style suffix so the agent sees WHY this buyer
+          // landed in review. parse_error uses red so the cohort is
+          // easy to spot for retry.
+          const reasonLabel = {
+            user_skip:        'user skip',
+            nothing_selected: 'nothing selected',
+            ai_no_signal:     'no signal',
+            ai_parse_error:   'parse error',
+          }[r.skipReason] || (r.skipReason ? r.skipReason : null);
+          const reasonStyle = r.skipReason === 'ai_parse_error'
+            ? 'background:#fee2e2;color:#991b1b;border:1px solid #fca5a5;'
+            : r.skipReason === 'ai_no_signal'
+            ? 'background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;'
+            : 'background:#ffedd5;color:#9a3412;border:1px solid #fed7aa;';
+          const reviewChip = reasonLabel
+            ? `<span title="${esc(r.lastAiError || '')}" style="display:inline-block;padding:2px 8px;border-radius:99px;${reasonStyle}font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;">needs review · ${esc(reasonLabel)}</span>`
+            : `<span style="display:inline-block;padding:2px 8px;border-radius:99px;background:#ffedd5;color:#9a3412;border:1px solid #fed7aa;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;">needs review</span>`;
           const modeChip = r.mode === 'auto_apply'
             ? `<span style="display:inline-block;padding:2px 8px;border-radius:99px;background:#fef9c3;color:#854d0e;border:1px solid #fde68a;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;">auto</span>`
             : r.mode === 'needs_review'
-            ? `<span style="display:inline-block;padding:2px 8px;border-radius:99px;background:#ffedd5;color:#9a3412;border:1px solid #fed7aa;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;">needs review</span>`
+            ? reviewChip
             : `<span style="display:inline-block;padding:2px 8px;border-radius:99px;background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;">reviewed</span>`;
           const openBtn = r.bcId
             ? `<button onclick="document.getElementById('bcAiActivityModal')?.remove();if(typeof bcOpenExpanded==='function')bcOpenExpanded('${esc(r.bcId)}');" style="background:#f1f5f9;border:1px solid #cbd5e1;color:#0f172a;padding:3px 10px;font-size:11px;font-weight:600;border-radius:6px;cursor:pointer;font-family:inherit;">Open BC →</button>`

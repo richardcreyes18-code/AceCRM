@@ -26944,6 +26944,18 @@ function showSettingsPage(){
           <button onclick="_bcBulkAiAutoFillLauncher()" style="background:linear-gradient(135deg,#7c3aed,#5b21b6);color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Open bulk launcher →</button>
         </section>
 
+        <!-- v326: BC AI field suggestions inbox -->
+        <section data-settings-tab="tools" style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
+          <div style="font-size:28px;flex-shrink:0;">💡</div>
+          <div style="flex:1;min-width:0;">
+            <div style="font-size:15px;font-weight:700;color:#0f172a;">AI field suggestions inbox</div>
+            <div style="font-size:12px;color:#64748b;margin-top:3px;line-height:1.5;">
+              Every BC AI auto-fill run can propose new dedicated fields for patterns it sees in free-text notes (e.g. "owner-operator vs investor" for gas stations). The suggestions accumulate here with a recurrence counter. Click "Add to taxonomy" to wire the field into the matching scope; "Dismiss" to ignore it.
+            </div>
+          </div>
+          <button onclick="_bcAiSuggestionsOpen()" style="background:#1e40af;color:#fff;border:none;padding:9px 18px;font-size:13px;font-weight:600;border-radius:8px;cursor:pointer;white-space:nowrap;">Open suggestions inbox →</button>
+        </section>
+
         <!-- v314: BC AI Auto-Fill activity log (running list of buyers + timestamps) -->
         <section data-settings-tab="tools" style="background:#fff;border-radius:10px;padding:18px 22px;margin-bottom:16px;box-shadow:0 1px 3px rgba(0,0,0,0.04);border:1px solid #e2e8f0;display:flex;align-items:center;gap:16px;">
           <div style="font-size:28px;flex-shrink:0;">🗒</div>
@@ -30803,7 +30815,15 @@ async function _bcBatchAiTriggerForCurrent(bcId){
       // bumped from +1 to +2 to match the steady-state lookahead.
       _bcBatchAiKickoffPrefetch(_bcBatchIndex + 1);
       _bcBatchAiKickoffPrefetch(_bcBatchIndex + 2);
-      _bcAiAutoFillSkip(bcId, null);
+      // v326: tag the skip with the actual error so the activity log
+      // can surface this cohort separately (and the new "Retry parse-
+      // errors" button can target them).
+      try {
+        await _sbPatch(SB_TABLES.buyerCriteria, bcId, {
+          extra_fields: { last_ai_error: String(entry.error || '').slice(0, 400) },
+        });
+      } catch(_) {}
+      _bcAiAutoFillSkip(bcId, null, 'ai_parse_error');
       return;
     }
     alert('AI parse failed for this buyer: ' + entry.error
@@ -30867,17 +30887,40 @@ async function _bcBatchAiTriggerForCurrent(bcId){
 async function _bcAutoApplyProposalsAndAdvance(bcId, resp){
   const proposed = (resp && resp.proposed_changes) || {};
   const naProposals = (resp && resp.na_proposals) || [];
-  const valueCount = Object.keys(proposed).length;
+  let valueCount = Object.keys(proposed).length;
   const naCount = naProposals.length;
 
-  // Nothing to apply → route to the existing Skip handler so the BC
-  // gets the placeholder + review_status='needs_human_review' and the
-  // skipped counter is incremented (not applied).
+  // v326: tag fallback. When the AI returned 0 proposals AND 0 N/A
+  // flags, check whether the contact has clear "asset - <type>"
+  // tags. If yes, synthesize a desired_property_types proposal from
+  // the tags and apply that as a normal AI-suggestion rather than
+  // falling through to needs_human_review. Tags are source-of-truth
+  // per v311; a tag-only buyer should land in the applied bucket,
+  // not the skipped one.
   if(valueCount === 0 && naCount === 0){
-    if(typeof _showToast === 'function'){
-      _showToast(`⏭ ${_bcShortContactLabel(bcId)} — AI returned 0 suggestions; auto-skipped.`, 'info', 2400);
+    const contactTags = (resp && Array.isArray(resp.contact_tags))
+      ? resp.contact_tags
+      : (Array.isArray(window._bcAiLastDiagnostic?.contact_tags)
+          ? window._bcAiLastDiagnostic.contact_tags : []);
+    const chips = _bcTagsToChips(contactTags);
+    if(chips.length){
+      proposed.desired_property_types = {
+        proposed: chips.join(', '),
+        before: null,
+        explanation: `Tag-derived fallback: contact carries ${chips.length === 1 ? 'tag' : 'tags'} ${chips.map(c => `"${c}"`).join(', ')} but AI returned no other proposals.`,
+        cite: 'tag fallback',
+        _extra: false,
+      };
+      valueCount = 1;
+      if(typeof _showToast === 'function'){
+        _showToast(`✓ ${_bcShortContactLabel(bcId)} — tag fallback applied: ${chips.join(', ')}`, 'success', 2400);
+      }
+    } else {
+      if(typeof _showToast === 'function'){
+        _showToast(`⏭ ${_bcShortContactLabel(bcId)} — AI returned 0 suggestions, no tags; auto-skipped.`, 'info', 2400);
+      }
+      return _bcAiAutoFillSkip(bcId, null, 'ai_no_signal');
     }
-    return _bcAiAutoFillSkip(bcId, null);
   }
 
   // Build the same patch _bcAiAutoFillApply builds with all proposals
@@ -30998,6 +31041,92 @@ function _bcShortContactLabel(bcId){
     if(c?.name) return c.name;
   } catch(_){}
   return String(bcId).slice(0, 8);
+}
+
+// v326: map "asset - <type>" FUB tags to the canonical taxonomy chips
+// the AI prompt expects. Mirrors the table in
+// supabase/functions/ai-parse-buyer-criteria/index.ts ~line 580 plus
+// the v311 / v319 expansions. Returns an array of chip strings (bare
+// category or "Category: Subtype"), deduped + filtered to chips that
+// actually exist in the active taxonomy (window.ASSET_SUBTYPES).
+function _bcTagsToChips(rawTags){
+  if(!Array.isArray(rawTags) || !rawTags.length) return [];
+  const TAG_MAP = {
+    'asset - multi family':    'Multifamily',
+    'asset - multifamily':     'Multifamily',
+    'asset - mf':              'Multifamily',
+    'asset - warehouse':       'Industrial: Warehouse',
+    'asset - distribution':    'Industrial: Distribution',
+    'asset - manufacturing':   'Industrial: Manufacturing',
+    'asset - flex':            'Industrial: Flex',
+    'asset - self storage':    'Industrial: Self Storage',
+    'asset - cold storage':    'Industrial: Cold Storage',
+    'asset - data center':     'Industrial: Data Center',
+    'asset - truck terminal':  'Industrial: Truck Terminal',
+    'asset - truck parking':   'Industrial: Truck Terminal',
+    'asset - ios':             'Industrial: Truck Terminal',
+    'asset - retail':          'Retail',
+    'asset - shopping center': 'Shopping Center',
+    'asset - office':          'Office',
+    'asset - medical office':  'Health Care: Medical Office',
+    'asset - mob':             'Health Care: Medical Office',
+    'asset - land':            'Land',
+    'asset - hotel':           'Hotel & Motel',
+    'asset - motel':           'Hotel & Motel',
+    'asset - hotel/motel':     'Hotel & Motel',
+    'asset - mobile home':     'Residential Income: Mobile Home Park',
+    'asset - mobile home park':'Residential Income: Mobile Home Park',
+    'asset - mhp':             'Residential Income: Mobile Home Park',
+    'asset - sfr':             'Residential Income: Single Family Rental',
+    'asset - single family':   'Residential Income: Single Family Rental',
+    'asset - mixed use':       'Mixed Use',
+    'asset - automotive':      'Automotive',
+    'asset - mechanic':        'Automotive: Auto Repair / Mechanic',
+    'asset - auto repair':     'Automotive: Auto Repair / Mechanic',
+    'asset - repair shop':     'Automotive: Auto Repair / Mechanic',
+    'asset - auto body':       'Automotive: Auto Body Shop',
+    'asset - body shop':       'Automotive: Auto Body Shop',
+    'asset - tire shop':       'Automotive: Tire Shop',
+    'asset - dealership':      'Automotive: Auto Dealership (Used)',
+    'asset - car wash':        'Automotive: Car Wash',
+    'asset - gas station':     'Special Purpose: Gas Station',
+    'asset - laundromat':      'Special Purpose: Laundromat',
+    'asset - church':          'Special Purpose: Church/Religious',
+    'asset - school':          'Special Purpose: School',
+    'asset - parking':         'Special Purpose: Parking Lot/Garage',
+    'asset - parking lot':     'Special Purpose: Parking Lot/Garage',
+    'asset - assisted living': 'Senior Housing: Assisted Living',
+    'asset - skilled nursing': 'Senior Housing: Skilled Nursing',
+    'asset - development':     'Development',
+    'asset - agricultural':    'Agricultural',
+    'asset - business':        'Business',
+  };
+  const tax = (typeof window.ASSET_SUBTYPES === 'object' && window.ASSET_SUBTYPES) ? window.ASSET_SUBTYPES : {};
+  const validChips = new Set();
+  for(const [cat, subs] of Object.entries(tax)){
+    validChips.add(cat.toLowerCase());
+    for(const s of (subs || [])) validChips.add(`${cat}: ${s}`.toLowerCase());
+  }
+  const out = [];
+  for(const t of rawTags){
+    const key = String(t || '').trim().toLowerCase();
+    if(!key) continue;
+    const chip = TAG_MAP[key];
+    if(!chip) continue;
+    // Only emit if the chip is in the active taxonomy. If the mapped
+    // chip is a subtype but its category isn't in the taxonomy, fall
+    // back to the bare category.
+    const chipLc = chip.toLowerCase();
+    if(validChips.has(chipLc)){
+      if(!out.some(c => c.toLowerCase() === chipLc)) out.push(chip);
+    } else {
+      const cat = chip.split(':')[0].trim();
+      if(validChips.has(cat.toLowerCase()) && !out.some(c => c.toLowerCase() === cat.toLowerCase())){
+        out.push(cat);
+      }
+    }
+  }
+  return out;
 }
 
 // v285: start a fetch for the buyer at queueIndex (if any) and stash
@@ -33308,7 +33437,7 @@ window._bcAiAutoFillApply = async function(bcId, btn){
     if(typeof _bcBatchQueue !== 'undefined' && _bcBatchQueue
        && _bcBatchQueue[_bcBatchIndex] === bcId
        && _bcBatchAutoTriggerAi){
-      return _bcAiAutoFillSkip(bcId, btn);
+      return _bcAiAutoFillSkip(bcId, btn, 'nothing_selected');
     }
     alert('Nothing selected.');
     return;
@@ -33504,7 +33633,11 @@ window._bcAiAutoFillApply = async function(bcId, btn){
 //   chips yet (so an otherwise-blank BC at least carries a placeholder
 //   asset class the agent can sort later), bumps the skipped counter,
 //   and advances to the next buyer via bcBatchNext().
-window._bcAiAutoFillSkip = async function(bcId, btn){
+// v326: third arg `skipReason` lets the caller tag WHY this BC ended
+// up in needs_human_review. Goes into extra_fields.last_skip_reason
+// so the activity log can surface it as a chip suffix and the new
+// "Retry parse-errors" button can target the right cohort.
+window._bcAiAutoFillSkip = async function(bcId, btn, skipReason){
   const modal = document.getElementById('bcAiReviewModal');
   const inBulk = (typeof _bcBatchQueue !== 'undefined' && _bcBatchQueue
                   && _bcBatchQueue[_bcBatchIndex] === bcId
@@ -33515,14 +33648,22 @@ window._bcAiAutoFillSkip = async function(bcId, btn){
     return;
   }
   if(btn){ btn.disabled = true; btn.textContent = 'Skipping…'; }
+  // Default the reason: when the manual Skip button fires (no
+  // skipReason arg) and the caller didn't classify it, call it
+  // user_skip. Auto-apply / parse-error callers pass an explicit
+  // reason ('ai_no_signal' / 'ai_parse_error' / 'nothing_selected').
+  const reason = skipReason || 'user_skip';
   try {
     // Check whether the BC currently has any asset chips. The cache
     // entry's `Desired Property Types` field is a comma-joined string
     // (per SB_BC_MAP → _atToSb roundtrip).
     let currentAssets = '';
+    let existingExtras = {};
     try {
-      const cur = await _sbGet(SB_TABLES.buyerCriteria, `id=eq.${bcId}&select=desired_property_types&limit=1`);
+      const cur = await _sbGet(SB_TABLES.buyerCriteria, `id=eq.${bcId}&select=desired_property_types,extra_fields&limit=1`);
       currentAssets = (Array.isArray(cur) && cur[0]?.desired_property_types) || '';
+      const ef = Array.isArray(cur) && cur[0]?.extra_fields;
+      if(ef && typeof ef === 'object' && !Array.isArray(ef)) existingExtras = ef;
     } catch(e){ console.warn('[bc-ai] skip: asset lookup failed:', e.message); }
     const hasNoAssets = !String(currentAssets || '').trim();
 
@@ -33530,6 +33671,14 @@ window._bcAiAutoFillSkip = async function(bcId, btn){
       review_status: 'needs_human_review',
       reviewed_at: new Date().toISOString(),
       reviewed_by: (typeof _currentUser !== 'undefined' && _currentUser?.fub_name) || null,
+      // v326: stamp the skip reason so the activity log can surface
+      // it. Merge with existing extras so we don't clobber other
+      // JSONB keys.
+      extra_fields: {
+        ...existingExtras,
+        last_skip_reason: reason,
+        last_skip_at: new Date().toISOString(),
+      },
     };
     if(hasNoAssets){
       // v308: place a "Needs Classification" placeholder so the BC is

@@ -1952,6 +1952,46 @@ Deno.serve(async (req: Request) => {
       const subtypeLines = activeVocab
         .map(cat => `  ${cat}: ${(activeSubtypes[cat] || []).join(', ') || '(no subtypes)'}`)
         .join('\n')
+
+      // v307: when a word appears BOTH as a top-level category AND as
+      // a subtype under another category in the active taxonomy, the
+      // model historically collapsed it into the "Parent: Sub" form
+      // (e.g. notes mention "land, development" → "Land: Development"
+      // instead of two separate chips "Land" + "Development"). Build
+      // an explicit DISAMBIGUATION list so the model picks the
+      // top-level chip unless the notes clearly tie the word to the
+      // parent category.
+      const catLowerSet = new Set(activeVocab.map(c => c.toLowerCase()))
+      const ambiguousWords: Array<{ word: string; topLevel: string; alsoSubOf: string[] }> = []
+      for (const cat of activeVocab) {
+        const subList = activeSubtypes[cat] || []
+        for (const sub of subList) {
+          const subLc = sub.toLowerCase()
+          if (catLowerSet.has(subLc) && subLc !== cat.toLowerCase()) {
+            const topLevel = activeVocab.find(c => c.toLowerCase() === subLc) || sub
+            const existing = ambiguousWords.find(a => a.word.toLowerCase() === subLc)
+            if (existing) {
+              if (!existing.alsoSubOf.includes(cat)) existing.alsoSubOf.push(cat)
+            } else {
+              ambiguousWords.push({ word: topLevel, topLevel, alsoSubOf: [cat] })
+            }
+          }
+        }
+      }
+      const ambiguousLines = ambiguousWords.length
+        ? `\nDISAMBIGUATION — words that are BOTH a top-level category AND a\n` +
+          `subtype somewhere else. When notes mention these as standalone\n` +
+          `interests (e.g. "they like X" or "X, Y, and Z" as a list),\n` +
+          `emit the TOP-LEVEL chip on its own — do NOT combine with the\n` +
+          `parent category. Only use "Parent: Word" when the notes\n` +
+          `explicitly tie the word to that parent (e.g. "land for Word",\n` +
+          `"Word-style Parent properties"):\n` +
+          ambiguousWords
+            .map(a => `  "${a.word}" → prefer chip "${a.topLevel}" (not "${a.alsoSubOf.join(': ' + a.word + '" or "')}: ${a.word}")`)
+            .join('\n') +
+          `\n`
+        : ''
+
       const overrideBlock =
         `═══════════════════════════════════════════════════════════════════════\n` +
         `AUTHORITATIVE ASSET-TYPE VOCAB (runtime override — replaces Step 2.4)\n` +
@@ -1964,7 +2004,16 @@ Deno.serve(async (req: Request) => {
         `  ${activeVocab.join(' | ')}\n\n` +
         `Subtypes (use as "Category: Subtype" chips when notes warrant):\n` +
         subtypeLines +
-        `\n\n═══════════════════════════════════════════════════════════════════════\n\n`
+        `\n` +
+        ambiguousLines +
+        `\nLIST-OF-ASSETS RULE: when notes enumerate multiple property types\n` +
+        `as a comma- or "and"-separated list ("multifamily, land, and\n` +
+        `development"), emit one chip per listed type, each as the BARE\n` +
+        `top-level category from the Categories list above. Do NOT collapse\n` +
+        `two list items into a "Parent: Sub" chip unless the notes\n` +
+        `EXPLICITLY tie one to the other ("land for development", "land\n` +
+        `with development potential" → "Land: Development" stands).\n` +
+        `\n═══════════════════════════════════════════════════════════════════════\n\n`
       userMessage = overrideBlock + userMessage
     }
 

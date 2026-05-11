@@ -1006,12 +1006,25 @@ RULES THAT NEVER BEND
          "anything between $1M and $3M", "won't pay over $2M"
      NOT OK: an asking price on a specific property, a competing
          offer, the buyer's own offer on a specific deal, NOI
-         multiples, a seller's net number. These are deal-specific
-         data points, not portfolio buy-box budgets.
+         multiples, a seller's net number, an LOI amount the
+         buyer submitted on a deal, a bid / offer the buyer made
+         on a specific property (active, pending, or dead — all
+         deal-specific), a contract price the buyer is under
+         contract for. These are deal-specific data points, not
+         portfolio buy-box budgets.
    If the only price signal is an asking price ("Asking: $1.45m") —
    leave max_purchase_price empty. If the contact is the SELLER of
    the property the asking price is attached to (per Step 1.5),
    the asking price is GUARANTEED not the contact's buy-box.
+   DO NOT RATIONALIZE A DEAL-SPECIFIC BID INTO A BUY-BOX. An LOI on
+   Deal A says nothing about whether the buyer would pay the same
+   for Deal B. Explanations like "treated as the current deal
+   ceiling" or "no other price signal exists, so use this" are
+   forbidden — they all break this rule. If the only price signal
+   is a deal-specific offer / LOI / bid / contract price, leave
+   max_purchase_price empty and surface the LOI context in
+   other_requirements (e.g. "Submitted LOI at $1.05M on Linden
+   deal Sept 2025 — historic bid, not a stated buy-box budget").
 3b. financing_type is the BUYER'S preferred way to fund their
    acquisitions. Offer amounts STRUCTURED with cash/financing
    options that someone offered ON the contact's own property
@@ -1057,6 +1070,18 @@ RULES THAT NEVER BEND
    max_purchase_price = 12000000 with no real cite, that's almost
    certainly this exact mistake — flag it as na with reason
    "stale unsourced value, likely from 12M-FUB misread".
+7. DEAL-ACTIVITY MARKERS — these signal a DEAL-SPECIFIC bid, NOT a
+   portfolio budget. Per rule 3a, never use the dollar amount
+   attached to any of these as min/max_purchase_price:
+     "LOI" / "loi" / "letter of intent"     — buyer submitted an LOI on a deal
+     "submitted offer" / "offered $X on"    — buyer's bid on a specific deal
+     "bid $X on" / "bid of $X"              — same
+     "under contract" / "UC at $X"          — buyer is in contract on a specific deal
+     "accepted offer of $X"                 — the seller accepted the buyer's deal-specific offer
+   When you see one of these, route the price into
+   other_requirements with the deal address / date if known, NOT
+   into max_purchase_price. The buy-box describes future deals,
+   not the current one the buyer is already pursuing.
 
 ═══════════════════════════════════════════════════════════════════════
 EXAMPLES
@@ -1326,6 +1351,16 @@ NOTES on what this example does NOT do:
     on the contact's OWN property is seller-side data — never a
     buying budget. Per rule 3a, only stated portfolio budgets
     qualify. Leave the field empty.
+  - Does NOT propose max_purchase_price from an LOI / offer / bid
+    the buyer submitted on a specific deal. An LOI amount is
+    deal-specific — the buyer's bid on one property — not their
+    portfolio buy-box ceiling. Per rule 3a, leave the field empty
+    and surface the LOI in other_requirements (e.g. "Submitted
+    LOI at $1.05M on Linden deal Sept 2025") so future agents
+    know the buyer has bid in that price range historically.
+    Explanations like "treated as the current deal ceiling" or
+    "broader portfolio budget not stated, so use this as the
+    ceiling" are forbidden rationalizations of this exact rule.
   - Does NOT propose financing_type = "Mix" from the "$785K all cash
     & $900K with financing" line. Those are someone else's offers
     TO the contact for HIS property — not his own buying preference.

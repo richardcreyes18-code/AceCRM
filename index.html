@@ -31052,9 +31052,21 @@ function _bcShortContactLabel(bcId){
 function _bcTagsToChips(rawTags){
   if(!Array.isArray(rawTags) || !rawTags.length) return [];
   const TAG_MAP = {
+    // ── Multifamily / Residential Income ─────────────────────────
     'asset - multi family':    'Multifamily',
     'asset - multifamily':     'Multifamily',
     'asset - mf':              'Multifamily',
+    'asset - residential':     'Residential Income',
+    'asset - condo':           'Multifamily',
+    'asset - mobile home':     'Residential Income: Mobile Home Park',
+    'asset - mobile home park':'Residential Income: Mobile Home Park',
+    'asset - mhp':             'Residential Income: Mobile Home Park',
+    'asset - rv park':         'Residential Income: Mobile Home Park',
+    'asset - sfr':             'Residential Income: Single Family Rental',
+    'asset - single family':   'Residential Income: Single Family Rental',
+
+    // ── Industrial ──────────────────────────────────────────────
+    'asset - industrial':      'Industrial',
     'asset - warehouse':       'Industrial: Warehouse',
     'asset - distribution':    'Industrial: Distribution',
     'asset - manufacturing':   'Industrial: Manufacturing',
@@ -31065,21 +31077,34 @@ function _bcTagsToChips(rawTags){
     'asset - truck terminal':  'Industrial: Truck Terminal',
     'asset - truck parking':   'Industrial: Truck Terminal',
     'asset - ios':             'Industrial: Truck Terminal',
+    'asset - salvage yards':   'Industrial',
+    'asset - salvage yard':    'Industrial',
+    'asset - cannabis':        'Industrial',
+
+    // ── Retail / Shopping Center ────────────────────────────────
     'asset - retail':          'Retail',
     'asset - shopping center': 'Shopping Center',
+    'asset - nnn':             'Retail: NNN Retail',
+    'asset - stnl':            'Retail: Single Tenant',
+    'asset - single tenant':   'Retail: Single Tenant',
+    'asset - restaurant':      'Retail: Restaurant',
+    'asset - liquor store':    'Retail: Single Tenant',
+
+    // ── Office ──────────────────────────────────────────────────
     'asset - office':          'Office',
+    'asset - medical':         'Health Care: Medical Office',
     'asset - medical office':  'Health Care: Medical Office',
     'asset - mob':             'Health Care: Medical Office',
-    'asset - land':            'Land',
+
+    // ── Mixed Use ───────────────────────────────────────────────
+    'asset - mixed use':       'Mixed Use',
+
+    // ── Hotel & Motel ───────────────────────────────────────────
     'asset - hotel':           'Hotel & Motel',
     'asset - motel':           'Hotel & Motel',
     'asset - hotel/motel':     'Hotel & Motel',
-    'asset - mobile home':     'Residential Income: Mobile Home Park',
-    'asset - mobile home park':'Residential Income: Mobile Home Park',
-    'asset - mhp':             'Residential Income: Mobile Home Park',
-    'asset - sfr':             'Residential Income: Single Family Rental',
-    'asset - single family':   'Residential Income: Single Family Rental',
-    'asset - mixed use':       'Mixed Use',
+
+    // ── Automotive ──────────────────────────────────────────────
     'asset - automotive':      'Automotive',
     'asset - mechanic':        'Automotive: Auto Repair / Mechanic',
     'asset - auto repair':     'Automotive: Auto Repair / Mechanic',
@@ -31088,17 +31113,39 @@ function _bcTagsToChips(rawTags){
     'asset - body shop':       'Automotive: Auto Body Shop',
     'asset - tire shop':       'Automotive: Tire Shop',
     'asset - dealership':      'Automotive: Auto Dealership (Used)',
+    'asset - car dealership':  'Automotive: Auto Dealership (Used)',
     'asset - car wash':        'Automotive: Car Wash',
+
+    // ── Land ────────────────────────────────────────────────────
+    'asset - land':            'Land',
+    'asset - vacant land':     'Land',
+    'asset - farm':            'Agricultural',
+    'asset - agricultural':    'Agricultural',
+
+    // ── Special Purpose ─────────────────────────────────────────
     'asset - gas station':     'Special Purpose: Gas Station',
     'asset - laundromat':      'Special Purpose: Laundromat',
     'asset - church':          'Special Purpose: Church/Religious',
     'asset - school':          'Special Purpose: School',
     'asset - parking':         'Special Purpose: Parking Lot/Garage',
     'asset - parking lot':     'Special Purpose: Parking Lot/Garage',
+    'asset - cell tower':      'Special Purpose',
+
+    // ── Senior Housing / Health Care ────────────────────────────
     'asset - assisted living': 'Senior Housing: Assisted Living',
     'asset - skilled nursing': 'Senior Housing: Skilled Nursing',
+    'asset - nursing home':    'Senior Housing: Skilled Nursing',
+
+    // ── Sport & Entertainment ───────────────────────────────────
+    'asset - sport facility':  'Sport & Entertainment',
+    'asset - golf course':     'Sport & Entertainment: Golf Course',
+    'asset - marina':          'Sport & Entertainment: Marina',
+    'asset - event hall':      'Sport & Entertainment: Event Venue',
+    'asset - events venue':    'Sport & Entertainment: Event Venue',
+    'asset - event venue':     'Sport & Entertainment: Event Venue',
+
+    // ── Top-level categories that are in your taxonomy ─────────
     'asset - development':     'Development',
-    'asset - agricultural':    'Agricultural',
     'asset - business':        'Business',
   };
   const tax = (typeof window.ASSET_SUBTYPES === 'object' && window.ASSET_SUBTYPES) ? window.ASSET_SUBTYPES : {};

@@ -34169,16 +34169,71 @@ async function _bcEnsureBuyerCriteriaLoaded(){
 // by the bulk launcher's "no-BC" filter to compute the set difference
 // against existing BCs.
 async function _bcLoadBuyerTaggedContactIds(){
-  const ids = [];
-  let from = 0, batchSize = 1000;
-  while(true){
-    const batch = await _sbGet('ace_contacts', `deleted_at=is.null&fub_tags=cs.{Buyer}&select=id&limit=${batchSize}&offset=${from}`);
-    if(!batch || !batch.length) break;
-    for(const r of batch){ if(r && r.id) ids.push(r.id); }
-    if(batch.length < batchSize) break;
-    from += batchSize;
+  // v327 fix: the crm-proxy edge function was stripping the
+  // `fub_tags=cs.{Buyer}` filter (the array-contains operator on a
+  // JSONB/array column doesn't round-trip cleanly through the proxy's
+  // generic query-builder), so _sbGet was returning ALL non-deleted
+  // contacts instead of just buyer-tagged ones. That's why the
+  // launcher's "without a BC yet" badge was showing 25,249 (the full
+  // contact table) instead of the real ~5,300. Bypass the proxy with
+  // a direct PostgREST fetch using the anon key.
+  return _bcDirectFetchBuyerTagged().then(rows => rows.map(r => r.id));
+}
+
+// Direct-PostgREST helper that returns full rows (id, fub_contact_id,
+// fub_tags). Used by the v327 with-notes / tag-only filters too.
+async function _bcDirectFetchBuyerTagged(){
+  const cfg = getConfig();
+  const url = `${cfg.url}/rest/v1/ace_contacts?deleted_at=is.null&fub_tags=cs.%7BBuyer%7D&select=id,fub_contact_id,fub_tags&limit=10000`;
+  try {
+    const res = await fetch(url, {
+      headers: {
+        apikey: cfg.key,
+        Authorization: 'Bearer ' + cfg.key,
+      },
+    });
+    if(!res.ok) return [];
+    const rows = await res.json();
+    return Array.isArray(rows) ? rows : [];
+  } catch(e){
+    console.warn('[bc-launcher] direct-fetch buyer-tagged failed:', e.message);
+    return [];
   }
-  return ids;
+}
+
+// v327: returns a Set of fub_contact_ids that have ANY non-null note
+// across fub_notes + fub_calls. Used to split the buyer-tagged set
+// into "with notes" vs "tag-only" populations. Chunks the IN() query
+// to stay under URL length limits.
+async function _bcLoadFubIdsWithNotes(fubIds){
+  const out = new Set();
+  if(!Array.isArray(fubIds) || !fubIds.length) return out;
+  const cfg = getConfig();
+  const CHUNK = 120;
+  for(let i = 0; i < fubIds.length; i += CHUNK){
+    const chunk = fubIds.slice(i, i + CHUNK).map(String).filter(Boolean);
+    if(!chunk.length) continue;
+    const inClause = `(${chunk.join(',')})`;
+    // fub_notes
+    try {
+      const u1 = `${cfg.url}/rest/v1/fub_notes?body=not.is.null&person_id=in.${encodeURIComponent(inClause)}&select=person_id&limit=20000`;
+      const r1 = await fetch(u1, { headers: { apikey: cfg.key, Authorization: 'Bearer ' + cfg.key } });
+      if(r1.ok){
+        const rows = await r1.json();
+        for(const r of (rows || [])) if(r.person_id != null) out.add(r.person_id);
+      }
+    } catch(_){}
+    // fub_calls
+    try {
+      const u2 = `${cfg.url}/rest/v1/fub_calls?note=not.is.null&person_id=in.${encodeURIComponent(inClause)}&select=person_id&limit=20000`;
+      const r2 = await fetch(u2, { headers: { apikey: cfg.key, Authorization: 'Bearer ' + cfg.key } });
+      if(r2.ok){
+        const rows = await r2.json();
+        for(const r of (rows || [])) if(r.person_id != null) out.add(r.person_id);
+      }
+    } catch(_){}
+  }
+  return out;
 }
 
 // v317: shared helper that returns counts across every BC for the
@@ -34291,7 +34346,19 @@ window._bcBulkAiAutoFillLauncher = async function(){
         </label>
         <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:#334155;margin-bottom:5px;cursor:pointer;background:#fef9c3;border:1px solid #fde68a;padding:8px 10px;border-radius:6px;">
           <input type="radio" name="bcBulkFilter" value="no-bc" style="margin-top:2px;"/>
-          <span style="flex:1;"><strong>Buyer-tagged contacts without a BC yet</strong><span id="bcBulkCntNoBc" style="margin-left:6px;display:inline-block;padding:1px 7px;border-radius:99px;background:#fef3c7;color:#854d0e;border:1px solid #fde68a;font-size:10px;font-weight:700;font-family:'Source Code Pro',ui-monospace,Menlo,monospace;">…</span><br><span style="color:#854d0e;font-size:11px;">Auto-creates a blank BC for each, then walks through them with AI Auto-Fill. v297.</span></span>
+          <span style="flex:1;"><strong>Buyer-tagged contacts without a BC yet</strong><span id="bcBulkCntNoBc" style="margin-left:6px;display:inline-block;padding:1px 7px;border-radius:99px;background:#fef3c7;color:#854d0e;border:1px solid #fde68a;font-size:10px;font-weight:700;font-family:'Source Code Pro',ui-monospace,Menlo,monospace;">…</span><br><span style="color:#854d0e;font-size:11px;">Auto-creates a blank BC for each, then walks through them with AI Auto-Fill.</span></span>
+        </label>
+        <!-- v327: target the two halves of the no-BC population
+             separately. With-notes is what's actually worth feeding
+             the AI. Tag-only skips the AI entirely — much faster
+             and free. -->
+        <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:#334155;margin-bottom:5px;cursor:pointer;background:#eff6ff;border:1px solid #bfdbfe;padding:8px 10px;border-radius:6px;">
+          <input type="radio" name="bcBulkFilter" value="no-bc-with-notes" style="margin-top:2px;"/>
+          <span style="flex:1;"><strong>…subset: WITH notes (worth running AI on)</strong><span id="bcBulkCntNoBcWithNotes" style="margin-left:6px;display:inline-block;padding:1px 7px;border-radius:99px;background:#dbeafe;color:#1e40af;border:1px solid #bfdbfe;font-size:10px;font-weight:700;font-family:'Source Code Pro',ui-monospace,Menlo,monospace;">…</span><br><span style="color:#1e40af;font-size:11px;">Only buyer-tagged contacts (no BC yet) that have ≥1 fub_note or fub_call note. AI has actual content to read.</span></span>
+        </label>
+        <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:#334155;margin-bottom:5px;cursor:pointer;background:#dcfce7;border:1px solid #86efac;padding:8px 10px;border-radius:6px;">
+          <input type="radio" name="bcBulkFilter" value="no-bc-tag-only" style="margin-top:2px;"/>
+          <span style="flex:1;"><strong>…subset: TAG-ONLY (no notes — map tags directly, no AI)</strong><span id="bcBulkCntNoBcTagOnly" style="margin-left:6px;display:inline-block;padding:1px 7px;border-radius:99px;background:#bbf7d0;color:#14532d;border:1px solid #86efac;font-size:10px;font-weight:700;font-family:'Source Code Pro',ui-monospace,Menlo,monospace;">…</span><br><span style="color:#14532d;font-size:11px;">Buyer-tagged contacts with NO notes. Maps "asset - X" tags directly to chips (no AI call, no cost, ~instant). Contacts without any asset tag get "Needs Classification".</span></span>
         </label>
       </div>
 
@@ -34350,21 +34417,44 @@ window._bcBulkAiAutoFillLauncher = async function(){
       if(elUntouched) elUntouched.textContent = String(untouched);
       if(elAll)       elAll.textContent       = String(stats.total || 0);
 
-      // No-BC count: fetch buyer-tagged contact IDs, subtract the
-      // contact_ids the existing BCs are already linked to. Uses the
-      // same helper the no-bc filter runs at start time, so the count
-      // shown here matches the population the run would actually pick
-      // from.
-      const elNoBc = document.getElementById('bcBulkCntNoBc');
+      // No-BC count: fetch buyer-tagged contact rows (v327 direct-
+      // PostgREST helper), subtract contact_ids already linked to a
+      // BC. The "with notes" / "tag-only" split needs a separate
+      // pass against fub_notes + fub_calls — kicked off lazily so
+      // the no-BC badge fills first.
+      const elNoBc          = document.getElementById('bcBulkCntNoBc');
+      const elNoBcWithNotes = document.getElementById('bcBulkCntNoBcWithNotes');
+      const elNoBcTagOnly   = document.getElementById('bcBulkCntNoBcTagOnly');
       try {
-        const buyerIds = await _bcLoadBuyerTaggedContactIds();
+        const buyerRows = await _bcDirectFetchBuyerTagged();
         const existing = new Set(
           (allBuyerCriteria || []).map(r => r.fields?._contactId).filter(Boolean)
         );
-        const missing = (buyerIds || []).filter(cid => !existing.has(cid));
+        const missing = (buyerRows || []).filter(c => !existing.has(c.id));
         if(elNoBc) elNoBc.textContent = String(missing.length);
+        // Stash for the Start handler so it doesn't re-fetch.
+        window._bcBulkNoBcRows = missing;
+        // Lazy: compute with-notes split next. Heavy query (chunked
+        // fub_notes + fub_calls IN-list lookups for ~5K fub_ids), so
+        // the no-BC badge is already populated before this finishes.
+        try {
+          const fubIds = missing.map(c => c.fub_contact_id).filter(Boolean);
+          const withNotes = await _bcLoadFubIdsWithNotes(fubIds);
+          const withNotesRows = missing.filter(c => c.fub_contact_id && withNotes.has(c.fub_contact_id));
+          const tagOnlyRows   = missing.filter(c => !c.fub_contact_id || !withNotes.has(c.fub_contact_id));
+          window._bcBulkNoBcWithNotesRows = withNotesRows;
+          window._bcBulkNoBcTagOnlyRows   = tagOnlyRows;
+          if(elNoBcWithNotes) elNoBcWithNotes.textContent = String(withNotesRows.length);
+          if(elNoBcTagOnly)   elNoBcTagOnly.textContent   = String(tagOnlyRows.length);
+        } catch(e){
+          if(elNoBcWithNotes) elNoBcWithNotes.textContent = '?';
+          if(elNoBcTagOnly)   elNoBcTagOnly.textContent   = '?';
+          console.warn('[bulk-ai] with-notes split failed:', e.message);
+        }
       } catch(e){
         if(elNoBc) elNoBc.textContent = '?';
+        if(elNoBcWithNotes) elNoBcWithNotes.textContent = '?';
+        if(elNoBcTagOnly)   elNoBcTagOnly.textContent   = '?';
       }
     } catch(e){ console.warn('[bulk-ai] per-filter counts failed:', e.message); }
   })();
@@ -34387,22 +34477,127 @@ window._bcBulkAiAutoFillStart = async function(btn){
   const lastAtKey = 'Last AI Autofill At';
   let queue = [];
 
-  if(filter === 'no-bc'){
-    if(btn) btn.textContent = '⏳ Finding contacts without BCs…';
-    let buyerIds;
-    try { buyerIds = await _bcLoadBuyerTaggedContactIds(); }
-    catch(e){
+  // v327: TAG-ONLY direct path — for buyer-tagged contacts with no
+  // notes, skip the AI entirely. Map "asset - X" tags to canonical
+  // chips via _bcTagsToChips (mirrors the v319 glossary), create a
+  // blank BC pre-populated with desired_property_types from those
+  // tags, mark review_status='ai_suggestions_applied'. Zero AI cost,
+  // ~instant for 2k+ contacts. Contacts whose only tag is "Buyer"
+  // (no asset tags) get "Needs Classification" placeholder so they
+  // still land in the BC table for later cleanup.
+  if(filter === 'no-bc-tag-only'){
+    if(btn) btn.textContent = '⏳ Loading tag-only contacts…';
+    let rows = Array.isArray(window._bcBulkNoBcTagOnlyRows) ? window._bcBulkNoBcTagOnlyRows : null;
+    if(!rows){
+      // Defensive refetch in case the launcher's lazy load didn't finish.
+      const all = await _bcDirectFetchBuyerTagged();
+      const existing = new Set(
+        (allBuyerCriteria || []).map(r => r.fields?._contactId).filter(Boolean)
+      );
+      const missing = all.filter(c => !existing.has(c.id));
+      const fubIds = missing.map(c => c.fub_contact_id).filter(Boolean);
+      const withNotes = await _bcLoadFubIdsWithNotes(fubIds);
+      rows = missing.filter(c => !c.fub_contact_id || !withNotes.has(c.fub_contact_id));
+    }
+    if(!rows.length){
       if(btn){ btn.disabled = false; btn.textContent = '✦ Start bulk run'; }
-      alert('Failed to load buyer-tagged contacts: ' + (e.message || e));
+      alert('No tag-only buyer-tagged contacts without a BC.');
       return;
     }
+    const sample = rows.slice(0, size);
+    const proceed = confirm(
+      `Found ${rows.length} buyer-tagged contact${rows.length===1?'':'s'} with NO notes.\n` +
+      `Create ${sample.length} blank BC${sample.length===1?'':'s'} and tag-fill ${sample.length===1?'it':'them'} directly from FUB tags (no AI cost)?\n\n` +
+      `Contacts whose only tag is "Buyer" with no "asset - X" tags get "Needs Classification" as a placeholder. The rest get their asset tags mapped to canonical chips per the v319 taxonomy.`
+    );
+    if(!proceed){
+      if(btn){ btn.disabled = false; btn.textContent = '✦ Start bulk run'; }
+      return;
+    }
+    if(btn) btn.textContent = `⏳ Creating ${sample.length} BCs…`;
+    const today = new Date().toISOString().split('T')[0];
+    const nowIso = new Date().toISOString();
+    let okCount = 0, errCount = 0, taggedCount = 0, placeholderCount = 0;
+    for(const c of sample){
+      try {
+        const chips = _bcTagsToChips(c.fub_tags || []);
+        const dpt = chips.length ? chips.join(', ') : 'Needs Classification';
+        if(chips.length) taggedCount++; else placeholderCount++;
+        const payload = {
+          contact_id: c.id,
+          date_added: today,
+          desired_property_types: dpt,
+          last_ai_autofill_at: nowIso,
+          review_status: 'ai_suggestions_applied',
+          reviewed_at: nowIso,
+          reviewed_by: (typeof _currentUser !== 'undefined' && _currentUser?.fub_name) || null,
+          ai_autofill_log: [{
+            at: nowIso,
+            applied_count: chips.length ? 1 : 0,
+            na_count: 0,
+            mode: 'tag_only_no_ai',
+            changes: [{
+              col: 'desired_property_types',
+              label: 'Desired Property Types',
+              before: null,
+              proposed: dpt,
+              applied: dpt,
+              applied_na: false,
+              skipped: false,
+              explanation: chips.length
+                ? `Direct tag map (no AI): ${chips.length} chip${chips.length===1?'':'s'} derived from ${c.fub_tags?.filter(t => /^asset\s*-/i.test(String(t||''))).join(', ') || 'asset tags'}.`
+                : 'No asset tags on this contact — placeholder "Needs Classification" applied.',
+              user_override: false,
+            }],
+          }],
+        };
+        await _sbPost(SB_TABLES.buyerCriteria, payload);
+        okCount++;
+      } catch(e){ errCount++; console.warn('[bulk-ai] tag-only BC create failed for', c.id, e.message); }
+    }
+    // Bust the BC list cache so the page reflects the new rows.
+    if(typeof _bcLastLoadMs !== 'undefined') _bcLastLoadMs = 0;
+    if(btn){ btn.disabled = false; btn.textContent = '✦ Start bulk run'; }
+    const modalEl = document.getElementById('bcBulkAiLauncherModal');
+    if(modalEl) modalEl.remove();
+    alert(
+      `✓ Tag-only bulk done.\n\n` +
+      `  Created: ${okCount}\n` +
+      `  Asset tags mapped: ${taggedCount}\n` +
+      `  Needs Classification placeholder: ${placeholderCount}\n` +
+      `  Errors: ${errCount}\n\n` +
+      `Zero AI cost — all chips applied from FUB tag mappings directly.`
+    );
+    if(typeof showBuyerCriteriaPage === 'function') showBuyerCriteriaPage();
+    return;
+  }
+
+  // v327: WITH-NOTES variant of no-bc. Same flow as no-bc but only
+  // for buyer-tagged contacts that have ≥1 source note — i.e. the
+  // ones actually worth feeding the AI.
+  if(filter === 'no-bc' || filter === 'no-bc-with-notes'){
+    if(btn) btn.textContent = '⏳ Finding contacts without BCs…';
+    let buyerRows;
+    if(filter === 'no-bc-with-notes' && Array.isArray(window._bcBulkNoBcWithNotesRows)){
+      buyerRows = window._bcBulkNoBcWithNotesRows;
+    } else {
+      try { buyerRows = await _bcDirectFetchBuyerTagged(); }
+      catch(e){
+        if(btn){ btn.disabled = false; btn.textContent = '✦ Start bulk run'; }
+        alert('Failed to load buyer-tagged contacts: ' + (e.message || e));
+        return;
+      }
+    }
+    const buyerIds = buyerRows.map(r => r.id || r);
     const existing = new Set(
       (allBuyerCriteria || []).map(r => r.fields?._contactId).filter(Boolean)
     );
     let missing = buyerIds.filter(cid => !existing.has(cid));
     if(!missing.length){
       if(btn){ btn.disabled = false; btn.textContent = '✦ Start bulk run'; }
-      alert('All buyer-tagged contacts already have a BC. Nothing to create.');
+      alert(filter === 'no-bc-with-notes'
+        ? 'All buyer-tagged contacts WITH notes already have a BC.'
+        : 'All buyer-tagged contacts already have a BC. Nothing to create.');
       return;
     }
     // Shuffle then take N.
@@ -34411,8 +34606,9 @@ window._bcBulkAiAutoFillStart = async function(btn){
       [missing[i], missing[j]] = [missing[j], missing[i]];
     }
     const sample = missing.slice(0, size);
+    const withNotesHint = filter === 'no-bc-with-notes' ? ' (WITH notes — AI has source content to read)' : '';
     const proceed = confirm(
-      `Found ${missing.length} buyer-tagged contact${missing.length===1?'':'s'} without a BC.\n` +
+      `Found ${missing.length} buyer-tagged contact${missing.length===1?'':'s'} without a BC${withNotesHint}.\n` +
       `Create ${sample.length} blank BC${sample.length===1?'':'s'} now and walk through them with AI Auto-Fill?\n\n` +
       `Each blank BC is a real DB row — they'll show up on the Buyer Criteria page.`
     );

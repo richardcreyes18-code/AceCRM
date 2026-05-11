@@ -71,7 +71,13 @@ export async function _bcAiActivityOpen(){
           <div style="font-size:16px;font-weight:700;color:#0f172a;">🗒 AI Auto-Fill activity log</div>
           <div id="bcAiActivityStatus" style="font-size:11px;color:#64748b;margin-top:2px;">Loading…</div>
         </div>
-        <div style="display:flex;gap:8px;align-items:center;">
+        <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+          <select id="bcAiActivityMode" onchange="window._bcAiActivityFilter()" style="padding:6px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:12px;font-family:inherit;background:#fff;">
+            <option value="all">All modes</option>
+            <option value="auto_apply">Auto-applied only</option>
+            <option value="reviewed">Reviewed only</option>
+            <option value="needs_review">Needs review only</option>
+          </select>
           <input type="text" id="bcAiActivitySearch" placeholder="Filter by name…" oninput="window._bcAiActivityFilter()" style="padding:6px 10px;border:1px solid #cbd5e1;border-radius:8px;font-size:12px;font-family:inherit;min-width:200px;"/>
           <button onclick="window._bcAiActivityRefresh()" style="background:#f1f5f9;border:1px solid #cbd5e1;color:#0f172a;padding:7px 14px;font-size:12px;border-radius:8px;cursor:pointer;font-family:inherit;">↻ Refresh</button>
           <button onclick="document.getElementById('bcAiActivityModal')?.remove()" style="background:transparent;border:1px solid #cbd5e1;color:#64748b;padding:7px 14px;font-size:12px;border-radius:8px;cursor:pointer;font-family:inherit;">Close</button>
@@ -99,14 +105,36 @@ async function _load(){
   if(status) status.textContent = 'Loading…';
 
   try {
-    // Pull the latest N BCs that have been AI auto-filled. Order by
-    // last_ai_autofill_at desc so the most recent runs are at the top.
-    // 100 is plenty for spot-checking; the agent can iterate the
-    // bulk launcher to make more rows show up.
+    // Pull the latest N BCs that have either (a) been AI auto-filled
+    // OR (b) been marked needs_human_review by the v308/v309 Skip
+    // paths. The OR filter is expressed via PostgREST's `or=(...)`
+    // syntax. We then sort by the effective timestamp client-side
+    // (last_ai_autofill_at if present else reviewed_at) so a buyer
+    // that was Skip'd shows up at the right point in the timeline.
     const tbl = (window.SB_TABLES && window.SB_TABLES.buyerCriteria) || 'ace_buyer_criteria';
-    const bcs = await _sbGet(tbl,
-      `last_ai_autofill_at=not.is.null&select=id,contact_id,last_ai_autofill_at,ai_autofill_log&order=last_ai_autofill_at.desc&limit=${PAGE_SIZE}`);
-    const rows = Array.isArray(bcs) ? bcs : [];
+    const orClause = encodeURIComponent('or=(last_ai_autofill_at.not.is.null,review_status.eq.needs_human_review)');
+    // _sbGet appends the filter directly; we want the OR as one expression
+    // alongside a select/order. Build the query string manually.
+    const bcsAuto = await _sbGet(tbl,
+      `last_ai_autofill_at=not.is.null&select=id,contact_id,last_ai_autofill_at,reviewed_at,review_status,ai_autofill_log&order=last_ai_autofill_at.desc&limit=${PAGE_SIZE}`);
+    const bcsNeedsReview = await _sbGet(tbl,
+      `review_status=eq.needs_human_review&select=id,contact_id,last_ai_autofill_at,reviewed_at,review_status,ai_autofill_log&order=reviewed_at.desc&limit=${PAGE_SIZE}`);
+    // Merge, dedupe by id (a buyer can be in both — e.g. v309 catch
+    // path stamps needs_human_review on top of a prior auto-apply).
+    const byId = new Map();
+    for(const r of (bcsAuto || [])) byId.set(r.id, r);
+    for(const r of (bcsNeedsReview || [])){
+      if(!byId.has(r.id)) byId.set(r.id, r);
+    }
+    const merged = [...byId.values()];
+    // Sort by effective timestamp desc (whichever is non-null and more recent).
+    const ts = r => {
+      const a = r.last_ai_autofill_at ? new Date(r.last_ai_autofill_at).getTime() : 0;
+      const b = r.reviewed_at ? new Date(r.reviewed_at).getTime() : 0;
+      return Math.max(a, b);
+    };
+    merged.sort((x, y) => ts(y) - ts(x));
+    const rows = merged.slice(0, PAGE_SIZE);
 
     // Batch-fetch contact names for these BCs.
     const contactIds = [...new Set(rows.map(r => r.contact_id).filter(Boolean))];
@@ -127,22 +155,40 @@ async function _load(){
       const log = Array.isArray(r.ai_autofill_log) ? r.ai_autofill_log : [];
       const latest = log[log.length - 1] || {};
       const c = contactsById[r.contact_id] || {};
+      // v315: figure out the effective mode. If the BC was last marked
+      // needs_human_review AND the reviewed_at timestamp is newer than
+      // last_ai_autofill_at, the buyer is currently in the "needs
+      // review" bucket regardless of any prior auto-apply.
+      const lastAi = r.last_ai_autofill_at ? new Date(r.last_ai_autofill_at).getTime() : 0;
+      const reviewed = r.reviewed_at ? new Date(r.reviewed_at).getTime() : 0;
+      const needsReviewActive = (r.review_status === 'needs_human_review')
+                                 && (reviewed >= lastAi);
+      const mode = needsReviewActive
+        ? 'needs_review'
+        : (latest.mode || 'reviewed');
+      // "When" timestamp = whichever event is more recent.
+      const whenIso = needsReviewActive
+        ? (r.reviewed_at || r.last_ai_autofill_at)
+        : (r.last_ai_autofill_at || r.reviewed_at);
       return {
         bcId: r.id,
         contactId: r.contact_id,
         name: c.name || '(no name)',
         email: c.email || '',
         phone: c.phone_number || '',
-        whenIso: r.last_ai_autofill_at,
-        applied: latest.applied_count || 0,
-        na: latest.na_count || 0,
-        mode: latest.mode || 'reviewed',
+        whenIso,
+        applied: needsReviewActive ? 0 : (latest.applied_count || 0),
+        na: needsReviewActive ? 0 : (latest.na_count || 0),
+        mode,
         totalRuns: log.length,
       };
     });
 
     if(status){
-      status.textContent = `${_rows.length} buyer${_rows.length===1?'':'s'} AI-autofilled · sorted newest first · max ${PAGE_SIZE} rows`;
+      const needsCount = _rows.filter(r => r.mode === 'needs_review').length;
+      const autoCount = _rows.filter(r => r.mode === 'auto_apply').length;
+      const reviewedCount = _rows.filter(r => r.mode === 'reviewed').length;
+      status.textContent = `${_rows.length} total · ${autoCount} auto-applied · ${reviewedCount} reviewed · ${needsCount} needs review · max ${PAGE_SIZE} rows`;
     }
     _render(_rows);
   } catch(e){
@@ -155,12 +201,16 @@ async function _load(){
 
 function _filter(){
   const q = (document.getElementById('bcAiActivitySearch')?.value || '').trim().toLowerCase();
-  if(!q){ _render(_rows); return; }
-  const filtered = _rows.filter(r =>
-    r.name.toLowerCase().includes(q) ||
-    (r.email && r.email.toLowerCase().includes(q)) ||
-    (r.phone && r.phone.toLowerCase().includes(q))
-  );
+  const mode = document.getElementById('bcAiActivityMode')?.value || 'all';
+  let filtered = _rows;
+  if(mode !== 'all') filtered = filtered.filter(r => r.mode === mode);
+  if(q){
+    filtered = filtered.filter(r =>
+      r.name.toLowerCase().includes(q) ||
+      (r.email && r.email.toLowerCase().includes(q)) ||
+      (r.phone && r.phone.toLowerCase().includes(q))
+    );
+  }
   _render(filtered);
 }
 
@@ -189,6 +239,8 @@ function _render(rows){
         ${rows.map(r => {
           const modeChip = r.mode === 'auto_apply'
             ? `<span style="display:inline-block;padding:2px 8px;border-radius:99px;background:#fef9c3;color:#854d0e;border:1px solid #fde68a;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;">auto</span>`
+            : r.mode === 'needs_review'
+            ? `<span style="display:inline-block;padding:2px 8px;border-radius:99px;background:#ffedd5;color:#9a3412;border:1px solid #fed7aa;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;">needs review</span>`
             : `<span style="display:inline-block;padding:2px 8px;border-radius:99px;background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.04em;">reviewed</span>`;
           const openBtn = r.bcId
             ? `<button onclick="document.getElementById('bcAiActivityModal')?.remove();if(typeof bcOpenExpanded==='function')bcOpenExpanded('${esc(r.bcId)}');" style="background:#f1f5f9;border:1px solid #cbd5e1;color:#0f172a;padding:3px 10px;font-size:11px;font-weight:600;border-radius:6px;cursor:pointer;font-family:inherit;">Open BC →</button>`

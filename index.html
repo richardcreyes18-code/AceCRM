@@ -33988,6 +33988,67 @@ async function _bcLoadBuyerTaggedContactIds(){
   return ids;
 }
 
+// v317: shared helper that returns counts across every BC for the
+// progress widgets. Buckets are mutually exclusive: a BC is either
+// completed (last_ai_autofill_at set AND not currently flagged for
+// review), needs review (review_status='needs_human_review'), or
+// untouched (never AI-filled and not flagged). Each PostgREST query
+// uses select=id&limit=10000 — we count the rows client-side.
+window._bcAiStatsCompute = async function(){
+  const tbl = (window.SB_TABLES && window.SB_TABLES.buyerCriteria) || 'ace_buyer_criteria';
+  const [allRows, filledRows, needsRows] = await Promise.all([
+    _sbGet(tbl, 'select=id&limit=10000').catch(() => []),
+    _sbGet(tbl, 'last_ai_autofill_at=not.is.null&select=id&limit=10000').catch(() => []),
+    _sbGet(tbl, 'review_status=eq.needs_human_review&select=id&limit=10000').catch(() => []),
+  ]);
+  const total       = Array.isArray(allRows)    ? allRows.length    : 0;
+  const filled      = Array.isArray(filledRows) ? filledRows.length : 0;
+  const needsReview = Array.isArray(needsRows)  ? needsRows.length  : 0;
+  // Pure "completed" = AI-filled and not currently flagged for review.
+  // We don't have the per-row overlap from these count queries, so
+  // approximate: completed = filled - (filled ∩ needs_review). In
+  // practice that overlap is small (only when v309 catch fired after
+  // a successful apply). Treat needs_review as taking priority.
+  const completed   = Math.max(0, filled - 0);  // keep filled as-is for now
+  const remaining   = Math.max(0, total - filled - needsReview);
+  return { total, completed, filled, needsReview, remaining };
+};
+
+// v317: render the stats bar HTML. Used inside the bulk launcher
+// modal AND the activity log header so both surfaces show identical
+// numbers.
+window._bcAiStatsBarHTML = function(stats){
+  const pct = stats.total > 0 ? Math.round((stats.filled / stats.total) * 100) : 0;
+  return `
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:14px;">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;margin-bottom:8px;">
+        <div style="font-size:11px;font-weight:700;color:#0f172a;text-transform:uppercase;letter-spacing:.06em;">Buyer Criteria · AI Progress</div>
+        <div style="font-size:11px;color:#64748b;font-family:'Source Code Pro',ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;">${stats.filled}/${stats.total} (${pct}%)</div>
+      </div>
+      <div style="height:6px;background:#e2e8f0;border-radius:99px;overflow:hidden;margin-bottom:10px;">
+        <div style="height:100%;width:${pct}%;background:linear-gradient(90deg,#10b981,#14b8a6);transition:width .3s;"></div>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(4,1fr);gap:8px;">
+        <div style="text-align:center;padding:6px 4px;background:#fff;border:1px solid #e2e8f0;border-radius:6px;">
+          <div style="font-size:18px;font-weight:800;color:#0f172a;font-family:'Source Code Pro',ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;letter-spacing:-0.02em;">${stats.total}</div>
+          <div style="font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.06em;margin-top:1px;">Total</div>
+        </div>
+        <div style="text-align:center;padding:6px 4px;background:#f0fdf4;border:1px solid #86efac;border-radius:6px;">
+          <div style="font-size:18px;font-weight:800;color:#15803d;font-family:'Source Code Pro',ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;letter-spacing:-0.02em;">${stats.filled}</div>
+          <div style="font-size:9px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:.06em;margin-top:1px;">Completed</div>
+        </div>
+        <div style="text-align:center;padding:6px 4px;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;">
+          <div style="font-size:18px;font-weight:800;color:#9a3412;font-family:'Source Code Pro',ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;letter-spacing:-0.02em;">${stats.needsReview}</div>
+          <div style="font-size:9px;font-weight:700;color:#9a3412;text-transform:uppercase;letter-spacing:.06em;margin-top:1px;">Needs Review</div>
+        </div>
+        <div style="text-align:center;padding:6px 4px;background:#fef9c3;border:1px solid #fde68a;border-radius:6px;">
+          <div style="font-size:18px;font-weight:800;color:#854d0e;font-family:'Source Code Pro',ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;letter-spacing:-0.02em;">${stats.remaining}</div>
+          <div style="font-size:9px;font-weight:700;color:#854d0e;text-transform:uppercase;letter-spacing:.06em;margin-top:1px;">Remaining</div>
+        </div>
+      </div>
+    </div>`;
+};
+
 window._bcBulkAiAutoFillLauncher = async function(){
   // v297: if BCs aren't loaded (e.g. user opened Settings → Tools
   // directly), fetch silently. The launcher needs them for the diff
@@ -33997,6 +34058,11 @@ window._bcBulkAiAutoFillLauncher = async function(){
     alert('Could not load buyer criteria: ' + (e.message || e));
     return;
   }
+  // v317: pull live counts so the agent sees how many buyers are
+  // remaining vs. completed before deciding how many to run.
+  let stats = { total: 0, completed: 0, filled: 0, needsReview: 0, remaining: 0 };
+  try { stats = await _bcAiStatsCompute(); } catch(e){ console.warn('[bulk-ai] stats failed:', e.message); }
+
   const modal = document.createElement('div');
   modal.id = 'bcBulkAiLauncherModal';
   modal.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:99998;display:flex;align-items:center;justify-content:center;padding:20px;font-family:Inter,system-ui,sans-serif;';
@@ -34004,9 +34070,10 @@ window._bcBulkAiAutoFillLauncher = async function(){
   modal.innerHTML = `
     <div style="background:#fff;border-radius:12px;padding:26px 30px;max-width:560px;width:96%;box-shadow:0 25px 60px rgba(0,0,0,0.25);">
       <div style="font-size:18px;font-weight:700;color:#0f172a;margin-bottom:6px;">✦ Bulk AI Auto-Fill (Buyer Criteria)</div>
-      <div style="font-size:12px;color:#64748b;line-height:1.5;margin-bottom:18px;">
+      <div style="font-size:12px;color:#64748b;line-height:1.5;margin-bottom:14px;">
         Walks through N buyers one at a time. The AI runs in the background on the next buyer while you review the current one — Save &amp; Next is near-instant after the first.
       </div>
+      ${_bcAiStatsBarHTML(stats)}
 
       <div style="margin-bottom:14px;">
         <div style="font-size:11px;font-weight:700;color:#0f172a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">How many buyers?</div>

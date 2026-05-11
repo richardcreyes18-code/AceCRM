@@ -66,7 +66,8 @@ export async function _bcAiActivityOpen(){
   modal.onclick = (e) => { if(e.target === modal) modal.remove(); };
   modal.innerHTML = `
     <div style="background:#fff;border-radius:12px;width:96%;max-width:1100px;max-height:90vh;display:flex;flex-direction:column;box-shadow:0 25px 60px rgba(0,0,0,0.25);">
-      <div style="padding:16px 22px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+      <div id="bcAiActivityStatsBar" style="padding:14px 22px 0;"></div>
+      <div style="padding:14px 22px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
         <div>
           <div style="font-size:16px;font-weight:700;color:#0f172a;">🗒 AI Auto-Fill activity log</div>
           <div id="bcAiActivityStatus" style="font-size:11px;color:#64748b;margin-top:2px;">Loading…</div>
@@ -103,6 +104,20 @@ async function _load(){
   const body = document.getElementById('bcAiActivityBody');
   if(!body) return;
   if(status) status.textContent = 'Loading…';
+
+  // v317: render the global stats bar at the top so the agent sees
+  // total / completed / needs-review / remaining counts across the
+  // entire BC table (not just the 100 rows in this modal).
+  try {
+    if(typeof window._bcAiStatsCompute === 'function'
+       && typeof window._bcAiStatsBarHTML === 'function'){
+      const statsBarEl = document.getElementById('bcAiActivityStatsBar');
+      if(statsBarEl){
+        const stats = await window._bcAiStatsCompute();
+        statsBarEl.innerHTML = window._bcAiStatsBarHTML(stats);
+      }
+    }
+  } catch(e){ console.warn('[bc-ai-activity] stats bar failed:', e.message); }
 
   try {
     // Pull the latest N BCs that have either (a) been AI auto-filled

@@ -508,10 +508,13 @@ export function _bcAssetTaxonomyAdmin(){
       const bareSk = sectionKeyOf(cat);
       const bareHas = !bareSk.startsWith('misc__');
       const bareUsage = _countBadgeHTML(usage, cat);
+      const bareStatusHTML = bareHas
+        ? '<span style="color:#15803d;" title="Built-in requirements fields section exists for this category — fields like Min Units / Class Preference render on the BC when this chip is added.">✓ Built-in fields</span>'
+        : '<span style="color:#64748b;" title="Chip works in the BC picker, the AI vocab, and the buyer match — only the optional built-in requirements fields form is not defined for this section yet. You can still author per-chip fields via the 📋 Fields button.">ℹ Picker + AI · no built-in fields</span>';
       const bareRow = `<tr style="border-top:1px solid #f1f5f9;background:#fafbff;">
         <td style="padding:5px 8px;color:#94a3b8;font-style:italic;font-size:11px;">(no subtype — bare "${esc(cat)}")</td>
         <td style="padding:5px 8px;color:#94a3b8;font-family:ui-monospace,Menlo,monospace;font-size:10px;">${esc(bareSk)}${SECTION_LABELS[bareSk] ? ' <span style="color:#cbd5e1;">(' + esc(SECTION_LABELS[bareSk]) + ')</span>' : ''}</td>
-        <td style="padding:5px 8px;font-size:11px;">${bareHas ? '<span style="color:#15803d;">✓</span>' : '<span style="color:#b91c1c;">⚠ no section</span>'}</td>
+        <td style="padding:5px 8px;font-size:11px;">${bareStatusHTML}</td>
         <td style="padding:5px 8px;text-align:left;">${bareUsage}</td>
         <td style="padding:5px 8px;text-align:right;white-space:nowrap;">
           <button data-action="reassign-bare" data-cat-name="${esc(cat)}" title="Reassign the records currently tagged with bare &quot;${esc(cat)}&quot; (no subtype) to a different chip. Category itself stays in the taxonomy — use the header's Delete button to remove it entirely." style="background:#eff6ff;border:1px solid #bfdbfe;color:#1e40af;cursor:pointer;font-size:10px;padding:2px 8px;border-radius:4px;font-weight:600;">↪ Reassign</button>
@@ -529,12 +532,22 @@ export function _bcAssetTaxonomyAdmin(){
         const subFieldCount = (typeof window._bcFieldsGet === 'function')
           ? (window._bcFieldsGet(fullChip) || []).length : 0;
         const subUsage = _countBadgeHTML(usage, fullChip);
+        // v322: status label reworded — "no section" was misleading.
+        // The chip works fine in the picker AND the AI vocab regardless
+        // of section status. What's actually conditional is whether a
+        // per-category REQUIREMENTS FIELDS section renders on the BC
+        // expanded form. has=true → built-in fields section renders;
+        // has=false → no built-in fields, but custom fields via the
+        // 📋 Fields button still work.
+        const subStatusHTML = has
+          ? '<span style="color:#15803d;" title="Built-in requirements fields section exists for this chip — fields like Min Units / Class Preference render on the BC when this chip is added.">✓ Built-in fields</span>'
+          : '<span style="color:#64748b;" title="Chip works in the BC picker, the AI vocab, and the buyer match — only the optional built-in requirements fields form is not defined for this section yet. You can still author per-chip fields via the 📋 Fields button.">ℹ Picker + AI · no built-in fields</span>';
         return `<tr style="border-top:1px solid #f1f5f9;">
           <td style="padding:5px 8px;color:#475569;">
             <input type="text" value="${esc(sub)}" data-sub-edit="${catIdx}|${subIdx}" style="width:100%;padding:3px 6px;font-size:11px;border:1px solid #cbd5e1;border-radius:4px;background:#fff;"/>
           </td>
           <td style="padding:5px 8px;color:#94a3b8;font-family:ui-monospace,Menlo,monospace;font-size:10px;">${esc(sk)}${SECTION_LABELS[sk] ? ' <span style="color:#cbd5e1;">(' + esc(SECTION_LABELS[sk]) + ')</span>' : ''}</td>
-          <td style="padding:5px 8px;font-size:11px;">${has ? '<span style="color:#15803d;">✓</span>' : '<span style="color:#b91c1c;">⚠ no section</span>'}</td>
+          <td style="padding:5px 8px;font-size:11px;">${subStatusHTML}</td>
           <td style="padding:5px 8px;text-align:left;">${subUsage}</td>
           <td style="padding:5px 8px;text-align:right;white-space:nowrap;">
             <button data-action="edit-sub-fields" data-cat-name="${esc(cat)}" data-sub-name="${esc(sub)}" title="Edit custom requirements fields for ${esc(fullChip)}" style="background:#ede9fe;border:1px solid #c4b5fd;color:#5b21b6;cursor:pointer;font-size:10px;padding:2px 8px;border-radius:4px;font-weight:600;margin-right:4px;">📋${subFieldCount?` ${subFieldCount}`:''}</button>
@@ -548,7 +561,7 @@ export function _bcAssetTaxonomyAdmin(){
         <summary style="padding:10px 14px;cursor:pointer;display:flex;justify-content:space-between;align-items:center;background:#f8fafc;gap:8px;">
           <div style="display:flex;align-items:center;gap:8px;flex:1;">
             <input type="text" value="${safeCat}" data-cat-edit="${catIdx}" onclick="event.stopPropagation()" style="font-size:13px;font-weight:700;color:#0f172a;padding:4px 8px;border:1px solid transparent;border-radius:4px;background:transparent;flex:1;max-width:280px;" onfocus="this.style.background='#fff';this.style.border='1px solid #cbd5e1';" onblur="this.style.background='transparent';this.style.border='1px solid transparent';"/>
-            <span style="font-size:10px;color:${catHasSection?'#15803d':'#b91c1c'};font-weight:600;">${catHasSection ? '✓ section: ' + esc(catKey) : '⚠ no section'}</span>
+            <span title="${catHasSection ? 'Built-in requirements fields section exists — fields render on the BC when a chip from this category is added.' : 'Chip works in the BC picker, the AI vocab, and the buyer match — only the optional built-in requirements fields form is not defined for this category yet. Use the 📋 Fields button to author your own.'}" style="font-size:10px;color:${catHasSection?'#15803d':'#64748b'};font-weight:600;">${catHasSection ? '✓ built-in: ' + esc(catKey) : 'ℹ picker + AI · no built-in fields'}</span>
             ${catUsageBadge}
           </div>
           <div style="display:flex;gap:6px;align-items:center;">
@@ -594,7 +607,7 @@ export function _bcAssetTaxonomyAdmin(){
         <div style="padding:16px 22px;border-bottom:1px solid #e2e8f0;display:flex;justify-content:space-between;align-items:center;">
           <div>
             <div style="font-size:16px;font-weight:700;color:#0f172a;">🗂 BC Asset Taxonomy</div>
-            <div style="font-size:11px;color:#64748b;margin-top:2px;">${Object.keys(taxonomy).length} categories · ${totalChips} chip variants · ${chipsWithSection}/${totalChips} resolve to a requirements section (${coverage}%) ${dirty ? '<span style="color:#b45309;font-weight:600;margin-left:8px;">● unsaved changes</span>' : ''}</div>
+            <div style="font-size:11px;color:#64748b;margin-top:2px;">${Object.keys(taxonomy).length} categories · ${totalChips} chip variants · ${chipsWithSection}/${totalChips} have a built-in requirements fields section (${coverage}%). Every chip works in the picker + AI regardless. ${dirty ? '<span style="color:#b45309;font-weight:600;margin-left:8px;">● unsaved changes</span>' : ''}</div>
           </div>
           <div style="display:flex;gap:8px;">
             <button data-action="cancel" style="background:transparent;border:1px solid #cbd5e1;color:#64748b;padding:7px 14px;font-size:12px;border-radius:8px;cursor:pointer;font-family:inherit;">Cancel</button>
@@ -609,7 +622,7 @@ export function _bcAssetTaxonomyAdmin(){
           </div>
         </div>
         <div style="padding:10px 22px;border-top:1px solid #e2e8f0;font-size:11px;color:#64748b;background:#fff;">
-          <strong style="color:#0f172a;">Note:</strong> Saving updates the picker (BC blank form + AI review modal) and the AI's vocabulary. Changes apply immediately for new BC opens / AI runs. Categories with "⚠ no section" still work as picker chips, but their requirements field section is missing — Phase 2 will let you author requirements fields here too.
+          <strong style="color:#0f172a;">Note:</strong> Saving updates the picker (BC blank form + AI review modal) and the AI's vocabulary. Changes apply immediately for new BC opens / AI runs. Every chip — including those marked "ℹ picker + AI · no built-in fields" — is fully usable: it shows up in the BC picker, the AI proposes it, and buyer-match searches find it. The only thing missing for "ℹ" chips is the hardcoded per-category <strong>requirements fields form</strong> (e.g. Multifamily's Min Units / Class Preference). You can still author custom requirements fields for any chip via the <span style="color:#5b21b6;font-weight:600;">📋 Fields</span> button.
         </div>
       </div>`;
 

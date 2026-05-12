@@ -39662,32 +39662,35 @@ async function _liCheckDealExists(rawTerm){
     return;
   }
   try {
-    // Strip Google's ", USA" tail + sanitize punctuation that PostgREST
-    // treats as filter syntax. Then take just the first two comma-segments
-    // (e.g. "2525 US-130, East Windsor, NJ 08512, USA" → "2525 US-130, East Windsor")
-    // — enough to be specific, short enough to substring-match stored
-    // addresses regardless of how the city/state suffix was written.
-    let safe = term
-      .replace(/,\s*USA\s*$/i, '')
-      .replace(/[(),%]/g, ' ')
-      .trim();
-    const parts = String(rawTerm || '').replace(/,\s*USA\s*$/i, '').split(',').map(s => s.trim()).filter(Boolean);
-    if(parts.length >= 2){
-      safe = parts.slice(0, 2).join(', ').replace(/[(),%]/g, ' ').trim();
-    } else if(parts.length === 1){
-      safe = parts[0].replace(/[(),%]/g, ' ').trim();
-    }
-    if(!safe || safe.length < 4){ dd.style.display = 'none'; return; }
+    // v352.1: PostgREST treats commas inside filter values as separators,
+    // so `ilike.*299 W Fort Lee Rd, Bogota*` was being parsed as two filter
+    // values and the search returned nothing. Use ONLY the street segment
+    // (first comma-segment, no commas) for the SQL filter, then narrow
+    // client-side by checking the city is also in the stored address.
+    const cleaned = String(rawTerm || '').replace(/,\s*USA\s*$/i, '').trim();
+    const parts = cleaned.split(',').map(s => s.trim()).filter(Boolean);
+    const street = (parts[0] || '').replace(/[(),%]/g, ' ').trim();
+    const city   = (parts[1] || '').replace(/[(),%]/g, ' ').trim();
+    if(!street || street.length < 4){ dd.style.display = 'none'; return; }
     const rows = await _sbGet(SB_TABLES.properties,
-      `address=ilike.*${encodeURIComponent(safe)}*&deleted_at=is.null&select=id,address&limit=5`);
-    console.log('[li_s] deal-exists check:', { term: rawTerm, searched: safe, found: (rows||[]).length });
-    if(!Array.isArray(rows) || !rows.length){
+      `address=ilike.*${encodeURIComponent(street)}*&deleted_at=is.null&select=id,address&limit=20`);
+    // Client-side narrow: if the user has a city, require it in the
+    // stored address. Without this, "299 W Fort Lee Rd" in Bogota would
+    // pull "299 W Fort Lee Rd" in any other city as a false positive.
+    const all = Array.isArray(rows) ? rows : [];
+    const cityLow = city.toLowerCase();
+    const matched = cityLow
+      ? all.filter(r => String(r.address || '').toLowerCase().includes(cityLow))
+      : all;
+    const finalRows = matched.slice(0, 5);
+    console.log('[li_s] deal-exists check:', { term: rawTerm, streetSearch: street, cityFilter: city, sqlRows: all.length, finalRows: finalRows.length });
+    if(!finalRows.length){
       dd.style.display = 'none';
       dd.innerHTML = '';
       return;
     }
     const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
-    const primary = rows[0];
+    const primary = finalRows[0];
     const primaryShortId = String(primary.id || '').slice(0, 8);
     const primaryAddr = esc(primary.address || '(no address)');
     // Primary banner: big "Open existing deal →" CTA. The rows[0] is the
@@ -39706,7 +39709,7 @@ async function _liCheckDealExists(rawTerm){
           </button>
         </div>
       </div>`;
-    const extraRows = rows.slice(1);
+    const extraRows = finalRows.slice(1);
     const extrasHtml = extraRows.length ? `
       <div style="padding:6px 12px;font-size:10px;font-weight:700;color:#9a3412;text-transform:uppercase;letter-spacing:0.06em;background:#fff7ed;border-top:1px solid #fed7aa;">Other possible matches</div>
       ${extraRows.map((r, i) => {

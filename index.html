@@ -3098,8 +3098,42 @@ function closeProb(d){
 }
 
 // ─── OPEN DEAL ────────────────────────────────────────────────
-function openDeal(d){
+async function openDeal(d){
   if(!d) return;
+  // v353: callers can pass either a deal object OR a string UUID. When
+  // given a string, look up in the in-memory allDeals first; if not there
+  // (deal owned by another agent / not in current personal-scope filter /
+  // fresh session that hasn't loaded the Deal Board), lazy-fetch the row
+  // from ace_properties and hydrate via _sbToAt(SB_PROP_MAP) — same
+  // translator the Deal Board loader uses at index.html:2153. Without
+  // this, openDeal('<uuid>') would treat the string itself as currentDeal,
+  // d['Address'] returned undefined, and the deal page rendered blank as
+  // "Unnamed Property".
+  if(typeof d === 'string'){
+    const id = d;
+    let obj = (typeof allDeals !== 'undefined' && Array.isArray(allDeals))
+      ? allDeals.find(x => x && x.id === id)
+      : null;
+    if(!obj){
+      try {
+        const rows = await _sbGet(SB_TABLES.properties,
+          `id=eq.${encodeURIComponent(id)}&deleted_at=is.null&select=*&limit=1`);
+        const row = Array.isArray(rows) && rows[0];
+        if(row){
+          obj = _sbToAt(row, SB_PROP_MAP);
+          obj.id = row.id;
+          if(row.owner_contact_id) obj['Owner'] = [row.owner_contact_id];
+          if(!obj['Date Added'] && row.created_at) obj['Date Added'] = row.created_at;
+          if(typeof allDeals !== 'undefined' && Array.isArray(allDeals)) allDeals.unshift(obj);
+          console.log('[openDeal] lazy-fetched deal', id, 'into allDeals');
+        }
+      } catch(e){
+        console.warn('[openDeal] lazy fetch failed:', e.message);
+      }
+    }
+    if(!obj){ alert('Deal not found — try refreshing the Deal Board and retry.'); return; }
+    d = obj;
+  }
   // Dismiss any floating browser autocomplete
   if(document.activeElement && document.activeElement !== document.body) document.activeElement.blur();
   if(_dealDirty && currentDeal && currentDeal.id !== d.id){
@@ -39703,7 +39737,7 @@ async function _liCheckDealExists(rawTerm){
             <div style="font-size:13px;font-weight:700;color:#78350f;">This property already exists in your CRM</div>
             <div style="font-size:11px;color:#92400e;margin-top:2px;">Lead <span style="font-family:'Source Code Pro',ui-monospace,Menlo,monospace;font-weight:700;">#${esc(primaryShortId)}</span> · ${primaryAddr}</div>
           </div>
-          <button onclick="(typeof openDeal === 'function') && openDeal('${esc(primary.id)}')" onmousedown="event.preventDefault()"
+          <button onclick="_liResetIntakeStateAndOpen('${esc(primary.id)}')" onmousedown="event.preventDefault()"
             style="background:#b45309;color:#fff;border:none;padding:9px 18px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;white-space:nowrap;">
             Open existing deal →
           </button>
@@ -39717,7 +39751,7 @@ async function _liCheckDealExists(rawTerm){
         const addr = esc(r.address || '(no address)');
         const borderTop = i === 0 ? '' : 'border-top:1px solid #f1f5f9;';
         return `
-          <div onclick="(typeof openDeal === 'function') && openDeal('${esc(r.id)}')" onmousedown="event.preventDefault()"
+          <div onclick="_liResetIntakeStateAndOpen('${esc(r.id)}')" onmousedown="event.preventDefault()"
                style="padding:10px 12px;cursor:pointer;display:flex;align-items:center;gap:10px;${borderTop}"
                onmouseover="this.style.background='#fff7ed'" onmouseout="this.style.background='transparent'">
             <div style="background:#fef3c7;color:#9a3412;border:1px solid #fed7aa;font-family:'Source Code Pro',ui-monospace,Menlo,monospace;font-size:10px;font-weight:700;padding:2px 7px;border-radius:99px;flex-shrink:0;">Lead #${esc(shortId)}</div>
@@ -39742,6 +39776,27 @@ async function _liCheckDealExists(rawTerm){
   }
 }
 window._liCheckDealExists = _liCheckDealExists;
+
+// v353: clear any in-flight seller-intake state before navigating to the
+// existing deal. Without this, fields the agent had been filling
+// (selected contact, prefill context, multifamily unit data, mixed-use
+// tenants buffer) leak into the existing deal's currentDeal scope.
+async function _liResetIntakeStateAndOpen(dealId){
+  try {
+    if(typeof _liSelectedSellerContactId !== 'undefined') _liSelectedSellerContactId = null;
+    if(typeof _liSelectedBuyerContactId  !== 'undefined') _liSelectedBuyerContactId  = null;
+    if(typeof _liSelectedContactSnapshot !== 'undefined') _liSelectedContactSnapshot = { s:null, b:null };
+    if(typeof _liPrefillContext !== 'undefined') _liPrefillContext = null;
+    if(typeof _liMfData !== 'undefined') _liMfData = null;
+    if(typeof _liMuTenantsToWrite !== 'undefined') _liMuTenantsToWrite = null;
+  } catch(_){}
+  // Hide the dedup dropdown immediately so it doesn't paint over the
+  // deal page during the brief async window.
+  const dd = document.getElementById('li_s_deal_dropdown');
+  if(dd){ dd.style.display = 'none'; dd.innerHTML = ''; }
+  if(typeof openDeal === 'function') await openDeal(dealId);
+}
+window._liResetIntakeStateAndOpen = _liResetIntakeStateAndOpen;
 
 // ── Asset type selector (search + type/subtype panels, like deal card) ─
 function _liAssetSelector(mode){

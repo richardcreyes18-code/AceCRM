@@ -35194,8 +35194,12 @@ function bcToggleNeedsReviewFilter(){ bcCycleReviewFilter(); }
 // inside bcOpenExpanded so the bulk launcher can be opened from
 // Settings without first visiting the Buyer Criteria tab. Idempotent —
 // no-op when allBuyerCriteria is already populated.
-async function _bcEnsureBuyerCriteriaLoaded(){
-  if(Array.isArray(allBuyerCriteria) && allBuyerCriteria.length) return;
+async function _bcEnsureBuyerCriteriaLoaded(force){
+  // v342: optional force flag bypasses the cache early-return. Callers
+  // that need authoritative-fresh data (the bulk-AI launcher) pass
+  // true so we don't filter against a stale cache that's missing
+  // recently-created BCs.
+  if(!force && Array.isArray(allBuyerCriteria) && allBuyerCriteria.length) return;
   let rows = [], from = 0, batchSize = 1000;
   while(true){
     const batch = await _sbGet(SB_TABLES.buyerCriteria, `select=*&order=created_at.desc&limit=${batchSize}&offset=${from}`);
@@ -35364,7 +35368,12 @@ window._bcBulkAiAutoFillLauncher = async function(){
   // v297: if BCs aren't loaded (e.g. user opened Settings → Tools
   // directly), fetch silently. The launcher needs them for the diff
   // logic + the "untouched" filter.
-  try { await _bcEnsureBuyerCriteriaLoaded(); }
+  // v342: force-reload the cache. The early-return on existing cache
+  // could leave us with stale data — missing the BCs created by
+  // previous bulk runs in the same session — which then made the
+  // "untouched" filter resolve to zero candidates ("No matching
+  // buyers found" error) while the stats showed hundreds remaining.
+  try { await _bcEnsureBuyerCriteriaLoaded(true); }
   catch(e){
     alert('Could not load buyer criteria: ' + (e.message || e));
     return;
@@ -35743,7 +35752,7 @@ window._bcBulkAiAutoFillStart = async function(btn){
     }
     queue = newIds.map(x => x.id);
   } else {
-    const all = (allBuyerCriteria || []).filter(r => r && r.id && r.fields);
+    let all = (allBuyerCriteria || []).filter(r => r && r.id && r.fields);
     let candidates;
     if(filter === 'untouched'){
       // v324 fix: never trust the cache for "untouched" — it can be
@@ -35765,6 +35774,26 @@ window._bcBulkAiAutoFillStart = async function(btn){
       candidates = touchedIds.size > 0
         ? all.filter(r => !touchedIds.has(r.id))
         : all.filter(r => !r.fields[lastAtKey]);
+      // v342: if the cache yielded zero candidates but the DB clearly
+      // has untouched BCs (touchedIds.size < total in stats), the
+      // cache is stale or partially loaded. Force-reload it and retry
+      // ONCE before giving up — surfaces the recently-created BCs
+      // that the bulk runner's diff would otherwise miss.
+      if(!candidates.length){
+        try {
+          const allIdRows = await _sbGet(SB_TABLES.buyerCriteria, 'deleted_at=is.null&select=id&limit=10000').catch(() => []);
+          const totalInDb = Array.isArray(allIdRows) ? allIdRows.length : 0;
+          if(totalInDb > touchedIds.size){
+            if(btn) btn.textContent = '⏳ Cache stale — reloading…';
+            await _bcEnsureBuyerCriteriaLoaded(true);
+            all = (allBuyerCriteria || []).filter(r => r && r.id && r.fields);
+            candidates = all.filter(r => !touchedIds.has(r.id));
+            console.log('[bulk-ai] force-reload recovered', candidates.length, 'candidates (cache was', all.length, 'rows; DB has', totalInDb, ')');
+          }
+        } catch(e){
+          console.warn('[bulk-ai] force-reload failed:', e.message);
+        }
+      }
     } else {
       candidates = all.slice();
     }

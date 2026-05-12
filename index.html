@@ -35331,10 +35331,29 @@ async function _bcLoadFubIdsWithNotes(fubIds){
 // uses select=id&limit=10000 — we count the rows client-side.
 window._bcAiStatsCompute = async function(){
   const tbl = (window.SB_TABLES && window.SB_TABLES.buyerCriteria) || 'ace_buyer_criteria';
+  // v343.3: paginate every query — the crm-proxy caps single
+  // responses at 1000 rows regardless of the requested limit, so
+  // total=1000 was a phantom that hid 95+ real BCs.
+  const paginate = async (filterQs) => {
+    const out = [];
+    const PAGE = 1000;
+    let offset = 0;
+    while(true){
+      const sep = filterQs ? '&' : '';
+      const qs = `${filterQs}${sep}select=id&order=id.asc&limit=${PAGE}&offset=${offset}`;
+      const rows = await _sbGet(tbl, qs).catch(() => []);
+      if(!Array.isArray(rows) || !rows.length) break;
+      out.push(...rows);
+      if(rows.length < PAGE) break;
+      offset += PAGE;
+      if(offset >= 20000) break;   // safety stop
+    }
+    return out;
+  };
   const [allRows, filledRows, needsRows] = await Promise.all([
-    _sbGet(tbl, 'select=id&limit=10000').catch(() => []),
-    _sbGet(tbl, 'last_ai_autofill_at=not.is.null&select=id&limit=10000').catch(() => []),
-    _sbGet(tbl, 'review_status=eq.needs_human_review&select=id&limit=10000').catch(() => []),
+    paginate(''),
+    paginate('last_ai_autofill_at=not.is.null'),
+    paginate('review_status=eq.needs_human_review'),
   ]);
   // v336/v343.2: do set math on the actual IDs so the four buckets
   // always sum to TOTAL. Earlier versions made TWO wrong assumptions:
@@ -35811,28 +35830,40 @@ window._bcBulkAiAutoFillStart = async function(btn){
       // _bcEnsureBuyerCriteriaLoaded(true) call still hydrates the
       // cache so bcOpenExpanded can find each picked BC.
       if(btn) btn.textContent = '⏳ Fetching untouched buyers…';
-      // v343.1: use the same three-query pattern that _bcAiStatsCompute
-      // uses (proven working — that's how the badge correctly shows
-      // 361). Earlier attempts used `last_ai_autofill_at=is.null` and
-      // `or=` filters which the crm-proxy appears to strip or reject,
-      // resulting in 0 rows. We instead fetch ALL ids, TOUCHED ids,
-      // and NEEDS_REVIEW ids — each with a filter the proxy is known
-      // to honor — and subtract client-side.
+      // v343.1/v343.3: three-query pattern (same proven filters as
+      // _bcAiStatsCompute), each paginated to bypass the proxy's
+      // 1000-row response cap. Then subtract on the client.
+      const paginate = async (filterQs) => {
+        const out = [];
+        const PAGE = 1000;
+        let offset = 0;
+        while(true){
+          const sep = filterQs ? '&' : '';
+          const qs = `${filterQs}${sep}select=id&order=id.asc&limit=${PAGE}&offset=${offset}`;
+          const rows = await _sbGet(SB_TABLES.buyerCriteria, qs).catch(() => []);
+          if(!Array.isArray(rows) || !rows.length) break;
+          out.push(...rows);
+          if(rows.length < PAGE) break;
+          offset += PAGE;
+          if(offset >= 20000) break;
+        }
+        return out;
+      };
       let untouchedRows = [];
       try {
         const [allRows, filledRows, reviewRows] = await Promise.all([
-          _sbGet(SB_TABLES.buyerCriteria, 'select=id&limit=10000').catch(() => []),
-          _sbGet(SB_TABLES.buyerCriteria, 'last_ai_autofill_at=not.is.null&select=id&limit=10000').catch(() => []),
-          _sbGet(SB_TABLES.buyerCriteria, 'review_status=eq.needs_human_review&select=id&limit=10000').catch(() => []),
+          paginate(''),
+          paginate('last_ai_autofill_at=not.is.null'),
+          paginate('review_status=eq.needs_human_review'),
         ]);
         const touched = new Set();
-        for(const r of (filledRows || [])) touched.add(r.id);
-        for(const r of (reviewRows || [])) touched.add(r.id);
-        untouchedRows = (allRows || []).filter(r => !touched.has(r.id));
+        for(const r of filledRows) touched.add(r.id);
+        for(const r of reviewRows) touched.add(r.id);
+        untouchedRows = allRows.filter(r => !touched.has(r.id));
         console.log('[bulk-ai] untouched fetch:',
-          'total=', (allRows || []).length,
-          'filled=', (filledRows || []).length,
-          'needsReview=', (reviewRows || []).length,
+          'total=', allRows.length,
+          'filled=', filledRows.length,
+          'needsReview=', reviewRows.length,
           'touchedUnion=', touched.size,
           'untouched=', untouchedRows.length);
       } catch(e){
@@ -35852,12 +35883,22 @@ window._bcBulkAiAutoFillStart = async function(btn){
       // "completed" tile doesn't count them, and the only way to
       // process them was manual. Fetch by review_status directly.
       if(btn) btn.textContent = '⏳ Fetching needs-review buyers…';
+      // v343.3: paginate to bypass the 1000-row proxy cap.
       let needsRows = [];
       try {
-        needsRows = await _sbGet(
-          SB_TABLES.buyerCriteria,
-          'review_status=eq.needs_human_review&select=id&order=created_at.desc&limit=10000'
-        ) || [];
+        const PAGE = 1000;
+        let offset = 0;
+        while(true){
+          const rows = await _sbGet(
+            SB_TABLES.buyerCriteria,
+            `review_status=eq.needs_human_review&select=id&order=id.asc&limit=${PAGE}&offset=${offset}`
+          ).catch(() => []);
+          if(!Array.isArray(rows) || !rows.length) break;
+          needsRows.push(...rows);
+          if(rows.length < PAGE) break;
+          offset += PAGE;
+          if(offset >= 20000) break;
+        }
       } catch(e){
         console.warn('[bulk-ai] needs-review fetch failed:', e.message);
       }

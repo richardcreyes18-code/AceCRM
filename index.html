@@ -36862,6 +36862,11 @@ function _makeColumnsResizable(tableEl, storageKey){
 
 let _ddCandidates = []; // raw rows from ace_contact_dedupe_candidates
 let _ddTierFilter = 'all'; // 'all' | 'high' | 'medium' | 'low'
+// v358: free-text search across contact names, phones, emails, and the
+// match_value column. Matches any token (space-separated) against any of
+// those fields on any contact in the group — so typing "eugene" finds the
+// Eugene R Diaz pair without the user having to scroll through 1000 rows.
+let _ddSearch = '';
 let _ddContactCache = {}; // contact_id -> full ace_contacts row, populated lazily
 let _ddOpenMergeId = null; // currently-open merge dialog candidate id
 let _ddMergePicks = {};   // field name -> picked value (or '__combine__' for notes)
@@ -37220,11 +37225,23 @@ function _ddRenderShell(){
           <button onclick="_ddRunScan()" id="ddScanBtn" style="background:#fff;color:#1e3a8a;border:1px solid #1e3a8a;padding:9px 16px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;">Scan now ↻</button>
           <button onclick="setNav(null,'settings')" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:9px 16px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;">← Back to Settings</button>
         </div>
-        <div style="display:flex;gap:0;border-bottom:1px solid transparent;">
-          <button onclick="_ddSetTier('all')"    style="${tabActive(_ddTierFilter==='all')}">All <span style="margin-left:6px;font-size:11px;color:#94a3b8;">${total}</span></button>
-          <button onclick="_ddSetTier('high')"   style="${tabActive(_ddTierFilter==='high')}">High confidence <span style="margin-left:6px;font-size:11px;color:#dc2626;font-weight:700;">${counts.high||0}</span></button>
-          <button onclick="_ddSetTier('medium')" style="${tabActive(_ddTierFilter==='medium')}">Medium <span style="margin-left:6px;font-size:11px;color:#d97706;font-weight:700;">${counts.medium||0}</span></button>
-          <button onclick="_ddSetTier('low')"    style="${tabActive(_ddTierFilter==='low')}">Low <span style="margin-left:6px;font-size:11px;color:#94a3b8;font-weight:700;">${counts.low||0}</span></button>
+        <div style="display:flex;gap:14px;align-items:center;flex-wrap:wrap;border-bottom:1px solid transparent;">
+          <div style="display:flex;gap:0;">
+            <button onclick="_ddSetTier('all')"    style="${tabActive(_ddTierFilter==='all')}">All <span style="margin-left:6px;font-size:11px;color:#94a3b8;" id="ddTabCountAll">${total}</span></button>
+            <button onclick="_ddSetTier('high')"   style="${tabActive(_ddTierFilter==='high')}">High confidence <span style="margin-left:6px;font-size:11px;color:#dc2626;font-weight:700;" id="ddTabCountHigh">${counts.high||0}</span></button>
+            <button onclick="_ddSetTier('medium')" style="${tabActive(_ddTierFilter==='medium')}">Medium <span style="margin-left:6px;font-size:11px;color:#d97706;font-weight:700;" id="ddTabCountMed">${counts.medium||0}</span></button>
+            <button onclick="_ddSetTier('low')"    style="${tabActive(_ddTierFilter==='low')}">Low <span style="margin-left:6px;font-size:11px;color:#94a3b8;font-weight:700;" id="ddTabCountLow">${counts.low||0}</span></button>
+          </div>
+          <div style="flex:1;min-width:240px;display:flex;justify-content:flex-end;padding-bottom:8px;">
+            <div style="position:relative;width:340px;max-width:100%;">
+              <input id="ddSearchInput" type="search" placeholder="Search names, phones, emails…"
+                value="${(_ddSearch||'').replace(/"/g,'&quot;')}"
+                oninput="_ddSetSearch(this.value)"
+                style="width:100%;padding:7px 30px 7px 30px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;color:#0f172a;background:#fff;outline:none;" />
+              <span style="position:absolute;left:10px;top:50%;transform:translateY(-50%);font-size:12px;color:#94a3b8;pointer-events:none;">🔍</span>
+              ${_ddSearch ? `<button onclick="_ddSetSearch('')" title="Clear search" style="position:absolute;right:6px;top:50%;transform:translateY(-50%);background:none;border:none;color:#94a3b8;font-size:14px;cursor:pointer;line-height:1;">×</button>` : ''}
+            </div>
+          </div>
         </div>
       </div>
       <div id="ddList" style="flex:1;overflow-y:auto;padding:12px 24px;"></div>
@@ -37238,16 +37255,59 @@ function _ddSetTier(tier){
   _ddRenderShell();
 }
 
+// v358: live-search update. Re-renders only the list (NOT the shell) so
+// the input keeps focus + cursor position while the user types. The
+// clear-X uses a setter that re-renders the shell so the X button can
+// disappear once the box is empty.
+let _ddSearchDebounce = null;
+function _ddSetSearch(v){
+  _ddSearch = String(v || '').trim();
+  if(_ddSearchDebounce) clearTimeout(_ddSearchDebounce);
+  _ddSearchDebounce = setTimeout(() => {
+    // If the user cleared via the X (programmatic), repaint the shell so
+    // the X button disappears. Otherwise just re-render the list.
+    const inp = document.getElementById('ddSearchInput');
+    if(inp && inp.value !== _ddSearch) inp.value = _ddSearch;
+    _ddRenderList();
+  }, 80);
+}
+
 function _ddRenderList(){
   const el = document.getElementById('ddList');
   if(!el) return;
+  // v358: tier filter + free-text search. Tokens are AND'd; each token
+  // must match at least one of: any contact's name / phone / email, or
+  // the candidate row's match_value.
+  const tokens = _ddSearch.toLowerCase().split(/\s+/).filter(Boolean);
+  const candidateMatches = (c) => {
+    if(tokens.length === 0) return true;
+    const haystack = [];
+    haystack.push(String(c.match_value||'').toLowerCase());
+    (Array.isArray(c.contact_ids) ? c.contact_ids : []).forEach(id => {
+      const row = _ddContactCache[id];
+      if(!row) return;
+      if(row.name)         haystack.push(String(row.name).toLowerCase());
+      if(row.email)        haystack.push(String(row.email).toLowerCase());
+      if(row.phone_number) haystack.push(String(row.phone_number).toLowerCase().replace(/\D/g,''));
+      if(row.phone_number) haystack.push(String(row.phone_number).toLowerCase());
+    });
+    const joined = haystack.join(' ');
+    return tokens.every(t => joined.indexOf(t) !== -1);
+  };
   const filtered = _ddCandidates.filter(c =>
-    _ddTierFilter === 'all' || c.tier === _ddTierFilter);
+    (_ddTierFilter === 'all' || c.tier === _ddTierFilter) && candidateMatches(c));
   if(!filtered.length){
+    const searchActive = !!_ddSearch;
     el.innerHTML = `
       <div style="padding:60px 20px;text-align:center;color:#64748b;font-size:13px;">
-        <div style="font-size:14px;font-weight:600;color:#334155;margin-bottom:8px;">No pending candidates ${_ddTierFilter==='all'?'':'in this tier'}.</div>
-        <div>Click <strong>Scan now</strong> above to re-run detection, or switch tiers.</div>
+        <div style="font-size:14px;font-weight:600;color:#334155;margin-bottom:8px;">
+          ${searchActive ? `No matches for "${_ddSearch.replace(/</g,'&lt;')}"${_ddTierFilter==='all'?'':' in this tier'}.` : `No pending candidates ${_ddTierFilter==='all'?'':'in this tier'}.`}
+        </div>
+        <div>
+          ${searchActive
+            ? `<a href="javascript:void(0)" onclick="_ddSetSearch('')" style="color:#1d4ed8;font-weight:600;">Clear search</a> or switch tiers.`
+            : `Click <strong>Scan now</strong> above to re-run detection, or switch tiers.`}
+        </div>
       </div>`;
     return;
   }

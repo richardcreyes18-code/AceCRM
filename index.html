@@ -14592,42 +14592,13 @@ async function initDealMap(){
 
   const countEl  = document.getElementById('db_mapPinCount');
 
-  // Read filters from the single unified top-bar control strip (all multi-select)
-  const search = (document.getElementById('db_search')?.value||'').toLowerCase();
-  const mapPriority = document.getElementById('db_priority')?.checked||false;
-  const selStages   = _dbMultiGetSelected('stage');
-  const selStates   = _dbMultiGetSelected('state');    // v102.24: LOC-001
-  const selRegions  = _dbMultiGetSelected('region');
-  const selCounties = _dbMultiGetSelected('county');
-  const selCities   = _dbMultiGetSelected('city');     // v102.24: LOC-001
-  const selTypes    = _dbMultiGetSelected('type');
-
-  let deals = allDeals.filter(d => {
-    if(d['Is Archived']) return false;
-    const stage = getStage(d);
-    // v111.3: use FULL type for filter matching (e.g. "Industrial: Warehouse")
-    // instead of the stripped top-level. Smart-matching handles both:
-    //   — selecting "Industrial" matches all Industrial subtypes
-    //   — selecting "Industrial: Warehouse" matches only that exact subtype
-    const dtypeFull = _dealAssetTypeFull(d);
-    // v102.24: strip "County" suffix so comparisons align with LOC-001 option values
-    const county = (d['Simple County']||'').replace(/\s*county\s*/i,'').trim();
-    const addr = (d['Address']||'').toLowerCase();
-    const notes = (d['Next Steps']||'').toLowerCase();
-    const matchSearch = !search || addr.includes(search) || county.toLowerCase().includes(search) || notes.includes(search) || dtypeFull.toLowerCase().includes(search) || (d.id||'').toLowerCase().includes(search);
-    const matchStage  = !selStages   || selStages.includes(stage);
-    const matchType   = _dealAssetTypeMatches(d, selTypes);
-    const matchCounty = !selCounties || selCounties.includes(county);
-    const matchRegion = !selRegions  || selRegions.some(r => _dealMatchesRegion(d, r));
-    // v102.24: State + City predicates to match renderDealBoard
-    const matchState  = !selStates   || selStates.includes(_stateFromAddress(d['Address']||''));
-    const matchCity   = !selCities   || selCities.includes(_locCityFromAddress(d['Address']||''));
-    const matchPri    = !mapPriority || d['Top Priority'];
-    // v111.3: drawn-shape filter — if the user has drawn a circle/rect/polygon,
-    // only deals whose coords fall inside that shape pass.
-    const matchShape  = !_dbDrawnShape || _dealInsideShape(d);
-    return matchSearch && matchStage && matchState && matchType && matchRegion && matchCounty && matchCity && matchPri && matchShape;
-  });
+  // v346.1: route the map's pin-placement through the same
+  // _dbComputeFilteredDeals() pipeline the side panel + CSV export use.
+  // Previously the map had its own filter copy that was missing both
+  // the number-range filters (Square Footage, Asking Price, Cap Rate, …)
+  // AND the source filter — applying any of those changed the count
+  // in the top right but left the pins untouched.
+  let deals = _dbComputeFilteredDeals();
 
   // ── Helper: place a single pin on the map ────────────────────
   const placePin = (d, coords) => {

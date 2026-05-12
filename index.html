@@ -39641,47 +39641,98 @@ function _liRenderSellerForm(){
   _liApplyPrefill('s');
 }
 
-// v349: query ace_properties for any existing deal whose address ilike-matches
-// the typed term. Render a dropdown of matches under the address input so the
-// agent can click an existing lead instead of creating a duplicate.
+// v349/v352: check ace_properties for any existing deal whose address matches
+// the typed term. Renders a prominent yellow banner directly above the address
+// row when a match is found — primary action "Open existing deal →" so the
+// agent doesn't duplicate. v352 fixes two bugs:
+//   1. Search used the full Google-formatted string ("...NJ 08512, USA") as
+//      a substring filter, so stored addresses without the ", USA" tail
+//      failed to match. Now strips the country suffix and uses just the
+//      first one-or-two comma segments as the search term.
+//   2. Match UI was a small dropdown anchored under the input that the
+//      user kept missing. Now it's a full-width yellow banner with a big
+//      "Open existing deal →" CTA.
 async function _liCheckDealExists(rawTerm){
   const dd = document.getElementById('li_s_deal_dropdown');
   if(!dd) return;
   const term = String(rawTerm || '').trim();
-  // Bail on short inputs to avoid noisy matches like "5".
   if(term.length < 5){
     dd.style.display = 'none';
     dd.innerHTML = '';
     return;
   }
   try {
-    const safe = term.replace(/[(),%]/g, ' ').trim();
-    if(!safe){ dd.style.display = 'none'; return; }
+    // Strip Google's ", USA" tail + sanitize punctuation that PostgREST
+    // treats as filter syntax. Then take just the first two comma-segments
+    // (e.g. "2525 US-130, East Windsor, NJ 08512, USA" → "2525 US-130, East Windsor")
+    // — enough to be specific, short enough to substring-match stored
+    // addresses regardless of how the city/state suffix was written.
+    let safe = term
+      .replace(/,\s*USA\s*$/i, '')
+      .replace(/[(),%]/g, ' ')
+      .trim();
+    const parts = String(rawTerm || '').replace(/,\s*USA\s*$/i, '').split(',').map(s => s.trim()).filter(Boolean);
+    if(parts.length >= 2){
+      safe = parts.slice(0, 2).join(', ').replace(/[(),%]/g, ' ').trim();
+    } else if(parts.length === 1){
+      safe = parts[0].replace(/[(),%]/g, ' ').trim();
+    }
+    if(!safe || safe.length < 4){ dd.style.display = 'none'; return; }
     const rows = await _sbGet(SB_TABLES.properties,
       `address=ilike.*${encodeURIComponent(safe)}*&deleted_at=is.null&select=id,address&limit=5`);
+    console.log('[li_s] deal-exists check:', { term: rawTerm, searched: safe, found: (rows||[]).length });
     if(!Array.isArray(rows) || !rows.length){
       dd.style.display = 'none';
       dd.innerHTML = '';
       return;
     }
     const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
-    const header = `<div style="padding:8px 12px;font-size:11px;color:#9a3412;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;background:#fff7ed;border-bottom:1px solid #fed7aa;">⚠ ${rows.length} existing lead${rows.length===1?'':'s'} match this address</div>`;
-    const rowsHtml = rows.map((r, i) => {
-      const shortId = String(r.id || '').slice(0, 8);
-      const addr = esc(r.address || '(no address)');
-      const borderTop = i === 0 ? '' : 'border-top:1px solid #f1f5f9;';
-      return `
-        <div onclick="(typeof openDeal === 'function') && openDeal('${esc(r.id)}')" onmousedown="event.preventDefault()"
-             style="padding:10px 12px;cursor:pointer;display:flex;align-items:center;gap:10px;${borderTop}"
-             onmouseover="this.style.background='#fff7ed'" onmouseout="this.style.background='transparent'">
-          <div style="background:#fef3c7;color:#9a3412;border:1px solid #fed7aa;font-family:'Source Code Pro',ui-monospace,Menlo,monospace;font-size:10px;font-weight:700;padding:2px 7px;border-radius:99px;flex-shrink:0;">Lead #${esc(shortId)}</div>
-          <div style="flex:1;min-width:0;font-size:13px;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${addr}</div>
-          <div style="font-size:11px;color:#9a3412;font-weight:600;flex-shrink:0;">Open →</div>
-        </div>`;
-    }).join('');
-    const footer = `<div style="padding:8px 12px;font-size:11px;color:#64748b;background:#f8fafc;border-top:1px solid #e2e8f0;line-height:1.4;">Or keep typing — picking a Google Places suggestion creates a new lead.</div>`;
-    dd.innerHTML = header + rowsHtml + footer;
-    dd.style.display = 'block';
+    const primary = rows[0];
+    const primaryShortId = String(primary.id || '').slice(0, 8);
+    const primaryAddr = esc(primary.address || '(no address)');
+    // Primary banner: big "Open existing deal →" CTA. The rows[0] is the
+    // most likely duplicate; additional matches (if any) are listed below.
+    const headerBanner = `
+      <div style="padding:14px 16px;background:linear-gradient(135deg,#fffbeb,#fef3c7);border-bottom:1px solid #fde68a;">
+        <div style="display:flex;align-items:center;gap:12px;flex-wrap:wrap;">
+          <div style="font-size:24px;line-height:1;">⚠</div>
+          <div style="flex:1;min-width:200px;">
+            <div style="font-size:13px;font-weight:700;color:#78350f;">This property already exists in your CRM</div>
+            <div style="font-size:11px;color:#92400e;margin-top:2px;">Lead <span style="font-family:'Source Code Pro',ui-monospace,Menlo,monospace;font-weight:700;">#${esc(primaryShortId)}</span> · ${primaryAddr}</div>
+          </div>
+          <button onclick="(typeof openDeal === 'function') && openDeal('${esc(primary.id)}')" onmousedown="event.preventDefault()"
+            style="background:#b45309;color:#fff;border:none;padding:9px 18px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;white-space:nowrap;">
+            Open existing deal →
+          </button>
+        </div>
+      </div>`;
+    const extraRows = rows.slice(1);
+    const extrasHtml = extraRows.length ? `
+      <div style="padding:6px 12px;font-size:10px;font-weight:700;color:#9a3412;text-transform:uppercase;letter-spacing:0.06em;background:#fff7ed;border-top:1px solid #fed7aa;">Other possible matches</div>
+      ${extraRows.map((r, i) => {
+        const shortId = String(r.id || '').slice(0, 8);
+        const addr = esc(r.address || '(no address)');
+        const borderTop = i === 0 ? '' : 'border-top:1px solid #f1f5f9;';
+        return `
+          <div onclick="(typeof openDeal === 'function') && openDeal('${esc(r.id)}')" onmousedown="event.preventDefault()"
+               style="padding:10px 12px;cursor:pointer;display:flex;align-items:center;gap:10px;${borderTop}"
+               onmouseover="this.style.background='#fff7ed'" onmouseout="this.style.background='transparent'">
+            <div style="background:#fef3c7;color:#9a3412;border:1px solid #fed7aa;font-family:'Source Code Pro',ui-monospace,Menlo,monospace;font-size:10px;font-weight:700;padding:2px 7px;border-radius:99px;flex-shrink:0;">Lead #${esc(shortId)}</div>
+            <div style="flex:1;min-width:0;font-size:13px;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${addr}</div>
+            <div style="font-size:11px;color:#9a3412;font-weight:600;flex-shrink:0;">Open →</div>
+          </div>`;
+      }).join('')}
+    ` : '';
+    const footer = `
+      <div style="padding:10px 14px;font-size:11px;color:#64748b;background:#f8fafc;border-top:1px solid #e2e8f0;line-height:1.5;display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap;">
+        <span>Not the same property? Just continue filling out the form — your submission will create a new lead.</span>
+        <button onclick="(() => { const dd = document.getElementById('li_s_deal_dropdown'); if(dd){ dd.style.display='none'; dd.innerHTML=''; } })()" style="background:transparent;border:1px solid #cbd5e1;color:#64748b;padding:5px 12px;font-size:11px;font-weight:600;border-radius:5px;cursor:pointer;white-space:nowrap;">Dismiss</button>
+      </div>`;
+    dd.innerHTML = headerBanner + extrasHtml + footer;
+    // v352: render the dropdown as a prominent banner anchored OVER the
+    // address row — restyle the container to look like an alert, not a
+    // dropdown.
+    dd.style.cssText = 'display:block;position:absolute;left:0;right:0;top:100%;margin-top:6px;background:#fff;border:2px solid #f59e0b;border-radius:10px;box-shadow:0 10px 30px rgba(180,83,9,0.2);z-index:30;max-height:none;overflow:visible;';
   } catch(e){
     console.warn('[li_s] deal-exists check failed:', e.message);
     dd.style.display = 'none';

@@ -35792,33 +35792,33 @@ window._bcBulkAiAutoFillStart = async function(btn){
       // _bcEnsureBuyerCriteriaLoaded(true) call still hydrates the
       // cache so bcOpenExpanded can find each picked BC.
       if(btn) btn.textContent = '⏳ Fetching untouched buyers…';
+      // v343.1: use the same three-query pattern that _bcAiStatsCompute
+      // uses (proven working — that's how the badge correctly shows
+      // 361). Earlier attempts used `last_ai_autofill_at=is.null` and
+      // `or=` filters which the crm-proxy appears to strip or reject,
+      // resulting in 0 rows. We instead fetch ALL ids, TOUCHED ids,
+      // and NEEDS_REVIEW ids — each with a filter the proxy is known
+      // to honor — and subtract client-side.
       let untouchedRows = [];
       try {
-        untouchedRows = await _sbGet(
-          SB_TABLES.buyerCriteria,
-          'deleted_at=is.null&last_ai_autofill_at=is.null&or=(review_status.is.null,review_status.neq.needs_human_review)&select=id&order=created_at.desc&limit=10000'
-        ) || [];
+        const [allRows, filledRows, reviewRows] = await Promise.all([
+          _sbGet(SB_TABLES.buyerCriteria, 'select=id&limit=10000').catch(() => []),
+          _sbGet(SB_TABLES.buyerCriteria, 'last_ai_autofill_at=not.is.null&select=id&limit=10000').catch(() => []),
+          _sbGet(SB_TABLES.buyerCriteria, 'review_status=eq.needs_human_review&select=id&limit=10000').catch(() => []),
+        ]);
+        const touched = new Set();
+        for(const r of (filledRows || [])) touched.add(r.id);
+        for(const r of (reviewRows || [])) touched.add(r.id);
+        untouchedRows = (allRows || []).filter(r => !touched.has(r.id));
+        console.log('[bulk-ai] untouched fetch:',
+          'total=', (allRows || []).length,
+          'filled=', (filledRows || []).length,
+          'needsReview=', (reviewRows || []).length,
+          'touchedUnion=', touched.size,
+          'untouched=', untouchedRows.length);
       } catch(e){
-        console.warn('[bulk-ai] direct untouched fetch failed:', e.message);
+        console.warn('[bulk-ai] untouched fetch failed:', e.message);
       }
-      if(!untouchedRows.length){
-        // Defensive fallback: maybe the or= filter syntax got rejected
-        // by the proxy. Try a simpler two-query subtraction.
-        try {
-          const [allRows, touchedFromFilled, touchedFromReview] = await Promise.all([
-            _sbGet(SB_TABLES.buyerCriteria, 'deleted_at=is.null&last_ai_autofill_at=is.null&select=id&limit=10000').catch(() => []),
-            _sbGet(SB_TABLES.buyerCriteria, 'last_ai_autofill_at=not.is.null&select=id&limit=10000').catch(() => []),
-            _sbGet(SB_TABLES.buyerCriteria, 'review_status=eq.needs_human_review&select=id&limit=10000').catch(() => []),
-          ]);
-          const touched = new Set();
-          for(const r of (touchedFromFilled || [])) touched.add(r.id);
-          for(const r of (touchedFromReview || [])) touched.add(r.id);
-          untouchedRows = (allRows || []).filter(r => !touched.has(r.id));
-        } catch(e){
-          console.warn('[bulk-ai] fallback untouched fetch failed:', e.message);
-        }
-      }
-      console.log('[bulk-ai] direct untouched fetch:', untouchedRows.length, 'rows');
       // Map to the same shape downstream code expects (each candidate
       // is just an object with .id). Cache may not have the row yet
       // (e.g. if it was created in another tab), but the launcher's

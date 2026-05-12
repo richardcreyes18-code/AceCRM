@@ -492,6 +492,11 @@ export function _bcFieldsAdminForCategory(category, onClose){
   // scope just like the overrides.
   let nativeOrder = _bcNativeOrderGet(nativeOverrideScope);
   let dirty = false;
+  // v332: blue banner rendered at the top of the modal when this open
+  // was triggered by an "Add to taxonomy →" click in the AI Field
+  // Suggestions Inbox. Populated below; rendered by `rerender()` so it
+  // survives state-driven re-renders.
+  let aiBannerHTML = '';
 
   // v296: helpers to bubble a native or custom field up/down by one slot.
   // Native uses a separate `nativeOrder` list (cols-only); custom uses
@@ -587,6 +592,7 @@ export function _bcFieldsAdminForCategory(category, onClose){
           </div>
         </div>
         <div style="flex:1;min-height:0;overflow:auto;padding:14px 22px;background:#f8fafc;">
+          ${aiBannerHTML || ''}
           ${(typeof window._bcRenderNativeFieldsPanel === 'function')
               ? (window._bcRenderNativeFieldsPanel(category) || '')
               : ''}
@@ -828,5 +834,52 @@ export function _bcFieldsAdminForCategory(category, onClose){
   });
 
   document.body.appendChild(modal);
+
+  // v332: if the Fields admin was opened from the AI Field Suggestions
+  // inbox ("Add to taxonomy →"), consume window._bcAiPendingSuggestion
+  // and auto-add the suggested field to defs so it's already in the
+  // list when the modal renders. The agent reviews, optionally edits
+  // label/col/options, then clicks Save. We snake_case the suggested
+  // label into a sensible default `col` if the suggestion didn't carry
+  // one.
+  try {
+    const pending = window._bcAiPendingSuggestion;
+    if(pending && pending.scope && pending.label){
+      const scopeMatch = String(pending.scope).toLowerCase().trim() === String(category).toLowerCase().trim();
+      if(scopeMatch){
+        const label = String(pending.label).trim();
+        const colSeed = String(pending.col || pending.label).toLowerCase()
+          .replace(/[^a-z0-9]+/g, '_').replace(/^_+|_+$/g, '');
+        // Avoid duplicate adds when the agent re-opens with the same
+        // suggestion still on window — check defs for an existing
+        // entry with the same col / label.
+        const alreadyExists = defs.some(d =>
+          (d.col && d.col.toLowerCase() === colSeed) ||
+          (d.label && d.label.toLowerCase() === label.toLowerCase())
+        );
+        if(!alreadyExists){
+          const type = ['text','number','boolean','enum','multienum','csv'].includes(pending.type) ? pending.type : 'text';
+          const opts = (type === 'enum' || type === 'multienum') && Array.isArray(pending.options)
+            ? pending.options.map(o => String(o || '').trim()).filter(Boolean)
+            : undefined;
+          defs.push({
+            col: colSeed || ('ai_suggested_' + Date.now()),
+            label,
+            type,
+            ...(opts ? { options: opts } : {}),
+            ...(pending.reason ? { hint: pending.reason } : {}),
+          });
+          dirty = true;
+          aiBannerHTML = `
+            <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:10px 14px;margin:14px 22px 0;font-size:12px;color:#1e40af;line-height:1.5;">
+              <strong>✦ Added "${esc(label)}" from AI suggestion.</strong> Review the row at the bottom of the list, tweak label / col key / options if needed, then click <strong>Save</strong>. To skip without adding, click Cancel — the suggestion stays in the inbox.
+            </div>`;
+        }
+      }
+      // Consume one-shot so a fresh open doesn't re-add.
+      window._bcAiPendingSuggestion = null;
+    }
+  } catch(e){ console.warn('[bc-fields] pending-suggestion consume failed:', e.message); }
+
   rerender();
 }

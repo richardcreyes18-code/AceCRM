@@ -338,8 +338,12 @@ export function _bcRenderExtraFields(chipText, record){
   const subtype  = colonIdx > 0 ? chip.slice(colonIdx + 1).trim() : '';
   const fullKey  = subtype ? `${category}: ${subtype}` : '';
 
-  const catDefs = _bcFieldsGet(category) || [];
-  const subDefs = fullKey ? (_bcFieldsGet(fullKey) || []) : [];
+  // v334: filter out custom fields flagged hidden=true so the BC form
+  // skips them. Admin still shows them for re-enable; only the live
+  // BC form respects the toggle. Mirrors the native-override "hidden"
+  // semantics at js/admin/bc-native-fields.js.
+  const catDefs = (_bcFieldsGet(category) || []).filter(d => d.hidden !== true);
+  const subDefs = fullKey ? (_bcFieldsGet(fullKey) || []).filter(d => d.hidden !== true) : [];
   // v325 fix: don't early-return purely on missing custom-field defs.
   // A scope can have 0 custom fields but Other Notes ENABLED — the
   // block() call needs to run so the Other Notes textarea renders.
@@ -548,12 +552,27 @@ export function _bcFieldsAdminForCategory(category, onClose){
         : '';
       const isFirstCustom = idx === 0;
       const isLastCustom  = idx === defs.length - 1;
+      // v334: context-aware tooltips on the disabled-state arrows so
+      // the grayed-out buttons don't look like a rendering bug when
+      // only one field exists.
+      const moveUpTitle   = isFirstCustom
+        ? (defs.length === 1 ? 'Need 2+ fields to reorder' : 'Already at top')
+        : 'Move up';
+      const moveDownTitle = isLastCustom
+        ? (defs.length === 1 ? 'Need 2+ fields to reorder' : 'Already at bottom')
+        : 'Move down';
+      const isVisible = d.hidden !== true;
       return `
-        <div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:10px;background:#fff;">
+        <div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:10px;background:${isVisible ? '#fff' : '#fef2f2'};">
           <div style="display:grid;grid-template-columns:auto 1fr 1fr 100px auto;gap:8px;align-items:end;">
-            <div style="display:flex;flex-direction:column;gap:2px;align-self:end;padding-bottom:5px;">
-              <button data-field-action="move-up" data-field-idx="${idx}" ${isFirstCustom ? 'disabled' : ''} title="Move up" style="background:${isFirstCustom?'#f1f5f9':'#eef2ff'};border:1px solid ${isFirstCustom?'#e2e8f0':'#c7d2fe'};color:${isFirstCustom?'#cbd5e1':'#3730a3'};cursor:${isFirstCustom?'not-allowed':'pointer'};font-size:12px;padding:1px 7px;border-radius:3px;line-height:1;">▲</button>
-              <button data-field-action="move-down" data-field-idx="${idx}" ${isLastCustom ? 'disabled' : ''} title="Move down" style="background:${isLastCustom?'#f1f5f9':'#eef2ff'};border:1px solid ${isLastCustom?'#e2e8f0':'#c7d2fe'};color:${isLastCustom?'#cbd5e1':'#3730a3'};cursor:${isLastCustom?'not-allowed':'pointer'};font-size:12px;padding:1px 7px;border-radius:3px;line-height:1;">▼</button>
+            <div style="display:flex;flex-direction:column;gap:4px;align-self:end;padding-bottom:5px;">
+              <!-- v334: Visible toggle — parity with native-field rows. Off → d.hidden=true → BC form skips this field. -->
+              <label style="display:inline-flex;align-items:center;gap:4px;font-size:10px;color:${isVisible ? '#15803d' : '#b91c1c'};font-weight:700;cursor:pointer;white-space:nowrap;" title="${isVisible ? 'Field is rendered on the BC form. Uncheck to hide.' : 'Field is hidden from the BC form. Check to show.'}">
+                <input type="checkbox" data-field-edit="${idx}" data-prop="hidden" ${isVisible ? 'checked' : ''} style="margin:0;width:13px;height:13px;cursor:pointer;"/>
+                ${isVisible ? 'Visible' : 'Hidden'}
+              </label>
+              <button data-field-action="move-up"   data-field-idx="${idx}" ${isFirstCustom ? 'disabled' : ''} title="${moveUpTitle}"   style="background:${isFirstCustom?'#f1f5f9':'#eef2ff'};border:1px solid ${isFirstCustom?'#e2e8f0':'#c7d2fe'};color:${isFirstCustom?'#cbd5e1':'#3730a3'};cursor:${isFirstCustom?'not-allowed':'pointer'};font-size:12px;padding:1px 7px;border-radius:3px;line-height:1;">▲</button>
+              <button data-field-action="move-down" data-field-idx="${idx}" ${isLastCustom  ? 'disabled' : ''} title="${moveDownTitle}" style="background:${isLastCustom?'#f1f5f9':'#eef2ff'};border:1px solid ${isLastCustom?'#e2e8f0':'#c7d2fe'};color:${isLastCustom?'#cbd5e1':'#3730a3'};cursor:${isLastCustom?'not-allowed':'pointer'};font-size:12px;padding:1px 7px;border-radius:3px;line-height:1;">▼</button>
             </div>
             <div>
               <label style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;font-weight:600;">Label (shown to user)</label>
@@ -794,6 +813,10 @@ export function _bcFieldsAdminForCategory(category, onClose){
     const prop = t.getAttribute('data-prop');
     const f = defs[idx];
     if(!f) return;
+    // v334: the hidden prop is bound to a checkbox; that's handled by
+    // the 'change' listener below. Defensive guard so a spurious
+    // 'input' event on the checkbox doesn't write "on" into f.hidden.
+    if(prop === 'hidden') return;
     if(prop === 'options'){
       f.options = String(t.value || '').split(/\n/).map(s => s.trim()).filter(Boolean);
     } else {
@@ -830,6 +853,20 @@ export function _bcFieldsAdminForCategory(category, onClose){
       else delete nativeOverrides[col];
       dirty = true;
       rerender();
+      return;
+    }
+    // v334: custom-field hidden-toggle change. Same semantics — checkbox
+    // is "Visible" (checked = visible); the def stores hidden=true
+    // when unchecked. Re-render so the row swaps to the red bg.
+    if(e.target && e.target.matches('[data-field-edit][data-prop="hidden"]')){
+      const idx = parseInt(e.target.getAttribute('data-field-edit'), 10);
+      if(!Number.isFinite(idx) || !defs[idx]) return;
+      const isVisible = !!e.target.checked;
+      if(isVisible) delete defs[idx].hidden;
+      else defs[idx].hidden = true;
+      dirty = true;
+      rerender();
+      return;
     }
   });
 

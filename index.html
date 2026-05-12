@@ -14001,9 +14001,10 @@ function dbRefreshMapPins(){
   if(_dbLeafletMap) initDealMap();
   // v111.3: if side panel is open, keep its contents in sync with filters
   if(_dbSidePanelOpen) _dbRenderSidePanel();
-  // Also refresh the banner count if a shape is active (count changes when
-  // other filters change)
-  if(_dbDrawnShape) _dbUpdateShapeBanner();
+  // v345: always refresh the action-bar banner so the count + buttons
+  // stay in sync with the current filters, regardless of whether a
+  // shape is drawn.
+  _dbUpdateShapeBanner();
 }
 
 function _dbCountyFilterSearch(q){
@@ -14158,40 +14159,42 @@ function _dbClearShape(){
 // Expose globally so inline onclick handlers can call it
 window._dbClearShape = _dbClearShape;
 
-// Update the blue banner above the filter bar to reflect current shape state.
-// Shows "N properties inside your area · Clear shape" when a shape is drawn,
-// or hides entirely when not.
+// v345: always-on action banner above the filter bar. Previously this
+// banner only appeared when a shape was drawn — the user had no Side
+// panel / View as list / Export CSV buttons on the default map view.
+// Now it renders unconditionally with the filtered-deal count and the
+// three action buttons; the "Clear shape" button only appears when
+// a shape is actually drawn.
 function _dbUpdateShapeBanner(){
   const el = document.getElementById('db_shape_banner');
   if(!el) return;
-  if(!_dbDrawnShape){
-    el.style.display = 'none';
-    el.innerHTML = '';
-    // Also close the side panel if it's open — shape gone, panel loses its reason
-    _dbCloseSidePanel();
-    return;
-  }
-  // Count matches = deals with coords that pass _dealInsideShape (ignoring
-  // other filters — just tells user how many are geographically inside).
+  // Always render the banner, drop the no-shape early-return.
+  const hasShape = !!_dbDrawnShape;
+  // Count = deals passing the FULL filter pipeline (filters + shape).
+  // Without a shape, _dealInsideShape returns true for every deal, so
+  // this reduces to "deals matching current filters".
   let matchCount = 0;
   for(const d of (allDeals || [])){
     if(d['Is Archived']) continue;
     if(_dealInsideShape(d)) matchCount++;
   }
-  const shapeName =
+  const shapeName = !hasShape ? null :
     _dbDrawnShape instanceof window.L.Circle    ? 'circle' :
     _dbDrawnShape instanceof window.L.Rectangle ? 'rectangle' :
     'polygon';
   el.style.display = 'flex';
+  const countLabel = hasShape
+    ? `<strong>${matchCount.toLocaleString()} propert${matchCount===1?'y':'ies'}</strong> inside your ${shapeName} <span style="color:#64748b;font-weight:400;">(combined with your other filters — see count above)</span>`
+    : `<strong>${matchCount.toLocaleString()} propert${matchCount===1?'y':'ies'}</strong> match your current filters <span style="color:#64748b;font-weight:400;">— draw a shape on the map to narrow further</span>`;
   el.innerHTML = `
-    <span style="font-size:16px;line-height:1;">🎯</span>
-    <span style="flex:1;"><strong>${matchCount.toLocaleString()} propert${matchCount===1?'y':'ies'}</strong> inside your ${shapeName} <span style="color:#64748b;font-weight:400;">(combined with your other filters — see count above)</span></span>
+    <span style="font-size:16px;line-height:1;">${hasShape ? '🎯' : '🗺️'}</span>
+    <span style="flex:1;">${countLabel}</span>
     <button onclick="_dbToggleSidePanel()" style="background:#fff;border:1px solid #7c3aed;color:#7c3aed;font-size:11px;font-weight:700;padding:5px 12px;border-radius:4px;cursor:pointer;" title="Show a slide-out list next to the map">📑 Side panel</button>
-    <button onclick="_dbViewAsList()" style="background:#fff;border:1px solid #7c3aed;color:#7c3aed;font-size:11px;font-weight:700;padding:5px 12px;border-radius:4px;cursor:pointer;" title="Switch to the full List view with your shape filter intact">📋 View as list</button>
+    <button onclick="_dbViewAsList()" style="background:#fff;border:1px solid #7c3aed;color:#7c3aed;font-size:11px;font-weight:700;padding:5px 12px;border-radius:4px;cursor:pointer;" title="Switch to the full List view with your current filters intact">📋 View as list</button>
     <button onclick="_dbExportShapeCSV()" style="background:#fff;border:1px solid #7c3aed;color:#7c3aed;font-size:11px;font-weight:700;padding:5px 12px;border-radius:4px;cursor:pointer;" title="Download the filtered deals as CSV">⬇ Export CSV</button>
-    <button onclick="_dbClearShape()" style="background:#7c3aed;border:1px solid #7c3aed;color:#fff;font-size:11px;font-weight:700;padding:5px 12px;border-radius:4px;cursor:pointer;">✕ Clear shape</button>
+    ${hasShape ? `<button onclick="_dbClearShape()" style="background:#7c3aed;border:1px solid #7c3aed;color:#fff;font-size:11px;font-weight:700;padding:5px 12px;border-radius:4px;cursor:pointer;">✕ Clear shape</button>` : ''}
   `;
-  // If the side panel is open, refresh its contents so counts + rows stay in sync
+  // If the side panel is open, refresh its contents so counts + rows stay in sync.
   if(_dbSidePanelOpen) _dbRenderSidePanel();
 }
 

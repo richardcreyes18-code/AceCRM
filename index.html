@@ -2477,7 +2477,11 @@ function buildSidebar(filter=''){
       // v144: address-normalized substring match in addition to raw substring
       const normAddr = fNorm ? _normalizeAddr(d['Address']||'') : '';
       const normMatches = fNorm && normAddr.indexOf(fNorm) !== -1;
-      if(!addr.includes(f) && !id.includes(f) && !ownerName.includes(f) && !cleanAddr.includes(f) && !normMatches) return false;
+      // v354: also match property name + complex name (the nicknames the
+      // user sets via the Edit Property Name modal).
+      const propName = (d['Property Name']||'').toLowerCase();
+      const complex  = (d['Complex Name']||'').toLowerCase();
+      if(!addr.includes(f) && !id.includes(f) && !ownerName.includes(f) && !cleanAddr.includes(f) && !normMatches && !propName.includes(f) && !complex.includes(f)) return false;
     }
     if(_sideView==='archived') return !!d['Is Archived'];
     if(_sideView==='starred') return !!d['Top Priority'] && !d['Is Archived'];
@@ -2498,12 +2502,16 @@ function buildSidebar(filter=''){
     if(countEl) countEl.textContent='0 deals';
     return;
   }
-  list.innerHTML=deals.map((d,i)=>`
+  list.innerHTML=deals.map((d,i)=>{
+    const pn = String(d['Property Name']||'').trim();
+    const pnSpan = pn ? ` <span style="color:#6366f1;font-weight:600;font-size:10px;">· ${pn.replace(/&/g,'&amp;').replace(/</g,'&lt;')}</span>` : '';
+    return `
     <div class="recent-item ${currentDeal&&currentDeal.id===d.id?'active':''}" onclick="openDeal(allDeals.find(x=>x.id==='${d.id}'))">
       <div class="dial-dot" style="background:${_sideView==='archived'?'#94a3b8':_sideView==='snoozed'?'#94a3b8':d['Top Priority']?'#f59e0b':'var(--green)'};"></div>
-      <div class="recent-name">${d['Address']||'Unnamed #'+(i+1)}</div>
+      <div class="recent-name">${d['Address']||'Unnamed #'+(i+1)}${pnSpan}</div>
       <div class="recent-id">${_sideView==='snoozed'?'💤':_sideView==='archived'?'📦':getStageShort(d)}</div>
-    </div>`).join('');
+    </div>`;
+  }).join('');
   // Update count bar
   const countEl=document.getElementById('sidebarCount');
   if(countEl){
@@ -3771,6 +3779,20 @@ async function saveEditAddressModal(){
       const clean = county.replace(/\s*county\s*/i,'').trim();
       countyEl.textContent = '📍 ' + clean + ' County, NJ';
     }
+    // v354: refresh the property-name pill next to the address. Hidden when
+    // the user cleared the name; visible-with-styling when set.
+    const propNameEl = document.getElementById('headerPropName');
+    if(propNameEl){
+      const pn = String(propName || '').trim();
+      if(pn){
+        propNameEl.style.cssText = 'background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px;white-space:nowrap;margin-left:6px;';
+        propNameEl.innerHTML = '🏷️ ' + pn.replace(/&/g,'&amp;').replace(/</g,'&lt;');
+        propNameEl.title = 'Property name (nickname)';
+      } else {
+        propNameEl.style.display = 'none';
+        propNameEl.innerHTML = '';
+      }
+    }
 
     // Refresh sidebar to pick up new address
     if(typeof buildSidebar === 'function'){
@@ -4189,6 +4211,8 @@ function renderDealPage(){
         <span class="dh-id"><span class="lbl">ID</span> ${leadId}</span>
         <div id="dealHeaderPhoto" style="display:none;flex-shrink:0;"></div>
         <div id="headerAddressText" class="dh-addr" title="${addr}">${addr}</div>
+        <!-- v354: Property Name (nickname) shown only when set. Inline-edited via the Edit modal. -->
+        ${(d['Property Name'] || '').trim() ? `<span id="headerPropName" class="dh-propname" title="Property name (nickname)" style="background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;font-size:11px;font-weight:700;padding:3px 9px;border-radius:99px;white-space:nowrap;margin-left:6px;">🏷️ ${String(d['Property Name']).trim().replace(/&/g,'&amp;').replace(/</g,'&lt;')}</span>` : `<span id="headerPropName" style="display:none;"></span>`}
         <div class="dh-addr-actions">
           <button id="headerEditAddrBtn" onclick="openEditAddressModal()" title="Edit property name &amp; address">Edit</button>
           <button id="headerMapsBtn" class="dh-maps-btn" onclick="openGoogleMaps('${addr.replace(/'/g,"\\'")}');" title="Open in Google Maps (Street View)">Maps</button>
@@ -14379,7 +14403,10 @@ function _dbComputeFilteredDeals(){
     const tFull = _dealAssetTypeFull(d);
     const addr = (d['Address']||'').toLowerCase();
     const notes = (d['Next Steps']||'').toLowerCase();
-    if(search && !(addr.includes(search) || c.toLowerCase().includes(search) || notes.includes(search) || tFull.toLowerCase().includes(search) || (d.id||'').toLowerCase().includes(search))) return false;
+    // v354: search also matches property name (nickname) + complex name
+    const propName = (d['Property Name']||'').toLowerCase();
+    const complex  = (d['Complex Name']||'').toLowerCase();
+    if(search && !(addr.includes(search) || c.toLowerCase().includes(search) || notes.includes(search) || tFull.toLowerCase().includes(search) || propName.includes(search) || complex.includes(search) || (d.id||'').toLowerCase().includes(search))) return false;
     if(selStages   && !selStages.includes(s)) return false;
     if(selCounties && !selCounties.includes(c)) return false;
     if(!_dealAssetTypeMatches(d, selTypes)) return false;
@@ -15048,7 +15075,10 @@ function renderDealBoard(){
     const addr = (d['Address']||'').toLowerCase();
     const countyLow = c.toLowerCase();
     const notes = (d['Next Steps']||'').toLowerCase();
-    const matchSearch  = !search || addr.includes(search) || countyLow.includes(search) || notes.includes(search) || tFull.toLowerCase().includes(search) || (d.id||'').toLowerCase().includes(search);
+    // v354: search also matches property name + complex name (nicknames)
+    const propName = (d['Property Name']||'').toLowerCase();
+    const complex  = (d['Complex Name']||'').toLowerCase();
+    const matchSearch  = !search || addr.includes(search) || countyLow.includes(search) || notes.includes(search) || tFull.toLowerCase().includes(search) || propName.includes(search) || complex.includes(search) || (d.id||'').toLowerCase().includes(search);
     const matchStage   = !selStages   || selStages.includes(s);
     const matchCounty  = !selCounties || selCounties.includes(c);
     const matchType    = _dealAssetTypeMatches(d, selTypes);

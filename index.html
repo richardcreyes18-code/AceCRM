@@ -26861,6 +26861,11 @@ function showSettingsPage(){
               <div style="font-size:12px;color:#64748b;margin-top:4px;">Items from Follow Up Boss that need a human decision. Nothing is auto-deleted or overwritten.</div>
             </div>
             <div style="display:flex;gap:8px;align-items:center;">
+              <!-- v341: bulk-merge button — opens a scanner that auto-applies the
+                   v340 field-merge to every pending merge queue row whose dedup
+                   signal is unambiguously safe (1 phone each + phones match +
+                   names compatible OR one is "No name"). -->
+              <button onclick="_reconBulkMergeSafeOpen()" id="reconBulkMergeBtn" style="background:#0f766e;color:#fff;border:none;padding:7px 14px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">✦ Bulk merge safe candidates</button>
               <select id="reconQueueFilter" onchange="_reconQueueRender(true)" style="padding:6px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;background:#fff;">
                 <option value="all">All types</option>
                 <option value="conflict">Conflicts</option>
@@ -28768,6 +28773,385 @@ async function _reconMergeFieldsAndMarkDuplicate(queueId, aceId, oldFubId, newFu
     if(btn){ btn.disabled = false; btn.textContent = 'Retry'; }
   }
 }
+
+// ═══════════════════════════════════════════════════════════════
+//  v341: BULK "MERGE SAFE CANDIDATES" SCANNER + EXECUTOR
+// ═══════════════════════════════════════════════════════════════
+//
+// Scans every pending merge queue row, hydrates both sides
+// (ace_contacts + fub_contacts), filters to the unambiguously-safe
+// subset, and bulk-applies the v340 merge-fields-and-mark-as-
+// duplicate flow.
+//
+// SAFE criteria (all must hold):
+//   • action = 'merge'
+//   • status = 'pending'
+//   • ace_target_id present (single canonical ace_contact to merge into)
+//   • exactly 1 phone on each side
+//   • the phones match (last-7-digit normalization)
+//   • names are compatible: same after normalization, OR one side is a sentinel ("No name", "Unknown", etc.)
+//
+// Anything ambiguous (multi-candidate merges, different real names,
+// multiple phones, no phone match) is SKIPPED — user must process
+// those one by one.
+
+// Name sentinels — kept identical to the per-row merge handler so
+// "safe" decisions are consistent.
+const _RECON_NAME_SENTINELS = new Set([
+  'no name', '(no name)', 'noname',
+  'unknown', 'unknown name', 'name unknown',
+  'tbd', 'n/a', 'na', '—', '-', '--',
+  'no first name', 'no last name', '',
+]);
+
+function _reconNormName(s){
+  return String(s || '').trim().toLowerCase().replace(/[^a-z0-9 ]/g, '').replace(/\s+/g, ' ');
+}
+function _reconIsSentinelName(s){
+  return _RECON_NAME_SENTINELS.has(_reconNormName(s));
+}
+function _reconLast7(s){
+  return String(s || '').replace(/\D/g, '').slice(-7);
+}
+
+// Counts every distinct phone on the ace side. Scalar columns
+// (phone_number, secondary_phone, phone_mobile, phone_office) plus
+// the all_phones jsonb array. Returns array of last-7-digit strings,
+// deduped.
+function _reconAcePhones(ace){
+  const out = new Set();
+  for(const k of ['phone_number','secondary_phone','phone_mobile','phone_office']){
+    const v = _reconLast7(ace[k]);
+    if(v) out.add(v);
+  }
+  if(Array.isArray(ace.all_phones)){
+    for(const p of ace.all_phones){
+      const val = p && (p.value || p.number || p.phone);
+      const v = _reconLast7(val);
+      if(v) out.add(v);
+    }
+  }
+  return [...out];
+}
+function _reconFubPhones(fub){
+  const out = new Set();
+  if(Array.isArray(fub.phones)){
+    for(const p of fub.phones){
+      const v = _reconLast7(p && p.value);
+      if(v) out.add(v);
+    }
+  }
+  return [...out];
+}
+
+window._reconBulkMergeSafeOpen = async function(){
+  // Dialog frame.
+  let modal = document.getElementById('reconBulkMergeModal');
+  if(!modal){
+    modal = document.createElement('div');
+    modal.id = 'reconBulkMergeModal';
+    modal.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9999;align-items:flex-start;justify-content:center;padding:40px 20px;overflow-y:auto;';
+    modal.onclick = e => { if(e.target === modal) modal.style.display = 'none'; };
+    modal.innerHTML = `
+      <div style="background:#fff;border-radius:12px;max-width:920px;width:100%;max-height:calc(100vh - 80px);overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.3);display:flex;flex-direction:column;">
+        <div style="padding:18px 24px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;">
+          <div>
+            <div style="font-size:16px;font-weight:700;color:#0f172a;">✦ Bulk merge safe duplicate candidates</div>
+            <div style="font-size:11px;color:#64748b;margin-top:3px;">Auto-applies "Merge fields + mark as duplicate" to every pending merge row where the dedup signal is unambiguous.</div>
+          </div>
+          <button onclick="document.getElementById('reconBulkMergeModal').style.display='none'" style="background:transparent;border:none;font-size:22px;color:#94a3b8;cursor:pointer;line-height:1;">×</button>
+        </div>
+        <div id="reconBulkMergeBody" style="padding:20px 24px;overflow-y:auto;flex:1;">
+          <div style="padding:30px;text-align:center;color:#94a3b8;font-size:12px;">Scanning pending merge queue…</div>
+        </div>
+      </div>`;
+    document.body.appendChild(modal);
+  }
+  modal.style.display = 'flex';
+  const body = document.getElementById('reconBulkMergeBody');
+  body.innerHTML = '<div style="padding:30px;text-align:center;color:#94a3b8;font-size:12px;">⏳ Scanning pending merge queue…</div>';
+
+  // 1. Fetch every pending merge queue row (cap 1000 to stay within
+  // a reasonable response size).
+  let queueRows;
+  try{
+    queueRows = await _sbGet('ace_fub_reconcile_queue',
+      'select=id,fub_source_id,ace_target_id,candidate_matches,reason,created_at&status=eq.pending&action=eq.merge&order=created_at.asc&limit=1000');
+  }catch(e){
+    body.innerHTML = `<div style="padding:30px;text-align:center;color:#dc2626;font-size:12px;">Failed to load queue: ${_reconEsc(e.message||e)}</div>`;
+    return;
+  }
+  if(!Array.isArray(queueRows) || !queueRows.length){
+    body.innerHTML = '<div style="padding:30px;text-align:center;color:#16a34a;font-size:13px;">✓ No pending merge rows to scan.</div>';
+    return;
+  }
+
+  // 2. Collect ace_target_ids + fub_source_ids to hydrate in two
+  // batched queries.
+  const aceIds = [...new Set(queueRows.map(r => r.ace_target_id).filter(Boolean))];
+  const fubIds = [...new Set(queueRows.map(r => r.fub_source_id).filter(Boolean))];
+  let aceMap = {}, fubMap = {};
+  try{
+    const BATCH = 100;
+    if(aceIds.length){
+      for(let i = 0; i < aceIds.length; i += BATCH){
+        const chunk = aceIds.slice(i, i + BATCH);
+        // Quote uuids — they need single quotes inside in.()
+        const inList = chunk.map(id => `"${id}"`).join(',');
+        const rows = await _sbGet('ace_contacts',
+          `select=id,name,phone_number,secondary_phone,phone_mobile,phone_office,all_phones&id=in.(${inList})`);
+        for(const r of (rows||[])) aceMap[r.id] = r;
+      }
+    }
+    if(fubIds.length){
+      for(let i = 0; i < fubIds.length; i += BATCH){
+        const chunk = fubIds.slice(i, i + BATCH);
+        const rows = await _sbGet('fub_contacts',
+          `select=id,name,first_name,last_name,phones&id=in.(${chunk.join(',')})`);
+        for(const r of (rows||[])) fubMap[r.id] = r;
+      }
+    }
+  }catch(e){
+    body.innerHTML = `<div style="padding:30px;text-align:center;color:#dc2626;font-size:12px;">Hydrate failed: ${_reconEsc(e.message||e)}</div>`;
+    return;
+  }
+
+  // 3. Filter to safe candidates.
+  const safe = [];
+  const skipped = { noAceTarget:0, multipleAcePhones:0, multipleFubPhones:0, phoneMismatch:0, nameDifferent:0, missingData:0 };
+  for(const qr of queueRows){
+    const cm = qr.candidate_matches || {};
+    const aceTargetId = qr.ace_target_id
+      || (Array.isArray(cm.candidate_ids) && cm.candidate_ids.length === 1 ? cm.candidate_ids[0] : null);
+    if(!aceTargetId){ skipped.noAceTarget++; continue; }
+    const ace = aceMap[aceTargetId];
+    const fub = fubMap[qr.fub_source_id];
+    if(!ace || !fub){ skipped.missingData++; continue; }
+    const acePhones = _reconAcePhones(ace);
+    const fubPhones = _reconFubPhones(fub);
+    if(acePhones.length !== 1){ skipped.multipleAcePhones++; continue; }
+    if(fubPhones.length !== 1){ skipped.multipleFubPhones++; continue; }
+    if(acePhones[0] !== fubPhones[0]){ skipped.phoneMismatch++; continue; }
+    const aceName = _reconNormName(ace.name);
+    const fubName = _reconNormName(
+      [fub.first_name, fub.last_name].filter(Boolean).join(' ').trim() || fub.name || ''
+    );
+    const namesCompatible =
+      _reconIsSentinelName(ace.name) ||
+      _reconIsSentinelName(fubName) ||
+      (aceName && fubName && aceName === fubName);
+    if(!namesCompatible){ skipped.nameDifferent++; continue; }
+    // Determine the canonical (oldFubId) — for FUB-side-dup rows
+    // it's cm.existing_fub_id; for single-candidate merges where the
+    // ace contact already has a fub_contact_id set, use that. If
+    // neither, the existing FUB id is the one already on the ace
+    // row (caller doesn't have that yet — fetch fub_contact_id when
+    // hydrating ace). Skip for now if we can't determine it.
+    const oldFubId = cm.existing_fub_id || null;
+    if(!oldFubId){ skipped.noAceTarget++; continue; }
+    safe.push({ qr, ace, fub, aceTargetId, oldFubId, newFubId: qr.fub_source_id });
+  }
+
+  // 4. Render the preview.
+  const totalPending = queueRows.length;
+  const safeCount = safe.length;
+  const skippedTotal = totalPending - safeCount;
+  const skipBreakdown = Object.entries(skipped)
+    .filter(([_, v]) => v > 0)
+    .map(([k, v]) => {
+      const label = {
+        noAceTarget:'no canonical FUB id (need manual pick)',
+        multipleAcePhones:'CRM has >1 phone',
+        multipleFubPhones:'FUB has >1 phone',
+        phoneMismatch:'phones don\'t match',
+        nameDifferent:'real names differ',
+        missingData:'hydrate gap',
+      }[k] || k;
+      return `<li>${v.toLocaleString()} — ${label}</li>`;
+    }).join('');
+  const previewList = safe.slice(0, 20).map(s => {
+    const aceLabel = _reconIsSentinelName(s.ace.name) ? `<em style="color:#94a3b8;">${_reconEsc(s.ace.name || 'No name')}</em>` : _reconEsc(s.ace.name);
+    const fubName = [s.fub.first_name, s.fub.last_name].filter(Boolean).join(' ') || s.fub.name || '';
+    const phone = (s.fub.phones && s.fub.phones[0] && s.fub.phones[0].value) || s.ace.phone_number || '—';
+    return `<tr style="border-bottom:1px solid #f1f5f9;"><td style="padding:5px 8px;font-size:11px;color:#0f172a;">${aceLabel}</td><td style="padding:5px 8px;font-size:11px;color:#0f172a;">${_reconEsc(fubName)}</td><td style="padding:5px 8px;font-size:11px;color:#64748b;font-family:monospace;">${_reconEsc(phone)}</td><td style="padding:5px 8px;font-size:11px;color:#94a3b8;">FUB #${s.newFubId} → #${s.oldFubId}</td></tr>`;
+  }).join('');
+
+  body.innerHTML = `
+    <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:14px 16px;margin-bottom:14px;">
+      <div style="font-size:13px;font-weight:700;color:#075985;margin-bottom:4px;">Safe to bulk-merge: ${safeCount.toLocaleString()}</div>
+      <div style="font-size:11px;color:#075985;line-height:1.6;">
+        Each safe row will get the same treatment as clicking ✦ Merge fields + mark as duplicate manually:
+        non-empty CRM fields preserved, empty fields filled from FUB, tags unioned, addresses appended,
+        FUB-assigned agent added as a relationship, then v339 mark-as-duplicate applied.
+      </div>
+    </div>
+    ${skippedTotal > 0 ? `
+      <div style="background:#fefce8;border:1px solid #fde68a;border-radius:8px;padding:12px 16px;margin-bottom:14px;font-size:11px;color:#854d0e;">
+        <strong>${skippedTotal.toLocaleString()} skipped</strong> (need manual review):
+        <ul style="margin:4px 0 0 18px;padding:0;line-height:1.5;">${skipBreakdown}</ul>
+      </div>` : ''}
+    ${safeCount > 0 ? `
+      <div style="margin-bottom:14px;">
+        <div style="font-size:11px;font-weight:700;color:#0f172a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Preview (first ${Math.min(safeCount, 20)} of ${safeCount.toLocaleString()})</div>
+        <div style="background:#fff;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden;">
+          <table style="width:100%;border-collapse:collapse;">
+            <thead><tr style="background:#f8fafc;text-align:left;"><th style="padding:6px 8px;font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.04em;">Existing</th><th style="padding:6px 8px;font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.04em;">Incoming</th><th style="padding:6px 8px;font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.04em;">Phone</th><th style="padding:6px 8px;font-size:10px;color:#64748b;font-weight:700;text-transform:uppercase;letter-spacing:.04em;">Action</th></tr></thead>
+            <tbody>${previewList}</tbody>
+          </table>
+        </div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:10px;">
+        <button onclick="document.getElementById('reconBulkMergeModal').style.display='none'" style="background:transparent;border:1px solid #cbd5e1;color:#64748b;padding:8px 14px;font-size:12px;border-radius:8px;cursor:pointer;font-family:inherit;">Cancel</button>
+        <button onclick="_reconBulkMergeSafeRun()" id="reconBulkMergeRunBtn" style="background:#0f766e;color:#fff;border:none;padding:8px 18px;font-size:12px;font-weight:700;border-radius:8px;cursor:pointer;font-family:inherit;">Start bulk merge (${safeCount.toLocaleString()})</button>
+      </div>` : `
+      <div style="padding:20px;text-align:center;color:#64748b;font-size:12px;">No safe candidates to bulk-merge right now.</div>
+      <div style="display:flex;justify-content:flex-end;">
+        <button onclick="document.getElementById('reconBulkMergeModal').style.display='none'" style="background:#1e3a8a;color:#fff;border:none;padding:8px 18px;font-size:12px;font-weight:700;border-radius:8px;cursor:pointer;font-family:inherit;">Close</button>
+      </div>`}`;
+
+  // Stash the safe list for the executor.
+  window._reconBulkMergeSafeQueue = safe;
+};
+
+window._reconBulkMergeSafeRun = async function(){
+  const queue = window._reconBulkMergeSafeQueue || [];
+  if(!queue.length) return;
+  const body = document.getElementById('reconBulkMergeBody');
+  const runBtn = document.getElementById('reconBulkMergeRunBtn');
+  if(runBtn){ runBtn.disabled = true; runBtn.textContent = '⏳ Running…'; }
+
+  // Pre-load the user list so we can resolve fub.assigned_to without
+  // re-fetching per row.
+  let users = [];
+  try{
+    users = (typeof window._relLoadUsers === 'function')
+      ? await window._relLoadUsers()
+      : await _sbGet('ace_users', 'select=id,name,fub_name,role');
+  }catch(_){ users = []; }
+  const ALIAS = {
+    'Dan Keenan':'Daniel Keenan', 'Joe Domenech':'Joseph Domenech',
+    'Joe Spinella':'Joseph Spinella', 'Tim Emrich':'Timothy Emrich',
+    'William Hartgers':'Will Hartgers', 'Everett James':'Everett McNulty',
+  };
+  const resolveUser = name => {
+    if(!name) return null;
+    const r = ALIAS[name] || name;
+    return users.find(u => u.fub_name === r || u.name === r) || null;
+  };
+
+  const NAME_SENTINELS_LOCAL = _RECON_NAME_SENTINELS;
+  const isEmptyVal = (v, col) => {
+    if(v == null) return true;
+    const s = String(v).trim().toLowerCase();
+    if(!s) return true;
+    if((col === 'name' || col === 'company') && NAME_SENTINELS_LOCAL.has(s)) return true;
+    return false;
+  };
+
+  let ok = 0, fail = 0;
+  const errors = [];
+
+  // Render a progress shell.
+  body.innerHTML = `
+    <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:14px 16px;margin-bottom:14px;">
+      <div id="reconBulkMergeProgressLabel" style="font-size:13px;font-weight:700;color:#075985;margin-bottom:8px;">Processing 0 / ${queue.length}…</div>
+      <div style="height:8px;background:#e0f2fe;border-radius:99px;overflow:hidden;"><div id="reconBulkMergeProgressBar" style="height:100%;width:0%;background:linear-gradient(90deg,#0d9488,#0f766e);transition:width .2s;"></div></div>
+    </div>
+    <div id="reconBulkMergeLog" style="background:#0f172a;color:#cbd5e1;border-radius:6px;padding:12px 14px;font-family:'Source Code Pro',ui-monospace,Menlo,monospace;font-size:10px;line-height:1.5;max-height:240px;overflow-y:auto;white-space:pre-wrap;"></div>`;
+
+  const log = msg => {
+    const el = document.getElementById('reconBulkMergeLog');
+    if(el){ el.textContent += msg + '\n'; el.scrollTop = el.scrollHeight; }
+  };
+  const updateProgress = (done) => {
+    const pct = Math.round((done / queue.length) * 100);
+    const label = document.getElementById('reconBulkMergeProgressLabel');
+    const bar = document.getElementById('reconBulkMergeProgressBar');
+    if(label) label.textContent = `Processing ${done} / ${queue.length}…`;
+    if(bar)   bar.style.width   = pct + '%';
+  };
+
+  for(let i = 0; i < queue.length; i++){
+    const { qr, ace, fub, aceTargetId, oldFubId, newFubId } = queue[i];
+    const fubName = [fub.first_name, fub.last_name].filter(Boolean).join(' ') || fub.name || '(no name)';
+    try{
+      // Need richer ace + fub for the actual merge fields. The scan
+      // only loaded the minimum to decide safety; re-fetch wider
+      // columns now.
+      const [aceFullRows, fubFullRows] = await Promise.all([
+        _sbGet('ace_contacts', `select=id,name,phone_number,secondary_phone,email,secondary_email,company,fub_stage,fub_source,fub_assigned_to,fub_deal_name,fub_deal_status,fub_deal_price,fub_tags,addresses&id=eq.${aceTargetId}`),
+        _sbGet('fub_contacts', `select=id,name,first_name,last_name,stage,source,assigned_to,tags,phones,emails,addresses,deal_name,deal_status,deal_price&id=eq.${newFubId}`),
+      ]);
+      const aceFull = aceFullRows && aceFullRows[0];
+      const fubFull = fubFullRows && fubFullRows[0];
+      if(!aceFull || !fubFull) throw new Error('hydrate failed for full row');
+
+      const patch = {};
+      const fill = (col, val) => { if(!isEmptyVal(val, col) && isEmptyVal(aceFull[col], col)) patch[col] = val; };
+      const fubFullName = [fubFull.first_name, fubFull.last_name].filter(Boolean).join(' ').trim() || fubFull.name || '';
+      const fubPrimaryEmail = (Array.isArray(fubFull.emails) && fubFull.emails[0]) ? fubFull.emails[0].value : '';
+      fill('name', fubFullName);
+      fill('email', fubPrimaryEmail);
+      fill('fub_stage', fubFull.stage);
+      fill('fub_source', fubFull.source);
+      fill('fub_assigned_to', fubFull.assigned_to);
+      fill('fub_deal_name', fubFull.deal_name);
+      fill('fub_deal_status', fubFull.deal_status);
+      fill('fub_deal_price', fubFull.deal_price);
+
+      // Tag union.
+      const existingTags = Array.isArray(aceFull.fub_tags) ? aceFull.fub_tags : [];
+      const incomingTags = Array.isArray(fubFull.tags) ? fubFull.tags : [];
+      const tagSet = new Set(existingTags);
+      let tagsAdded = 0;
+      for(const t of incomingTags){ if(t && !tagSet.has(t)){ tagSet.add(t); tagsAdded++; } }
+      if(tagsAdded) patch.fub_tags = [...tagSet];
+
+      // Address union.
+      const existingAddrs = Array.isArray(aceFull.addresses) ? aceFull.addresses : [];
+      const incomingAddrs = Array.isArray(fubFull.addresses) ? fubFull.addresses : [];
+      const addrKey = a => [a && a.street, a && a.city, a && a.state, a && a.code]
+        .map(x => String(x||'').toLowerCase().trim()).filter(Boolean).join('|');
+      const seenKeys = new Set(existingAddrs.map(addrKey).filter(Boolean));
+      let addrsAddedCount = 0;
+      const merged = [...existingAddrs];
+      for(const a of incomingAddrs){
+        const k = addrKey(a);
+        if(!k || seenKeys.has(k)) continue;
+        seenKeys.add(k); merged.push(a); addrsAddedCount++;
+      }
+      if(addrsAddedCount) patch.addresses = merged;
+
+      if(Object.keys(patch).length){
+        await _sbPatch('ace_contacts', aceTargetId, patch);
+      }
+
+      const agentUser = resolveUser(fubFull.assigned_to);
+      if(agentUser && typeof window._relAddAgent === 'function'){
+        try { await window._relAddAgent(aceTargetId, agentUser.id, { source: 'fub_duplicate_merge', sourceRefId: String(newFubId) }); }
+        catch(e){ /* non-fatal */ }
+      }
+
+      await _reconRpc('merge_fub_activity', { p_old_fub_id: oldFubId, p_new_fub_id: newFubId });
+      await _reconRpc('resolve_queue_merge', { p_queue_id: qr.id, p_chosen_ace: null });
+
+      ok++;
+      log(`✓ ${i+1}/${queue.length}  ${fubName}  →  FUB #${oldFubId}  (fields:${Object.keys(patch).length} tags:+${tagsAdded} addrs:+${addrsAddedCount}${agentUser?' agent:'+ (agentUser.fub_name||agentUser.name):''})`);
+    }catch(e){
+      fail++;
+      const msg = String(e.message || e || '');
+      errors.push({ queueId: qr.id, newFubId, oldFubId, message: msg });
+      log(`✗ ${i+1}/${queue.length}  ${fubName}  →  FAIL: ${msg.slice(0, 140)}`);
+    }
+    updateProgress(i + 1);
+  }
+
+  if(runBtn){ runBtn.disabled = false; runBtn.textContent = 'Done'; }
+  log(`\n— Done. ${ok} merged, ${fail} failed.`);
+
+  // Refresh the underlying queue list so the resolved rows drop off.
+  setTimeout(() => _reconQueueRender(true), 600);
+};
 
 // ═══════════════════════════════════════════════════════════════
 //  DATABASE CONNECTION TEST (Settings page)

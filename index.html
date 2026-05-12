@@ -28167,17 +28167,21 @@ function _reconRowHtml(r, fubBy, aceBy, actBy){
         <span style="color:#94a3b8;font-size:10px;">FUB #${r.fub_source_id}</span>
         ${activityChip}
         <span style="color:#cbd5e1;font-size:10px;margin-left:auto;">${_reconEsc(new Date(r.created_at).toLocaleString())}</span>
-        <button onclick="_reconOpenPreview(${r.fub_source_id})" style="background:#fff;border:1px solid #cbd5e1;color:#2563eb;padding:3px 10px;border-radius:6px;font-size:10px;font-weight:600;cursor:pointer;">🔍 Preview all data</button>
+        <button onclick="_reconOpenPreview(${r.id})" style="background:#fff;border:1px solid #cbd5e1;color:#2563eb;padding:3px 10px;border-radius:6px;font-size:10px;font-weight:600;cursor:pointer;">🔍 Preview all data</button>
       </div>
       ${body}
       <div style="margin-top:10px;display:flex;flex-wrap:wrap;gap:6px;">${actions}</div>
     </div>`;
 }
 
-// v111.13: Preview modal — everything FUB has for a contact
-// Fetches fub_contacts + fub_notes + fub_calls in parallel so the user can see
-// exactly what will land in ace_contacts before approving a queue action.
-async function _reconOpenPreview(fubId){
+// v111.13: Preview modal — everything FUB has for a contact.
+// v337: takes a queue-row id (not a raw fub id) so it can render
+// side-by-side when the action is merge/conflict. Left column = the
+// existing ace contact (and its currently-linked FUB record, if any).
+// Right column = the incoming FUB record. A top "Match analysis"
+// panel surfaces phone/email overlap so the agent can tell at a
+// glance whether the merge candidate is the same person or not.
+async function _reconOpenPreview(queueId){
   let modal = document.getElementById('reconPreviewModal');
   if(!modal){
     modal = document.createElement('div');
@@ -28185,9 +28189,9 @@ async function _reconOpenPreview(fubId){
     modal.style.cssText = 'display:none;position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9999;align-items:flex-start;justify-content:center;padding:40px 20px;overflow-y:auto;';
     modal.onclick = e => { if(e.target === modal) _reconClosePreview(); };
     modal.innerHTML = `
-      <div style="background:#fff;border-radius:12px;max-width:860px;width:100%;max-height:calc(100vh - 80px);overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.3);display:flex;flex-direction:column;">
+      <div style="background:#fff;border-radius:12px;max-width:1280px;width:100%;max-height:calc(100vh - 80px);overflow:hidden;box-shadow:0 20px 60px rgba(0,0,0,0.3);display:flex;flex-direction:column;">
         <div id="reconPreviewHeader" style="padding:18px 24px;border-bottom:1px solid #e2e8f0;display:flex;align-items:center;justify-content:space-between;">
-          <div style="font-size:16px;font-weight:700;color:#0f172a;">FUB Contact Preview</div>
+          <div style="font-size:16px;font-weight:700;color:#0f172a;">Contact Preview</div>
           <button onclick="_reconClosePreview()" style="background:transparent;border:none;font-size:22px;color:#94a3b8;cursor:pointer;line-height:1;">×</button>
         </div>
         <div id="reconPreviewBody" style="padding:20px 24px;overflow-y:auto;flex:1;">
@@ -28198,24 +28202,214 @@ async function _reconOpenPreview(fubId){
   }
   modal.style.display = 'flex';
   const body = document.getElementById('reconPreviewBody');
-  body.innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8;font-size:12px;">Loading FUB data…</div>';
+  body.innerHTML = '<div style="padding:40px;text-align:center;color:#94a3b8;font-size:12px;">Loading…</div>';
+
+  // Look up the queue row from in-memory state so we have the full
+  // context (action, ace_target_id, candidate_matches) without
+  // re-fetching. v337.
+  const qr = (_RECON_STATE.rows || []).find(x => x.id === queueId);
+  if(!qr){
+    body.innerHTML = '<div style="padding:40px;text-align:center;color:#dc2626;font-size:12px;">Queue row not found in local cache — refresh and retry.</div>';
+    return;
+  }
+  const incomingFubId = qr.fub_source_id;
+  const cm = qr.candidate_matches || {};
+  // For merge/conflict, pick the ace target: ace_target_id wins, else
+  // the first candidate match id.
+  const aceId = qr.ace_target_id
+    || (Array.isArray(cm.candidate_ids) && cm.candidate_ids[0])
+    || null;
+  // FUB-side duplicate: the matched ace contact is already bound to
+  // a different FUB id. Pull THAT FUB too so we can show its history.
+  const existingFubId = (cm && cm.existing_fub_id) || null;
 
   try{
-    const [contactRows, notes, calls] = await Promise.all([
+    // Always-fetch the incoming FUB record + its activity.
+    const incomingP = Promise.all([
       _sbGet('fub_contacts',
-        `select=id,name,first_name,last_name,type,stage,source,assigned_to,tags,phones,emails,addresses,deal_name,deal_status,deal_stage,deal_price,price,created_at,updated_at,last_activity&id=eq.${fubId}`),
+        `select=id,name,first_name,last_name,type,stage,source,assigned_to,tags,phones,emails,addresses,deal_name,deal_status,deal_stage,deal_price,price,created_at,updated_at,last_activity&id=eq.${incomingFubId}`),
       _sbGet('fub_notes',
-        `select=id,subject,body,created_by,created_at&person_id=eq.${fubId}&order=created_at.desc&limit=50`).catch(()=>[]),
+        `select=id,subject,body,created_by,created_at&person_id=eq.${incomingFubId}&order=created_at.desc&limit=50`).catch(()=>[]),
       _sbGet('fub_calls',
-        `select=id,direction,outcome,duration,phone,note,summary,created_at,user_id&person_id=eq.${fubId}&order=created_at.desc&limit=50`).catch(()=>[]),
+        `select=id,direction,outcome,duration,phone,note,summary,created_at,user_id&person_id=eq.${incomingFubId}&order=created_at.desc&limit=50`).catch(()=>[]),
     ]);
-    const c = contactRows && contactRows[0];
-    if(!c){ body.innerHTML = '<div style="padding:40px;text-align:center;color:#dc2626;">FUB contact not found</div>'; return; }
-    document.getElementById('reconPreviewHeader').firstElementChild.textContent = `${c.name || '(no name)'} — FUB #${c.id}`;
-    body.innerHTML = _reconPreviewHtml(c, notes||[], calls||[]);
+
+    // Existing ace + (optionally) its currently-linked FUB record.
+    const existingAceP = aceId
+      ? _sbGet('ace_contacts',
+          `select=id,name,phone_number,secondary_phone,email,company,contact_notes,type,fub_stage,fub_source,fub_contact_id,fub_tags,date_added,deleted_at&id=eq.${aceId}`)
+      : Promise.resolve([]);
+    const existingFubP = existingFubId
+      ? Promise.all([
+          _sbGet('fub_contacts',
+            `select=id,name,first_name,last_name,type,stage,source,assigned_to,tags,phones,emails,addresses,deal_name,deal_status,deal_stage,deal_price,price,created_at,updated_at,last_activity&id=eq.${existingFubId}`),
+          _sbGet('fub_notes',
+            `select=id,subject,body,created_by,created_at&person_id=eq.${existingFubId}&order=created_at.desc&limit=50`).catch(()=>[]),
+          _sbGet('fub_calls',
+            `select=id,direction,outcome,duration,phone,note,summary,created_at,user_id&person_id=eq.${existingFubId}&order=created_at.desc&limit=50`).catch(()=>[]),
+        ])
+      : Promise.resolve([[], [], []]);
+
+    const [[incContactRows, incNotes, incCalls], aceRows, [exFubRows, exNotes, exCalls]] = await Promise.all([
+      incomingP, existingAceP, existingFubP,
+    ]);
+
+    const incoming = incContactRows && incContactRows[0];
+    if(!incoming){ body.innerHTML = '<div style="padding:40px;text-align:center;color:#dc2626;">Incoming FUB contact not found</div>'; return; }
+    const ace = aceRows && aceRows[0];
+    const exFub = exFubRows && exFubRows[0];
+
+    // Header title.
+    const hdr = document.getElementById('reconPreviewHeader').firstElementChild;
+    if(ace || exFub){
+      hdr.textContent = `Compare — ${(ace && ace.name) || (exFub && exFub.name) || 'existing'} ↔ ${incoming.name || '(no name)'}`;
+    } else {
+      hdr.textContent = `${incoming.name || '(no name)'} — FUB #${incoming.id}`;
+    }
+
+    // Render: side-by-side when we have an existing ace (or existing
+    // FUB) to compare against; single-column for pure-create.
+    if(ace || exFub){
+      body.innerHTML = _reconSideBySideHtml({
+        action: qr.action,
+        ace, exFub, exNotes: exNotes || [], exCalls: exCalls || [],
+        incoming, incNotes: incNotes || [], incCalls: incCalls || [],
+      });
+    } else {
+      body.innerHTML = _reconPreviewHtml(incoming, incNotes || [], incCalls || []);
+    }
   }catch(e){
     body.innerHTML = `<div style="padding:40px;text-align:center;color:#dc2626;">Failed to load: ${_reconEsc(e.message||e)}</div>`;
   }
+}
+
+// v337: side-by-side render. Left = existing ace (+ optionally its
+// currently-linked FUB record). Right = incoming FUB record. Top
+// "Match analysis" panel highlights phone/email overlap so the agent
+// can tell whether the merge candidate is the same person.
+function _reconSideBySideHtml({ action, ace, exFub, exNotes, exCalls, incoming, incNotes, incCalls }){
+  // Collect comparable values from both sides.
+  const norm = s => String(s||'').toLowerCase().replace(/[^a-z0-9]/g,'');
+  const last7 = s => norm(s).slice(-7);
+  // Phones: ace has `phone_number` + `secondary_phone` (strings); FUB has phones[] array of {type,value}.
+  const acePhones = ace ? [ace.phone_number, ace.secondary_phone].filter(Boolean) : [];
+  const exFubPhones = (exFub && Array.isArray(exFub.phones)) ? exFub.phones.map(p => p.value).filter(Boolean) : [];
+  const leftPhones  = [...new Set([...acePhones, ...exFubPhones])];
+  const rightPhones = (Array.isArray(incoming.phones) ? incoming.phones.map(p => p.value).filter(Boolean) : []);
+  const phoneMatches = leftPhones.filter(lp => rightPhones.some(rp => last7(lp) && last7(lp) === last7(rp)));
+  // Emails.
+  const aceEmails = ace && ace.email ? [ace.email] : [];
+  const exFubEmails = (exFub && Array.isArray(exFub.emails)) ? exFub.emails.map(e => e.value).filter(Boolean) : [];
+  const leftEmails  = [...new Set([...aceEmails, ...exFubEmails])];
+  const rightEmails = (Array.isArray(incoming.emails) ? incoming.emails.map(e => e.value).filter(Boolean) : []);
+  const emailMatches = leftEmails.filter(le => rightEmails.some(re => norm(le) === norm(re)));
+  // Name similarity (loose).
+  const leftName  = (ace && ace.name) || (exFub && exFub.name) || '';
+  const rightName = incoming.name || '';
+  const nameExact = leftName && rightName && norm(leftName) === norm(rightName);
+  const nameTokensShared = (() => {
+    const a = new Set(norm(leftName).match(/[a-z0-9]+/gi)  ? leftName.toLowerCase().split(/\s+/).filter(t=>t.length>=3) : []);
+    const b = new Set(rightName ? rightName.toLowerCase().split(/\s+/).filter(t=>t.length>=3) : []);
+    let n = 0; for(const t of a) if(b.has(t)) n++;
+    return n;
+  })();
+
+  const matchBadge = (label, ok, detail) => `
+    <div style="background:${ok?'#dcfce7':'#fef2f2'};border:1px solid ${ok?'#86efac':'#fecaca'};color:${ok?'#14532d':'#991b1b'};padding:6px 10px;border-radius:6px;font-size:11px;font-weight:600;">
+      ${ok?'✓':'✕'} ${_reconEsc(label)}
+      ${detail ? `<div style="font-size:10px;font-weight:500;margin-top:2px;color:${ok?'#166534':'#7f1d1d'};">${_reconEsc(detail)}</div>` : ''}
+    </div>`;
+
+  const matchPanel = `
+    <div style="background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;padding:12px 14px;margin-bottom:14px;">
+      <div style="font-size:11px;font-weight:700;color:#0f172a;text-transform:uppercase;letter-spacing:.06em;margin-bottom:8px;">Match analysis</div>
+      <div style="display:grid;grid-template-columns:repeat(3,1fr);gap:8px;">
+        ${matchBadge(
+          phoneMatches.length ? `Phone match (${phoneMatches.length})` : 'No phone match',
+          phoneMatches.length > 0,
+          phoneMatches.length ? phoneMatches.slice(0,2).join(', ') : `Left ${leftPhones.length} · Right ${rightPhones.length}`
+        )}
+        ${matchBadge(
+          emailMatches.length ? `Email match (${emailMatches.length})` : 'No email match',
+          emailMatches.length > 0,
+          emailMatches.length ? emailMatches.slice(0,1).join(', ') : `Left ${leftEmails.length} · Right ${rightEmails.length}`
+        )}
+        ${matchBadge(
+          nameExact ? 'Name exact' : (nameTokensShared >= 1 ? `Name partial (${nameTokensShared} token${nameTokensShared===1?'':'s'})` : 'Name different'),
+          nameExact || nameTokensShared >= 1,
+          nameExact ? '' : `"${leftName}" vs "${rightName}"`
+        )}
+      </div>
+      <div style="font-size:10px;color:#64748b;margin-top:8px;line-height:1.4;">
+        Strong dedup signal = phone or email match. Name-only matches are often false positives (common names).
+        ${action === 'merge' && !phoneMatches.length && !emailMatches.length
+          ? ' <strong style="color:#b45309;">Heads up:</strong> this merge candidate has no phone/email overlap — verify before relinking.'
+          : ''}
+      </div>
+    </div>`;
+
+  // Column headers.
+  const leftLabel = ace
+    ? `Existing in CRM · ${ace.name || '(no name)'}${ace.fub_contact_id ? ` (linked to FUB #${ace.fub_contact_id})` : ''}`
+    : (exFub ? `Existing FUB #${exFub.id} · ${exFub.name || '(no name)'}` : 'Existing');
+  const rightLabel = `Incoming FUB #${incoming.id} · ${incoming.name || '(no name)'}`;
+
+  // Build the existing side.
+  let leftBody = '';
+  if(ace){
+    leftBody += _reconAceSectionHtml(ace);
+    if(exFub){
+      leftBody += `<div style="font-size:11px;color:#64748b;margin:14px 0 6px;font-weight:600;">— Currently-linked FUB record (#${exFub.id}) —</div>`;
+      leftBody += _reconPreviewHtml(exFub, exNotes, exCalls);
+    } else {
+      leftBody += `<div style="font-size:11px;color:#94a3b8;margin-top:10px;font-style:italic;">(no FUB record currently linked)</div>`;
+    }
+  } else if(exFub){
+    leftBody += _reconPreviewHtml(exFub, exNotes, exCalls);
+  } else {
+    leftBody += '<div style="padding:20px;text-align:center;color:#94a3b8;font-size:12px;">No existing record to compare against.</div>';
+  }
+  // Right side: incoming FUB.
+  const rightBody = _reconPreviewHtml(incoming, incNotes, incCalls);
+
+  return `
+    ${matchPanel}
+    <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;align-items:flex-start;">
+      <div style="background:#f0f9ff;border:1px solid #bae6fd;border-radius:8px;padding:14px;">
+        <div style="font-size:11px;font-weight:700;color:#075985;text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #bae6fd;">${_reconEsc(leftLabel)}</div>
+        ${leftBody}
+      </div>
+      <div style="background:#fefce8;border:1px solid #fde68a;border-radius:8px;padding:14px;">
+        <div style="font-size:11px;font-weight:700;color:#854d0e;text-transform:uppercase;letter-spacing:.04em;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid #fde68a;">${_reconEsc(rightLabel)}</div>
+        ${rightBody}
+      </div>
+    </div>`;
+}
+
+// v337: tiny renderer for the ace_contacts row itself (no notes/calls
+// because those live in fub_* tables, surfaced by the linked-FUB
+// renderer below).
+function _reconAceSectionHtml(c){
+  const kv = (k, v) => `<div style="display:flex;font-size:12px;padding:3px 0;border-bottom:1px solid #f1f5f9;"><span style="color:#94a3b8;width:120px;flex-shrink:0;">${_reconEsc(k)}</span><span style="color:#0f172a;">${_reconEsc(v ?? '—')}</span></div>`;
+  const tags = Array.isArray(c.fub_tags) && c.fub_tags.length
+    ? c.fub_tags.map(t => `<span style="background:#f1f5f9;color:#334155;font-size:11px;padding:2px 8px;border-radius:10px;margin-right:4px;display:inline-block;">${_reconEsc(t)}</span>`).join('')
+    : '<span style="font-size:11px;color:#94a3b8;">None</span>';
+  return `
+    <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin:0 0 8px;">CRM row</div>
+    ${kv('Name', c.name)}
+    ${kv('Phone', c.phone_number)}
+    ${kv('Secondary phone', c.secondary_phone)}
+    ${kv('Email', c.email)}
+    ${kv('Company', c.company)}
+    ${kv('Type', c.type)}
+    ${kv('Stage', c.fub_stage)}
+    ${kv('Source', c.fub_source)}
+    ${kv('FUB link', c.fub_contact_id ? `FUB #${c.fub_contact_id}` : '—')}
+    ${kv('Added', c.date_added)}
+    ${c.deleted_at ? kv('Deleted', new Date(c.deleted_at).toLocaleString()) : ''}
+    <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin:10px 0 6px;">Tags</div>
+    <div>${tags}</div>
+    ${c.contact_notes ? `<div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:0.5px;margin:10px 0 6px;">CRM notes</div><div style="font-size:12px;color:#0f172a;white-space:pre-wrap;line-height:1.5;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:8px 10px;">${_reconEsc(c.contact_notes)}</div>` : ''}`;
 }
 
 function _reconClosePreview(){

@@ -39500,13 +39500,23 @@ function _liRenderSellerForm(){
       <!-- v102.27: Prefill banner (only shows when adding property from contact detail page) -->
       ${_liPrefillBannerHTML()}
 
-      <!-- v349: unified Contact section. Lookup widget + create-new fields
-           share one card. _clkSelect locks the inline fields when an existing
-           contact is picked; _clkClear unlocks them for the create-new path. -->
+      <!-- v351: the Name field IS the lookup. Typing fires _clkOnInput which
+           debounces a fuzzy search across ace_contacts (name / phone / email /
+           company) and drops a results dropdown directly under the input. Pick
+           a match → all contact fields fill + lock + chip shows above the
+           Name field. Click ➕ Create new (or just keep typing past the
+           dropdown) → fields stay editable, the typed name persists. -->
       ${_liSection('👤 Contact', `
-        ${_clkRender('s')}
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:10px;">
-          ${_liField('Name *','li_s_name','text','Full name','1fr')}
+        <div id="li_s_clk_selected" style="display:none;margin-bottom:10px;"></div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+          <div style="position:relative;">
+            <label style="${_liLabelStyle()}">Name *</label>
+            <input id="li_s_name" type="text" placeholder="Type a name, phone, or email…" autocomplete="off"
+              oninput="_clkOnInput('s', this.value)"
+              style="${_liInputStyle()}"/>
+            <!-- Dropdown anchor — _clkRenderDropdown writes here when the user types. -->
+            <div id="li_s_clk_dropdown" style="display:none;position:absolute;left:0;right:0;top:100%;margin-top:2px;background:#fff;border:1px solid #cbd5e1;border-radius:8px;box-shadow:0 6px 18px rgba(15,23,42,0.08);z-index:25;max-height:340px;overflow-y:auto;"></div>
+          </div>
           ${_liPhoneField('Phone *','li_s_phone','(201) 555-0100')}
           ${_liField('Email','li_s_email','email','email@example.com','1fr')}
           ${_liField('Company','li_s_company','text','LLC, Corp, etc.','1fr')}
@@ -39579,49 +39589,50 @@ function _liRenderSellerForm(){
   // from Google's administrative_area_level_2, normalized to match our NJ_COUNTIES
   // list (e.g. "Monmouth County"). User can still type a custom address — the
   // autocomplete only suggests; it doesn't force selection.
+  // v351: the existing-deal dedup dropdown now ONLY fires after Google formats
+  // the address (formerly fired on every keystroke, competing with Google's
+  // own suggestions and producing noisy partial-match dropdowns). The user
+  // sees the "this address already exists as Lead #X" prompt only when they've
+  // committed to a fully-formatted Google address.
   if(typeof attachPlacesAutocomplete === 'function' && _store.get('google_places_key')){
     attachPlacesAutocomplete('li_s_address', (c) => {
       console.log('[li_s_address places_changed]', c);
       const addrEl = document.getElementById('li_s_address');
-      // Only overwrite the input if we got a usable formatted address.
-      // Google's widget itself writes the selected address to the input before
-      // firing this callback, so if we have nothing better, leave whatever's there.
-      if(addrEl){
-        const newAddr = c.formatted || c.street || '';
-        if(newAddr) addrEl.value = newAddr;
-      }
+      const newAddr = c.formatted || c.street || '';
+      if(addrEl && newAddr) addrEl.value = newAddr;
       const countyEl = document.getElementById('li_s_county');
       if(countyEl && c.county){
-        // Normalize county to canonical "<Name> County" format matching our NJ_COUNTIES list.
-        // Google returns "Monmouth County" as long_name; strip any existing suffix first.
         const bareName = c.county.replace(/\s+County$/i,'').trim();
         const match = (typeof NJ_COUNTIES !== 'undefined')
           ? NJ_COUNTIES.find(n => n.toLowerCase() === bareName.toLowerCase())
           : null;
         countyEl.value = match ? (match + ' County') : (bareName + ' County');
       }
-      // v349: address picked from Google Places — definitely a new entry,
-      // so hide the existing-deal dropdown.
-      const dd = document.getElementById('li_s_deal_dropdown');
-      if(dd){ dd.style.display = 'none'; dd.innerHTML = ''; }
+      // v351: now that Google has formatted the address, check if it matches
+      // an existing deal in ace_properties. If yes, show the "link to existing
+      // lead" dropdown so the agent can jump there instead of duplicating.
+      if(newAddr) _liCheckDealExists(newAddr);
     });
   }
-  // v349: parallel listener on the address input that debounces a query
-  // against ace_properties. If the typed address ilike-matches an existing
-  // deal, surface a dropdown of "Lead #<short-id> · <address>" rows so the
-  // agent can jump to the existing deal instead of duplicating.
+  // v351: blur-to-hide the dropdown so it doesn't linger when the user
+  // tabs away. Delay so click handlers inside the dropdown can fire first.
   (() => {
     const addrEl = document.getElementById('li_s_address');
     if(!addrEl) return;
-    let _liDealCheckTimer = null;
-    addrEl.addEventListener('input', () => {
-      if(_liDealCheckTimer) clearTimeout(_liDealCheckTimer);
-      _liDealCheckTimer = setTimeout(() => _liCheckDealExists(addrEl.value), 300);
-    });
     addrEl.addEventListener('blur', () => {
-      // Delay hiding so click handlers inside the dropdown can fire first.
       setTimeout(() => {
         const dd = document.getElementById('li_s_deal_dropdown');
+        if(dd) dd.style.display = 'none';
+      }, 200);
+    });
+  })();
+  // v351: same blur-to-hide for the contact lookup dropdown.
+  (() => {
+    const nameEl = document.getElementById('li_s_name');
+    if(!nameEl) return;
+    nameEl.addEventListener('blur', () => {
+      setTimeout(() => {
+        const dd = document.getElementById('li_s_clk_dropdown');
         if(dd) dd.style.display = 'none';
       }, 200);
     });

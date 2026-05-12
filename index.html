@@ -35336,22 +35336,30 @@ window._bcAiStatsCompute = async function(){
     _sbGet(tbl, 'last_ai_autofill_at=not.is.null&select=id&limit=10000').catch(() => []),
     _sbGet(tbl, 'review_status=eq.needs_human_review&select=id&limit=10000').catch(() => []),
   ]);
-  // v336: do set math on the actual IDs so the four buckets always
-  // sum to TOTAL. Previously the "Remaining" math subtracted both
-  // filled AND needsReview, but those two sets overlap (every
-  // needs_human_review buyer was AI-touched first, so it's also in
-  // filled) — which made Remaining clamp to 0 long before the run
-  // was actually done, and made the green "Completed" tile display
-  // filled (which includes the buyers still flagged for review).
+  // v336/v343.2: do set math on the actual IDs so the four buckets
+  // always sum to TOTAL. Earlier versions made TWO wrong assumptions:
+  //   • v1 assumed filled and needsReview are disjoint (subtracted both),
+  //     which double-counted and stuck REMAINING at 0.
+  //   • v336 assumed needsReview ⊆ filled (treated needsReview as the
+  //     intersection only), which UNDER-counted needs_review by ignoring
+  //     buyers whose skip path didn't stamp last_ai_autofill_at.
+  // The skip path at _bcAiAutoFillSkip only writes review_status (not
+  // last_ai_autofill_at), so the two sets overlap but neither is a
+  // subset of the other. The correct accounting is:
+  //   COMPLETED   = |filled| - |filled ∩ needsReview|   (filled and not flagged)
+  //   NEEDS_REV   = |needsReview|                        (full count, regardless of fill)
+  //   REMAINING   = total - |filled ∪ needsReview|       (never AI'd, never flagged)
+  // Sum = COMPLETED + NEEDS_REV + REMAINING = total ✓
   const total      = Array.isArray(allRows)    ? allRows.length    : 0;
   const filledIds  = new Set((Array.isArray(filledRows) ? filledRows : []).map(r => r.id));
   const needsIds   = new Set((Array.isArray(needsRows)  ? needsRows  : []).map(r => r.id));
-  let trulyNeeds = 0;
-  for(const id of needsIds) if(filledIds.has(id)) trulyNeeds++;
+  let intersection = 0;
+  for(const id of needsIds) if(filledIds.has(id)) intersection++;
   const filled      = filledIds.size;
-  const needsReview = trulyNeeds;
-  const completed   = Math.max(0, filled - trulyNeeds);
-  const remaining   = Math.max(0, total - filled);
+  const needsReview = needsIds.size;
+  const touchedUnion = filled + needsReview - intersection;
+  const completed   = Math.max(0, filled - intersection);
+  const remaining   = Math.max(0, total - touchedUnion);
   return { total, completed, filled, needsReview, remaining };
 };
 
@@ -35445,7 +35453,12 @@ window._bcBulkAiAutoFillLauncher = async function(){
         <div style="font-size:11px;font-weight:700;color:#0f172a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">Pick from</div>
         <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:#334155;margin-bottom:5px;cursor:pointer;">
           <input type="radio" name="bcBulkFilter" value="untouched" checked style="margin-top:2px;"/>
-          <span style="flex:1;"><strong>Buyers I haven't AI-autofilled yet</strong><span id="bcBulkCntUntouched" style="margin-left:6px;display:inline-block;padding:1px 7px;border-radius:99px;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;font-size:10px;font-weight:700;font-family:'Source Code Pro',ui-monospace,Menlo,monospace;">…</span><br><span style="color:#94a3b8;font-size:11px;">Filters to BCs where last_ai_autofill_at is empty. Newest first.</span></span>
+          <span style="flex:1;"><strong>Buyers I haven't AI-autofilled yet</strong><span id="bcBulkCntUntouched" style="margin-left:6px;display:inline-block;padding:1px 7px;border-radius:99px;background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;font-size:10px;font-weight:700;font-family:'Source Code Pro',ui-monospace,Menlo,monospace;">…</span><br><span style="color:#94a3b8;font-size:11px;">BCs with no last_ai_autofill_at AND not flagged Needs Review. Truly never processed.</span></span>
+        </label>
+        <!-- v343.2: re-process the BCs the AI skipped or that import flagged. -->
+        <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:#334155;margin-bottom:5px;cursor:pointer;background:#fff7ed;border:1px solid #fed7aa;padding:8px 10px;border-radius:6px;">
+          <input type="radio" name="bcBulkFilter" value="needs-review" style="margin-top:2px;"/>
+          <span style="flex:1;"><strong>BCs flagged Needs Review (re-run AI)</strong><span id="bcBulkCntNeedsReview" style="margin-left:6px;display:inline-block;padding:1px 7px;border-radius:99px;background:#fef3c7;color:#9a3412;border:1px solid #fed7aa;font-size:10px;font-weight:700;font-family:'Source Code Pro',ui-monospace,Menlo,monospace;">…</span><br><span style="color:#9a3412;font-size:11px;">Re-runs AI on BCs the previous run skipped (or that an import flagged). If the AI still finds nothing, they stay flagged — but if FUB notes / call data grew in the meantime, this catches them up.</span></span>
         </label>
         <label style="display:flex;align-items:flex-start;gap:8px;font-size:12px;color:#334155;margin-bottom:5px;cursor:pointer;">
           <input type="radio" name="bcBulkFilter" value="all" style="margin-top:2px;"/>
@@ -35524,11 +35537,17 @@ window._bcBulkAiAutoFillLauncher = async function(){
       // which, in practice, equals stats.filled. Use stats.remaining
       // (which v336 computes as total - filled) — same value the
       // candidate pool produces.
-      const untouched = Math.max(0, stats.remaining || ((stats.total || 0) - (stats.filled || 0)));
+      // v343.2: stats.remaining now correctly subtracts the union of
+      // filled + needs_review (the skip path stamps needs_review without
+      // setting last_ai_autofill_at, so the two sets overlap but
+      // neither is a subset of the other). The badge mirrors that.
+      const untouched = Math.max(0, stats.remaining || 0);
       const elUntouched = document.getElementById('bcBulkCntUntouched');
       const elAll = document.getElementById('bcBulkCntAll');
-      if(elUntouched) elUntouched.textContent = String(untouched);
-      if(elAll)       elAll.textContent       = String(stats.total || 0);
+      const elNeedsReview = document.getElementById('bcBulkCntNeedsReview');
+      if(elUntouched)   elUntouched.textContent   = String(untouched);
+      if(elAll)         elAll.textContent         = String(stats.total || 0);
+      if(elNeedsReview) elNeedsReview.textContent = String(stats.needsReview || 0);
 
       // No-BC count: fetch buyer-tagged contact rows (v327 direct-
       // PostgREST helper), subtract contact_ids already linked to a
@@ -35826,6 +35845,24 @@ window._bcBulkAiAutoFillStart = async function(btn){
       // freshly — if a row is still missing, bcOpenExpanded will fall
       // back to its own refresh path.
       candidates = untouchedRows.map(r => ({ id: r.id, fields: {} }));
+    } else if(filter === 'needs-review'){
+      // v343.2: re-run AI on BCs flagged Needs Review. The skip path
+      // never set last_ai_autofill_at, so these BCs sit in a limbo
+      // state — the "untouched" filter excludes them, the
+      // "completed" tile doesn't count them, and the only way to
+      // process them was manual. Fetch by review_status directly.
+      if(btn) btn.textContent = '⏳ Fetching needs-review buyers…';
+      let needsRows = [];
+      try {
+        needsRows = await _sbGet(
+          SB_TABLES.buyerCriteria,
+          'review_status=eq.needs_human_review&select=id&order=created_at.desc&limit=10000'
+        ) || [];
+      } catch(e){
+        console.warn('[bulk-ai] needs-review fetch failed:', e.message);
+      }
+      console.log('[bulk-ai] needs-review fetch:', needsRows.length, 'rows');
+      candidates = needsRows.map(r => ({ id: r.id, fields: {} }));
     } else {
       candidates = all.slice();
     }

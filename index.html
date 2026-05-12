@@ -4054,6 +4054,46 @@ function _naDecorate(root){
   });
 }
 
+// v350: re-render the .dh-row2 stat strip in place after a save touches any
+// of Asking / Offer / NOI / Cap Rate / Commission Split / GRI / Expenses /
+// Pipeline Stage (stage affects close-prob). Called from airtableUpdate.
+// No-ops when (a) currentDeal isn't the saved deal or (b) the header isn't
+// in the DOM (user navigated away mid-save).
+const _DEAL_HEADER_FIELDS = new Set([
+  'Asking Price','Offer Price','NOI','Cap Rate (CRM)','Cap Rate',
+  'Commission Split (%)','Commission Split',
+  'Gross Rental Income (Monthly)','Expenses Monthly',
+  'Pipeline Stage',
+]);
+function _refreshDealHeaderStats(dealId, changedFields){
+  if(!currentDeal || currentDeal.id !== dealId) return;
+  if(!changedFields || typeof changedFields !== 'object') return;
+  // Only redraw if at least one ticker-visible field changed.
+  const keys = Object.keys(changedFields);
+  if(!keys.some(k => _DEAL_HEADER_FIELDS.has(k))) return;
+  // Sync changed fields into currentDeal so the helpers see the new values.
+  for(const k of keys) currentDeal[k] = changedFields[k];
+  const row2 = document.querySelector('.deal-header.dh-ticker .dh-row2');
+  if(!row2) return;
+  const d = currentDeal;
+  const prob = (typeof closeProb === 'function') ? closeProb(d) : 0;
+  const capPct = (typeof _dealCapRate === 'function') ? _dealCapRate(d) : null;
+  const capDisp = (capPct != null && capPct > 0) ? capPct.toFixed(2) + '%' : '<span class="muted">—</span>';
+  const noiVal = (typeof _dealEstNOI === 'function') ? _dealEstNOI(d) : (Number(d['NOI']) || 0);
+  const noiDisp = noiVal > 0 ? fmtMoney(noiVal) : '<span class="muted">—</span>';
+  const askDisp = ((typeof _dealAskingDisplay === 'function') && _dealAskingDisplay(d)) || '<span class="muted">—</span>';
+  const offerDisp = fmtMoney(d['Offer Price']) || '<span class="muted">—</span>';
+  const commDisp = (typeof estCommission === 'function') ? estCommission(d) : '—';
+  row2.innerHTML = `
+    <div class="dh-stat"><span class="lbl">Asking</span><span class="val">${askDisp}</span></div>
+    <div class="dh-stat"><span class="lbl">Offer</span><span class="val">${offerDisp}</span></div>
+    <div class="dh-stat"><span class="lbl">NOI</span><span class="val">${noiDisp}</span></div>
+    <div class="dh-stat"><span class="lbl">Cap Rate</span><span class="val">${capDisp}</span></div>
+    <div class="dh-stat"><span class="lbl">Commission</span><span class="val green">${commDisp}</span></div>
+    <div class="dh-stat"><span class="lbl">Close Prob.</span><span class="val">${prob}%</span><div class="progress-mini"><div style="width:${prob}%"></div></div></div>
+  `;
+}
+
 function renderDealPage(){
   const d=currentDeal;
   const stage=getStage(d);
@@ -4073,7 +4113,19 @@ function renderDealPage(){
   // Pre-compute meta-row pieces to keep the template readable.
   const _ownerName  = (d['Owner Name'] || d['_ownerName'] || '').trim();
   const _ownerPhone = (d['Owner Phone'] || '').trim();
-  const _capRate    = d['Cap Rate (CRM)'] || d['Cap Rate'] || '';
+  // v350: cap rate display — pull through _dealCapRate which converts the
+  // stored decimal (0.0855) to a percent number (8.55). Previously the
+  // ticker just appended '%' to the raw decimal, so users saw "0.0855%"
+  // instead of "8.55%". Same helper the Deal Board list view uses.
+  const _capPct = (typeof _dealCapRate === 'function') ? _dealCapRate(d) : null;
+  const _capRate = (_capPct != null && _capPct > 0) ? _capPct.toFixed(2) : '';
+  // v350: NOI display — fall back to GRI minus Expenses (annualized) when
+  // the stored NOI field is empty. The Financial tab's "simple" mode
+  // updates GRI + Expenses but doesn't always write through to the NOI
+  // column, so a deal can have a computable NOI without d['NOI'] being set.
+  const _noiVal = (typeof _dealEstNOI === 'function')
+    ? _dealEstNOI(d)
+    : (Number(d['NOI']) || 0);
   const _lastEdit   = d['Updated At']
     ? new Date(d['Updated At']).toLocaleDateString('en-US',{month:'short',day:'numeric'})
     : '—';
@@ -4130,7 +4182,7 @@ function renderDealPage(){
         </div>
         <div class="dh-stat">
           <span class="lbl">NOI</span>
-          <span class="val">${fmtMoney(d['NOI']) || '<span class="muted">—</span>'}</span>
+          <span class="val">${_noiVal > 0 ? fmtMoney(_noiVal) : '<span class="muted">—</span>'}</span>
         </div>
         <div class="dh-stat">
           <span class="lbl">Cap Rate</span>
@@ -48005,9 +48057,25 @@ function _dealAssetTypeMatches(d, selectedTypes){
 // Compute cap rate (as percent, e.g. 6.5) from a deal
 function _dealCapRate(d){
   const ask = Number(d['Asking Price']) || 0;
-  const noi = Number(d['NOI']) || 0;
+  const noi = _dealEstNOI(d);
   if(ask <= 0 || noi <= 0) return null;
   return (noi / ask) * 100;
+}
+
+// v350: best-effort NOI for display. Returns the stored d['NOI'] if set,
+// otherwise falls back to (GRI - Expenses) * 12 from the monthly fields.
+// The Financial tab's simple-mode editor writes GRI / Expenses but doesn't
+// always persist NOI to the column, so a deal can have a computable NOI
+// without d['NOI'] being filled — this helper picks up that case for the
+// ticker header + cap-rate computation.
+function _dealEstNOI(d){
+  if(!d) return 0;
+  const stored = Number(d['NOI']);
+  if(stored > 0) return stored;
+  const griMo = Number(d['Gross Rental Income (Monthly)']) || 0;
+  const expMo = Number(d['Expenses Monthly']) || 0;
+  if(griMo > 0) return Math.max(0, (griMo - expMo) * 12);
+  return 0;
 }
 
 // Compute commission dollar amount from a deal
@@ -52353,6 +52421,13 @@ async function airtableUpdate(recordId, fields){
         const updated = await _sbPatch(SB_TABLES.properties, recordId, sbData);
         const idx = allDeals.findIndex(d=>d.id===recordId);
         if(idx>-1) Object.assign(allDeals[idx], remoteFields);
+      }
+      // v350: if the patch touches any ticker-visible field on the deal
+      // currently open, re-render the .dh-row2 stat strip in place so
+      // Asking / Offer / NOI / Cap / Commission / Close Prob update
+      // immediately — no more "leave and come back to see new value".
+      if(typeof _refreshDealHeaderStats === 'function'){
+        try { _refreshDealHeaderStats(recordId, remoteFields); } catch(e){}
       }
       // v113.4: broadcast to sibling tabs so they update their cache + re-render
       if(typeof _aceSyncPost === 'function'){

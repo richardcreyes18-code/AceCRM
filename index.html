@@ -28628,10 +28628,31 @@ async function _reconMergeFieldsAndMarkDuplicate(queueId, aceId, oldFubId, newFu
   }
 
   // 2. Compute the merge patch — non-empty wins for scalars.
+  //
+  // v340.1: treat sentinel strings as empty for name/company. The
+  // CSV/manual-import path sometimes writes "No name" / "(no name)" /
+  // "Unknown" as a placeholder when the source row had no real name.
+  // Without this, the merge would see "No name" as filled and refuse
+  // to copy the real name from FUB — defeating the whole point.
+  // Applied to both sides (the FUB record can also carry a sentinel),
+  // so we don't copy "No name" from FUB onto a CRM row that just
+  // happens to be NULL.
+  const NAME_SENTINELS = new Set([
+    'no name', '(no name)', 'noname',
+    'unknown', 'unknown name', 'name unknown',
+    'tbd', 'n/a', 'na', '—', '-', '--',
+    'no first name', 'no last name',
+  ]);
   const patch = {};
-  const isEmpty = v => v == null || (typeof v === 'string' && v.trim() === '');
+  const isEmpty = (v, col) => {
+    if(v == null) return true;
+    const s = String(v).trim().toLowerCase();
+    if(!s) return true;
+    if((col === 'name' || col === 'company') && NAME_SENTINELS.has(s)) return true;
+    return false;
+  };
   const fill = (col, val) => {
-    if(!isEmpty(val) && isEmpty(ace[col])) patch[col] = val;
+    if(!isEmpty(val, col) && isEmpty(ace[col], col)) patch[col] = val;
   };
   const fubFullName = [fub.first_name, fub.last_name].filter(Boolean).join(' ').trim() || fub.name || '';
   const fubPrimaryPhone = (Array.isArray(fub.phones) && fub.phones[0]) ? fub.phones[0].value : '';

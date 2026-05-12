@@ -12097,6 +12097,14 @@ function _dbToggleFilterPanel(){
   const icon  = document.getElementById('db_filtToggleIcon');
   if(panel) panel.style.display = open ? 'grid' : 'none';
   if(icon)  icon.textContent = open ? '▾' : '▸';
+  // v344: tell Leaflet the map container resized. ResizeObserver in
+  // initDealMap also catches this, but firing here synchronously
+  // (after a paint tick) eliminates any visible window where the
+  // gray "unrendered tile" area can flash before the observer reacts.
+  setTimeout(() => {
+    try { if(typeof _dbLeafletMap !== 'undefined' && _dbLeafletMap) _dbLeafletMap.invalidateSize({ animate: false }); }
+    catch(_){}
+  }, 50);
 }
 
 // Toggle the advanced filter panel open/closed.
@@ -13861,6 +13869,13 @@ function showDealBoard(){
 let _dbCurrentView = 'list';
 let _dbLeafletMap  = null;
 let _dbMarkers     = [];
+// v344: map-redraw plumbing. The ResizeObserver watches the map's
+// parent flex wrapper and calls invalidateSize on every container
+// resize (filter toggle, sidebar toggle, window resize, zoom, etc.)
+// so the "gray tile" area never appears. Re-entry into initDealMap()
+// shouldn't stack observers — the guards prevent that.
+let _dbResizeObserver   = null;
+let _dbWindowResizeHooked = false;
 // v111.3: drawing/area-select state. _dbDrawnShape is the last-drawn Leaflet
 // shape layer (Circle / Rectangle / Polygon); _dbShapeGroup is the feature
 // group the draw control uses to render + edit shapes. Both are null until
@@ -14510,6 +14525,40 @@ async function initDealMap(){
     _dbMarkers.forEach(m => _dbLeafletMap.removeLayer(m));
     _dbMarkers = [];
     _dbLeafletMap.invalidateSize();
+  }
+
+  // v344: one ResizeObserver on the map's parent wrapper handles
+  // every future container resize — filter toggle, sidebar open/close,
+  // window resize, browser zoom, list↔map view switch. Without this,
+  // the user had to chase down each call site to wire invalidateSize.
+  // Guarded so re-entering initDealMap() (which happens on every
+  // dbSetView('map')) doesn't stack observers.
+  if(!_dbResizeObserver && typeof ResizeObserver !== 'undefined'){
+    const container = document.getElementById('db_map')?.parentElement;
+    if(container){
+      let t;
+      _dbResizeObserver = new ResizeObserver(() => {
+        clearTimeout(t);
+        t = setTimeout(() => {
+          try { if(_dbLeafletMap) _dbLeafletMap.invalidateSize({ animate: false }); }
+          catch(_){}
+        }, 50);
+      });
+      _dbResizeObserver.observe(container);
+    }
+  }
+  // Window resize fallback for browser/zoom paths where ResizeObserver
+  // doesn't fire on the element box (some macOS Safari pinch-zoom).
+  if(!_dbWindowResizeHooked){
+    _dbWindowResizeHooked = true;
+    let wt;
+    window.addEventListener('resize', () => {
+      clearTimeout(wt);
+      wt = setTimeout(() => {
+        try { if(_dbLeafletMap) _dbLeafletMap.invalidateSize({ animate: false }); }
+        catch(_){}
+      }, 100);
+    });
   }
 
   // Register "View Deal" handler IMMEDIATELY — not after geocoding — so it works on all pins

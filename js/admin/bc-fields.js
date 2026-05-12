@@ -379,7 +379,7 @@ export function _bcRenderExtraFields(chipText, record){
       otherNotesHtml = `
         <div data-extra-field="${esc(onCol)}" data-extra-type="text" style="grid-column:span 2;margin-top:6px;">
           <label for="${esc(onId)}" style="font-size:11px;color:#475569;font-weight:600;display:block;margin-bottom:3px;">📝 Other Notes</label>
-          <textarea id="${esc(onId)}" rows="3" placeholder="${esc(onCfg.placeholder)}" style="border:1px solid #cbd5e1;border-radius:6px;padding:6px 9px;font-size:12px;width:100%;box-sizing:border-box;font-family:inherit;resize:vertical;">${esc(onVal)}</textarea>
+          <textarea id="${esc(onId)}" rows="3"  style="border:1px solid #cbd5e1;border-radius:6px;padding:6px 9px;font-size:12px;width:100%;box-sizing:border-box;font-family:inherit;resize:vertical;">${esc(onVal)}</textarea>
         </div>`;
     }
     const summaryParts = [];
@@ -413,7 +413,7 @@ function _renderFieldRow(d, id, val){
   }
   if(d.type === 'number'){
     const v = (val === 0 || val) ? String(val) : '';
-    return `<div data-extra-field="${esc(d.col)}" data-extra-type="number">${labelHtml}<input id="${esc(id)}" type="number" value="${esc(v)}" placeholder="${esc(d.hint || '')}" style="${baseInput}"/>${hintHtml}</div>`;
+    return `<div data-extra-field="${esc(d.col)}" data-extra-type="number">${labelHtml}<input id="${esc(id)}" type="number" value="${esc(v)}" style="${baseInput}"/>${hintHtml}</div>`;
   }
   if(d.type === 'enum'){
     const opts = Array.isArray(d.options) ? d.options : [];
@@ -434,7 +434,7 @@ function _renderFieldRow(d, id, val){
   }
   // Default: text
   const v = (val === 0 || val) ? String(val) : '';
-  return `<div data-extra-field="${esc(d.col)}" data-extra-type="text">${labelHtml}<input id="${esc(id)}" type="text" value="${esc(v)}" placeholder="${esc(d.hint || '')}" style="${baseInput}"/>${hintHtml}</div>`;
+  return `<div data-extra-field="${esc(d.col)}" data-extra-type="text">${labelHtml}<input id="${esc(id)}" type="text" value="${esc(v)}" style="${baseInput}"/>${hintHtml}</div>`;
 }
 
 function _categorySlug(cat){
@@ -609,7 +609,7 @@ export function _bcFieldsAdminForCategory(category, onClose){
             </div>
             <div>
               <label style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;font-weight:600;">Placeholder text (shown to user inside the textarea)</label>
-              <input type="text" id="bcOtherNotesPlaceholder" value="${esc(otherNotes.placeholder)}" placeholder="${esc(OTHER_NOTES_DEFAULT_PLACEHOLDER)}" style="width:100%;padding:7px 10px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;margin-top:3px;"/>
+              <input type="text" id="bcOtherNotesPlaceholder" value="${esc(otherNotes.placeholder)}" style="width:100%;padding:7px 10px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;margin-top:3px;"/>
             </div>
           </div>
           ${list || '<div style="padding:30px;text-align:center;color:#94a3b8;font-size:12px;">No custom fields yet. Add one below to make new requirements show up on every BC for this category.</div>'}
@@ -618,11 +618,11 @@ export function _bcFieldsAdminForCategory(category, onClose){
             <div style="display:grid;grid-template-columns:1fr 1fr 120px auto;gap:8px;align-items:end;">
               <div>
                 <label style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;font-weight:600;">Label</label>
-                <input type="text" id="bcFieldNewLabel" placeholder="e.g. Min building size" style="width:100%;padding:6px 9px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;"/>
+                <input type="text" id="bcFieldNewLabel" style="width:100%;padding:6px 9px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;"/>
               </div>
               <div>
                 <label style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;font-weight:600;">Column key</label>
-                <input type="text" id="bcFieldNewCol" placeholder="e.g. min_building_size" style="width:100%;padding:6px 9px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;font-family:ui-monospace,Menlo,monospace;"/>
+                <input type="text" id="bcFieldNewCol" style="width:100%;padding:6px 9px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;font-family:ui-monospace,Menlo,monospace;"/>
               </div>
               <div>
                 <label style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;font-weight:600;">Type</label>
@@ -871,8 +871,11 @@ export function _bcFieldsAdminForCategory(category, onClose){
           });
           dirty = true;
           aiBannerHTML = `
-            <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:10px 14px;margin:14px 22px 0;font-size:12px;color:#1e40af;line-height:1.5;">
-              <strong>✦ Added "${esc(label)}" from AI suggestion.</strong> Review the row at the bottom of the list, tweak label / col key / options if needed, then click <strong>Save</strong>. To skip without adding, click Cancel — the suggestion stays in the inbox.
+            <div style="background:#eff6ff;border:1px solid #bfdbfe;border-radius:6px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:#1e40af;line-height:1.5;display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap;">
+              <div style="flex:1;min-width:240px;">
+                <strong>✦ Added "${esc(label)}" from AI suggestion.</strong> Review the row at the bottom of the list, tweak the label / col key / options if needed, then click Apply.
+              </div>
+              <button data-modal-action="save" style="background:#1e40af;color:#fff;border:none;padding:7px 16px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;font-family:inherit;white-space:nowrap;">✓ Apply now</button>
             </div>`;
         }
       }

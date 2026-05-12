@@ -30619,12 +30619,12 @@ async function bcOpenExpanded(recordId){
 
             <div>
               <div class="bc-label">Minimum CAP Rate (%)</div>
-              <input class="form-input" id="bcf_caprate" oninput="_bcAutoSave()" value="${f['Minumum Cap Rate']||''}" placeholder="—" style="width:120px;margin-bottom:12px;"/>
+              <input class="form-input" id="bcf_caprate" oninput="_bcAutoSave()" value="${f['Minumum Cap Rate']||''}" style="width:120px;margin-bottom:12px;"/>
               <div class="bc-label">Purchase Price Range</div>
               <div style="display:flex;align-items:center;gap:8px;margin-bottom:12px;">
-                <input class="form-input num-input" id="bcf_minprice" oninput="_bcAutoSave()" value="${_fmtNum(f['Min Purchase Price'])}" placeholder="Min $" style="width:115px;" type="text" inputmode="numeric"/>
+                <input class="form-input num-input" id="bcf_minprice" oninput="_bcAutoSave()" value="${_fmtNum(f['Min Purchase Price'])}" style="width:115px;" type="text" inputmode="numeric"/>
                 <span style="color:#888;font-size:12px;">to</span>
-                <input class="form-input num-input" id="bcf_maxprice" oninput="_bcAutoSave()" value="${_fmtNum(f['Max Purchase Price'])}" placeholder="Max $" style="width:115px;" type="text" inputmode="numeric"/>
+                <input class="form-input num-input" id="bcf_maxprice" oninput="_bcAutoSave()" value="${_fmtNum(f['Max Purchase Price'])}" style="width:115px;" type="text" inputmode="numeric"/>
               </div>
               <div class="bc-label">Date Added</div>
               <input class="form-input" id="bcf_dateadded" type="date" value="${f['Date Added Buyer']||''}" onchange="_bcAutoSave()" style="width:160px;margin-bottom:14px;"/>
@@ -30683,9 +30683,9 @@ async function bcOpenExpanded(recordId){
                   <div class="bc-label" style="font-size:10px;margin-bottom:3px;color:#14532d;">1031 Expiration Date (45-day or 180-day deadline)</div>
                   <input type="date" id="bcf_1031_expiration" value="${_esc(exp1031)}" onchange="_bcAutoSave()" class="form-input" style="width:160px;font-size:11px;margin-bottom:8px;"/>
                   <div class="bc-label" style="font-size:10px;margin-bottom:3px;color:#14532d;">1031 Amount ($ to roll over)</div>
-                  <input type="text" inputmode="numeric" id="bcf_1031_amount" class="form-input num-input" placeholder="e.g. 1,500,000" value="${_esc(amtStr)}" oninput="_bcAutoSave()" style="width:100%;font-size:11px;margin-bottom:8px;"/>
+                  <input type="text" inputmode="numeric" id="bcf_1031_amount" class="form-input num-input" value="${_esc(amtStr)}" oninput="_bcAutoSave()" style="width:100%;font-size:11px;margin-bottom:8px;"/>
                   <div class="bc-label" style="font-size:10px;margin-bottom:3px;color:#14532d;">1031 Source Asset (property they sold / are selling)</div>
-                  <input type="text" id="bcf_1031_source_asset" value="${_esc(src1031)}" placeholder="e.g. 4-unit in Elizabeth, sold Mar 2026" oninput="_bcAutoSave()" class="form-input" style="width:100%;font-size:11px;"/>
+                  <input type="text" id="bcf_1031_source_asset" value="${_esc(src1031)}" oninput="_bcAutoSave()" class="form-input" style="width:100%;font-size:11px;"/>
                 </div>
               </div>`;
               })()}

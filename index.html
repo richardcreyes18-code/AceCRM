@@ -48419,6 +48419,22 @@ const TABLE_COLS = [
         : `<span title="No email template linked" style="display:inline-block;color:#cbd5e1;font-size:13px;">📭</span>`;
     }
   },
+  // v348: at-a-glance "is this deal mappable?" column. Green ✓ when the
+  // deal has both Latitude + Longitude set (it shows up on the Deal
+  // Board map). Red ✗ when one or both are missing (invisible on map —
+  // candidate for the Bulk Geocode tool). Sorts geocoded-first so
+  // a "sort by Map ↑" surfaces the un-geocoded ones at the top.
+  {key:'map', label:'Map', align:'center', sortable:true,
+    getter: d => (Number(d['Latitude']) && Number(d['Longitude'])) ? 1 : 0,
+    render: d => {
+      const lat = Number(d['Latitude']);
+      const lng = Number(d['Longitude']);
+      const ok = lat && lng && !isNaN(lat) && !isNaN(lng);
+      return ok
+        ? `<span title="Geocoded — shows on map (${lat.toFixed(4)}, ${lng.toFixed(4)})" style="display:inline-block;background:#dcfce7;color:#15803d;border:1px solid #86efac;padding:1px 7px;border-radius:99px;font-size:10px;font-weight:700;">✓</span>`
+        : `<span title="No coordinates — invisible on map. Run Settings → Tools → Clean &amp; Geocode addresses." style="display:inline-block;background:#fef2f2;color:#b91c1c;border:1px solid #fecaca;padding:1px 7px;border-radius:99px;font-size:10px;font-weight:700;">✗</span>`;
+    }
+  },
   {key:'stage', label:'Stage', align:'left', sortable:true,
     getter: d => getStage(d),
     render: d => {

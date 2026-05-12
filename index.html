@@ -31103,7 +31103,33 @@ async function bcOpenExpanded(recordId){
     }
   }
 
-  const record  = allBuyerCriteria.find(r=>r.id===recordId);
+  let record = allBuyerCriteria.find(r=>r.id===recordId);
+  // v343: lazy-fetch a single missing BC into the cache instead of
+  // bailing with an alert. This happens in bulk-AI flows when the
+  // queue was built from a direct DB fetch and the cache hasn't been
+  // hydrated for some rows yet (e.g. created in another tab).
+  if(!record){
+    try {
+      const rows = await _sbGet(SB_TABLES.buyerCriteria, `id=eq.${recordId}&select=*&limit=1`);
+      const row = Array.isArray(rows) && rows[0];
+      if(row){
+        const fields = {};
+        for(const [snake, atLabel] of Object.entries(SB_BC_MAP)){
+          if(snake === 'id') continue;
+          const v = row[snake];
+          fields[atLabel] = (v === null || v === undefined) ? '' : v;
+        }
+        fields['Import Source'] = row.import_source || '';
+        fields['Buyer']         = row.contact_id ? [row.contact_id] : [];
+        fields['_contactId']    = row.contact_id;
+        record = {
+          id: row.id, fields,
+          extra_fields: (row.extra_fields && typeof row.extra_fields === 'object') ? row.extra_fields : {},
+        };
+        allBuyerCriteria.unshift(record);
+      }
+    } catch(e){ console.warn('[bcOpenExpanded] lazy BC fetch failed:', e.message); }
+  }
   if(!record){ alert('Buyer not found — try refreshing.'); return; }
   const f       = record.fields;
   // v335: migrate legacy per-scope Other Notes (extra_fields.other_notes_*)
@@ -35755,45 +35781,51 @@ window._bcBulkAiAutoFillStart = async function(btn){
     let all = (allBuyerCriteria || []).filter(r => r && r.id && r.fields);
     let candidates;
     if(filter === 'untouched'){
-      // v324 fix: never trust the cache for "untouched" — it can be
-      // stale after auto-apply / skip runs in the current session, and
-      // it never carries review_status so skipped buyers got re-picked.
-      // Hit the DB for authoritative "touched" IDs and subtract.
-      if(btn) btn.textContent = '⏳ Checking who\'s already been touched…';
-      let touchedIds = new Set();
+      // v343: bypass the cache intersection entirely — go directly to
+      // the DB for the authoritative untouched-ID set. The previous
+      // path took the cache, subtracted touched-IDs, and hoped the
+      // cache was in sync. When the cache was stale (a common state
+      // after long sessions or when accessed from Settings), the
+      // intersection silently produced zero candidates while the
+      // badge said hundreds remaining. Going direct removes the
+      // dependency on cache sync, and the launcher's
+      // _bcEnsureBuyerCriteriaLoaded(true) call still hydrates the
+      // cache so bcOpenExpanded can find each picked BC.
+      if(btn) btn.textContent = '⏳ Fetching untouched buyers…';
+      let untouchedRows = [];
       try {
-        const [filledRows, reviewRows] = await Promise.all([
-          _sbGet(SB_TABLES.buyerCriteria, 'last_ai_autofill_at=not.is.null&select=id&limit=10000').catch(() => []),
-          _sbGet(SB_TABLES.buyerCriteria, 'review_status=eq.needs_human_review&select=id&limit=10000').catch(() => []),
-        ]);
-        for(const r of (filledRows || [])) touchedIds.add(r.id);
-        for(const r of (reviewRows || [])) touchedIds.add(r.id);
+        untouchedRows = await _sbGet(
+          SB_TABLES.buyerCriteria,
+          'deleted_at=is.null&last_ai_autofill_at=is.null&or=(review_status.is.null,review_status.neq.needs_human_review)&select=id&order=created_at.desc&limit=10000'
+        ) || [];
       } catch(e){
-        console.warn('[bulk-ai] touched-id fetch failed; falling back to cache:', e.message);
+        console.warn('[bulk-ai] direct untouched fetch failed:', e.message);
       }
-      candidates = touchedIds.size > 0
-        ? all.filter(r => !touchedIds.has(r.id))
-        : all.filter(r => !r.fields[lastAtKey]);
-      // v342: if the cache yielded zero candidates but the DB clearly
-      // has untouched BCs (touchedIds.size < total in stats), the
-      // cache is stale or partially loaded. Force-reload it and retry
-      // ONCE before giving up — surfaces the recently-created BCs
-      // that the bulk runner's diff would otherwise miss.
-      if(!candidates.length){
+      if(!untouchedRows.length){
+        // Defensive fallback: maybe the or= filter syntax got rejected
+        // by the proxy. Try a simpler two-query subtraction.
         try {
-          const allIdRows = await _sbGet(SB_TABLES.buyerCriteria, 'deleted_at=is.null&select=id&limit=10000').catch(() => []);
-          const totalInDb = Array.isArray(allIdRows) ? allIdRows.length : 0;
-          if(totalInDb > touchedIds.size){
-            if(btn) btn.textContent = '⏳ Cache stale — reloading…';
-            await _bcEnsureBuyerCriteriaLoaded(true);
-            all = (allBuyerCriteria || []).filter(r => r && r.id && r.fields);
-            candidates = all.filter(r => !touchedIds.has(r.id));
-            console.log('[bulk-ai] force-reload recovered', candidates.length, 'candidates (cache was', all.length, 'rows; DB has', totalInDb, ')');
-          }
+          const [allRows, touchedFromFilled, touchedFromReview] = await Promise.all([
+            _sbGet(SB_TABLES.buyerCriteria, 'deleted_at=is.null&last_ai_autofill_at=is.null&select=id&limit=10000').catch(() => []),
+            _sbGet(SB_TABLES.buyerCriteria, 'last_ai_autofill_at=not.is.null&select=id&limit=10000').catch(() => []),
+            _sbGet(SB_TABLES.buyerCriteria, 'review_status=eq.needs_human_review&select=id&limit=10000').catch(() => []),
+          ]);
+          const touched = new Set();
+          for(const r of (touchedFromFilled || [])) touched.add(r.id);
+          for(const r of (touchedFromReview || [])) touched.add(r.id);
+          untouchedRows = (allRows || []).filter(r => !touched.has(r.id));
         } catch(e){
-          console.warn('[bulk-ai] force-reload failed:', e.message);
+          console.warn('[bulk-ai] fallback untouched fetch failed:', e.message);
         }
       }
+      console.log('[bulk-ai] direct untouched fetch:', untouchedRows.length, 'rows');
+      // Map to the same shape downstream code expects (each candidate
+      // is just an object with .id). Cache may not have the row yet
+      // (e.g. if it was created in another tab), but the launcher's
+      // force-reload of _bcEnsureBuyerCriteriaLoaded(true) hydrates
+      // freshly — if a row is still missing, bcOpenExpanded will fall
+      // back to its own refresh path.
+      candidates = untouchedRows.map(r => ({ id: r.id, fields: {} }));
     } else {
       candidates = all.slice();
     }

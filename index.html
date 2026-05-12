@@ -14279,6 +14279,12 @@ function _dbComputeFilteredDeals(){
   const selCities   = _dbMultiGetSelected('city');
   const selTypes    = _dbMultiGetSelected('type');
   const selSources  = _dbMultiGetSelected('source');
+  // v346: the number-range filters (Square Footage, Asking Price, Cap
+  // Rate, Units, Lot Size, Year Built, Occupancy, NOI) were already
+  // wired for the list view via _dbDealMatchesAdv but never applied
+  // to the map / side panel / CSV-export pipeline. Apply them here so
+  // every "filtered deals" consumer respects the same set of filters.
+  const adv = (typeof _dbReadAdvFilters === 'function') ? _dbReadAdvFilters() : null;
 
   return (allDeals||[]).filter(d => {
     if(d['Is Archived']) return false;
@@ -14296,6 +14302,7 @@ function _dbComputeFilteredDeals(){
     if(selStates   && !selStates.includes(_stateFromAddress(d['Address']||''))) return false;
     if(selCities   && !selCities.includes(_locCityFromAddress(d['Address']||''))) return false;
     if(priority && !d['Top Priority']) return false;
+    if(adv && typeof _dbDealMatchesAdv === 'function' && !_dbDealMatchesAdv(d, adv)) return false;
     if(_dbDrawnShape && !_dealInsideShape(d)) return false;
     return true;
   });

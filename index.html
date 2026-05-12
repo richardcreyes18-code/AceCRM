@@ -39448,12 +39448,12 @@ function _liRenderSellerForm(){
       <!-- v102.27: Prefill banner (only shows when adding property from contact detail page) -->
       ${_liPrefillBannerHTML()}
 
-      <!-- v102.40: Contact lookup — pick existing contact OR keep typing to create new -->
-      ${_clkRender('s')}
-
-      <!-- CONTACT INFO -->
-      ${_liSection('👤 Contact Information', `
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+      <!-- v349: unified Contact section. Lookup widget + create-new fields
+           share one card. _clkSelect locks the inline fields when an existing
+           contact is picked; _clkClear unlocks them for the create-new path. -->
+      ${_liSection('👤 Contact', `
+        ${_clkRender('s')}
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;margin-top:10px;">
           ${_liField('Name *','li_s_name','text','Full name','1fr')}
           ${_liPhoneField('Phone *','li_s_phone','(201) 555-0100')}
           ${_liField('Email','li_s_email','email','email@example.com','1fr')}
@@ -39478,19 +39478,20 @@ function _liRenderSellerForm(){
             <span style="font-size:11px;color:#64748b;">— fill in the details for this property below</span>
           </div>
 
-          <!-- PROPERTY INFO -->
-          ${_liSection('📍 Property Information', `
-            <div style="display:grid;grid-template-columns:2fr 1fr;gap:14px;margin-bottom:14px;">
-              ${_liField('Property Address *','li_s_address','text','123 Main St, Ridgefield Park, NJ','2fr')}
-              ${_liField('County *','li_s_county','text','Bergen County','1fr')}
-            </div>
-            <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:14px;">
-              ${_liNumField('Asking Price','li_s_price','e.g. 1,500,000')}
-              ${_liNumField('Square Footage','li_s_sf','e.g. 5,000')}
-              <div><label style="${_liLabelStyle()}">Seller Motivation</label><select id="li_s_motivation" style="${_liInputStyle()}">
-                <option value="">Select...</option>
-                <option>Highly Motivated</option><option>Motivated</option><option>Somewhat Motivated</option><option>Testing Market</option><option>Not Motivated</option>
-              </select></div>
+          <!-- v349: minimal Property section. Address + auto-filled county only.
+               Asking Price, Square Footage, Seller Motivation, Financial
+               Information, Asking Price in Words — all removed; the user
+               enters those on the deal detail page after submit.
+               The address input has Google Places autocomplete (wired below)
+               plus a deal-dedup dropdown anchored under it. -->
+          ${_liSection('📍 Property', `
+            <div style="display:grid;grid-template-columns:2fr 1fr;gap:14px;position:relative;">
+              <div style="position:relative;">
+                ${_liField('Property Address *','li_s_address','text','123 Main St, Ridgefield Park, NJ','1fr')}
+                <!-- v349: existing-deal dropdown anchor. Populated by _liCheckDealExists. -->
+                <div id="li_s_deal_dropdown" style="display:none;position:absolute;left:0;right:0;top:100%;margin-top:2px;background:#fff;border:1px solid #cbd5e1;border-radius:8px;box-shadow:0 6px 18px rgba(15,23,42,0.08);z-index:20;max-height:280px;overflow-y:auto;"></div>
+              </div>
+              ${_liField('County (auto)','li_s_county','text','Filled by Google after you pick an address','1fr')}
             </div>
           `)}
 
@@ -39498,37 +39499,6 @@ function _liRenderSellerForm(){
           ${_liSection('🏗️ Asset Type *', `
             ${_liAssetSelector('s')}
             <div id="li_s_conditional"></div>
-          `)}
-
-          <!-- FINANCIALS -->
-          ${_liSection('💰 Financial Information', `
-            <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
-              ${_liNumField('Gross Monthly Revenue','li_s_gri_mo','e.g. 12,000',"_liSellerFinSync('gri_mo')")}
-              ${_liNumField('Gross Yearly Revenue','li_s_gri_yr','e.g. 144,000',"_liSellerFinSync('gri_yr')")}
-              ${_liNumField('Monthly Expenses','li_s_exp_mo','e.g. 4,500',"_liSellerFinSync('exp_mo')")}
-              ${_liNumField('Yearly Expenses','li_s_exp_yr','e.g. 54,000',"_liSellerFinSync('exp_yr')")}
-            </div>
-            <div style="margin-top:16px;padding:14px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:8px;">
-              <div style="display:flex;align-items:center;gap:12px;">
-                <label style="font-size:13px;font-weight:600;color:#374151;">Open to Seller Financing?</label>
-                <div style="display:flex;gap:0;border:1px solid #cbd5e1;border-radius:6px;overflow:hidden;">
-                  <button type="button" id="li_s_sf_btn_no" onclick="_liSellerFinToggle(false)" style="padding:6px 18px;font-size:12px;font-weight:600;border:none;cursor:pointer;background:#fff;color:#475569;">No</button>
-                  <button type="button" id="li_s_sf_btn_yes" onclick="_liSellerFinToggle(true)" style="padding:6px 18px;font-size:12px;font-weight:600;border:none;cursor:pointer;background:#fff;color:#475569;border-left:1px solid #cbd5e1;">Yes</button>
-                </div>
-              </div>
-              <div id="li_s_sf_notes_wrap" style="display:none;margin-top:12px;">
-                <label style="${_liLabelStyle()}">Seller Financing Notes</label>
-                <textarea id="li_s_sf_notes" rows="3" placeholder="Down payment expectations, interest rate, term, amortization, balloon, credit requirements, etc." style="${_liInputStyle()}height:auto;resize:vertical;"></textarea>
-              </div>
-            </div>
-            ${_liTextarea('General Notes','li_s_notes','Property notes, condition, highlights, access roads, zoning, etc.',4)}
-            ${_liTextarea('Financial Notes','li_s_fnotes','Rent roll details, tenant info, lease expirations, etc.',3)}
-            ${_liTextarea('Motivation / Why Selling','li_s_why','e.g. Estate sale, relocating, 1031 exchange...',2)}
-          `)}
-
-          <!-- Asking Price Words -->
-          ${_liSection('🏷️ Asking Price in Words (Optional)', `
-            ${_liTextarea('e.g. "Seller wants $1.5M, firm. Open to seller financing for qualified buyer."','li_s_pricewords','',2)}
           `)}
         </div><!-- /li_s_property_card_1 -->
       </div><!-- /li_s_properties_container -->
@@ -39578,11 +39548,83 @@ function _liRenderSellerForm(){
           : null;
         countyEl.value = match ? (match + ' County') : (bareName + ' County');
       }
+      // v349: address picked from Google Places — definitely a new entry,
+      // so hide the existing-deal dropdown.
+      const dd = document.getElementById('li_s_deal_dropdown');
+      if(dd){ dd.style.display = 'none'; dd.innerHTML = ''; }
     });
   }
+  // v349: parallel listener on the address input that debounces a query
+  // against ace_properties. If the typed address ilike-matches an existing
+  // deal, surface a dropdown of "Lead #<short-id> · <address>" rows so the
+  // agent can jump to the existing deal instead of duplicating.
+  (() => {
+    const addrEl = document.getElementById('li_s_address');
+    if(!addrEl) return;
+    let _liDealCheckTimer = null;
+    addrEl.addEventListener('input', () => {
+      if(_liDealCheckTimer) clearTimeout(_liDealCheckTimer);
+      _liDealCheckTimer = setTimeout(() => _liCheckDealExists(addrEl.value), 300);
+    });
+    addrEl.addEventListener('blur', () => {
+      // Delay hiding so click handlers inside the dropdown can fire first.
+      setTimeout(() => {
+        const dd = document.getElementById('li_s_deal_dropdown');
+        if(dd) dd.style.display = 'none';
+      }, 200);
+    });
+  })();
   // v102.27: Apply prefill values if we arrived here from a contact detail page
   _liApplyPrefill('s');
 }
+
+// v349: query ace_properties for any existing deal whose address ilike-matches
+// the typed term. Render a dropdown of matches under the address input so the
+// agent can click an existing lead instead of creating a duplicate.
+async function _liCheckDealExists(rawTerm){
+  const dd = document.getElementById('li_s_deal_dropdown');
+  if(!dd) return;
+  const term = String(rawTerm || '').trim();
+  // Bail on short inputs to avoid noisy matches like "5".
+  if(term.length < 5){
+    dd.style.display = 'none';
+    dd.innerHTML = '';
+    return;
+  }
+  try {
+    const safe = term.replace(/[(),%]/g, ' ').trim();
+    if(!safe){ dd.style.display = 'none'; return; }
+    const rows = await _sbGet(SB_TABLES.properties,
+      `address=ilike.*${encodeURIComponent(safe)}*&deleted_at=is.null&select=id,address&limit=5`);
+    if(!Array.isArray(rows) || !rows.length){
+      dd.style.display = 'none';
+      dd.innerHTML = '';
+      return;
+    }
+    const esc = s => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+    const header = `<div style="padding:8px 12px;font-size:11px;color:#9a3412;font-weight:700;text-transform:uppercase;letter-spacing:0.04em;background:#fff7ed;border-bottom:1px solid #fed7aa;">⚠ ${rows.length} existing lead${rows.length===1?'':'s'} match this address</div>`;
+    const rowsHtml = rows.map((r, i) => {
+      const shortId = String(r.id || '').slice(0, 8);
+      const addr = esc(r.address || '(no address)');
+      const borderTop = i === 0 ? '' : 'border-top:1px solid #f1f5f9;';
+      return `
+        <div onclick="(typeof openDeal === 'function') && openDeal('${esc(r.id)}')" onmousedown="event.preventDefault()"
+             style="padding:10px 12px;cursor:pointer;display:flex;align-items:center;gap:10px;${borderTop}"
+             onmouseover="this.style.background='#fff7ed'" onmouseout="this.style.background='transparent'">
+          <div style="background:#fef3c7;color:#9a3412;border:1px solid #fed7aa;font-family:'Source Code Pro',ui-monospace,Menlo,monospace;font-size:10px;font-weight:700;padding:2px 7px;border-radius:99px;flex-shrink:0;">Lead #${esc(shortId)}</div>
+          <div style="flex:1;min-width:0;font-size:13px;color:#0f172a;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${addr}</div>
+          <div style="font-size:11px;color:#9a3412;font-weight:600;flex-shrink:0;">Open →</div>
+        </div>`;
+    }).join('');
+    const footer = `<div style="padding:8px 12px;font-size:11px;color:#64748b;background:#f8fafc;border-top:1px solid #e2e8f0;line-height:1.4;">Or keep typing — picking a Google Places suggestion creates a new lead.</div>`;
+    dd.innerHTML = header + rowsHtml + footer;
+    dd.style.display = 'block';
+  } catch(e){
+    console.warn('[li_s] deal-exists check failed:', e.message);
+    dd.style.display = 'none';
+  }
+}
+window._liCheckDealExists = _liCheckDealExists;
 
 // ── Asset type selector (search + type/subtype panels, like deal card) ─
 function _liAssetSelector(mode){

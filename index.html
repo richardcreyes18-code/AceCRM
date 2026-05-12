@@ -30649,12 +30649,25 @@ async function bcOpenExpanded(recordId){
                    JSONB so no migration needed. Sub-fields only render
                    when the checkbox is on. -->
               ${(() => {
-                const ef = (_bcCurrentRecord && _bcCurrentRecord.extra_fields && typeof _bcCurrentRecord.extra_fields === 'object') ? _bcCurrentRecord.extra_fields : {};
+                // v331.1: local esc + tolerant lookups — bcOpenExpanded
+                // doesn't have a module-level esc, and _bcCurrentRecord
+                // may not be populated yet on first render. Read from
+                // the in-memory cache entry by recordId as a fallback.
+                const _esc = s => String(s == null ? '' : s).replace(/[<&>"]/g, c => ({'<':'&lt;','&':'&amp;','>':'&gt;','"':'&quot;'}[c]));
+                let ef = (window._bcCurrentRecord && window._bcCurrentRecord.extra_fields && typeof window._bcCurrentRecord.extra_fields === 'object')
+                  ? window._bcCurrentRecord.extra_fields
+                  : null;
+                if(!ef && Array.isArray(window.allBuyerCriteria)){
+                  const cached = window.allBuyerCriteria.find(r => r.id === recordId);
+                  if(cached && cached.extra_fields && typeof cached.extra_fields === 'object') ef = cached.extra_fields;
+                }
+                ef = ef || {};
                 const is1031   = ef['is_1031_buyer'] === true;
                 const needsId  = ef['1031_needs_identification'] === true;
                 const exp1031  = ef['1031_expiration_date'] || '';
                 const amt1031  = ef['1031_amount'] != null ? ef['1031_amount'] : '';
                 const src1031  = ef['1031_source_asset'] || '';
+                const amtStr   = amt1031 === '' ? '' : (typeof _fmtNum === 'function' ? _fmtNum(amt1031) : String(amt1031));
                 return `
               <div class="bc-label" style="margin-bottom:6px;">🏛 1031 Exchange</div>
               <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:5px;padding:8px 10px;margin-bottom:14px;">
@@ -30668,11 +30681,11 @@ async function bcOpenExpanded(recordId){
                     <span>⚠ Still needs to identify a 1031 property</span>
                   </label>
                   <div class="bc-label" style="font-size:10px;margin-bottom:3px;color:#14532d;">1031 Expiration Date (45-day or 180-day deadline)</div>
-                  <input type="date" id="bcf_1031_expiration" value="${esc(exp1031)}" onchange="_bcAutoSave()" class="form-input" style="width:160px;font-size:11px;margin-bottom:8px;"/>
+                  <input type="date" id="bcf_1031_expiration" value="${_esc(exp1031)}" onchange="_bcAutoSave()" class="form-input" style="width:160px;font-size:11px;margin-bottom:8px;"/>
                   <div class="bc-label" style="font-size:10px;margin-bottom:3px;color:#14532d;">1031 Amount ($ to roll over)</div>
-                  <input type="text" inputmode="numeric" id="bcf_1031_amount" class="form-input num-input" placeholder="e.g. 1,500,000" value="${esc(amt1031 === '' ? '' : _fmtNum(amt1031))}" oninput="_bcAutoSave()" style="width:100%;font-size:11px;margin-bottom:8px;"/>
+                  <input type="text" inputmode="numeric" id="bcf_1031_amount" class="form-input num-input" placeholder="e.g. 1,500,000" value="${_esc(amtStr)}" oninput="_bcAutoSave()" style="width:100%;font-size:11px;margin-bottom:8px;"/>
                   <div class="bc-label" style="font-size:10px;margin-bottom:3px;color:#14532d;">1031 Source Asset (property they sold / are selling)</div>
-                  <input type="text" id="bcf_1031_source_asset" value="${esc(src1031)}" placeholder="e.g. 4-unit in Elizabeth, sold Mar 2026" oninput="_bcAutoSave()" class="form-input" style="width:100%;font-size:11px;"/>
+                  <input type="text" id="bcf_1031_source_asset" value="${_esc(src1031)}" placeholder="e.g. 4-unit in Elizabeth, sold Mar 2026" oninput="_bcAutoSave()" class="form-input" style="width:100%;font-size:11px;"/>
                 </div>
               </div>`;
               })()}

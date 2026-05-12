@@ -30277,6 +30277,46 @@ async function bcOpenExpanded(recordId){
   const record  = allBuyerCriteria.find(r=>r.id===recordId);
   if(!record){ alert('Buyer not found — try refreshing.'); return; }
   const f       = record.fields;
+  // v335: migrate legacy per-scope Other Notes (extra_fields.other_notes_*)
+  // into the native <category>_notes column so each chip renders ONE
+  // Other Notes textarea (the native one). Idempotent — once nulled on
+  // save, future opens find nothing to migrate.
+  (() => {
+    const NATIVE_NOTES_BY_SLUG = {
+      multifamily:      'Multifamily Notes',
+      warehouse:        'Warehouse Notes',
+      retail:           'Retail Notes',
+      office:           'Office Notes',
+      shopping_center:  'Shopping Notes',
+      mixed_use:        'MixedUse Notes',
+      automotive:       'Automotive Notes',
+      land:             'Land Notes',
+      self_storage:     'Storage Notes',
+      mobile_home_park: 'MHP Notes',
+      healthcare:       'Healthcare Notes',
+      development:      'Development Notes',
+    };
+    // Order matters: longest slugs first so "shopping_center" beats
+    // "shopping" if both were registered (defensive — only the longer
+    // form ships today).
+    const slugs = Object.keys(NATIVE_NOTES_BY_SLUG).sort((a,b) => b.length - a.length);
+    const ef = (record.extra_fields && typeof record.extra_fields === 'object') ? record.extra_fields : {};
+    const doomed = [];
+    for(const k of Object.keys(ef)){
+      if(!k.startsWith('other_notes_')) continue;
+      const stem = k.slice('other_notes_'.length);
+      const slug = slugs.find(s => stem === s || stem.startsWith(s + '_'));
+      doomed.push(k);
+      if(!slug) continue;
+      const fieldKey = NATIVE_NOTES_BY_SLUG[slug];
+      const text = String(ef[k] || '').trim();
+      if(!text) continue;
+      const cur = String(f[fieldKey] || '').trim();
+      if(cur && cur.includes(text)) continue;
+      f[fieldKey] = cur ? `${cur}\n${text}` : text;
+    }
+    record._bcDoomedExtraKeys = doomed;
+  })();
   // v288: stash on window so bcExpandedAssetSection (and any other
   // helper that needs the raw record, e.g. for extra_fields) can read
   // it without threading the param through every call.
@@ -34090,6 +34130,22 @@ async function bcSaveExpanded(recordId, isAuto=false){
           if(window._bcCurrentRecord) window._bcCurrentRecord.extra_fields = sbData.extra_fields;
         }
       } catch(e){ console.warn('[bc-1031] collect failed:', e.message); }
+      // v335: strip legacy per-scope Other Notes keys from extra_fields.
+      // The migration at BC open already folded their content into the
+      // native <category>_notes columns; writing them back would resurrect
+      // the duplicate-textarea UI on next open. Defensive sweep: drop
+      // every key prefixed with `other_notes_` regardless of whether it
+      // was on the doomed list.
+      try {
+        if(sbData.extra_fields && typeof sbData.extra_fields === 'object'){
+          const cleaned = {};
+          for(const [k, v] of Object.entries(sbData.extra_fields)){
+            if(!k.startsWith('other_notes_')) cleaned[k] = v;
+          }
+          sbData.extra_fields = cleaned;
+          if(window._bcCurrentRecord) window._bcCurrentRecord.extra_fields = cleaned;
+        }
+      } catch(e){ console.warn('[bc-fields] doomed-key strip failed:', e.message); }
       await _sbPatch(SB_TABLES.buyerCriteria, recordId, sbData);
     } else {
       const res = await fetch(`https://api.airtable.com/v0/${cfg.base}/tbltwNvbX5T3t9wRE/${recordId}`,{

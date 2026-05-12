@@ -344,67 +344,46 @@ export function _bcRenderExtraFields(chipText, record){
   // semantics at js/admin/bc-native-fields.js.
   const catDefs = (_bcFieldsGet(category) || []).filter(d => d.hidden !== true);
   const subDefs = fullKey ? (_bcFieldsGet(fullKey) || []).filter(d => d.hidden !== true) : [];
-  // v325 fix: don't early-return purely on missing custom-field defs.
-  // A scope can have 0 custom fields but Other Notes ENABLED — the
-  // block() call needs to run so the Other Notes textarea renders.
-  // Previously this returned '' for "Other Notes only" scopes, which
-  // is why Special Purpose: Gas Station showed no textarea despite
-  // the admin checkbox being on.
-  const catOn = _bcOtherNotesGet(category);
-  const subOn = fullKey ? _bcOtherNotesGet(fullKey) : { enabled: false };
-  const anyFields = catDefs.length || subDefs.length;
-  const anyNotes  = catOn?.enabled || subOn?.enabled;
-  if(!anyFields && !anyNotes) return '';
-
   const extra = (record?.extra_fields && typeof record.extra_fields === 'object')
     ? record.extra_fields
     : {};
 
-  const block = (scopeLabel, scopeKey, defs) => {
-    const slug = _categorySlug(scopeKey);
-    const onCfg = _bcOtherNotesGet(scopeKey);
-    // v292: render the block when EITHER custom fields exist OR the
-    // Other Notes textarea is enabled for this scope. Skip entirely
-    // only when both are absent.
-    if(!defs.length && !onCfg.enabled) return '';
-    const rows = defs.map(d => {
-      const id  = `bcf_extra_${slug}_${d.col}`;
-      const val = extra[d.col];
-      return _renderFieldRow(d, id, val);
-    }).join('');
-    // v292: standard "Other Notes" textarea, configurable per scope.
-    // Stored under extra_fields[`other_notes_${slug}`] so each scope
-    // has its own bucket (no clobber across categories/subtypes).
-    let otherNotesHtml = '';
-    if(onCfg.enabled){
-      const onCol = `other_notes_${slug}`;
-      const onId  = `bcf_extra_${slug}_${onCol}`;
-      const onVal = (extra[onCol] === 0 || extra[onCol]) ? String(extra[onCol]) : '';
-      otherNotesHtml = `
-        <div data-extra-field="${esc(onCol)}" data-extra-type="text" style="grid-column:span 2;margin-top:6px;">
-          <label for="${esc(onId)}" style="font-size:11px;color:#475569;font-weight:600;display:block;margin-bottom:3px;">📝 Other Notes</label>
-          <textarea id="${esc(onId)}" rows="3"  style="border:1px solid #cbd5e1;border-radius:6px;padding:6px 9px;font-size:12px;width:100%;box-sizing:border-box;font-family:inherit;resize:vertical;">${esc(onVal)}</textarea>
-        </div>`;
-    }
-    const summaryParts = [];
-    if(defs.length)      summaryParts.push(`${defs.length} field${defs.length===1?'':'s'}`);
-    if(onCfg.enabled)    summaryParts.push('+ other notes');
-    return `
-      <div class="info-box" data-bc-extra-section="${esc(slug)}" style="margin-top:10px;border:1px dashed #c0d0e8;background:#fbfdff;">
-        <div class="info-box-title" style="display:flex;justify-content:space-between;align-items:center;">
-          <span>${esc(scopeLabel)} — Custom Requirements</span>
-          <span style="font-size:9px;color:#94a3b8;font-weight:500;">${summaryParts.join(' · ')}</span>
-        </div>
-        <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;">
-          ${rows}
-          ${otherNotesHtml}
-        </div>
-      </div>`;
-  };
-  return [
-    block(category, category, catDefs),
-    block(fullKey, fullKey, subDefs),
-  ].join('');
+  // v335: ONE merged Custom Requirements block per chip. Previously this
+  // returned two blocks (one for the category, one for the subtype) — each
+  // with its own dashed border + its own "Other Notes" textarea — which
+  // produced staggered duplicate sections on subtype chips. Now: a single
+  // info-box labeled by the chip's most specific scope, with category
+  // defs first and subtype defs appended (deduped by col). The per-scope
+  // "📝 Other Notes" textarea was also dropped here — the native
+  // <category>_notes textarea above the box is now the only Other Notes
+  // per chip. Migration of legacy other_notes_* values into the native
+  // column happens at BC load (see _bcMigrateLegacyOtherNotes in index.html).
+  const scopeLabel = fullKey || category;
+  const scopeKey   = fullKey || category;
+  const slug       = _categorySlug(scopeKey);
+  const seen = new Set();
+  const mergedDefs = [];
+  for(const d of [...catDefs, ...subDefs]){
+    if(!d || !d.col || seen.has(d.col)) continue;
+    seen.add(d.col);
+    mergedDefs.push(d);
+  }
+  if(!mergedDefs.length) return '';
+  const rows = mergedDefs.map(d => {
+    const id  = `bcf_extra_${slug}_${d.col}`;
+    const val = extra[d.col];
+    return _renderFieldRow(d, id, val);
+  }).join('');
+  return `
+    <div class="info-box" data-bc-extra-section="${esc(slug)}" style="margin-top:10px;border:1px dashed #c0d0e8;background:#fbfdff;">
+      <div class="info-box-title" style="display:flex;justify-content:space-between;align-items:center;">
+        <span>${esc(scopeLabel)} — Custom Requirements</span>
+        <span style="font-size:9px;color:#94a3b8;font-weight:500;">${mergedDefs.length} field${mergedDefs.length===1?'':'s'}</span>
+      </div>
+      <div style="display:grid;grid-template-columns:repeat(2,1fr);gap:12px;">
+        ${rows}
+      </div>
+    </div>`;
 }
 
 function _renderFieldRow(d, id, val){
@@ -552,16 +531,22 @@ export function _bcFieldsAdminForCategory(category, onClose){
         : '';
       const isFirstCustom = idx === 0;
       const isLastCustom  = idx === defs.length - 1;
+      const onlyOne       = defs.length === 1;
       // v334: context-aware tooltips on the disabled-state arrows so
       // the grayed-out buttons don't look like a rendering bug when
       // only one field exists.
-      const moveUpTitle   = isFirstCustom
-        ? (defs.length === 1 ? 'Need 2+ fields to reorder' : 'Already at top')
-        : 'Move up';
-      const moveDownTitle = isLastCustom
-        ? (defs.length === 1 ? 'Need 2+ fields to reorder' : 'Already at bottom')
-        : 'Move down';
+      const moveUpTitle   = isFirstCustom ? 'Already at top'    : 'Move up';
+      const moveDownTitle = isLastCustom  ? 'Already at bottom' : 'Move down';
       const isVisible = d.hidden !== true;
+      // v335: when there's only one custom field, the ▲ ▼ buttons
+      // are necessarily both disabled — and the AI-suggestion-inbox
+      // flow lands the agent here every time (one field just pushed
+      // in). The grayed-out buttons read as "broken" rather than
+      // "nothing to reorder against." Swap in a small explainer.
+      const arrowsHtml = onlyOne
+        ? `<div style="font-size:9px;color:#94a3b8;line-height:1.2;padding:3px 5px;text-align:center;background:#f8fafc;border:1px dashed #e2e8f0;border-radius:3px;">Add a 2nd<br/>field to<br/>reorder</div>`
+        : `<button data-field-action="move-up"   data-field-idx="${idx}" ${isFirstCustom ? 'disabled' : ''} title="${moveUpTitle}"   style="background:${isFirstCustom?'#f1f5f9':'#eef2ff'};border:1px solid ${isFirstCustom?'#e2e8f0':'#c7d2fe'};color:${isFirstCustom?'#cbd5e1':'#3730a3'};cursor:${isFirstCustom?'not-allowed':'pointer'};font-size:12px;padding:1px 7px;border-radius:3px;line-height:1;">▲</button>
+           <button data-field-action="move-down" data-field-idx="${idx}" ${isLastCustom  ? 'disabled' : ''} title="${moveDownTitle}" style="background:${isLastCustom?'#f1f5f9':'#eef2ff'};border:1px solid ${isLastCustom?'#e2e8f0':'#c7d2fe'};color:${isLastCustom?'#cbd5e1':'#3730a3'};cursor:${isLastCustom?'not-allowed':'pointer'};font-size:12px;padding:1px 7px;border-radius:3px;line-height:1;">▼</button>`;
       return `
         <div style="border:1px solid #e2e8f0;border-radius:8px;padding:12px;margin-bottom:10px;background:${isVisible ? '#fff' : '#fef2f2'};">
           <div style="display:grid;grid-template-columns:auto 1fr 1fr 100px auto;gap:8px;align-items:end;">
@@ -571,8 +556,7 @@ export function _bcFieldsAdminForCategory(category, onClose){
                 <input type="checkbox" data-field-edit="${idx}" data-prop="hidden" ${isVisible ? 'checked' : ''} style="margin:0;width:13px;height:13px;cursor:pointer;"/>
                 ${isVisible ? 'Visible' : 'Hidden'}
               </label>
-              <button data-field-action="move-up"   data-field-idx="${idx}" ${isFirstCustom ? 'disabled' : ''} title="${moveUpTitle}"   style="background:${isFirstCustom?'#f1f5f9':'#eef2ff'};border:1px solid ${isFirstCustom?'#e2e8f0':'#c7d2fe'};color:${isFirstCustom?'#cbd5e1':'#3730a3'};cursor:${isFirstCustom?'not-allowed':'pointer'};font-size:12px;padding:1px 7px;border-radius:3px;line-height:1;">▲</button>
-              <button data-field-action="move-down" data-field-idx="${idx}" ${isLastCustom  ? 'disabled' : ''} title="${moveDownTitle}" style="background:${isLastCustom?'#f1f5f9':'#eef2ff'};border:1px solid ${isLastCustom?'#e2e8f0':'#c7d2fe'};color:${isLastCustom?'#cbd5e1':'#3730a3'};cursor:${isLastCustom?'not-allowed':'pointer'};font-size:12px;padding:1px 7px;border-radius:3px;line-height:1;">▼</button>
+              ${arrowsHtml}
             </div>
             <div>
               <label style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;font-weight:600;">Label (shown to user)</label>
@@ -615,22 +599,12 @@ export function _bcFieldsAdminForCategory(category, onClose){
           ${(typeof window._bcRenderNativeFieldsPanel === 'function')
               ? (window._bcRenderNativeFieldsPanel(category) || '')
               : ''}
-          <!-- v292: per-scope Other Notes settings. Renders at the
-               bottom of every BC requirements section. Toggle off to
-               hide for this scope; edit placeholder to customize. -->
-          <div style="border:1.5px solid ${otherNotes.enabled ? '#bfdbfe' : '#fecaca'};background:${otherNotes.enabled ? '#eff6ff' : '#fef2f2'};border-radius:8px;padding:12px 14px;margin-bottom:14px;">
-            <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;">
-              <label style="display:inline-flex;align-items:center;gap:6px;cursor:pointer;font-size:13px;font-weight:600;color:#0f172a;">
-                <input type="checkbox" id="bcOtherNotesEnabled" ${otherNotes.enabled ? 'checked' : ''} style="margin:0;"/>
-                📝 Show "Other Notes" textarea on this scope
-              </label>
-              <span style="font-size:11px;color:#64748b;">— renders at the bottom of every BC's ${esc(category)} requirements section</span>
-            </div>
-            <div>
-              <label style="font-size:10px;color:#64748b;text-transform:uppercase;letter-spacing:.04em;font-weight:600;">Placeholder text (shown to user inside the textarea)</label>
-              <input type="text" id="bcOtherNotesPlaceholder" value="${esc(otherNotes.placeholder)}" style="width:100%;padding:7px 10px;font-size:12px;border:1px solid #cbd5e1;border-radius:6px;margin-top:3px;"/>
-            </div>
-          </div>
+          <!-- v335: removed the per-scope "Show Other Notes textarea" toggle.
+               The native <category>_notes textarea (see js/admin/bc-native-fields.js)
+               is now the sole Other Notes field per chip — its label/hint/options
+               are editable from the Native Fields panel above. Legacy
+               other_notes_* JSONB values are migrated into the native column
+               at BC load (see _bcMigrateLegacyOtherNotes in index.html). -->
           ${list || '<div style="padding:30px;text-align:center;color:#94a3b8;font-size:12px;">No custom fields yet. Add one below to make new requirements show up on every BC for this category.</div>'}
           <div style="margin-top:8px;padding:14px;border:1.5px dashed #cbd5e1;border-radius:8px;background:#fff;">
             <div style="font-size:12px;font-weight:600;color:#0f172a;margin-bottom:8px;">+ Add new field</div>
@@ -766,12 +740,6 @@ export function _bcFieldsAdminForCategory(category, onClose){
   });
   modal.addEventListener('input', (e) => {
     const t = e.target;
-    // v292: Other Notes placeholder text edits.
-    if(t.id === 'bcOtherNotesPlaceholder'){
-      otherNotes.placeholder = String(t.value || '');
-      dirty = true;
-      return;
-    }
     // v294: native-field label-override edits.
     if(t.matches('[data-native-override][data-native-prop="label"]')){
       const col = t.getAttribute('data-native-override');
@@ -830,15 +798,7 @@ export function _bcFieldsAdminForCategory(category, onClose){
     }
   });
 
-  // v292: checkbox change for Other Notes enabled toggle. Re-render so
-  // the colored border around the panel reflects the new state.
   modal.addEventListener('change', (e) => {
-    if(e.target && e.target.id === 'bcOtherNotesEnabled'){
-      otherNotes.enabled = !!e.target.checked;
-      dirty = true;
-      rerender();
-      return;
-    }
     // v294: native-field hidden-toggle change. Checkbox is "Visible"
     // (checked = visible). The override stores hidden=true when
     // unchecked. Re-render so the row's red/white background updates.

@@ -35269,23 +35269,33 @@ async function _bcLoadBuyerTaggedContactIds(){
 
 // Direct-PostgREST helper that returns full rows (id, fub_contact_id,
 // fub_tags). Used by the v327 with-notes / tag-only filters too.
+// v343.4: paginate. PostgREST's max-rows default of 1000 was capping
+// the fetch at 1000 buyer-tagged contacts even though `limit=10000` was
+// in the URL. That made the launcher's "without a BC yet" badge show
+// 364 (the diff against in-memory BCs) instead of the real ~4,954.
 async function _bcDirectFetchBuyerTagged(){
   const cfg = getConfig();
-  const url = `${cfg.url}/rest/v1/ace_contacts?deleted_at=is.null&fub_tags=cs.%7BBuyer%7D&select=id,fub_contact_id,fub_tags&limit=10000`;
-  try {
-    const res = await fetch(url, {
-      headers: {
-        apikey: cfg.key,
-        Authorization: 'Bearer ' + cfg.key,
-      },
-    });
-    if(!res.ok) return [];
-    const rows = await res.json();
-    return Array.isArray(rows) ? rows : [];
-  } catch(e){
-    console.warn('[bc-launcher] direct-fetch buyer-tagged failed:', e.message);
-    return [];
+  const out = [];
+  const PAGE = 1000;
+  let offset = 0;
+  while(true){
+    const url = `${cfg.url}/rest/v1/ace_contacts?deleted_at=is.null&fub_tags=cs.%7BBuyer%7D&select=id,fub_contact_id,fub_tags&order=id.asc&limit=${PAGE}&offset=${offset}`;
+    let rows = [];
+    try {
+      const res = await fetch(url, { headers: { apikey: cfg.key, Authorization: 'Bearer ' + cfg.key } });
+      if(!res.ok) break;
+      rows = await res.json();
+      if(!Array.isArray(rows) || !rows.length) break;
+    } catch(e){
+      console.warn('[bc-launcher] direct-fetch buyer-tagged failed:', e.message);
+      break;
+    }
+    out.push(...rows);
+    if(rows.length < PAGE) break;
+    offset += PAGE;
+    if(offset >= 50000) break;   // safety stop
   }
+  return out;
 }
 
 // v327: returns a Set of fub_contact_ids that have ANY non-null note

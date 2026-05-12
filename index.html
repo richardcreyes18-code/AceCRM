@@ -28144,6 +28144,13 @@ function _reconRowHtml(r, fubBy, aceBy, actBy){
         </div>`;
       actions =
         `<button onclick="_reconResolveMerge(${r.id},null,this)" style="background:#16a34a;color:#fff;border:none;padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Ignore new FUB record</button>` +
+        // v338: move calls/notes from the duplicate FUB id onto the
+        // ace_contact's already-linked FUB id. Keeps the existing
+        // link (FUB #${existingFubId}) intact and just attaches the
+        // orphan activity. Use when the new FUB record is a
+        // duplicate of someone you've been working with and you
+        // want their calls without losing the prior history.
+        `<button onclick="_reconMergeHistoryIntoExisting(${r.id}, ${existingFubId}, ${r.fub_source_id}, this)" style="background:#1e3a8a;color:#fff;border:none;padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Move calls/notes to existing &amp; ignore</button>` +
         (ids[0] ? `<button onclick="if(confirm('This will repoint this contact from FUB #${existingFubId} to FUB #${r.fub_source_id}. Notes/calls keyed to the old FUB id may become harder to find. Continue?')) _reconResolveMerge(${r.id},'${_reconEsc(ids[0])}',this)" style="background:transparent;border:1px solid #f59e0b;color:#b45309;padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Relink to FUB #${r.fub_source_id}</button>` : '');
     } else {
       const candButtons = ids.map(id =>
@@ -28516,6 +28523,59 @@ async function _reconResolveMerge(queueId, chosenAce, btn){
     if(row) row.style.opacity = '0.4';
     setTimeout(() => _reconQueueRender(true), 400);
   }catch(e){ alert('Failed: ' + (e.message||e)); if(btn){ btn.disabled=false; btn.textContent='Retry'; } }
+}
+
+// v338: FUB-side duplicate path — keep the existing ace_contacts ↔
+// FUB link intact, but re-key the duplicate FUB record's calls/notes
+// onto the surviving FUB id so the orphan activity attaches to the
+// contact. Then mark the queue row resolved (same effect as the
+// "Ignore new FUB record" button). Requires the merge_fub_activity
+// RPC from supabase/migrations/20260511234500_merge_fub_activity_rpc.sql.
+async function _reconMergeHistoryIntoExisting(queueId, oldFubId, newFubId, btn){
+  const proceed = confirm(
+    `Move calls + notes from duplicate FUB #${newFubId} onto FUB #${oldFubId} ` +
+    `(the FUB id this contact is already linked to in your CRM)?\n\n` +
+    `After this: the duplicate FUB record stays in fub_contacts but its history ` +
+    `attaches to the surviving link, and this queue row is marked resolved.\n\n` +
+    `Heads up: if FUB itself still has #${newFubId} as a separate person, future ` +
+    `syncs will add new calls under that id and may re-surface this queue row. ` +
+    `Run this again when that happens.`
+  );
+  if(!proceed) return;
+  if(btn){ btn.disabled = true; btn.textContent = '⏳'; }
+  try{
+    const r = await _reconRpc('merge_fub_activity', {
+      p_old_fub_id: oldFubId,
+      p_new_fub_id: newFubId,
+    });
+    // r is a single-row response { calls_moved, notes_moved, ... }.
+    const result = Array.isArray(r) ? r[0] : r;
+    const callsMoved = (result && result.calls_moved) || 0;
+    const notesMoved = (result && result.notes_moved) || 0;
+    // Then mark the queue row resolved as an "ignore" so the duplicate
+    // FUB record doesn't appear on any ace_contact.
+    await _reconRpc('resolve_queue_merge', { p_queue_id: queueId, p_chosen_ace: null });
+    const row = document.getElementById(`reconRow-${queueId}`);
+    if(row) row.style.opacity = '0.4';
+    if(typeof showSaveConfirm === 'function'){
+      showSaveConfirm(`✓ Moved ${callsMoved} call${callsMoved===1?'':'s'} + ${notesMoved} note${notesMoved===1?'':'s'} to FUB #${oldFubId}`);
+    } else {
+      alert(`Moved ${callsMoved} calls + ${notesMoved} notes onto FUB #${oldFubId}.`);
+    }
+    setTimeout(() => _reconQueueRender(true), 400);
+  }catch(e){
+    const msg = String(e.message || e || '');
+    if(msg.includes('merge_fub_activity') || msg.toLowerCase().includes('does not exist')){
+      alert(
+        'Server-side RPC merge_fub_activity is not deployed yet.\n\n' +
+        'Apply supabase/migrations/20260511234500_merge_fub_activity_rpc.sql ' +
+        'to your Supabase project, then retry.'
+      );
+    } else {
+      alert('Failed: ' + msg);
+    }
+    if(btn){ btn.disabled = false; btn.textContent = 'Retry'; }
+  }
 }
 
 // ═══════════════════════════════════════════════════════════════

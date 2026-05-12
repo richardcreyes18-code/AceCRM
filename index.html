@@ -34477,16 +34477,22 @@ window._bcAiStatsCompute = async function(){
     _sbGet(tbl, 'last_ai_autofill_at=not.is.null&select=id&limit=10000').catch(() => []),
     _sbGet(tbl, 'review_status=eq.needs_human_review&select=id&limit=10000').catch(() => []),
   ]);
-  const total       = Array.isArray(allRows)    ? allRows.length    : 0;
-  const filled      = Array.isArray(filledRows) ? filledRows.length : 0;
-  const needsReview = Array.isArray(needsRows)  ? needsRows.length  : 0;
-  // Pure "completed" = AI-filled and not currently flagged for review.
-  // We don't have the per-row overlap from these count queries, so
-  // approximate: completed = filled - (filled ∩ needs_review). In
-  // practice that overlap is small (only when v309 catch fired after
-  // a successful apply). Treat needs_review as taking priority.
-  const completed   = Math.max(0, filled - 0);  // keep filled as-is for now
-  const remaining   = Math.max(0, total - filled - needsReview);
+  // v336: do set math on the actual IDs so the four buckets always
+  // sum to TOTAL. Previously the "Remaining" math subtracted both
+  // filled AND needsReview, but those two sets overlap (every
+  // needs_human_review buyer was AI-touched first, so it's also in
+  // filled) — which made Remaining clamp to 0 long before the run
+  // was actually done, and made the green "Completed" tile display
+  // filled (which includes the buyers still flagged for review).
+  const total      = Array.isArray(allRows)    ? allRows.length    : 0;
+  const filledIds  = new Set((Array.isArray(filledRows) ? filledRows : []).map(r => r.id));
+  const needsIds   = new Set((Array.isArray(needsRows)  ? needsRows  : []).map(r => r.id));
+  let trulyNeeds = 0;
+  for(const id of needsIds) if(filledIds.has(id)) trulyNeeds++;
+  const filled      = filledIds.size;
+  const needsReview = trulyNeeds;
+  const completed   = Math.max(0, filled - trulyNeeds);
+  const remaining   = Math.max(0, total - filled);
   return { total, completed, filled, needsReview, remaining };
 };
 
@@ -34510,7 +34516,7 @@ window._bcAiStatsBarHTML = function(stats){
           <div style="font-size:9px;font-weight:700;color:#94a3b8;text-transform:uppercase;letter-spacing:.06em;margin-top:1px;">Total</div>
         </div>
         <div style="text-align:center;padding:6px 4px;background:#f0fdf4;border:1px solid #86efac;border-radius:6px;">
-          <div style="font-size:18px;font-weight:800;color:#15803d;font-family:'Source Code Pro',ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;letter-spacing:-0.02em;">${stats.filled}</div>
+          <div style="font-size:18px;font-weight:800;color:#15803d;font-family:'Source Code Pro',ui-monospace,Menlo,monospace;font-variant-numeric:tabular-nums;letter-spacing:-0.02em;">${stats.completed}</div>
           <div style="font-size:9px;font-weight:700;color:#166534;text-transform:uppercase;letter-spacing:.06em;margin-top:1px;">Completed</div>
         </div>
         <div style="text-align:center;padding:6px 4px;background:#fff7ed;border:1px solid #fed7aa;border-radius:6px;">

@@ -22,6 +22,81 @@ import { _sbGet, _sbPatch, _sbPost, _sbDelete } from '../core/supabase.js';
 import { showSaveConfirm } from '../core/toast.js';
 import { SB_TABLES } from '../schemas/sb-tables.js';
 
+// v347: one-click "Sync from FUB" handler for the Settings → Email
+// Templates tab. Runs the two stages of the FUB-template import
+// pipeline back-to-back (Supabase Edge Function refresh → per-user
+// matching/insertion), both already idempotent so re-clicks only
+// add genuinely new templates.
+const _FUB_TPL_SYNC_URL = 'https://kxtuegjptvzqycgyzehj.functions.supabase.co/fub-templates-sync';
+
+export async function _emailTplFubSync(btn){
+  const restoreBtn = () => {
+    if(!btn) return;
+    btn.disabled = false;
+    btn.textContent = '📥 Sync from FUB';
+  };
+  if(btn){ btn.disabled = true; btn.textContent = '⏳ Fetching from FUB…'; }
+
+  // Stage 1 — refresh the ace_email_templates mirror from FUB. Edge
+  // function does the actual FUB-API call and UPSERTs by template id,
+  // so existing templates are updated and new ones inserted.
+  try {
+    const res = await fetch(_FUB_TPL_SYNC_URL, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: '{}',
+    });
+    const data = await res.json().catch(() => ({}));
+    if(!res.ok || data?.error){
+      throw new Error(data?.error || `HTTP ${res.status}`);
+    }
+  } catch(e){
+    restoreBtn();
+    alert('FUB sync failed at the mirror-refresh step:\n' + (e.message || e) +
+      '\n\nThe edge function is at:\n' + _FUB_TPL_SYNC_URL);
+    return;
+  }
+
+  // Stage 2 — match templates to properties + insert per-user copies.
+  // The browser-side _fubLinkTemplates is already on window from
+  // index.html:18494; it's idempotent so existing (user, property, name)
+  // tuples are skipped.
+  if(btn){ btn.textContent = '⏳ Matching to properties…'; }
+  let result = null;
+  try {
+    if(typeof window._fubLinkTemplates !== 'function'){
+      throw new Error('_fubLinkTemplates not loaded. Refresh the page and try again.');
+    }
+    result = await window._fubLinkTemplates({ dryRun: false });
+  } catch(e){
+    restoreBtn();
+    alert('FUB sync failed at the matching step:\n' + (e.message || e));
+    return;
+  }
+
+  // Surface the result. result shape: { stats:{matched,unmatched,skipped_dup,inserted,inserted_unlinked,...}, total }
+  const s = result?.stats || {};
+  const newLinked   = Number(s.inserted)          || 0;
+  const newUnlinked = Number(s.inserted_unlinked) || 0;
+  const skipped     = Number(s.skipped_dup)       || 0;
+  const total       = Number(result?.total)       || 0;
+  const totalNew    = newLinked + newUnlinked;
+  const summary = totalNew > 0
+    ? `✓ Added ${totalNew} new template${totalNew===1?'':'s'} (${newLinked} linked + ${newUnlinked} unlinked). Skipped ${skipped} existing.`
+    : `✓ Already up to date. ${skipped} existing template${skipped===1?'':'s'} skipped; scanned ${total}.`;
+  if(typeof showSaveConfirm === 'function') showSaveConfirm(summary);
+  else alert(summary);
+
+  // Refresh the tab so newly-inserted rows appear without a page reload.
+  try {
+    if(typeof _emailTplsTabRender === 'function') await _emailTplsTabRender();
+  } catch(e){ console.warn('[email-tpl sync] tab refresh failed (non-fatal):', e.message); }
+
+  restoreBtn();
+}
+// Attach to window so the inline onclick="_emailTplFubSync(this)" resolves.
+window._emailTplFubSync = _emailTplFubSync;
+
 // ═══════════════════════════════════════════════════════════════════════
 // LEGACY BLOCK BELOW — copied from index.html with `export` added to
 // top-level functions. Many functions in this block are assigned via
@@ -847,6 +922,14 @@ export function _emailTplsLibPaintTemplates(folder){
         <span style="color:#64748b;font-weight:400;font-size:12px;margin-left:8px;">${rows.length.toLocaleString()} template${rows.length===1?'':'s'}</span>
       </div>
       <div style="display:flex;gap:8px;align-items:center;flex-wrap:wrap;">
+        <!-- v347: one-click "pull new templates from FUB" button. Two-stage
+             flow under the hood: fub-templates-sync edge function (refresh
+             the ace_email_templates mirror) + _fubLinkTemplates (match to
+             properties + insert per-user copies). Both stages already
+             idempotent — existing templates are skipped automatically. -->
+        <button id="emailTplFubSyncBtn" onclick="_emailTplFubSync(this)"
+          style="background:#0f172a;color:#fff;border:none;border-radius:6px;padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer;"
+          title="Pull new templates from FUB. Idempotent — only templates that aren't already in your library get added.">📥 Sync from FUB</button>
         ${showAutoLink ? `<button id="emailTplsAutoLinkBtn" onclick="_emailTplsAutoLinkUnlinked()" style="background:#1a3a6e;color:#fff;border:none;border-radius:6px;padding:7px 12px;font-size:12px;font-weight:700;cursor:pointer;" title="Scan body + subject for an address and auto-link to the matching property. Skips ambiguous matches.">✦ Auto-link from text</button>` : ''}
         <input type="text" id="emailTplsSearchInput" value="${safeQ}"
           oninput="window._emailTplsLibState.search=this.value; _emailTplsLibPaint();"

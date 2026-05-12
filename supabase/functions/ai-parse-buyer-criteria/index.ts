@@ -62,7 +62,11 @@ const AUTO_ROUTING = {
   source_chars_threshold: 1800,
   note_count_threshold:    6,
 }
-const MAX_TOKENS = 4096
+// v313: BC responses are typically 500-1500 output tokens (15-25 fields
+// + na/uncertain arrays). 4096 was generous and slowed wall time because
+// Claude keeps emitting until it decides it's done. 2048 is still ~2x
+// headroom over the largest observed real response. Direct latency win.
+const MAX_TOKENS = 2048
 const PROMPT_VERSION = 'bc-v1.12'
 
 // Maps a FIELD_SPEC.group to the asset-class label(s) (from ASSET_TYPE_VOCAB)
@@ -354,6 +358,26 @@ const FIELD_SPEC: FieldDef[] = [
     hint: 'References to specific properties or deals previously shown to this buyer (addresses, deal nicknames, etc.).' },
   { col: 'is_vip_buyer', label: 'VIP Buyer', type: 'boolean', group: 'Misc',
     hint: 'true ONLY when notes/tags clearly mark the buyer as VIP / top-tier / trusted / high-priority. Default false; do not propose true on weak signals.' },
+
+  // v331: 1031 Exchange tracking. Stored in extra_fields JSONB (no DB
+  // migration). All five route through `_extra: true` and land in the
+  // BC's extra_fields blob. The frontend renders the dedicated 1031
+  // block in the right panel.
+  { col: 'is_1031_buyer', label: '1031 Buyer', type: 'boolean', group: 'Misc',
+    hint: 'true when ANY 1031 mention exists in the notes, regardless of year. Default false.',
+    _extra: true } as FieldDef & { _extra: true; _category: string },
+  { col: '1031_needs_identification', label: '1031 Needs Identification', type: 'boolean', group: 'Misc',
+    hint: 'true UNLESS the notes name a specific property already identified. Pre-2026 mentions always true (windows likely expired). This-year mentions: true unless an explicit target property is named.',
+    _extra: true } as FieldDef & { _extra: true; _category: string },
+  { col: '1031_expiration_date', label: '1031 Expiration Date', type: 'text', group: 'Misc',
+    hint: 'YYYY-MM-DD format. Extract ONLY when notes give an explicit 45-day or 180-day deadline. Empty for pre-2026 mentions (expired).',
+    _extra: true } as FieldDef & { _extra: true; _category: string },
+  { col: '1031_amount', label: '1031 Amount ($)', type: 'number', group: 'Misc',
+    hint: 'Dollar amount being rolled over. Extract when notes state it ("$1.5M 1031", "rolling 2.3M from sale of X"). Empty otherwise.',
+    _extra: true } as FieldDef & { _extra: true; _category: string },
+  { col: '1031_source_asset', label: '1031 Source Asset', type: 'text', group: 'Misc',
+    hint: 'Free-text description of the property being sold that funds the 1031 ("4-unit in Elizabeth sold Mar 2026"). Empty when not described.',
+    _extra: true } as FieldDef & { _extra: true; _category: string },
 ]
 
 const FIELD_SPEC_COLS = new Set(FIELD_SPEC.map(f => f.col))
@@ -388,10 +412,19 @@ function isEmptyValue(v: unknown): boolean {
 }
 
 function tryRepairJson(raw: string): string {
+  // v309: handle more Claude failure modes — trailing commas (common when
+  // the response gets cut off mid-list), smart quotes, and stray content
+  // before/after the JSON object. The caller still wraps this in a JSON.parse
+  // try/catch so anything not fixable bubbles up as 502.
   let s = raw.replace(/```json|```/g, '').trim()
   const first = s.indexOf('{')
   const last = s.lastIndexOf('}')
   if (first !== -1 && last !== -1 && last > first) s = s.slice(first, last + 1)
+  // Replace common smart quotes that LLMs sometimes emit when echoing user prose.
+  s = s.replace(/[\u201c\u201d]/g, '"').replace(/[\u2018\u2019]/g, "'")
+  // Strip trailing commas before } or ] (most common LLM mistake when
+  // a list is being progressively built and the response is cut early).
+  s = s.replace(/,(\s*[}\]])/g, '$1')
   return s
 }
 
@@ -610,7 +643,35 @@ OTHER TAG RULES (apply when buy_intent is "buyer" or "both"):
       desired_property_types untouched and put "Tag 'asset - X' had
       no clean vocab match — agent should classify manually" in
       other_requirements.
-  - "1031 Investor" or "1031" → bias financing_type to "1031".
+  - "1031 Investor" or "1031" → bias financing_type to "1031". Also
+    populate the dedicated 1031 fields (stored in extra_fields under
+    these column names; route via _extra: true):
+      is_1031_buyer (boolean): true whenever ANY 1031 mention exists
+        in the notes, regardless of when. Default false; never propose
+        false unless the buyer explicitly said "no longer doing a
+        1031".
+      1031_needs_identification (boolean): true UNLESS the notes give
+        a concrete property the buyer has already identified.
+        - 1031 mention is from 2025 or earlier (calendar year):
+          ALWAYS true. Those 1031 windows have likely expired; the
+          buyer needs to re-identify if they're still active.
+        - 1031 mention is from THIS calendar year:
+          true unless the notes explicitly identify a target property
+          ("identified 4-unit on Linden Ave", "in contract on 12
+          Maple"). If they identify a property → false.
+      1031_expiration_date (date YYYY-MM-DD): extract ONLY when the
+        notes give an explicit deadline ("45-day expires 6/15", "180-
+        day is 8/2"). Leave empty when the deadline isn't stated.
+        For 2025-or-earlier mentions, leave empty (expired).
+      1031_amount (number): the dollar amount being rolled over.
+        Extract when the notes state it ("$1.5M 1031", "rolling
+        2.3M from sale of X"). Leave empty otherwise.
+      1031_source_asset (text): the property being / having been sold
+        that funds the 1031. Free-text description from the notes
+        ("4-unit in Elizabeth sold Mar 2026", "12 Maple Ave").
+        Leave empty when not described.
+    Cite each populated 1031 field. is_1031_buyer + the needs-ID flag
+    are bookkeeping — cite the same source for both.
   - "VIP" → set is_vip_buyer = true. Cite: "tag: VIP".
   - "Bounced" → ignore. Email deliverability flag, not a buying signal.
   - U.S. STATE-NAME tags ("New Jersey", "Pennsylvania", "New York",
@@ -811,6 +872,35 @@ NOTES-READING RULES:
 ═══════════════════════════════════════════════════════════════════════
 STEP 2.4 — DESIRED PROPERTY TYPES: CATEGORIES + SUBTYPES
 ═══════════════════════════════════════════════════════════════════════
+⚠ THIS IS THE MOST IMPORTANT FIELD. Asset types are the agent's
+primary tool for matching buyers to deals — every other field is
+secondary. You MUST:
+  1. SCAN EVERY LINE of every note, every call note body, every
+     contact tag, and every email/message snippet for asset-type
+     mentions. Do not stop at the first match.
+  2. BIAS TOWARD INCLUSION. If a note says "Mixed Use Buyer
+     $500K–$2.5M" alongside an "asset - multi family" tag,
+     emit BOTH "Multifamily" AND "Mixed Use". A buyer can want
+     several categories — chips are additive, not mutually
+     exclusive.
+  3. Any of these phrasings = a chip MUST be added:
+       "X buyer" / "buys X" / "buying X"
+       "looking for X" / "wants X" / "interested in X"
+       "active in X" / "does X" / "focuses on X"
+       "X investor" (e.g. "MF investor", "retail investor")
+       a bare list ("MF, retail, mixed use")
+       "X buyer $A-$B" (price range pattern — chip + price hint)
+       an asset name appearing in a profile / summary line
+         ("Mixed Use Buyer", "Self Storage Investor")
+       an "asset - X" tag (per Step 2.0 mapping)
+  4. ABSENCE in the notes is NOT a reason to drop an existing
+     chip (per rule 5a above). But PRESENCE in the notes is
+     ALWAYS a reason to add a chip when one isn't there yet.
+  5. If you finish parsing and desired_property_types has fewer
+     chips than the count of distinct asset-type mentions you
+     saw, GO BACK and add the missed ones. Better to add a
+     bare category that's only mentioned once than to omit it.
+
 desired_property_types is multi-select against this canonical category
 vocab (matches the BC blank-form picker exactly):
 
@@ -1019,12 +1109,81 @@ Return EXACTLY this JSON shape — no preamble, no code fences:
     ...
   },
   "na":        [ { "field": "<col>", "reason": "<why explicitly excluded>" } ],
-  "uncertain": [ { "field": "<col>", "reason": "<what's ambiguous>" } ]
+  "uncertain": [ { "field": "<col>", "reason": "<what's ambiguous>" } ],
+  "field_suggestions": [
+    { "scope": "<Category>" | "<Category>: <Subtype>",
+      "label": "<what to call the field>",
+      "type":  "text" | "number" | "boolean" | "enum",
+      "options": ["<opt1>","<opt2>"]  // only when type=enum
+      "reason": "<one sentence on why this is worth a dedicated field>" }
+  ]
 }
 
 Numbers as numbers (no $, no commas). Percentages as 0-100.
 Booleans as true/false. CSV fields as a single comma-separated string.
 For enum / multienum, use ONLY values from the field's ALLOWED VALUES.
+
+═══════════════════════════════════════════════════════════════════════
+STEP 4a — ROUTING ASSET-SPECIFIC COMMENTARY
+═══════════════════════════════════════════════════════════════════════
+When the notes contain commentary tied to a SPECIFIC asset class (e.g.
+"wants to operate the gas station himself", "needs 5+ acre lots for
+truck terminal use", "MF garden-style only, no high rise"), DO NOT
+dump it into the global other_requirements field. Route it into the
+per-asset Other Notes field for that asset's scope. The available
+fields appear in your eligible-fields list as:
+
+  other_notes_<slug>   (label: "Other Notes — <Category>"
+                         or "Other Notes — <Category>: <Subtype>")
+
+Where <slug> is the lowercased-and-snakecased version of the scope.
+Examples:
+  Notes mention "owner-operator gas station buyer"
+    → field "other_notes_special_purpose_gas_station"
+    NOT "other_requirements"
+  Notes mention "looking for warehouse with truck terminal access"
+    → "other_notes_industrial_truck_terminal" (if that subtype scope
+       has Other Notes enabled) or "other_notes_industrial"
+  Notes mention "no high rise, garden style only"
+    → "other_notes_multifamily_garden_low_rise" or
+       "other_notes_multifamily"
+
+Reserve global other_requirements for commentary that's NOT tied to a
+specific asset class — e.g. "1031 buyer", "needs assumable financing",
+"agent should call before sending listings", or buy-box flexibility
+notes that span multiple asset classes.
+
+═══════════════════════════════════════════════════════════════════════
+STEP 4b — FIELD SUGGESTIONS
+═══════════════════════════════════════════════════════════════════════
+When you notice information in the notes that looks STRUCTURED (a
+choice from a small set of values, a yes/no flag, a number with a
+clear unit) but doesn't fit any existing field for that asset's scope
+AND would plausibly recur on other buyers in the same scope, propose
+a new field via the "field_suggestions" array.
+
+Triggering patterns (not exhaustive — use judgment):
+  - "owner-operator" vs "investor" for asset classes typically owned
+    by one or the other (gas stations, car washes, laundromats,
+    restaurants, smaller commercial)
+  - 1031-deadline / cash / financing-source patterns for high-volume
+    buyers
+  - Brand preferences ("Shell, Exxon only" for gas stations; "Marriott
+    flag only" for hotels)
+  - Lot-size / pad-size minima for retail single-tenant chains
+  - Tenant credit / lease term thresholds for NNN buyers
+  - Build-year cutoffs ("pre-1990 only", "no pre-WWII") for value-add MF
+
+Each suggestion: scope = the asset class chip the field would live
+under (bare "Gas Station" → use the full "Special Purpose: Gas
+Station" form so the agent knows where to add it). type = text /
+number / boolean / enum. options[] required when type=enum. reason =
+one sentence explaining why this is worth promoting from free-text
+into a dedicated field.
+
+Cap suggestions at 3 per response — only the strongest ones. Empty
+array if nothing notable. The agent reviews these in the modal and
+decides whether to wire them into the BC Asset Taxonomy admin.
 
 ═══════════════════════════════════════════════════════════════════════
 RULES THAT NEVER BEND
@@ -1634,7 +1793,21 @@ Deno.serve(async (req: Request) => {
     const bc = bcRows[0]
     const contact_id = bc.contact_id as string | null
 
+    // v313: Step 1 — fetch the contact row (needed because fub_contact_id
+    // is the join key for fub_calls / fub_notes). Other fetches that
+    // don't depend on the contact row can start once we have the
+    // contact_id (which we already have from the BC row), in parallel.
+    // Saves 2-3 round-trips of serial latency per request (~150-400ms).
     let contact: Record<string, unknown> | null = null
+    const aceNotesPromise: Promise<Array<{ body?: string | null; kind?: string | null; created_at?: string | null }>> | null =
+      contact_id
+        ? (fetchSb(
+            `${SUPABASE_URL}/rest/v1/ace_contact_notes?contact_id=eq.${encodeURIComponent(contact_id)}&select=body,kind,created_at&order=created_at.desc&limit=50`,
+            SERVICE_KEY,
+          ) as Promise<Array<{ body?: string | null; kind?: string | null; created_at?: string | null }>>)
+            .catch(() => [] as Array<{ body?: string | null; kind?: string | null; created_at?: string | null }>)
+        : null
+
     if (contact_id) {
       // v270: also pull fub_tags here as a server-side fallback if the client
       // didn't include contact_tags in the body. The client SHOULD pass them,
@@ -1655,35 +1828,29 @@ Deno.serve(async (req: Request) => {
 
     const fubId = contact?.fub_contact_id ? String(contact.fub_contact_id) : ''
 
-    let fubCalls: Array<{ note?: string | null; created_at?: string | null }> = []
-    if (fubId) {
-      try {
-        fubCalls = (await fetchSb(
+    // v313: fub_calls + fub_notes can run in parallel with each other
+    // (both keyed on the same fubId, no interdependency). aceNotes was
+    // already kicked off above — await all three together.
+    const fubCallsPromise: Promise<Array<{ note?: string | null; created_at?: string | null }>> = fubId
+      ? (fetchSb(
           `${SUPABASE_URL}/rest/v1/fub_calls?person_id=eq.${encodeURIComponent(fubId)}&select=note,created_at&order=created_at.desc&limit=30`,
           SERVICE_KEY,
-        )) as Array<{ note?: string | null; created_at?: string | null }>
-      } catch (_) { fubCalls = [] }
-    }
-
-    let fubNotes: Array<{ body?: string | null; created_at?: string | null }> = []
-    if (fubId) {
-      try {
-        fubNotes = (await fetchSb(
+        ) as Promise<Array<{ note?: string | null; created_at?: string | null }>>)
+          .catch(() => [] as Array<{ note?: string | null; created_at?: string | null }>)
+      : Promise.resolve([])
+    const fubNotesPromise: Promise<Array<{ body?: string | null; created_at?: string | null }>> = fubId
+      ? (fetchSb(
           `${SUPABASE_URL}/rest/v1/fub_notes?person_id=eq.${encodeURIComponent(fubId)}&select=body,created_at&order=created_at.desc&limit=30`,
           SERVICE_KEY,
-        )) as Array<{ body?: string | null; created_at?: string | null }>
-      } catch (_) { fubNotes = [] }
-    }
+        ) as Promise<Array<{ body?: string | null; created_at?: string | null }>>)
+          .catch(() => [] as Array<{ body?: string | null; created_at?: string | null }>)
+      : Promise.resolve([])
 
-    let aceNotes: Array<{ body?: string | null; kind?: string | null; created_at?: string | null }> = []
-    if (contact_id) {
-      try {
-        aceNotes = (await fetchSb(
-          `${SUPABASE_URL}/rest/v1/ace_contact_notes?contact_id=eq.${encodeURIComponent(contact_id)}&select=body,kind,created_at&order=created_at.desc&limit=50`,
-          SERVICE_KEY,
-        )) as Array<{ body?: string | null; kind?: string | null; created_at?: string | null }>
-      } catch (_) { aceNotes = [] }
-    }
+    const [fubCalls, fubNotes, aceNotes] = await Promise.all([
+      fubCallsPromise,
+      fubNotesPromise,
+      aceNotesPromise || Promise.resolve([] as Array<{ body?: string | null; kind?: string | null; created_at?: string | null }>),
+    ])
 
     const sourceParts: string[] = []
     const source_breakdown: Record<string, string> = {}
@@ -2036,6 +2203,95 @@ Deno.serve(async (req: Request) => {
       const subtypeLines = activeVocab
         .map(cat => `  ${cat}: ${(activeSubtypes[cat] || []).join(', ') || '(no subtypes)'}`)
         .join('\n')
+
+      // v307: when a word appears BOTH as a top-level category AND as
+      // a subtype under another category in the active taxonomy, the
+      // model historically collapsed it into the "Parent: Sub" form
+      // (e.g. notes mention "land, development" → "Land: Development"
+      // instead of two separate chips "Land" + "Development"). Build
+      // an explicit DISAMBIGUATION list so the model picks the
+      // top-level chip unless the notes clearly tie the word to the
+      // parent category.
+      const catLowerSet = new Set(activeVocab.map(c => c.toLowerCase()))
+      const ambiguousWords: Array<{ word: string; topLevel: string; alsoSubOf: string[] }> = []
+      for (const cat of activeVocab) {
+        const subList = activeSubtypes[cat] || []
+        for (const sub of subList) {
+          const subLc = sub.toLowerCase()
+          if (catLowerSet.has(subLc) && subLc !== cat.toLowerCase()) {
+            const topLevel = activeVocab.find(c => c.toLowerCase() === subLc) || sub
+            const existing = ambiguousWords.find(a => a.word.toLowerCase() === subLc)
+            if (existing) {
+              if (!existing.alsoSubOf.includes(cat)) existing.alsoSubOf.push(cat)
+            } else {
+              ambiguousWords.push({ word: topLevel, topLevel, alsoSubOf: [cat] })
+            }
+          }
+        }
+      }
+      const ambiguousLines = ambiguousWords.length
+        ? `\nDISAMBIGUATION — words that are BOTH a top-level category AND a\n` +
+          `subtype somewhere else. When notes mention these as standalone\n` +
+          `interests (e.g. "they like X" or "X, Y, and Z" as a list),\n` +
+          `emit the TOP-LEVEL chip on its own — do NOT combine with the\n` +
+          `parent category. Only use "Parent: Word" when the notes\n` +
+          `explicitly tie the word to that parent (e.g. "land for Word",\n` +
+          `"Word-style Parent properties"):\n` +
+          ambiguousWords
+            .map(a => `  "${a.word}" → prefer chip "${a.topLevel}" (not "${a.alsoSubOf.join(': ' + a.word + '" or "')}: ${a.word}")`)
+            .join('\n') +
+          `\n`
+        : ''
+
+      // v316: dynamically build a SUBTYPE KEYWORD TRIGGERS map from the
+      // runtime taxonomy. The static prompt's Step 2.4 has a frozen
+      // keyword map, but the user can add new subtypes via Settings →
+      // BC Asset Taxonomy (e.g. "Laundromat" under Special Purpose).
+      // The AI was emitting the bare category when those new subtype
+      // names appeared in notes because it had no trigger to graduate
+      // them to "Category: Subtype" form.
+      //
+      // Group by lowercase subtype name so collisions across categories
+      // (e.g. Car Wash is under both Automotive AND Special Purpose)
+      // become one line with an OR clause — model can choose or
+      // propose both.
+      const subtypeTriggers = new Map<string, string[]>()  // lowercase keyword → ["Cat: Sub", ...]
+      for (const cat of activeVocab) {
+        const subList = activeSubtypes[cat] || []
+        for (const sub of subList) {
+          const key = sub.toLowerCase().trim()
+          if (!key) continue
+          // Skip if the subtype is identical to its parent category — the
+          // bare category chip is correct in that case (e.g. Land under Land).
+          if (key === cat.toLowerCase()) continue
+          // Skip subtype keywords that ARE a top-level category by themselves
+          // (handled by the DISAMBIGUATION block above — they should emit
+          // the standalone chip, not "Parent: Word").
+          if (catLowerSet.has(key)) continue
+          const chip = `${cat}: ${sub}`
+          const arr = subtypeTriggers.get(key) || []
+          if (!arr.includes(chip)) arr.push(chip)
+          subtypeTriggers.set(key, arr)
+        }
+      }
+      // Sort keys alphabetically so the prompt is deterministic (helps
+      // the v270 ephemeral prompt cache stay warm between requests).
+      const subtypeTriggerKeys = [...subtypeTriggers.keys()].sort()
+      const subtypeTriggerLines = subtypeTriggerKeys
+        .map(key => {
+          const chips = subtypeTriggers.get(key) || []
+          if (chips.length === 1) return `  "${key}" → "${chips[0]}"`
+          // Multi-category collision — propose both unless notes disambiguate.
+          return `  "${key}" → ${chips.map(c => `"${c}"`).join(' OR ')} (pick whichever fits the notes; if ambiguous, propose both)`
+        })
+        .join('\n')
+      const subtypeTriggerBlock = subtypeTriggerKeys.length
+        ? `\nSUBTYPE KEYWORD TRIGGERS (auto-built from your runtime taxonomy —\n` +
+          `${subtypeTriggerKeys.length} keywords across ${activeVocab.length} categories):\n` +
+          subtypeTriggerLines +
+          `\n`
+        : ''
+
       const overrideBlock =
         `═══════════════════════════════════════════════════════════════════════\n` +
         `AUTHORITATIVE ASSET-TYPE VOCAB (runtime override — replaces Step 2.4)\n` +
@@ -2048,7 +2304,203 @@ Deno.serve(async (req: Request) => {
         `  ${activeVocab.join(' | ')}\n\n` +
         `Subtypes (use as "Category: Subtype" chips when notes warrant):\n` +
         subtypeLines +
-        `\n\n═══════════════════════════════════════════════════════════════════════\n\n`
+        `\n` +
+        ambiguousLines +
+        subtypeTriggerBlock +
+        `\nLIST-OF-ASSETS RULE: when notes enumerate multiple property types\n` +
+        `as a comma- or "and"-separated list ("multifamily, land, and\n` +
+        `development"), emit one chip per listed type, each as the BARE\n` +
+        `top-level category from the Categories list above. Do NOT collapse\n` +
+        `two list items into a "Parent: Sub" chip unless the notes\n` +
+        `EXPLICITLY tie one to the other ("land for development", "land\n` +
+        `with development potential" → "Land: Development" stands).\n` +
+        `\nSUBTYPE-PRIORITY RULE: when a note contains ANY keyword from the\n` +
+        `SUBTYPE KEYWORD TRIGGERS list above, the resulting chip MUST be in\n` +
+        `the "Category: Subtype" form — NEVER the bare category alone.\n` +
+        `Bare-category chips are only correct when the notes describe the\n` +
+        `buyer's interest at the category level WITHOUT naming a specific\n` +
+        `subtype:\n` +
+        `  - "interested in special purpose properties"  → bare "Special Purpose"\n` +
+        `  - "laundromat investor"                       → "Special Purpose: Laundromat"\n` +
+        `  - "they buy mechanic shops and tire shops"    → BOTH "Automotive: Auto Repair / Mechanic"\n` +
+        `                                                  AND "Automotive: Tire Shop"\n` +
+        `If the notes mention multiple subtypes under the same category,\n` +
+        `emit a chip per subtype — do NOT collapse into a single bare\n` +
+        `category chip when subtype detail is present.\n` +
+        `\nNORMALIZATION-FIRST RULE: agents type abbreviations constantly.\n` +
+        `BEFORE checking the SUBTYPE KEYWORD TRIGGERS list, expand every\n` +
+        `abbreviation in the notes to its canonical word, then re-check the\n` +
+        `trigger list against the expanded text. Full CRE expansion table:\n` +
+        `\n` +
+        `  GENERAL PROPERTY TYPES\n` +
+        `  ──────────────────────\n` +
+        `  MF / mf / MFR / multifam       → multifamily\n` +
+        `  apts / apt / apartments        → multifamily (Garden/Mid/High based on context)\n` +
+        `  SFR / SFH / SFD                → single family rental (Residential Income)\n` +
+        `  TH / townhouse / townhome      → townhome (Multifamily: Townhome)\n` +
+        `  duplex / 2-plex / 2plex        → Multifamily: Duplex OR Residential Income: Duplex\n` +
+        `  triplex / 3-plex / 3plex       → Multifamily: Triplex OR Residential Income: Triplex\n` +
+        `  fourplex / 4-plex / 4plex / quad → Multifamily: Fourplex OR Residential Income: Fourplex\n` +
+        `  GA / garden / garden-style     → Multifamily: Garden/Low Rise\n` +
+        `  LR / low rise                  → Multifamily: Garden/Low Rise\n` +
+        `  MR / mid rise / mid-rise       → Multifamily: Mid Rise\n` +
+        `  HR / high rise / high-rise     → Multifamily: High Rise\n` +
+        `  BTR / build to rent            → Multifamily: Garden/Low Rise (BTR is a development pattern, route to MF)\n` +
+        `  LIHTC / Section 42 / sec 42    → Multifamily: Affordable Housing\n` +
+        `  affordable / workforce housing → Multifamily: Affordable Housing\n` +
+        `  student / student housing      → Multifamily: Student Housing\n` +
+        `  military / on-base / barracks  → Multifamily: Military Housing\n` +
+        `  MHP / mobile home park / MH    → Residential Income: Mobile Home Park\n` +
+        `  manufactured home / man. home  → Residential Income: Mobile Home Park\n` +
+        `  RV park                        → (no exact subtype — bare Residential Income + note in other_requirements)\n` +
+        `\n` +
+        `  INDUSTRIAL\n` +
+        `  ──────────\n` +
+        `  WH / whse / wh                 → Industrial: Warehouse\n` +
+        `  warehouse / w/h                → Industrial: Warehouse\n` +
+        `  distro / distribution / DC     → Industrial: Distribution\n` +
+        `  fulfillment center / FC        → Industrial: Distribution\n` +
+        `  mfg / manufacturing / mfr      → Industrial: Manufacturing\n` +
+        `  flex / flex space / flex industrial → Industrial: Flex\n` +
+        `  cold storage / refrigerated / freezer → Industrial: Cold Storage\n` +
+        `  data center / DC tier-3        → Industrial: Data Center\n` +
+        `  truck terminal / T-park / truck park / truck parking → Industrial: Truck Terminal\n` +
+        `  IOS / outdoor storage / industrial outdoor → Industrial: Truck Terminal (closest existing subtype unless taxonomy has "Outdoor Storage")\n` +
+        `  self storage / SS / mini storage / storage units → Industrial: Self Storage\n` +
+        `  R&D / R and D / research & development → Industrial: R&D OR Office: R&D (route based on prose)\n` +
+        `  showroom / showroom space      → Industrial: Showroom\n` +
+        `\n` +
+        `  OFFICE\n` +
+        `  ──────\n` +
+        `  CBD / downtown office          → Office: CBD\n` +
+        `  suburban office / subOff       → Office: Suburban\n` +
+        `  medical office / MOB           → Office: Medical OR Health Care: Medical Office (emit BOTH if unsure)\n` +
+        `  creative office / loft / brick-and-beam → Office: Creative/Flex\n` +
+        `  govt / government / fed lease  → Office: Government\n` +
+        `  owner-user / OU / owner occupied → Office: Owner/User\n` +
+        `\n` +
+        `  RETAIL / SHOPPING CENTER\n` +
+        `  ────────────────────────\n` +
+        `  RT / retail                    → Retail (use subtype if specified)\n` +
+        `  strip / strip mall / strip ctr → Retail: Strip Mall OR Shopping Center: Strip Center\n` +
+        `  VAS / value-add strip          → Retail: Value Add Strip\n` +
+        `  power center                   → Retail: Power Center OR Shopping Center: Power Center\n` +
+        `  neighborhood ctr / neighborhood center → Shopping Center: Neighborhood Center OR Retail: Neighborhood Center\n` +
+        `  community center               → Shopping Center: Community Center OR Retail: Community Center\n` +
+        `  lifestyle ctr / lifestyle center → Shopping Center: Lifestyle Center\n` +
+        `  regional mall / mall           → Shopping Center: Regional Mall\n` +
+        `  outlet / outlet mall / outlet ctr → Shopping Center: Outlet Center\n` +
+        `  grocery anchored / grocery-anchored / GAC → Retail: Grocery Anchored\n` +
+        `  STNL / NNN / triple net / single tenant net lease → Retail: NNN Retail or Retail: Single Tenant (emit both if unsure)\n` +
+        `  drug store / CVS / Walgreens / Rite Aid → Retail: Drug Store\n` +
+        `  bank branch / bank             → Retail: Bank\n` +
+        `  restaurant / sit-down / fast casual → Retail: Restaurant\n` +
+        `  QSR / quick service / drive thru / fast food → Retail: Restaurant\n` +
+        `  auto dealer / dealership / car dealer → Retail: Auto Dealership OR Automotive: Auto Dealership (New) / (Used)\n` +
+        `\n` +
+        `  MIXED USE\n` +
+        `  ─────────\n` +
+        `  MU / mixed use / mixed-use     → Mixed Use\n` +
+        `  ground floor retail + apts     → Mixed Use: Ground Floor Retail + Apartments\n` +
+        `  live-work / live/work          → Mixed Use: Live-Work\n` +
+        `\n` +
+        `  HOTEL & MOTEL\n` +
+        `  ─────────────\n` +
+        `  hotel / motel / inn            → Hotel & Motel (use subtype if specified)\n` +
+        `  full service / FS hotel        → Hotel & Motel: Full Service\n` +
+        `  select service / SS hotel      → Hotel & Motel: Select Service\n` +
+        `  extended stay / ES / ext stay  → Hotel & Motel: Extended Stay\n` +
+        `  budget / economy / motel 6 / red roof → Hotel & Motel: Budget/Economy\n` +
+        `  boutique / lifestyle hotel     → Hotel & Motel: Boutique\n` +
+        `  resort                         → Hotel & Motel: Resort\n` +
+        `  B&B / bed and breakfast        → Hotel & Motel: Hostel (closest) — or note in other_requirements\n` +
+        `\n` +
+        `  SENIOR HOUSING / HEALTH CARE\n` +
+        `  ────────────────────────────\n` +
+        `  ILF / independent living       → Senior Housing: Independent Living\n` +
+        `  ALF / assisted living          → Senior Housing: Assisted Living\n` +
+        `  MC / memory care               → Senior Housing: Memory Care\n` +
+        `  SNF / skilled nursing / nursing home → Senior Housing: Skilled Nursing\n` +
+        `  CCRC / life plan community     → Senior Housing: CCRC\n` +
+        `  55+ / active adult / age-restricted → Senior Housing: Active Adult\n` +
+        `  urgent care / UC               → Health Care: Urgent Care\n` +
+        `  surgery / ASC / ambulatory surgery → Health Care: Surgery Center\n` +
+        `  hospital                       → Health Care: Hospital\n` +
+        `  rehab / rehabilitation         → Health Care: Rehabilitation\n` +
+        `  behavioral / psych / mental health → Health Care: Behavioral Health\n` +
+        `  lab / life science / R&D lab   → Health Care: Lab/Life Science\n` +
+        `\n` +
+        `  AUTOMOTIVE\n` +
+        `  ──────────\n` +
+        `  ABS / body shop / collision    → Automotive: Auto Body Shop\n` +
+        `  mechanic / auto repair / garage / shop → Automotive: Auto Repair / Mechanic\n` +
+        `  dealer / dealership            → Automotive: Auto Dealership (New) or (Used) — pick by context\n` +
+        `  parts store / NAPA / AutoZone / O'Reilly → Automotive: Auto Parts Store\n` +
+        `  tire shop / tire store / tire center → Automotive: Tire Shop\n` +
+        `  oil change / lube / Jiffy Lube → Automotive: Oil Change / Lube\n` +
+        `  towing / tow yard              → Automotive: Towing Facility\n` +
+        `  auction / auto auction         → Automotive: Auto Auction\n` +
+        `  CW / car wash / wash           → Automotive: Car Wash AND/OR Special Purpose: Car Wash (emit both unless prose disambiguates)\n` +
+        `\n` +
+        `  SPECIAL PURPOSE / LAND / OTHER\n` +
+        `  ──────────────────────────────\n` +
+        `  gas / gas station / convenience / c-store → Special Purpose: Gas Station\n` +
+        `  parking lot / parking garage / pkg → Special Purpose: Parking Lot/Garage\n` +
+        `  cemetery                       → Special Purpose: Cemetery\n` +
+        `  church / religious / synagogue / mosque → Special Purpose: Church/Religious\n` +
+        `  school / daycare / charter school → Special Purpose: School\n` +
+        `  funeral home / mortuary        → Special Purpose: Funeral Home\n` +
+        `  laundromat / wash & fold       → Special Purpose: Laundromat (if in taxonomy)\n` +
+        `  cellular / cell tower / cell site → Special Purpose (note subtype in other_requirements)\n` +
+        `  arena / stadium                → Sport & Entertainment: Arena/Stadium\n` +
+        `  theater / cinema / movie       → Sport & Entertainment: Movie Theater\n` +
+        `  bowling / bowling alley        → Sport & Entertainment: Bowling\n` +
+        `  golf / golf course             → Sport & Entertainment: Golf Course\n` +
+        `  gym / fitness / 24-hour fitness / planet fitness → Sport & Entertainment: Fitness/Gym\n` +
+        `  marina / boat slip             → Sport & Entertainment: Marina\n` +
+        `  event venue / banquet hall     → Sport & Entertainment: Event Venue\n` +
+        `  Dev / dev / development        → Development (top-level if in taxonomy) OR Land: Development\n` +
+        `  Resi / residential land        → Land: Residential\n` +
+        `  Comm / commercial land         → Land: Commercial\n` +
+        `  Indy land / industrial land    → Land: Industrial\n` +
+        `  Ag / agricultural land         → Land: Agricultural OR Agricultural (top-level)\n` +
+        `  infill / urban infill          → Land: Infill\n` +
+        `  pad site                       → Land: Pad Site\n` +
+        `  Bizz / business                → no clean vocab match (note in other_requirements)\n` +
+        `\n` +
+        `If your own explanation text says "X is a warehouse" / "X is a\n` +
+        `laundromat" / "X is a mobile home park" / etc., that is a TELL\n` +
+        `that you normalized but forgot to apply the SUBTYPE-PRIORITY RULE.\n` +
+        `Go back and graduate the chip to "Category: Subtype". The rule\n` +
+        `applies to EVERY category in the taxonomy — Industrial, Special\n` +
+        `Purpose, Automotive, Residential Income, Senior Housing, Health\n` +
+        `Care, Hotel & Motel, Retail, Shopping Center, Multifamily, Mixed\n` +
+        `Use, Office, Sport & Entertainment, Agricultural, Land — no\n` +
+        `exceptions.\n` +
+        `\nMULTI-CHIP IS GOOD: agents search the buyer list by both bare\n` +
+        `category AND Category: Subtype. A buyer interested in "warehouse\n` +
+        `and truck parking" should appear in BOTH "Industrial: Warehouse"\n` +
+        `AND "Industrial: Truck Terminal" search results — so emit BOTH\n` +
+        `chips, not just one. The bar for adding a chip is LOW: if the\n` +
+        `notes name any subtype, that's enough. Bias toward MORE chips,\n` +
+        `not fewer. Worked examples:\n` +
+        `  Notes: "looking for WH, distro, and flex space in NJ"\n` +
+        `    → "Industrial: Warehouse", "Industrial: Distribution",\n` +
+        `      "Industrial: Flex"  (3 chips, not 1)\n` +
+        `  Notes: "MOB or surgery center, North Jersey"\n` +
+        `    → "Health Care: Medical Office", "Health Care: Surgery Center"\n` +
+        `      (2 chips — possibly also "Office: Medical" if MOB might\n` +
+        `      be the office-leasing version of the same property)\n` +
+        `  Notes: "car wash buyer up to $1M"\n` +
+        `    → "Automotive: Car Wash" AND "Special Purpose: Car Wash"\n` +
+        `      (both — agent disambiguates in review)\n` +
+        `  Notes: "MHP and SFR portfolio"\n` +
+        `    → "Residential Income: Mobile Home Park",\n` +
+        `      "Residential Income: Single Family Rental"\n` +
+        `  Notes: "buys multifamily 4-6 units and student housing"\n` +
+        `    → "Multifamily: Fourplex", "Multifamily: Small Multifamily (5-20)"\n` +
+        `      (if those subtypes exist), AND "Multifamily: Student Housing"\n` +
+        `\n═══════════════════════════════════════════════════════════════════════\n\n`
       userMessage = overrideBlock + userMessage
     }
 
@@ -2102,19 +2554,71 @@ Deno.serve(async (req: Request) => {
       explanations?: Record<string, string>
       na?: Array<{ field: string; reason: string }>
       uncertain?: Array<{ field: string; reason: string }>
+      // v325: field_suggestions — proposes new dedicated fields for
+      // recurring structured-looking values currently dumped in
+      // free-text notes (per STEP 4b).
+      field_suggestions?: Array<{
+        scope: string
+        label: string
+        type: string
+        options?: string[]
+        reason: string
+      }>
     } = {}
     try { parsed = JSON.parse(rawText) }
     catch (_) {
       try { parsed = JSON.parse(tryRepairJson(rawText)) }
       catch (_) {
-        return jsonResp({
-          ok: false,
-          error: 'Model returned non-JSON',
-          prompt_version: PROMPT_VERSION,
-          stop_reason,
-          raw_head: rawText.slice(0, 600),
-          raw_tail: rawText.slice(-600),
-        }, 502)
+        // v326: one-shot retry with a stricter user-message instruction
+        // before surfacing the 502. The retry costs one extra Anthropic
+        // call when the first response was malformed (~rare); the
+        // alternative is the user seeing the buyer auto-skip with
+        // "Model returned non-JSON" via the v309 catch path.
+        let retryParsed: typeof parsed | null = null
+        try {
+          const retryUserMessage = userMessage +
+            `\n\n═══════════════════════════════════════════════════════════════════════\n` +
+            `RETRY NOTICE — your previous response was not valid JSON.\n` +
+            `═══════════════════════════════════════════════════════════════════════\n` +
+            `Respond with VALID JSON ONLY — no preamble, no commentary, no code\n` +
+            `fences, no trailing prose. Start with "{" and end with "}". Every\n` +
+            `string is double-quoted. No trailing commas. The earlier instructions\n` +
+            `still apply; this is purely a formatting fix.\n`
+          const retryResp = await fetch('https://api.anthropic.com/v1/messages', {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-api-key': ANTHROPIC_KEY,
+              'anthropic-version': '2023-06-01',
+            },
+            body: JSON.stringify({
+              model: MODEL,
+              max_tokens: MAX_TOKENS,
+              system: [{ type: 'text', text: SYSTEM_PROMPT_STATIC, cache_control: { type: 'ephemeral' } }],
+              messages: [{ role: 'user', content: retryUserMessage }],
+            }),
+          })
+          if (retryResp.ok) {
+            const retryData = await retryResp.json()
+            const retryRaw: string = (retryData?.content?.[0]?.text || '{}').replace(/```json|```/g, '').trim()
+            try { retryParsed = JSON.parse(retryRaw) }
+            catch (_) {
+              try { retryParsed = JSON.parse(tryRepairJson(retryRaw)) } catch (_) { retryParsed = null }
+            }
+          }
+        } catch (_) { retryParsed = null }
+        if (retryParsed) {
+          parsed = retryParsed
+        } else {
+          return jsonResp({
+            ok: false,
+            error: 'Model returned non-JSON (retry also failed)',
+            prompt_version: PROMPT_VERSION,
+            stop_reason,
+            raw_head: rawText.slice(0, 600),
+            raw_tail: rawText.slice(-600),
+          }, 502)
+        }
       }
     }
 
@@ -2127,6 +2631,20 @@ Deno.serve(async (req: Request) => {
       ? (parsed.confidence as Record<string, string>) : {}
     const naRaw = Array.isArray(parsed.na) ? parsed.na : []
     const uncertainRaw = Array.isArray(parsed.uncertain) ? parsed.uncertain : []
+    // v325: pass-through for field_suggestions. Lightly validate shape;
+    // anything malformed gets dropped silently.
+    const fieldSuggestionsRaw = Array.isArray(parsed.field_suggestions)
+      ? parsed.field_suggestions
+          .map(s => s && typeof s === 'object' ? s : null)
+          .filter((s): s is { scope: string; label: string; type: string; options?: string[]; reason: string } => {
+            if (!s) return false
+            const ss = s as Record<string, unknown>
+            return typeof ss.scope === 'string' && !!ss.scope.trim()
+              && typeof ss.label === 'string' && !!ss.label.trim()
+              && typeof ss.type === 'string' && !!ss.type.trim()
+          })
+          .slice(0, 3)
+      : []
 
     const proposed_changes: Record<string, {
       proposed: unknown
@@ -2322,6 +2840,76 @@ Deno.serve(async (req: Request) => {
       })
     }
 
+    // v326: persist field_suggestions to ace_ai_settings.bc_field_suggestions
+    // so the Settings → Tools "💡 AI field suggestions inbox" tile can
+    // surface accumulated suggestions across runs. Dedup key:
+    // `${scope}::${normalized label}`. Pending entries gain seen_count
+    // on each repeat; accepted/dismissed entries stay in the array as
+    // audit history but drop off the inbox view.
+    if (fieldSuggestionsRaw.length) {
+      try {
+        const sugRows = (await fetchSb(
+          `${SUPABASE_URL}/rest/v1/ace_ai_settings?key=eq.bc_field_suggestions&select=id,value&limit=1`,
+          SERVICE_KEY,
+        )) as Array<{ id?: string; value?: unknown }>
+        const existing: Array<Record<string, unknown>> =
+          (sugRows?.[0]?.value && Array.isArray(sugRows[0].value))
+            ? sugRows[0].value as Array<Record<string, unknown>>
+            : []
+        const norm = (s: string) => String(s || '').toLowerCase().replace(/\s+/g, ' ').trim()
+        const byKey = new Map<string, Record<string, unknown>>()
+        for (const e of existing) {
+          const k = `${norm(String(e.scope || ''))}::${norm(String(e.label || ''))}`
+          if (k) byKey.set(k, e)
+        }
+        const nowIso = new Date().toISOString()
+        for (const s of fieldSuggestionsRaw) {
+          const k = `${norm(s.scope)}::${norm(s.label)}`
+          if (!k) continue
+          const prior = byKey.get(k)
+          if (prior) {
+            // Bump the recurrence counters; don't overwrite status.
+            prior.seen_count    = (Number(prior.seen_count) || 0) + 1
+            prior.last_seen_at  = nowIso
+            prior.last_buyer_id = buyer_criteria_id
+            // Keep latest type/options/reason in case the model has
+            // refined them on this run.
+            prior.type    = s.type
+            prior.options = s.options || prior.options || null
+            prior.reason  = s.reason
+          } else {
+            byKey.set(k, {
+              scope:         s.scope,
+              label:         s.label,
+              type:          s.type,
+              options:       s.options || null,
+              reason:        s.reason,
+              seen_count:    1,
+              first_seen_at: nowIso,
+              last_seen_at:  nowIso,
+              last_buyer_id: buyer_criteria_id,
+              status:        'pending',
+            })
+          }
+        }
+        const merged = [...byKey.values()]
+        const payload = { key: 'bc_field_suggestions', value: merged, updated_at: nowIso }
+        if (sugRows?.[0]?.id) {
+          await fetch(`${SUPABASE_URL}/rest/v1/ace_ai_settings?id=eq.${sugRows[0].id}`, {
+            method: 'PATCH',
+            headers: { 'Content-Type': 'application/json', apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, Prefer: 'return=minimal' },
+            body: JSON.stringify(payload),
+          })
+        } else {
+          await fetch(`${SUPABASE_URL}/rest/v1/ace_ai_settings`, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json', apikey: SERVICE_KEY, Authorization: `Bearer ${SERVICE_KEY}`, Prefer: 'return=minimal' },
+            body: JSON.stringify(payload),
+          })
+        }
+      } catch (e) { /* suggestion persistence is best-effort */ }
+    }
+
     return jsonResp({
       ok: true,
       prompt_version: PROMPT_VERSION,
@@ -2330,6 +2918,12 @@ Deno.serve(async (req: Request) => {
       na_proposals,
       current_na_fields: currentNa,
       uncertain_fields,
+      // v325: pass through the model's field_suggestions so the
+      // frontend can render them in the review modal.
+      field_suggestions: fieldSuggestionsRaw,
+      // v326: pass along the contact tags so the frontend's tag
+      // fallback (auto-apply path) doesn't have to re-fetch them.
+      contact_tags: effective_tags,
       all_fields: buildAllFields(proposed_changes, na_proposals.map(p => ({ col: p.col, reason: p.explanation || '' }))),
       source_chars,
       source_breakdown,

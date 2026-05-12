@@ -1,0 +1,365 @@
+/* ─────────────────────────────────────────────────────────────
+   deal-detail-redesign.css — v300 deal-detail Bloomberg ticker
+   Mirrors the "ticker" variant from the claude.ai/design handoff
+   bundle: 3-row header (ID+addr+meta · 6-cell stats · badges+actions)
+   plus a clean text-only tab strip with single blue accent.
+
+   Loads AFTER design-system.css so it can override deal-detail
+   chrome without touching the broader app. STAGING-only rollout.
+   ───────────────────────────────────────────────────────────── */
+
+/* ── Header: Bloomberg ticker variant ──────────────────────── */
+.deal-header.dh-ticker {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  padding: 0;
+  position: relative;
+}
+
+/* ROW 1 — ID + Address + meta */
+.dh-ticker .dh-row1 {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 18px;
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.dh-ticker .dh-id {
+  display: inline-flex; align-items: center; gap: 6px;
+  font-family: var(--font-mono);
+  font-size: 11px; font-weight: 600;
+  background: var(--primary-light);
+  color: var(--primary-darker);
+  border: 1px solid var(--primary-lighter);
+  padding: 3px 8px;
+  border-radius: var(--radius-xs);
+  white-space: nowrap;
+}
+.dh-ticker .dh-id .lbl { color: var(--primary); font-weight: 700; }
+.dh-ticker .dh-addr {
+  font-size: 17px;
+  font-weight: 700;
+  color: var(--fg-1);
+  letter-spacing: -0.01em;
+  line-height: 1.25;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  min-width: 0;
+  flex: 1;
+}
+.dh-ticker .dh-meta {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  font-size: 11.5px;
+  color: var(--fg-2);
+  margin-left: auto;
+  white-space: nowrap;
+}
+.dh-ticker .dh-meta .item {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+}
+.dh-ticker .dh-meta .item.mono {
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.dh-ticker .dh-meta .sep {
+  width: 1px; height: 14px; background: var(--border);
+}
+
+/* ROW 1 — small icon-only address-edit/maps buttons */
+.dh-ticker .dh-row1 .dh-addr-actions {
+  display: inline-flex; gap: 4px; align-items: center;
+}
+.dh-ticker .dh-row1 .dh-addr-actions button {
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--fg-2);
+  padding: 4px 8px;
+  font-size: 11px;
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  white-space: nowrap;
+}
+.dh-ticker .dh-row1 .dh-addr-actions button:hover {
+  background: var(--surface);
+  border-color: var(--border-2);
+  color: var(--fg-1);
+}
+.dh-ticker .dh-row1 .dh-addr-actions .dh-maps-btn {
+  background: var(--primary);
+  border-color: var(--primary-dark);
+  color: #fff;
+}
+.dh-ticker .dh-row1 .dh-addr-actions .dh-maps-btn:hover {
+  background: var(--primary-dark);
+}
+
+/* ROW 2 — 6-cell stat strip */
+.dh-ticker .dh-row2 {
+  display: flex;
+  align-items: stretch;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+}
+.dh-ticker .dh-stat {
+  flex: 1;
+  padding: 10px 14px;
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 2px;
+  min-width: 0;
+}
+.dh-ticker .dh-stat:last-child { border-right: none; }
+.dh-ticker .dh-stat .lbl {
+  font-size: 9.5px;
+  font-weight: 700;
+  color: var(--fg-3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dh-ticker .dh-stat .val {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--fg-1);
+  font-variant-numeric: tabular-nums;
+  letter-spacing: -0.01em;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.dh-ticker .dh-stat .val.muted { color: var(--fg-3); font-weight: 500; }
+.dh-ticker .dh-stat .val.green { color: var(--green-dark); }
+.dh-ticker .dh-stat .val.red   { color: var(--red-dark); }
+.dh-ticker .dh-stat .delta {
+  font-size: 10px;
+  color: var(--fg-3);
+  display: flex;
+  align-items: center;
+  gap: 3px;
+}
+.dh-ticker .dh-stat .delta.green { color: var(--green-dark); }
+.dh-ticker .dh-stat .delta.red   { color: var(--red-dark); }
+.dh-ticker .dh-stat .progress-mini {
+  height: 4px;
+  background: var(--border);
+  border-radius: var(--radius-pill);
+  overflow: hidden;
+  margin-top: 4px;
+}
+.dh-ticker .dh-stat .progress-mini > div {
+  height: 100%;
+  background: var(--primary);
+  border-radius: var(--radius-pill);
+}
+
+/* ROW 3 — badges + actions */
+.dh-ticker .dh-row3 {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 18px;
+  flex-wrap: wrap;
+}
+.dh-ticker .dh-row3 .dh-badges {
+  display: flex; align-items: center; gap: 6px;
+  flex-wrap: wrap;
+}
+.dh-ticker .dh-row3 .dh-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-wrap: wrap;
+}
+
+/* ── Tag pill (for asset type / county / etc.) ─────────────── */
+.dh-ticker .tag-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 11px;
+  font-weight: 500;
+  background: var(--surface-2);
+  border: 1px solid var(--border);
+  color: var(--fg-2);
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  white-space: nowrap;
+  cursor: default;
+}
+.dh-ticker .tag-pill.dashed {
+  border-style: dashed;
+  background: var(--surface);
+  cursor: pointer;
+}
+.dh-ticker .tag-pill.dashed:hover {
+  background: var(--surface-2);
+  border-color: var(--border-2);
+}
+
+/* ── Action buttons (slim Bloomberg style) ─────────────────── */
+.dh-ticker .dh-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--fg-1);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: var(--t);
+}
+.dh-ticker .dh-btn:hover {
+  background: var(--surface-2);
+  border-color: var(--border-2);
+}
+.dh-ticker .dh-btn.primary {
+  background: var(--primary);
+  border-color: var(--primary-dark);
+  color: #fff;
+}
+.dh-ticker .dh-btn.primary:hover {
+  background: var(--primary-dark);
+}
+.dh-ticker .dh-btn.danger {
+  color: var(--red-dark);
+  border-color: var(--red-border);
+}
+.dh-ticker .dh-btn.danger:hover {
+  background: var(--red-bg);
+  border-color: var(--red);
+}
+.dh-ticker .dh-btn.success {
+  background: var(--green);
+  border-color: var(--green-dark);
+  color: #fff;
+}
+.dh-ticker .dh-btn.success:hover {
+  background: var(--green-dark);
+}
+.dh-ticker .dh-btn.warning {
+  background: #fff;
+  border-color: var(--yellow-border);
+  color: var(--yellow-dark);
+}
+.dh-ticker .dh-btn.warning:hover {
+  background: var(--yellow-bg);
+}
+.dh-ticker .dh-btn.icon-only { padding: 5px 8px; }
+.dh-ticker .dh-btn.sm { padding: 3px 8px; font-size: 11.5px; }
+
+/* ── Tabs (clean text-only, single blue accent) ────────────── */
+.tabs-section.dh-tabs {
+  background: var(--surface);
+  border-bottom: 1px solid var(--border);
+  position: relative;
+}
+.dh-tabs .tabs-row {
+  display: flex;
+  align-items: stretch;
+  padding: 0 12px;
+  gap: 0;
+  flex-wrap: nowrap;
+  overflow-x: auto;
+  scrollbar-width: thin;
+}
+.dh-tabs .tabs-row::-webkit-scrollbar { height: 4px; }
+.dh-tabs .tabs-row::-webkit-scrollbar-thumb { background: var(--border-2); border-radius: 2px; }
+
+.dh-tabs .tab-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 10px 14px;
+  font-size: 12.5px;
+  font-weight: 500;
+  font-family: inherit;
+  color: var(--fg-2);
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  margin-bottom: -1px;
+  white-space: nowrap;
+  cursor: pointer;
+  transition: color var(--t), border-color var(--t);
+}
+.dh-tabs .tab-btn:hover { color: var(--fg-1); }
+.dh-tabs .tab-btn.active {
+  color: var(--primary);
+  border-bottom-color: var(--primary);
+  font-weight: 600;
+}
+.dh-tabs .tab-btn .count {
+  font-size: 10px;
+  font-weight: 600;
+  background: var(--surface-2);
+  color: var(--fg-2);
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.dh-tabs .tab-btn.active .count {
+  background: var(--primary-lighter);
+  color: var(--primary-darker);
+}
+
+.dh-tabs .field-map-btn {
+  margin-left: auto;
+  padding: 4px 10px;
+  font-size: 10px;
+  font-weight: 700;
+  background: var(--primary-light);
+  border: 1px solid var(--primary-lighter);
+  color: var(--primary-darker);
+  border-radius: var(--radius-xs);
+  cursor: pointer;
+  white-space: nowrap;
+  align-self: center;
+  flex-shrink: 0;
+}
+.dh-tabs .field-map-btn:hover {
+  background: var(--primary-lighter);
+}
+
+/* ── Snooze dropdown menu — keep functional, restyle ────────── */
+.dh-ticker .dh-snooze-wrap { position: relative; display: inline-block; }
+.dh-ticker .dh-snooze-menu {
+  display: none;
+  position: absolute;
+  right: 0; top: 100%;
+  margin-top: 4px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  box-shadow: var(--shadow-md);
+  z-index: 999;
+  min-width: 220px;
+  overflow: hidden;
+  font-size: 12px;
+}
+.dh-ticker .dh-snooze-menu button {
+  width: 100%;
+  padding: 8px 12px;
+  border: none;
+  background: none;
+  font-size: 12px;
+  cursor: pointer;
+  text-align: left;
+  color: var(--fg-1);
+  font-family: inherit;
+}
+.dh-ticker .dh-snooze-menu button:hover { background: var(--surface-2); }
+.dh-ticker .dh-snooze-menu button + button { border-top: 1px solid var(--border); }

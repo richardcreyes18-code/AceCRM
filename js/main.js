@@ -41,6 +41,9 @@ import {
 } from './core/auth.js';
 import { _showToast, showSaveConfirm } from './core/toast.js';
 
+// ─── Design system ────────────────────────────────────────────────────
+import * as designSystem    from './design/design-system.js';
+
 // ─── Feature modules ──────────────────────────────────────────────────
 import * as workbench       from './workbench/workbench.js';
 import * as portfolios      from './portfolios/portfolios.js';
@@ -56,6 +59,8 @@ import * as appLists        from './admin/app-lists.js';
 import * as bcTaxonomy      from './admin/bc-taxonomy.js';
 import * as bcFields        from './admin/bc-fields.js';
 import * as bcNativeFields  from './admin/bc-native-fields.js';
+import * as bcAiActivity    from './admin/bc-ai-activity.js';
+import * as bcAiSuggestions from './admin/bc-ai-suggestions.js';
 import * as backmarket      from './buyer-search/backmarket.js';
 import * as fub             from './fub/fub.js';
 import * as relationships   from './contacts/relationships.js';
@@ -74,6 +79,9 @@ window._atToSb = _atToSb;
 // Schemas with multiple constants/functions
 for (const [name, value] of Object.entries(countyMap))      { window[name] = value; }
 
+// Design system
+for (const [name, value] of Object.entries(designSystem))   { window[name] = value; }
+
 // Feature modules
 for (const [name, value] of Object.entries(workbench))      { window[name] = value; }
 for (const [name, value] of Object.entries(portfolios))     { window[name] = value; }
@@ -89,6 +97,8 @@ for (const [name, value] of Object.entries(appLists))       { window[name] = val
 for (const [name, value] of Object.entries(bcTaxonomy))     { window[name] = value; }
 for (const [name, value] of Object.entries(bcFields))       { window[name] = value; }
 for (const [name, value] of Object.entries(bcNativeFields)) { window[name] = value; }
+for (const [name, value] of Object.entries(bcAiActivity))   { window[name] = value; }
+for (const [name, value] of Object.entries(bcAiSuggestions)){ window[name] = value; }
 for (const [name, value] of Object.entries(backmarket))     { window[name] = value; }
 for (const [name, value] of Object.entries(fub))            { window[name] = value; }
 for (const [name, value] of Object.entries(relationships))  { window[name] = value; }
@@ -117,6 +127,8 @@ console.log('[ace-modules] all modules loaded', {
   sessionVersion: SESSION_VERSION,
   proxyUrl: PROXY_URL.endsWith('/crm-proxy'),
   config:  getConfig().isConnected,
+  // design system
+  designSystem:   Object.keys(designSystem).length,
   // feature modules — exported symbol counts
   workbench:      Object.keys(workbench).length,
   portfolios:     Object.keys(portfolios).length,
@@ -132,6 +144,7 @@ console.log('[ace-modules] all modules loaded', {
   bcTaxonomy:     Object.keys(bcTaxonomy).length,
   bcFields:       Object.keys(bcFields).length,
   bcNativeFields: Object.keys(bcNativeFields).length,
+  bcAiActivity:   Object.keys(bcAiActivity).length,
   backmarket:     Object.keys(backmarket).length,
   fub:            Object.keys(fub).length,
   relationships:  Object.keys(relationships).length,

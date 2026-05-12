@@ -1,0 +1,1530 @@
+/* ─────────────────────────────────────────────────────────────
+   deal-detail-bodies.css — v301 universal redesign primitives
+   Mirrors the reusable component classes from the claude.ai/design
+   handoff bundle (`new-crm-look/project/styles.css`) so every tab
+   body can be re-skinned by adding classnames rather than rewriting
+   the existing render functions in index.html.
+
+   Loaded AFTER css/deal-detail-redesign.css (which loads after
+   css/design-system.css) so the cascade order is:
+     base.css → components.css → deal-detail.css →
+     design-system.css → deal-detail-redesign.css →
+     deal-detail-bodies.css   ← this file (winner)
+
+   Convention: the design's tokens are already aliased in
+   design-system.css (--surface-2 / --primary-darker / etc.) so
+   this file only adds new classes, never re-defines tokens.
+   STAGING-only rollout — visual review before production.
+   ───────────────────────────────────────────────────────────── */
+
+/* ── Surface-3 alias (the design's deeper neutral) ──────────── */
+:root {
+  --surface-3: #f1f5f9;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   .section — bordered surface card with eyebrow header bar.
+   Replaces .info-box for the new redesign. Both classes can be
+   applied together; .section wins via cascade order.
+   ─────────────────────────────────────────────────────────── */
+.section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+.section-hd {
+  display: flex; align-items: center; gap: 8px;
+  padding: 9px 14px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--fg-1);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.section-hd .icon,
+.section-hd svg { width: 13px; height: 13px; color: var(--primary); }
+.section-hd .sub {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--fg-3);
+  text-transform: none;
+  letter-spacing: 0;
+  margin-left: 6px;
+}
+.section-hd .right {
+  margin-left: auto;
+  display: flex; gap: 6px; align-items: center;
+}
+.section-bd { padding: 14px 16px; }
+.section-bd.flush { padding: 0; }
+.section.flush-bd > .section-bd { padding: 0; }
+
+/* Collapsible variant — chevron on header, click toggles body */
+.section.collapsible > .section-hd { cursor: pointer; }
+.section.collapsible > .section-hd .chev {
+  margin-left: auto;
+  font-size: 11px;
+  color: var(--fg-3);
+  transition: transform 120ms ease;
+}
+.section.collapsible.open > .section-hd .chev,
+.section.collapsible:not(.closed) > .section-hd .chev {
+  transform: rotate(90deg);
+  color: var(--primary);
+}
+.section.collapsible.closed > .section-bd { display: none; }
+
+/* ─────────────────────────────────────────────────────────────
+   .field-grid — tight, bordered label/value grid.
+   2 / 3 / 4 columns. Used for Property Details, Summary facts,
+   Results Summary in Financial.
+   ─────────────────────────────────────────────────────────── */
+.field-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0;
+}
+.field-grid.cols-2 { grid-template-columns: repeat(2, 1fr); }
+.field-grid.cols-3 { grid-template-columns: repeat(3, 1fr); }
+.field-grid.cols-4 { grid-template-columns: repeat(4, 1fr); }
+.field-grid > .field {
+  padding: 10px 14px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 3px;
+  min-height: 56px;
+  min-width: 0;
+}
+.field-grid > .field:nth-child(3n) { border-right: none; }
+.field-grid.cols-2 > .field:nth-child(2n) { border-right: none; }
+.field-grid.cols-4 > .field:nth-child(4n) { border-right: none; }
+.field-grid > .field:nth-last-child(-n+3) { border-bottom: none; }
+.field-grid.cols-2 > .field:nth-last-child(-n+2) { border-bottom: none; }
+.field-grid.cols-4 > .field:nth-last-child(-n+4) { border-bottom: none; }
+
+.field .lbl {
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-3);
+}
+.field .val {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg-1);
+  font-variant-numeric: tabular-nums;
+  word-break: break-word;
+}
+.field .val.mono {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+.field .val.muted { color: var(--fg-4); font-weight: 400; }
+.field .val.large { font-size: 15px; font-weight: 700; }
+.field .stamp {
+  font-family: var(--font-stamp);
+  font-style: italic;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--fg-3);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  transform: rotate(-3deg);
+  display: inline-block;
+  border: 2px solid var(--fg-3);
+  padding: 1px 8px;
+  border-radius: 3px;
+  opacity: 0.55;
+  margin-top: 2px;
+  align-self: flex-start;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   .kpi-row — horizontal flex of cells used at the TOP of new
+   tabs (Documents, Notes, Tasks, etc.). Distinct from .kpi-strip
+   (4-cell grid for Summary) and the deal-header .dh-row2.
+   ─────────────────────────────────────────────────────────── */
+.kpi-row {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0;
+  margin-bottom: 14px;
+  overflow: hidden;
+  flex-wrap: wrap;
+}
+.kpi-row .kpi {
+  display: flex; flex-direction: column; gap: 3px;
+  padding: 10px 14px;
+  border-right: 1px solid var(--border);
+  min-width: 110px;
+}
+.kpi-row .kpi-lbl {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--fg-3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.kpi-row .kpi-val {
+  font-family: var(--font-mono);
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--fg-1);
+  font-variant-numeric: tabular-nums;
+}
+.kpi-row .kpi-val.primary { color: var(--primary); }
+.kpi-row .kpi-val.green { color: var(--green-dark); }
+.kpi-row .kpi-val.red { color: var(--red); }
+.kpi-row .kpi-val.muted { color: var(--fg-4); font-weight: 500; }
+.kpi-row .kpi-sub { font-size: 10px; color: var(--fg-3); }
+.kpi-row .kpi-spacer { flex: 1; border: none; }
+.kpi-row > .btn,
+.kpi-row > .btn-group {
+  align-self: center;
+  margin-right: 12px;
+}
+
+/* .kpi-strip — 4-cell grid version (Summary tab snapshot) */
+.kpi-strip {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+.kpi-strip .kpi {
+  padding: 12px 16px;
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column; gap: 3px;
+}
+.kpi-strip .kpi:last-child { border-right: none; }
+.kpi-strip .kpi .lbl {
+  font-size: 10px; font-weight: 700; color: var(--fg-3);
+  text-transform: uppercase; letter-spacing: 0.08em;
+}
+.kpi-strip .kpi .val {
+  font-family: var(--font-mono);
+  font-size: 16px;
+  font-weight: 700;
+  color: var(--fg-1);
+  font-variant-numeric: tabular-nums;
+}
+.kpi-strip .kpi .val.muted { color: var(--fg-4); font-weight: 500; }
+.kpi-strip .kpi .sub { font-size: 10px; color: var(--fg-3); }
+
+/* ─────────────────────────────────────────────────────────────
+   .dt — Bloomberg data table.
+   Replaces .data-table for the redesign. .num cells are right-
+   aligned mono tabular-nums. Scenario columns get semantic bg.
+   ─────────────────────────────────────────────────────────── */
+.dt {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.dt thead th {
+  background: var(--surface-2);
+  text-align: left;
+  padding: 8px 14px;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-2);
+  border-bottom: 1px solid var(--border);
+  white-space: nowrap;
+}
+.dt thead th.num,
+.dt tbody td.num {
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+  font-family: var(--font-mono);
+}
+.dt thead th.scenario {
+  text-align: right;
+  border-left: 1px solid var(--border);
+}
+.dt thead th.scenario.actual,
+.dt thead th.scenario.asking {
+  color: var(--primary-darker);
+  background: var(--primary-light);
+}
+.dt thead th.scenario.proforma,
+.dt thead th.scenario.pitch {
+  color: var(--green-dark);
+  background: var(--green-bg);
+}
+.dt tbody td {
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-1);
+}
+.dt tbody td.scenario { border-left: 1px solid var(--border); }
+.dt tbody tr:last-child td { border-bottom: none; }
+.dt tbody td.metric {
+  font-weight: 600;
+  display: flex; align-items: center; gap: 6px;
+}
+.dt tbody td.metric .help {
+  width: 13px; height: 13px;
+  border-radius: 50%;
+  background: var(--surface-3);
+  color: var(--fg-3);
+  display: inline-grid; place-items: center;
+  font-size: 9px; font-weight: 700;
+  cursor: help;
+}
+.dt tbody tr.total {
+  background: var(--surface-2);
+  font-weight: 700;
+}
+.dt tbody tr.total td { font-weight: 700; }
+.dt tbody tr.subject td {
+  background: var(--primary-light);
+  color: var(--primary-darker);
+  font-weight: 700;
+}
+.dt tbody td.placeholder,
+.dt td.placeholder {
+  color: var(--fg-4);
+  font-family: var(--font-mono);
+  font-style: italic;
+}
+
+/* Expandable category rows (Operating Expenses, etc.) */
+.dt.expandable .expandable-row { cursor: pointer; }
+.dt.expandable .expandable-row:hover { background: var(--surface-2); }
+.dt.expandable .expandable-row td.expander {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 600;
+}
+.dt.expandable .expandable-row .chevron {
+  color: var(--fg-3);
+  transition: transform 120ms ease;
+  display: inline-block;
+  width: 12px;
+  text-align: center;
+}
+.dt.expandable .expandable-row.open .chevron {
+  transform: rotate(90deg);
+  color: var(--primary);
+}
+.dt.expandable .expandable-row.open {
+  background: var(--primary-light);
+}
+.dt.expandable .count-pill {
+  margin-left: 6px;
+  font-size: 10px;
+  font-weight: 600;
+  padding: 1px 6px;
+  border-radius: var(--radius-pill);
+  background: var(--surface-3);
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+}
+.dt.expandable .sub-row td {
+  background: var(--surface-2);
+  font-size: 11.5px;
+  color: var(--fg-2);
+  padding: 6px 14px;
+}
+.dt.expandable .sub-row .sub-label { padding-left: 38px; }
+.dt.expandable .sub-row td.num { color: var(--fg-1); }
+
+/* ─────────────────────────────────────────────────────────────
+   .pill — generic semantic / stage pill.
+   Builds on the .stage-pill family already defined in
+   design-system.css. Adds a generic .pill for non-stage uses
+   (status, role, priority, file-type).
+   ─────────────────────────────────────────────────────────── */
+.pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 10.5px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  padding: 3px 9px;
+  border-radius: var(--radius-pill);
+  text-transform: uppercase;
+  white-space: nowrap;
+  background: var(--surface-2);
+  color: var(--fg-2);
+  border: 1px solid var(--border);
+}
+.pill.lg { font-size: 11px; padding: 3px 9px; }
+.pill.sm { font-size: 9.5px; padding: 1px 7px; }
+.pill.solid { background: var(--surface); color: var(--fg-1); }
+.pill .dot {
+  display: inline-block;
+  width: 6px; height: 6px;
+  border-radius: 50%;
+  background: currentColor;
+  margin-right: 2px;
+}
+/* Stage variants — match .stage-pill family */
+.pill.stage-prospect { background: var(--stage-prospect-bg); color: var(--stage-prospect-fg); border-color: transparent; }
+.pill.stage-pitch    { background: var(--stage-pitch-bg);    color: var(--stage-pitch-fg);    border-color: transparent; }
+.pill.stage-offer    { background: var(--stage-offer-bg);    color: var(--stage-offer-fg);    border-color: transparent; }
+.pill.stage-uc       { background: var(--stage-uc-bg);       color: var(--stage-uc-fg);       border-color: transparent; }
+.pill.stage-closed   { background: var(--stage-closed-bg);   color: var(--stage-closed-fg);   border-color: transparent; }
+.pill.stage-dead     { background: var(--stage-dead-bg);     color: var(--stage-dead-fg);     border-color: transparent; }
+.pill.stage-lead     { background: var(--stage-lead-bg);     color: var(--stage-lead-fg);     border-color: transparent; }
+.pill.stage-hot      { background: var(--stage-hot-bg);      color: var(--stage-hot-fg);      border-color: transparent; }
+/* Priority */
+.pill.prio-high    { background: var(--red-bg);    color: var(--red-dark);    border-color: transparent; }
+.pill.prio-medium  { background: var(--yellow-bg); color: var(--yellow-dark); border-color: transparent; }
+.pill.prio-low     { background: var(--green-bg);  color: var(--green-dark);  border-color: transparent; }
+
+/* ─────────────────────────────────────────────────────────────
+   .avatar — circular initials with primary-light bg.
+   ─────────────────────────────────────────────────────────── */
+.avatar {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  background: var(--primary-light);
+  color: var(--primary-darker);
+  font-size: 10.5px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  letter-spacing: 0.02em;
+  flex-shrink: 0;
+}
+.avatar.lg { width: 38px; height: 38px; font-size: 13px; }
+.avatar.sm { width: 22px; height: 22px; font-size: 9.5px; }
+.avatar.gradient {
+  background: linear-gradient(135deg, var(--primary-darker), var(--primary));
+  color: #fff;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   .btn-group — segmented button cluster (view-mode toggles,
+   sub-tabs, filter modes).
+   Distinct from header's .dh-btn / design-system's .btn-ds.
+   ─────────────────────────────────────────────────────────── */
+.btn-group {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  overflow: hidden;
+  background: var(--surface);
+}
+.btn-group > .btn,
+.btn-group > button {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 5px 10px;
+  font-size: 12px;
+  font-weight: 500;
+  border: none;
+  border-right: 1px solid var(--border);
+  background: var(--surface);
+  color: var(--fg-2);
+  font-family: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+  transition: var(--t);
+}
+.btn-group > .btn:last-child,
+.btn-group > button:last-child { border-right: none; }
+.btn-group > .btn:hover,
+.btn-group > button:hover {
+  background: var(--surface-2);
+  color: var(--fg-1);
+}
+.btn-group > .btn.active,
+.btn-group > button.active {
+  background: var(--primary-light);
+  color: var(--primary-darker);
+  font-weight: 600;
+}
+
+/* Standalone .btn (used inside .kpi-row, etc.) */
+.dh-tabs ~ * .btn,
+.tab-content .btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font-size: 12px;
+  font-weight: 500;
+  padding: 5px 10px;
+  border-radius: var(--radius-sm);
+  background: var(--surface);
+  border: 1px solid var(--border);
+  color: var(--fg-1);
+  white-space: nowrap;
+  cursor: pointer;
+  font-family: inherit;
+  transition: var(--t);
+}
+.tab-content .btn:hover {
+  background: var(--surface-2);
+  border-color: var(--border-2);
+}
+.tab-content .btn.primary {
+  background: var(--primary);
+  border-color: var(--primary-dark);
+  color: #fff;
+}
+.tab-content .btn.primary:hover { background: var(--primary-dark); }
+.tab-content .btn.success {
+  background: var(--green);
+  border-color: var(--green-dark);
+  color: #fff;
+}
+.tab-content .btn.success:hover { background: var(--green-dark); }
+.tab-content .btn.danger {
+  color: var(--red-dark);
+  border-color: var(--red-border);
+}
+.tab-content .btn.danger:hover { background: var(--red-bg); }
+.tab-content .btn.ghost {
+  background: transparent;
+  border-color: transparent;
+  color: var(--fg-2);
+}
+.tab-content .btn.ghost:hover { background: var(--surface-2); color: var(--fg-1); }
+.tab-content .btn.sm { padding: 3px 8px; font-size: 11.5px; }
+.tab-content .btn.xs { padding: 2px 6px; font-size: 10px; gap: 4px; border-radius: 3px; }
+.tab-content .btn.icon-only { padding: 5px 7px; }
+
+/* ─────────────────────────────────────────────────────────────
+   .hero-grid — Summary tab top hero (2-col big-number cards).
+   ─────────────────────────────────────────────────────────── */
+.hero-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  margin-bottom: 14px;
+}
+.hero-card {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 16px 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  position: relative;
+}
+.hero-card.primary { border-left: 3px solid var(--primary); }
+.hero-card.green { border-left: 3px solid var(--green); }
+.hero-card.empty {
+  background: var(--surface-2);
+  border-style: dashed;
+}
+.hero-card .lbl {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--fg-3);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+.hero-card .val {
+  font-family: var(--font-mono);
+  font-size: 28px;
+  font-weight: 700;
+  color: var(--fg-1);
+  letter-spacing: -0.02em;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.1;
+}
+.hero-card .val.muted { color: var(--fg-4); }
+.hero-card .val.green { color: var(--green-dark); }
+.hero-card .sub { font-size: 11px; color: var(--fg-3); }
+.hero-card .delta {
+  font-size: 11px;
+  color: var(--green-dark);
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+.hero-card .delta.red { color: var(--red-dark); }
+
+/* ─────────────────────────────────────────────────────────────
+   .note-card — Notes tab feed item.
+   ─────────────────────────────────────────────────────────── */
+.notes-feed { padding: 0; }
+.note-card {
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.note-card:last-child { border-bottom: none; }
+.note-rail { width: 14px; padding-top: 4px; flex-shrink: 0; }
+.note-dot {
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  background: var(--fg-3);
+}
+.note-dot.stage-offer    { background: var(--stage-offer-fg); }
+.note-dot.stage-pitch    { background: var(--stage-pitch-fg); }
+.note-dot.stage-lead     { background: var(--stage-lead-fg); }
+.note-dot.stage-prospect { background: var(--stage-prospect-fg); }
+.note-dot.stage-uc       { background: var(--stage-uc-fg); }
+.note-dot.stage-closed   { background: var(--stage-closed-fg); }
+.note-body { flex: 1; min-width: 0; }
+.note-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--fg-3);
+  margin-bottom: 5px;
+  flex-wrap: wrap;
+}
+.note-meta .strong { color: var(--fg-1); font-weight: 600; }
+.note-actions { margin-left: auto; }
+.note-text {
+  font-size: 12.5px;
+  color: var(--fg-1);
+  line-height: 1.55;
+  word-break: break-word;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   .form-stack — vertical field stack (Notes add panel, modals).
+   ─────────────────────────────────────────────────────────── */
+.form-stack { display: flex; flex-direction: column; gap: 12px; }
+.form-row { display: flex; flex-direction: column; gap: 5px; }
+.form-row label,
+.form-row .lbl {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--fg-3);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.form-actions { display: flex; gap: 8px; justify-content: flex-end; }
+
+/* ─────────────────────────────────────────────────────────────
+   .activity-feed — Deal Status tab timeline.
+   ─────────────────────────────────────────────────────────── */
+.activity-feed { padding: 0; }
+.activity-row {
+  display: flex;
+  gap: 12px;
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--border);
+}
+.activity-row:last-child { border-bottom: none; }
+.activity-row.mark { background: var(--primary-light); }
+.activity-rail {
+  width: 14px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding-top: 4px;
+}
+.activity-dot {
+  width: 9px; height: 9px;
+  border-radius: 50%;
+  background: var(--fg-3);
+}
+.activity-dot.stage-lead   { background: var(--stage-lead-fg); }
+.activity-dot.stage-pitch  { background: var(--stage-pitch-fg); }
+.activity-dot.stage-offer  { background: var(--stage-offer-fg); }
+.activity-dot.stage-uc     { background: var(--stage-uc-fg); }
+.activity-dot.stage-closed { background: var(--stage-closed-fg); }
+.activity-meta {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 11.5px;
+  color: var(--fg-2);
+  margin-bottom: 4px;
+  flex-wrap: wrap;
+}
+.activity-meta .strong { color: var(--fg-1); font-weight: 600; }
+.activity-text {
+  font-size: 12.5px;
+  color: var(--fg-1);
+  line-height: 1.5;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   .pipeline-track — Deal Status horizontal stage line.
+   ─────────────────────────────────────────────────────────── */
+.pipeline-track {
+  display: flex;
+  align-items: stretch;
+  padding: 16px 18px;
+  gap: 0;
+  flex-wrap: wrap;
+}
+.pipeline-step {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.pipeline-marker {
+  width: 26px; height: 26px;
+  border-radius: 50%;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  font-weight: 700;
+  background: var(--surface);
+  border: 1.5px solid var(--border-2);
+  color: var(--fg-3);
+  flex-shrink: 0;
+}
+.pipeline-step.done .pipeline-marker {
+  background: var(--green);
+  border-color: var(--green);
+  color: #fff;
+}
+.pipeline-step.active .pipeline-marker {
+  background: var(--primary);
+  border-color: var(--primary);
+  color: #fff;
+  box-shadow: 0 0 0 4px var(--primary-light);
+}
+.pipeline-stage {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--fg-1);
+}
+.pipeline-step.done .pipeline-stage { color: var(--fg-2); }
+.pipeline-date { font-size: 10.5px; color: var(--fg-3); }
+.pipeline-line {
+  flex: 1;
+  height: 2px;
+  background: var(--border);
+  margin: 0 12px;
+  min-width: 24px;
+  align-self: center;
+}
+.pipeline-line.done { background: var(--green); }
+
+/* Checklist (Deal Status side panel) */
+.checklist { padding: 6px 0; }
+.checklist-row {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 16px;
+  cursor: pointer;
+  font-size: 12.5px;
+  border-bottom: 1px solid var(--border);
+}
+.checklist-row:last-child { border-bottom: none; }
+.checklist-row:hover { background: var(--surface-2); }
+.checklist-row.done .checklist-label {
+  color: var(--fg-3);
+  text-decoration: line-through;
+}
+.checklist-row input[type="checkbox"] { accent-color: var(--primary); }
+.checklist-label { flex: 1; }
+.checklist-meta {
+  font-size: 11px;
+  color: var(--primary);
+  font-weight: 600;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   .buyer-grid / .buyer-card — Contacts/Buyers pool.
+   ─────────────────────────────────────────────────────────── */
+.buyer-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(280px, 1fr));
+  gap: 0;
+  border-top: 1px solid var(--border);
+}
+.buyer-card {
+  padding: 14px 16px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.buyer-hd { display: flex; align-items: center; gap: 10px; }
+.buyer-id { flex: 1; min-width: 0; }
+.buyer-name {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-1);
+  display: flex;
+  align-items: center;
+  gap: 5px;
+}
+.buyer-name .fav { color: var(--gold); }
+.buyer-co { font-size: 11.5px; color: var(--fg-3); }
+.buyer-meta { display: flex; flex-direction: column; gap: 4px; }
+.buyer-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 11.5px;
+  color: var(--fg-2);
+}
+.buyer-row .icon,
+.buyer-row svg { color: var(--fg-3); width: 12px; height: 12px; }
+.buyer-actions { display: flex; gap: 4px; flex-wrap: wrap; }
+
+/* Generic small badge */
+.badge {
+  display: inline-block;
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 1px 5px;
+  border-radius: 3px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  margin-left: 6px;
+}
+.primary-badge { background: var(--primary-light); color: var(--primary-darker); }
+.red-badge     { background: var(--red-bg);        color: var(--red-dark); }
+.green-badge   { background: var(--green-bg);      color: var(--green-dark); }
+.yellow-badge  { background: var(--yellow-bg);     color: var(--yellow-dark); }
+
+/* ─────────────────────────────────────────────────────────────
+   .cal-grid / .agenda — Calendar tab.
+   ─────────────────────────────────────────────────────────── */
+.cal-month-grid {
+  display: grid;
+  grid-template-columns: repeat(7, 1fr);
+  border-top: 1px solid var(--border);
+}
+.cal-month-grid .cal-dow {
+  background: var(--surface-2);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-3);
+  padding: 6px 10px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.cal-month-grid .cal-dow:nth-child(7n) { border-right: none; }
+.cal-month-grid .cal-cell {
+  min-height: 96px;
+  padding: 6px 6px 8px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  background: var(--surface);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+.cal-month-grid .cal-cell.empty { background: var(--surface-2); }
+.cal-month-grid .cal-cell:nth-child(7n) { border-right: none; }
+.cal-month-grid .cal-cell.today .cal-day-mark {
+  background: var(--primary);
+  color: #fff;
+  width: 22px;
+  height: 22px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 50%;
+}
+.cal-month-grid .cal-day-mark {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-2);
+  font-family: var(--font-mono);
+}
+.cal-month-grid .cal-event {
+  font-size: 10.5px;
+  padding: 2px 6px;
+  border-left: 2px solid;
+  border-radius: 2px;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  font-weight: 500;
+  cursor: pointer;
+}
+.cal-month-grid .cal-event:hover { filter: brightness(0.96); }
+.cal-month-grid .cal-event .mono {
+  font-family: var(--font-mono);
+  font-weight: 700;
+  margin-right: 4px;
+}
+.cal-month-grid .cal-event.evt-showing  { background: var(--primary-light);  color: var(--primary-darker);  border-left-color: var(--primary); }
+.cal-month-grid .cal-event.evt-call     { background: var(--green-bg);       color: var(--green-dark);      border-left-color: var(--green); }
+.cal-month-grid .cal-event.evt-internal { background: var(--yellow-bg);      color: var(--yellow-dark);     border-left-color: var(--yellow); }
+.cal-month-grid .cal-event.evt-deadline { background: var(--red-bg);         color: var(--red-dark);        border-left-color: var(--red); }
+.cal-month-grid .cal-event.evt-other    { background: var(--surface-2);      color: var(--fg-2);            border-left-color: var(--fg-3); }
+
+.agenda { padding: 0; }
+.agenda-row {
+  display: flex;
+  gap: 10px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--border);
+  align-items: stretch;
+}
+.agenda-row:last-child { border-bottom: none; }
+.agenda-date {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 60px;
+  flex-shrink: 0;
+}
+.agenda-day {
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--fg-1);
+  letter-spacing: 0.04em;
+  font-family: var(--font-mono);
+}
+.agenda-time { font-size: 10.5px; color: var(--fg-3); font-family: var(--font-mono); }
+.agenda-bar {
+  width: 3px;
+  border-radius: 2px;
+  flex-shrink: 0;
+  background: var(--fg-3);
+}
+.agenda-bar.evt-showing  { background: var(--primary); }
+.agenda-bar.evt-call     { background: var(--green); }
+.agenda-bar.evt-internal { background: var(--yellow); }
+.agenda-bar.evt-deadline { background: var(--red); }
+.agenda-body { flex: 1; min-width: 0; }
+.agenda-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: var(--fg-1);
+}
+.agenda-meta {
+  font-size: 11px;
+  color: var(--fg-3);
+  margin-top: 2px;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   .calc-grid / .calc-card — Quick Calculations sub-pane.
+   ─────────────────────────────────────────────────────────── */
+.calc-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  border-top: 1px solid var(--border);
+}
+.calc-card {
+  padding: 14px 16px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  min-height: 180px;
+}
+.calc-card:nth-child(3n) { border-right: none; }
+.calc-hd {
+  display: flex;
+  gap: 10px;
+  align-items: flex-start;
+}
+.calc-icon {
+  width: 28px; height: 28px;
+  background: var(--primary-light);
+  color: var(--primary);
+  border-radius: var(--radius-sm);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  font-weight: 700;
+  font-size: 14px;
+}
+.calc-title {
+  font-size: 13px;
+  font-weight: 600;
+  color: var(--fg-1);
+}
+.calc-desc {
+  font-size: 11px;
+  color: var(--fg-3);
+  margin-top: 1px;
+}
+.calc-inputs {
+  display: flex;
+  flex-direction: column;
+  gap: 0;
+  background: var(--surface-2);
+  border-radius: var(--radius-sm);
+}
+.calc-input {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 6px 10px;
+  font-size: 11.5px;
+  border-bottom: 1px solid var(--border);
+}
+.calc-input:last-child { border-bottom: none; }
+.calc-lbl { color: var(--fg-2); }
+.calc-v {
+  color: var(--fg-1);
+  font-weight: 600;
+  font-size: 12px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.calc-out {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 8px 10px;
+  background: var(--primary-light);
+  border-radius: var(--radius-sm);
+  margin-top: auto;
+}
+.calc-out-lbl {
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--primary-darker);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.calc-out-v {
+  font-size: 15px;
+  font-weight: 700;
+  color: var(--primary-darker);
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   .folder-list / .file-chip — Documents sidebar + file types.
+   ─────────────────────────────────────────────────────────── */
+.folder-list { display: flex; flex-direction: column; padding: 6px 0; }
+.folder-row {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 14px;
+  border: none;
+  background: transparent;
+  font-size: 12px;
+  font-weight: 500;
+  color: var(--fg-2);
+  cursor: pointer;
+  text-align: left;
+  width: 100%;
+  font-family: inherit;
+}
+.folder-row:hover { background: var(--surface-2); color: var(--fg-1); }
+.folder-row.active {
+  background: var(--primary-light);
+  color: var(--primary-darker);
+  font-weight: 600;
+}
+.folder-row.active .icon,
+.folder-row.active svg { color: var(--primary); }
+.folder-row .icon,
+.folder-row svg { color: var(--fg-3); width: 14px; height: 14px; flex-shrink: 0; }
+.folder-row .folder-name { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.folder-row .folder-count {
+  font-size: 11px;
+  color: var(--fg-3);
+  font-family: var(--font-mono);
+}
+.folder-divider {
+  height: 1px;
+  background: var(--border);
+  margin: 6px 14px;
+}
+
+.file-chip {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-family: var(--font-mono);
+  font-size: 9.5px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  padding: 4px 5px;
+  border-radius: 3px;
+  min-width: 30px;
+}
+.file-chip.pdf  { background: var(--red-bg);     color: var(--red-dark); }
+.file-chip.xlsx,
+.file-chip.csv  { background: var(--green-bg);   color: var(--green-dark); }
+.file-chip.docx,
+.file-chip.doc  { background: var(--primary-light); color: var(--primary-darker); }
+.file-chip.png,
+.file-chip.jpg,
+.file-chip.jpeg,
+.file-chip.gif  { background: var(--yellow-bg);  color: var(--yellow-dark); }
+.file-chip.zip  { background: var(--surface-3);  color: var(--fg-2); }
+.file-chip.other { background: var(--surface-2); color: var(--fg-3); }
+
+/* ─────────────────────────────────────────────────────────────
+   .task-table — Tasks tab table.
+   ─────────────────────────────────────────────────────────── */
+.task-table tbody tr.done td { color: var(--fg-3); }
+.task-table tbody tr.done td.strong,
+.task-table tbody tr.done .task-title { text-decoration: line-through; }
+.task-table input[type="checkbox"] { accent-color: var(--primary); }
+.task-table .row-actions {
+  display: inline-flex;
+  gap: 2px;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Helpers: .placeholder em-dash, color/text utilities.
+   ─────────────────────────────────────────────────────────── */
+.placeholder {
+  color: var(--fg-4);
+  font-family: var(--font-mono);
+  font-style: italic;
+}
+.fg-1 { color: var(--fg-1); }
+.fg-2 { color: var(--fg-2); }
+.fg-3 { color: var(--fg-3); }
+.t-strong { font-weight: 600; color: var(--fg-1); }
+.row-actions { display: inline-flex; gap: 2px; }
+
+/* Tab content padding tweak — tighter than the legacy rule */
+.tab-content {
+  padding: 14px 18px;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Legacy class re-skins — make .info-box, .data-table, and the
+   bleeding .section-hdr look like the new design system without
+   touching the dozens of call sites that use them. Targeted
+   inside .tab-content so we don't accidentally re-style modals
+   or other surfaces.
+   ─────────────────────────────────────────────────────────── */
+
+/* .info-box — Property Details / Financial / Documents wrapping
+   container. Match the .section card silhouette: hairline border,
+   8px radius, tighter padding. Drop the legacy gradient header. */
+.tab-content .info-box {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  padding: 0;
+  margin-bottom: 14px;
+  box-shadow: var(--shadow-sm);
+  overflow: hidden;
+}
+.tab-content .info-box > .info-box-title,
+.tab-content .info-box > :first-child:not(.info-box-title) ~ .info-box-title {
+  /* leave default — fall through */
+}
+.tab-content .info-box-title {
+  background: var(--surface-2);
+  color: var(--fg-1);
+  font-size: 11.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+  margin: 0 0 0 0;
+}
+/* Body padding wraps any element that follows the title inside
+   an info-box. Easier than retrofitting every call site. */
+.tab-content .info-box > *:not(.info-box-title) {
+  padding-left: 16px;
+  padding-right: 16px;
+}
+.tab-content .info-box > *:not(.info-box-title):first-child,
+.tab-content .info-box > .info-box-title + * {
+  padding-top: 14px;
+}
+.tab-content .info-box > *:not(.info-box-title):last-child {
+  padding-bottom: 14px;
+}
+
+/* .section-hdr — full-bleed primary-light strip the existing tabs
+   use as a "between sections" separator. Re-skin to a slim
+   surface-2 eyebrow so it stops competing with the .section /
+   .info-box chrome around it. */
+.tab-content .section-hdr {
+  background: var(--surface-2) !important;
+  color: var(--fg-1) !important;
+  font-size: 11.5px !important;
+  font-weight: 700 !important;
+  letter-spacing: 0.06em !important;
+  text-transform: uppercase !important;
+  padding: 8px 14px !important;
+  border-radius: var(--radius-sm) !important;
+  border: 1px solid var(--border) !important;
+  margin: 14px 0 10px !important;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.tab-content .section-hdr .icon {
+  color: var(--primary);
+}
+
+/* .data-table (legacy) — re-skin to .dt look without forcing
+   class swap. Header row gets surface-2 eyebrow caps; cells get
+   the dt's 32px-ish row height + hairline borders. */
+.tab-content .data-table {
+  width: 100%;
+  border-collapse: collapse;
+  font-size: 12px;
+}
+.tab-content .data-table thead th {
+  background: var(--surface-2);
+  color: var(--fg-2);
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  text-align: left;
+}
+.tab-content .data-table tbody td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  color: var(--fg-1);
+  font-size: 12px;
+}
+.tab-content .data-table tbody tr:last-child td { border-bottom: none; }
+.tab-content .data-table tbody tr:hover td { background: var(--surface-2); }
+
+/* Form inputs inside tabs — focus ring + tighter density. The
+   :focus rule from design-system.css already wires the primary
+   border + focus shadow; this just tightens the default border. */
+.tab-content .form-input,
+.tab-content .form-select,
+.tab-content .form-textarea {
+  border-color: var(--border);
+  border-radius: var(--radius-xs);
+  font-size: 12.5px;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Financial tab table re-skins (v303).
+   The inline <style> block in renderFinancialTab defines fin-*
+   tables with a blue gradient header and a beige input section.
+   Drop the gradient + beige; surface to design-system surface-2
+   eyebrow caps and clean borders. !important required because
+   the inline style block is defined inside the render function.
+   ─────────────────────────────────────────────────────────── */
+
+/* Results / Metrics / Cash Flow / NOI tables */
+.tab-content .fin-results-table {
+  font-size: 12px !important;
+}
+.tab-content .fin-results-table td {
+  border-bottom: 1px solid var(--border) !important;
+  padding: 7px 10px !important;
+  font-size: 12px !important;
+}
+.tab-content .fin-results-table .row-label {
+  color: var(--fg-2) !important;
+  font-weight: 700 !important;
+  font-size: 10px !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.06em !important;
+}
+
+.tab-content .fin-metrics-table th,
+.tab-content .fin-cf-table th {
+  background: var(--surface-2) !important;
+  background-image: none !important;
+  color: var(--fg-2) !important;
+  font-size: 10px !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.08em !important;
+  border: 1px solid var(--border) !important;
+  padding: 8px 10px !important;
+}
+.tab-content .fin-metrics-table td,
+.tab-content .fin-cf-table td {
+  border: 1px solid var(--border) !important;
+  padding: 8px 10px !important;
+  font-size: 12px !important;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.tab-content .fin-metrics-table tr:nth-child(even) td,
+.tab-content .fin-cf-table tr:nth-child(even) td {
+  background: var(--surface-2) !important;
+}
+.tab-content .fin-metrics-table .metric-label,
+.tab-content .fin-cf-table .cf-label {
+  color: var(--fg-1) !important;
+  font-weight: 600 !important;
+  font-family: var(--font-sans);
+  font-variant-numeric: normal;
+}
+
+/* Input section — drop the beige */
+.tab-content .fin-input-section {
+  background: var(--surface) !important;
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius) !important;
+  padding: 14px 16px !important;
+}
+.tab-content .fin-input-title {
+  color: var(--fg-1) !important;
+  border-bottom: 1px solid var(--border) !important;
+  font-size: 11.5px !important;
+  font-weight: 700 !important;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding-bottom: 6px !important;
+  margin-bottom: 10px !important;
+}
+.tab-content .fin-input-field input {
+  border: 1px solid var(--border) !important;
+  border-radius: var(--radius-xs) !important;
+  background: var(--surface) !important;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.tab-content .fin-input-field input:focus {
+  outline: none !important;
+  border-color: var(--primary) !important;
+  box-shadow: var(--shadow-focus) !important;
+}
+
+/* OpEx expense rows — soften the heavy 1px solid borders, add a
+   chevron-rotation feel via the existing toggleExpCat anchor. */
+.tab-content .exp-subrow td {
+  background: var(--surface-2) !important;
+  font-size: 11.5px !important;
+}
+.tab-content [id^="exp-icon-"] {
+  display: inline-block;
+  font-family: var(--font-mono);
+  width: 12px;
+  text-align: center;
+  color: var(--fg-3);
+  transition: transform 120ms ease;
+}
+
+/* Tip/help icons (the ?  blue circles in metric rows) */
+.tab-content .fin-tip {
+  background: var(--surface-3);
+  color: var(--fg-3);
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Phase 4 (v304): Documents, Deal Status, Contacts tab cleanups.
+   Mostly targeted color overrides — the .info-box / .section-hdr
+   re-skins from Phase 2 already handle the structural look.
+   ─────────────────────────────────────────────────────────── */
+
+/* Documents — photo gallery: drop the bluish dashed/fill bg */
+.tab-content #photoGallery {
+  border-color: var(--border-2) !important;
+  background: var(--surface-2) !important;
+}
+.tab-content #photoGallery .photo-tile {
+  border-color: var(--border) !important;
+  border-radius: var(--radius-sm);
+}
+.tab-content #photoGallery .photo-tile[style*="3px solid #1a3a6e"] {
+  border-color: var(--primary) !important;
+}
+
+/* Deal Status — Personal Pipeline purple border (legacy #7c3aed)
+   becomes a primary-blue accent so it matches the rest of the
+   redesign. */
+.tab-content .info-box[style*="border-color:#7c3aed"] {
+  border-color: var(--primary) !important;
+}
+.tab-content .info-box-title[style*="color:#6d28d9"] {
+  color: var(--primary-darker) !important;
+}
+
+/* Pipeline tracker dots — the inline-styled circles already
+   pick up stage colors via the STAGE_COLORS map. Just clean up
+   the connecting line so it matches the design's hairline. */
+.tab-content .info-box > div[style*="height:2px"] {
+  background: var(--border) !important;
+}
+
+/* Stage / tag selector buttons — soften the inline borders to
+   match the .btn aesthetic. The active state (which uses the
+   stage color inline) stays untouched. */
+.tab-content button[onclick*="changeStage"],
+.tab-content button[onclick*="setDealTag"],
+.tab-content button[onclick*="changeMyPipelineStage"] {
+  font-family: var(--font-sans);
+  transition: var(--t);
+}
+.tab-content button[onclick*="changeStage"]:hover,
+.tab-content button[onclick*="setDealTag"]:hover,
+.tab-content button[onclick*="changeMyPipelineStage"]:hover {
+  filter: brightness(0.96);
+}
+
+/* Contacts/Buyers — re-skin the role pills + buyer rows. Most
+   chrome here flows from .data-table re-skin (Phase 2) and
+   .info-box re-skin. Add a generic role-badge fallback. */
+.tab-content .role-badge,
+.tab-content .role-pill {
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 2px 8px;
+  border-radius: var(--radius-pill);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  background: var(--surface-2);
+  color: var(--fg-2);
+  border: 1px solid var(--border);
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  white-space: nowrap;
+}
+
+/* Documents — folder/section accent: drop legacy slate gradient
+   on Upload buttons in favor of flat primary blue. */
+.tab-content label[style*="linear-gradient(180deg,#1a3a6e,#0e2244)"],
+.tab-content button[style*="linear-gradient(180deg,#1a3a6e,#0e2244)"]:not(.ds-keep-legacy) {
+  background: var(--primary) !important;
+  background-image: none !important;
+  border: 1px solid var(--primary-dark) !important;
+  border-radius: var(--radius-sm) !important;
+}
+.tab-content label[style*="linear-gradient(180deg,#1a3a6e,#0e2244)"]:hover,
+.tab-content button[style*="linear-gradient(180deg,#1a3a6e,#0e2244)"]:hover {
+  background: var(--primary-dark) !important;
+}
+
+/* Documents — Pull Street View green gradient stays semantic but
+   gets flattened to match the .btn.success aesthetic. */
+.tab-content button[style*="linear-gradient(180deg,#059669,#047857)"]:not(.ds-keep-legacy) {
+  background: var(--green) !important;
+  background-image: none !important;
+  border: 1px solid var(--green-dark) !important;
+  border-radius: var(--radius-sm) !important;
+}
+.tab-content button[style*="linear-gradient(180deg,#059669,#047857)"]:hover {
+  background: var(--green-dark) !important;
+}
+
+/* ─────────────────────────────────────────────────────────────
+   Phase 5 (v305): Notes / Tasks / Calendar tab cleanups.
+   ─────────────────────────────────────────────────────────── */
+
+/* Notes — Next Steps card border drops the green callout in
+   favor of a neutral .section-style card with a primary
+   left-border accent. (Same treatment as the Summary nsCard.) */
+.tab-content [data-note-key="ns"]:not(.ns-edit-active),
+.tab-content > div[style*="border:1px solid #bbf7d0"][style*="border-left:4px solid #408040"] {
+  border: 1px solid var(--border) !important;
+  border-left: 3px solid var(--green) !important;
+  background: var(--surface) !important;
+  border-radius: var(--radius) !important;
+}
+.tab-content [style*="color:#408040"] {
+  color: var(--green-dark) !important;
+}
+
+/* Notes — blob entry cards: drop bluish border-left accent,
+   match the .note-card silhouette. */
+.tab-content [data-note-key]:not([data-note-key="ns"]) {
+  border-radius: var(--radius-sm) !important;
+}
+
+/* Notes — caret in History expander */
+.tab-content .ns-hist-caret {
+  font-size: 10px;
+  color: var(--fg-3);
+}
+
+/* Tasks tab — view-toggle row + new-task button get the .btn
+   group treatment automatically once the existing markup uses
+   .tab-content .btn classes. The inline-styled task-table
+   inherits .data-table re-skin. Add the strikethrough state
+   for done rows. */
+.tab-content tr.task-done td,
+.tab-content tr[data-task-done="1"] td {
+  color: var(--fg-3);
+}
+.tab-content tr.task-done .task-title,
+.tab-content tr[data-task-done="1"] .task-title {
+  text-decoration: line-through;
+}
+
+/* Calendar tab — re-skin the legacy .cal-grid / .cal-day used
+   by renderCalendarTab(). Different markup from the design's
+   .cal-month-grid above; this just re-skins the existing stub. */
+.tab-content .cal-grid {
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  overflow: hidden;
+  gap: 0 !important;
+  background: var(--border);
+}
+.tab-content .cal-grid .cal-hdr {
+  background: var(--surface-2) !important;
+  color: var(--fg-2) !important;
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  padding: 7px 10px;
+  border-radius: 0;
+  border-bottom: 1px solid var(--border);
+}
+.tab-content .cal-grid .cal-day {
+  background: var(--surface);
+  border: none;
+  min-height: 80px;
+  padding: 5px 7px;
+  font-family: var(--font-mono);
+  font-variant-numeric: tabular-nums;
+}
+.tab-content .cal-grid .cal-day.today {
+  background: var(--primary-light);
+  border: none;
+}
+.tab-content .cal-grid .cal-day.today .cal-day-num {
+  color: var(--primary-darker);
+}
+.tab-content .cal-grid .cal-day.other-month {
+  background: var(--surface-2);
+  color: var(--fg-4);
+}
+.tab-content .cal-grid .cal-day-num {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-2);
+}
+
+/* Calendar header buttons (◀ Prev / Next ▶ / + Add Event) use
+   .save-btn — already reskinned via Phase 2 to match the new
+   .btn aesthetic. */
+
+/* Section header row (full-width tab headings between sections,
+   distinct from .section-hd which is INSIDE .section). */
+.tab-content .section-hdr {
+  /* legacy class — keep its existing width-bleed but neutralize
+     the legacy primary-light background so it doesn't fight with
+     the new .section card style. */
+}

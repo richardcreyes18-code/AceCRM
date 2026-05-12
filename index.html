@@ -3245,12 +3245,15 @@ function openEditAddressModal(){
         if(zip && c.zip) zip.value = c.zip;
         const county = document.getElementById('nameCounty');
         if(county && c.county){
-          // Normalize to canonical "<Name> County" against NJ_COUNTIES (matches seller-lead form).
-          const bareName = c.county.replace(/\s+County$/i,'').trim();
-          const match = (typeof NJ_COUNTIES !== 'undefined')
-            ? NJ_COUNTIES.find(n => n.toLowerCase() === bareName.toLowerCase())
-            : null;
-          county.value = match ? (match + ' County') : (bareName + ' County');
+          // v356: normalize against _appLists.counties (the live standard
+          // list backing the "Standard county" validator) so Google's
+          // "Middlesex County" maps to canonical "Middlesex" instead of
+          // tripping the "isn't in the standard list" warning. Falls back
+          // to bare-name when nothing matches.
+          county.value = (typeof _canonicalCounty === 'function')
+            ? _canonicalCounty(c.county)
+            : c.county.replace(/\s+County$/i,'').trim();
+          if(typeof _countyInputCheck === 'function') _countyInputCheck();
         }
         const muni = document.getElementById('nameMunicipality');
         if(muni && !muni.value && c.city) muni.value = c.city;
@@ -39666,11 +39669,12 @@ function _liRenderSellerForm(){
       if(addrEl && newAddr) addrEl.value = newAddr;
       const countyEl = document.getElementById('li_s_county');
       if(countyEl && c.county){
-        const bareName = c.county.replace(/\s+County$/i,'').trim();
-        const match = (typeof NJ_COUNTIES !== 'undefined')
-          ? NJ_COUNTIES.find(n => n.toLowerCase() === bareName.toLowerCase())
-          : null;
-        countyEl.value = match ? (match + ' County') : (bareName + ' County');
+        // v356: route through _canonicalCounty so Google's "Middlesex County"
+        // collapses to canonical "Middlesex" — matches the validator's
+        // standard list (counties stored bare in _appLists.counties).
+        countyEl.value = (typeof _canonicalCounty === 'function')
+          ? _canonicalCounty(c.county)
+          : c.county.replace(/\s+County$/i,'').trim();
       }
       // v351: now that Google has formatted the address, check if it matches
       // an existing deal in ace_properties. If yes, show the "link to existing
@@ -40669,11 +40673,11 @@ function _liAddPropertyClick(){
       }
       const countyEl = document.getElementById(`li_s_p${newIdx}_county`);
       if(countyEl && c.county){
-        const bareName = c.county.replace(/\s+County$/i,'').trim();
-        const match = (typeof NJ_COUNTIES !== 'undefined')
-          ? NJ_COUNTIES.find(n => n.toLowerCase() === bareName.toLowerCase())
-          : null;
-        countyEl.value = match ? (match + ' County') : (bareName + ' County');
+        // v356: same canonicalization as the seller-lead form — strip
+        // "<Name> County" → "<Name>" via _canonicalCounty.
+        countyEl.value = (typeof _canonicalCounty === 'function')
+          ? _canonicalCounty(c.county)
+          : c.county.replace(/\s+County$/i,'').trim();
       }
     });
   }

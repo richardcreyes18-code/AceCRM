@@ -34405,13 +34405,22 @@ window._bcBulkAiAutoFillLauncher = async function(){
 
       <div style="margin-bottom:14px;">
         <div style="font-size:11px;font-weight:700;color:#0f172a;text-transform:uppercase;letter-spacing:.04em;margin-bottom:6px;">How many buyers?</div>
-        <div style="display:flex;gap:6px;flex-wrap:wrap;">
-          ${[5,15,25,50].map((n,i) => `
+        <div style="display:flex;gap:6px;flex-wrap:wrap;align-items:center;">
+          ${[5,15,25,50,100,250].map((n) => `
             <label style="display:inline-flex;align-items:center;gap:5px;padding:6px 12px;border:1.5px solid ${n===15?'#7c3aed':'#cbd5e1'};background:${n===15?'#ede9fe':'#fff'};color:${n===15?'#5b21b6':'#475569'};border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;">
-              <input type="radio" name="bcBulkSize" value="${n}" ${n===15?'checked':''} style="margin:0;"/>
+              <input type="radio" name="bcBulkSize" value="${n}" ${n===15?'checked':''} onchange="document.getElementById('bcBulkSizeCustom').value='';" style="margin:0;"/>
               ${n}
             </label>`).join('')}
+          <label style="display:inline-flex;align-items:center;gap:5px;padding:6px 12px;border:1.5px solid #cbd5e1;background:#fff;color:#475569;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;">
+            <input type="radio" name="bcBulkSize" value="all" onchange="document.getElementById('bcBulkSizeCustom').value='';" style="margin:0;"/>
+            All
+          </label>
+          <span style="font-size:11px;color:#94a3b8;margin:0 4px;">or</span>
+          <input type="number" id="bcBulkSizeCustom" min="1" max="10000" placeholder="custom"
+            oninput="(function(el){if(!el.value)return;document.querySelectorAll('input[name=bcBulkSize]').forEach(r=>r.checked=false);})(this)"
+            style="width:90px;padding:6px 10px;border:1.5px solid #cbd5e1;border-radius:8px;font-size:12px;font-weight:600;color:#475569;font-family:inherit;"/>
         </div>
+        <div style="font-size:10px;color:#94a3b8;margin-top:4px;">Custom overrides the preset. Pick "All" to process the entire filter population (capped at 10,000).</div>
       </div>
 
       <div style="margin-bottom:14px;">
@@ -34542,7 +34551,15 @@ window._bcBulkAiAutoFillLauncher = async function(){
 
 window._bcBulkAiAutoFillStart = async function(btn){
   const modal = document.getElementById('bcBulkAiLauncherModal');
-  const size = parseInt(document.querySelector('input[name="bcBulkSize"]:checked')?.value || '15', 10);
+  // v330: precedence — custom number > preset radio > default 15.
+  // "All" radio resolves to a high cap (10,000) so the slice grabs
+  // everything the filter produced.
+  const customRaw = document.getElementById('bcBulkSizeCustom')?.value?.trim();
+  const customN = customRaw ? Math.max(1, Math.min(10000, parseInt(customRaw, 10) || 0)) : 0;
+  const radioVal = document.querySelector('input[name="bcBulkSize"]:checked')?.value;
+  const size = customN
+    ? customN
+    : (radioVal === 'all' ? 10000 : parseInt(radioVal || '15', 10));
   const filter = document.querySelector('input[name="bcBulkFilter"]:checked')?.value || 'untouched';
   const onlyFillEmpty = document.getElementById('bcBulkOnlyFillEmpty')?.checked === true;
   // v314: auto-apply flag — skips per-buyer review modal entirely.

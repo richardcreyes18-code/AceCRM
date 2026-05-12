@@ -34650,11 +34650,17 @@ window._bcBulkAiAutoFillLauncher = async function(){
   // as soon as the queries resolve.
   (async () => {
     try {
-      // v324: untouched = total - filled - needsReview. Subtracting
-      // needsReview matches the v324 fix that excludes skipped buyers
-      // from re-pick — so the badge count equals the population the
-      // run would actually draw from.
-      const untouched = Math.max(0, (stats.total || 0) - (stats.filled || 0) - (stats.needsReview || 0));
+      // v336: the badge count must match what the Start handler will
+      // actually draw. The Start handler at _bcBulkAiAutoFillStart
+      // (filter=='untouched') excludes the UNION of filled ∪ needs_review
+      // — but those two sets overlap heavily (every needs_review buyer
+      // is also in filled). v336 stats now report needsReview as the
+      // intersection size, so the true touched count is
+      //   |filled ∪ needsReview| = filled + (any needs_review not in filled)
+      // which, in practice, equals stats.filled. Use stats.remaining
+      // (which v336 computes as total - filled) — same value the
+      // candidate pool produces.
+      const untouched = Math.max(0, stats.remaining || ((stats.total || 0) - (stats.filled || 0)));
       const elUntouched = document.getElementById('bcBulkCntUntouched');
       const elAll = document.getElementById('bcBulkCntAll');
       if(elUntouched) elUntouched.textContent = String(untouched);

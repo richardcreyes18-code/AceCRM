@@ -30644,6 +30644,38 @@ async function bcOpenExpanded(recordId){
                   <option value="mixed"     ${f['Financing Type']==='mixed'?'selected':''}>⚖️ Mixed / Depends on deal</option>
                 </select>
               </div>
+
+              <!-- v331: 1031 Exchange tracking. Stored in extra_fields
+                   JSONB so no migration needed. Sub-fields only render
+                   when the checkbox is on. -->
+              ${(() => {
+                const ef = (_bcCurrentRecord && _bcCurrentRecord.extra_fields && typeof _bcCurrentRecord.extra_fields === 'object') ? _bcCurrentRecord.extra_fields : {};
+                const is1031   = ef['is_1031_buyer'] === true;
+                const needsId  = ef['1031_needs_identification'] === true;
+                const exp1031  = ef['1031_expiration_date'] || '';
+                const amt1031  = ef['1031_amount'] != null ? ef['1031_amount'] : '';
+                const src1031  = ef['1031_source_asset'] || '';
+                return `
+              <div class="bc-label" style="margin-bottom:6px;">🏛 1031 Exchange</div>
+              <div style="background:#f0fdf4;border:1px solid #86efac;border-radius:5px;padding:8px 10px;margin-bottom:14px;">
+                <label style="display:flex;align-items:center;gap:8px;cursor:pointer;font-size:11px;font-weight:600;color:#14532d;">
+                  <input type="checkbox" id="bcf_is_1031" ${is1031?'checked':''} style="width:14px;height:14px;cursor:pointer;" onchange="_bc1031Toggle();_bcAutoSave()"/>
+                  <span>1031 Buyer</span>
+                </label>
+                <div id="bcf_1031_subfields" style="display:${is1031?'block':'none'};margin-top:8px;padding-top:8px;border-top:1px dashed #86efac;">
+                  <label style="display:flex;align-items:center;gap:6px;cursor:pointer;font-size:11px;color:#14532d;margin-bottom:8px;">
+                    <input type="checkbox" id="bcf_1031_needs_id" ${needsId?'checked':''} style="width:13px;height:13px;cursor:pointer;" onchange="_bcAutoSave()"/>
+                    <span>⚠ Still needs to identify a 1031 property</span>
+                  </label>
+                  <div class="bc-label" style="font-size:10px;margin-bottom:3px;color:#14532d;">1031 Expiration Date (45-day or 180-day deadline)</div>
+                  <input type="date" id="bcf_1031_expiration" value="${esc(exp1031)}" onchange="_bcAutoSave()" class="form-input" style="width:160px;font-size:11px;margin-bottom:8px;"/>
+                  <div class="bc-label" style="font-size:10px;margin-bottom:3px;color:#14532d;">1031 Amount ($ to roll over)</div>
+                  <input type="text" inputmode="numeric" id="bcf_1031_amount" class="form-input num-input" placeholder="e.g. 1,500,000" value="${esc(amt1031 === '' ? '' : _fmtNum(amt1031))}" oninput="_bcAutoSave()" style="width:100%;font-size:11px;margin-bottom:8px;"/>
+                  <div class="bc-label" style="font-size:10px;margin-bottom:3px;color:#14532d;">1031 Source Asset (property they sold / are selling)</div>
+                  <input type="text" id="bcf_1031_source_asset" value="${esc(src1031)}" placeholder="e.g. 4-unit in Elizabeth, sold Mar 2026" oninput="_bcAutoSave()" class="form-input" style="width:100%;font-size:11px;"/>
+                </div>
+              </div>`;
+              })()}
               <!-- PREFERRED CITIES -->
               <div class="bc-label" style="margin-bottom:6px;">📍 Preferred Cities / Towns <span style="color:#888;font-weight:400;">(click ✕ to remove)</span></div>
               <div id="bcf_city_pills" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px;min-height:28px;padding:4px;background:#f8faff;border:1px solid #c0d0e8;border-radius:5px;">
@@ -31041,6 +31073,34 @@ function _bcShortContactLabel(bcId){
     if(c?.name) return c.name;
   } catch(_){}
   return String(bcId).slice(0, 8);
+}
+
+// v331: toggle the 1031 sub-fields panel based on the checkbox state.
+function _bc1031Toggle(){
+  const on  = document.getElementById('bcf_is_1031')?.checked === true;
+  const sub = document.getElementById('bcf_1031_subfields');
+  if(sub) sub.style.display = on ? 'block' : 'none';
+}
+
+// v331: read the 1031 block from the right panel and return a delta
+// object to merge into extra_fields. Returns null when the BC form
+// isn't currently mounted (e.g. saving from a non-BC surface).
+function _bcCollect1031(){
+  const el = document.getElementById('bcf_is_1031');
+  if(!el) return null;
+  const is1031   = el.checked === true;
+  const needsId  = document.getElementById('bcf_1031_needs_id')?.checked === true;
+  const exp      = document.getElementById('bcf_1031_expiration')?.value || '';
+  const amtRaw   = _stripCommas(document.getElementById('bcf_1031_amount')?.value || '');
+  const amtNum   = amtRaw === '' ? null : Number(amtRaw);
+  const src      = document.getElementById('bcf_1031_source_asset')?.value || '';
+  return {
+    'is_1031_buyer':            is1031,
+    '1031_needs_identification': is1031 ? needsId : false,
+    '1031_expiration_date':      is1031 ? (exp || null) : null,
+    '1031_amount':               is1031 && amtNum != null && isFinite(amtNum) ? amtNum : null,
+    '1031_source_asset':         is1031 ? (src || '') : '',
+  };
 }
 
 // v326: map "asset - <type>" FUB tags to the canonical taxonomy chips
@@ -33906,6 +33966,14 @@ async function bcSaveExpanded(recordId, isAuto=false){
   if(ddEl) fields['Budget Deal Dependent'] = ddEl.checked === true;
   sv('Financing Type',                   gv('bcf_financing'));
 
+  // v331: 1031 Exchange fields — collected into extra_fields JSONB
+  // via the helper _bcCollect1031 below. Storage keys travel under
+  // extra_fields:
+  //   is_1031_buyer (bool) · 1031_needs_identification (bool) ·
+  //   1031_expiration_date (date string) · 1031_amount (number) ·
+  //   1031_source_asset (text).
+  // Always written so toggling off → on doesn't lose stale data.
+
   // v235: Hotel — guarded with element existence check because the section is
   // only present when a Hotel chip is on the form. gn() / gv() already
   // tolerate missing IDs by returning null/'', so this is a defense-in-depth
@@ -33998,6 +34066,17 @@ async function bcSaveExpanded(recordId, isAuto=false){
           }
         } catch(e){ console.warn('[bc-fields] collect-extras failed:', e.message); }
       }
+      // v331: also harvest the 1031 block from the right panel. These
+      // five keys live in extra_fields alongside any per-asset custom
+      // fields. Always-write so toggle state round-trips.
+      try {
+        const one1031 = _bcCollect1031();
+        if(one1031){
+          const cur = (sbData.extra_fields || (window._bcCurrentRecord && window._bcCurrentRecord.extra_fields) || {});
+          sbData.extra_fields = Object.assign({}, cur, one1031);
+          if(window._bcCurrentRecord) window._bcCurrentRecord.extra_fields = sbData.extra_fields;
+        }
+      } catch(e){ console.warn('[bc-1031] collect failed:', e.message); }
       await _sbPatch(SB_TABLES.buyerCriteria, recordId, sbData);
     } else {
       const res = await fetch(`https://api.airtable.com/v0/${cfg.base}/tbltwNvbX5T3t9wRE/${recordId}`,{

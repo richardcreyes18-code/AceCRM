@@ -358,6 +358,26 @@ const FIELD_SPEC: FieldDef[] = [
     hint: 'References to specific properties or deals previously shown to this buyer (addresses, deal nicknames, etc.).' },
   { col: 'is_vip_buyer', label: 'VIP Buyer', type: 'boolean', group: 'Misc',
     hint: 'true ONLY when notes/tags clearly mark the buyer as VIP / top-tier / trusted / high-priority. Default false; do not propose true on weak signals.' },
+
+  // v331: 1031 Exchange tracking. Stored in extra_fields JSONB (no DB
+  // migration). All five route through `_extra: true` and land in the
+  // BC's extra_fields blob. The frontend renders the dedicated 1031
+  // block in the right panel.
+  { col: 'is_1031_buyer', label: '1031 Buyer', type: 'boolean', group: 'Misc',
+    hint: 'true when ANY 1031 mention exists in the notes, regardless of year. Default false.',
+    _extra: true } as FieldDef & { _extra: true; _category: string },
+  { col: '1031_needs_identification', label: '1031 Needs Identification', type: 'boolean', group: 'Misc',
+    hint: 'true UNLESS the notes name a specific property already identified. Pre-2026 mentions always true (windows likely expired). This-year mentions: true unless an explicit target property is named.',
+    _extra: true } as FieldDef & { _extra: true; _category: string },
+  { col: '1031_expiration_date', label: '1031 Expiration Date', type: 'text', group: 'Misc',
+    hint: 'YYYY-MM-DD format. Extract ONLY when notes give an explicit 45-day or 180-day deadline. Empty for pre-2026 mentions (expired).',
+    _extra: true } as FieldDef & { _extra: true; _category: string },
+  { col: '1031_amount', label: '1031 Amount ($)', type: 'number', group: 'Misc',
+    hint: 'Dollar amount being rolled over. Extract when notes state it ("$1.5M 1031", "rolling 2.3M from sale of X"). Empty otherwise.',
+    _extra: true } as FieldDef & { _extra: true; _category: string },
+  { col: '1031_source_asset', label: '1031 Source Asset', type: 'text', group: 'Misc',
+    hint: 'Free-text description of the property being sold that funds the 1031 ("4-unit in Elizabeth sold Mar 2026"). Empty when not described.',
+    _extra: true } as FieldDef & { _extra: true; _category: string },
 ]
 
 const FIELD_SPEC_COLS = new Set(FIELD_SPEC.map(f => f.col))
@@ -623,7 +643,35 @@ OTHER TAG RULES (apply when buy_intent is "buyer" or "both"):
       desired_property_types untouched and put "Tag 'asset - X' had
       no clean vocab match — agent should classify manually" in
       other_requirements.
-  - "1031 Investor" or "1031" → bias financing_type to "1031".
+  - "1031 Investor" or "1031" → bias financing_type to "1031". Also
+    populate the dedicated 1031 fields (stored in extra_fields under
+    these column names; route via _extra: true):
+      is_1031_buyer (boolean): true whenever ANY 1031 mention exists
+        in the notes, regardless of when. Default false; never propose
+        false unless the buyer explicitly said "no longer doing a
+        1031".
+      1031_needs_identification (boolean): true UNLESS the notes give
+        a concrete property the buyer has already identified.
+        - 1031 mention is from 2025 or earlier (calendar year):
+          ALWAYS true. Those 1031 windows have likely expired; the
+          buyer needs to re-identify if they're still active.
+        - 1031 mention is from THIS calendar year:
+          true unless the notes explicitly identify a target property
+          ("identified 4-unit on Linden Ave", "in contract on 12
+          Maple"). If they identify a property → false.
+      1031_expiration_date (date YYYY-MM-DD): extract ONLY when the
+        notes give an explicit deadline ("45-day expires 6/15", "180-
+        day is 8/2"). Leave empty when the deadline isn't stated.
+        For 2025-or-earlier mentions, leave empty (expired).
+      1031_amount (number): the dollar amount being rolled over.
+        Extract when the notes state it ("$1.5M 1031", "rolling
+        2.3M from sale of X"). Leave empty otherwise.
+      1031_source_asset (text): the property being / having been sold
+        that funds the 1031. Free-text description from the notes
+        ("4-unit in Elizabeth sold Mar 2026", "12 Maple Ave").
+        Leave empty when not described.
+    Cite each populated 1031 field. is_1031_buyer + the needs-ID flag
+    are bookkeeping — cite the same source for both.
   - "VIP" → set is_vip_buyer = true. Cite: "tag: VIP".
   - "Bounced" → ignore. Email deliverability flag, not a buying signal.
   - U.S. STATE-NAME tags ("New Jersey", "Pennsylvania", "New York",

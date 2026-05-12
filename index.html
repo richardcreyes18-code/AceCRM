@@ -42184,6 +42184,10 @@ let _currentContactTasksId=null, _currentContactTasksName='';
 // buyer criteria card. Defaults task_type to 'buyer' and writes the FK
 // to ace_tasks.buyer_criteria_id.
 let _taskModalBuyerCritId=null, _taskModalBuyerCritLabel='';
+// v355: portfolio link — set when the task modal is opened from the
+// Portfolio detail page. Writes ace_tasks.portfolio_id so the same task
+// surfaces in that portfolio's Tasks tab.
+let _taskModalPortfolioId=null, _taskModalPortfolioName='';
 // v113.23: explicit task-type override. The modal's pill row writes here;
 // submit() falls back to _taskTypeFromSource() when null.
 let _taskModalTypeOverride = null;
@@ -42568,9 +42572,10 @@ async function _taskLinkSearchNow(kind, q){
   resEl.style.display = 'block';
 }
 
-function openCreateTaskModal(dealId=null,address='',source='deal',contactId=null,contactName=''){
+function openCreateTaskModal(dealId=null,address='',source='deal',contactId=null,contactName='',portfolioId=null,portfolioName=''){
   _taskModalDealId=dealId; _taskModalDealAddr=address; _taskModalSrc=source;
   _taskModalContactId=contactId; _taskModalContactName=contactName;
+  _taskModalPortfolioId=portfolioId||null; _taskModalPortfolioName=portfolioName||'';
   // v113.23: reset the buyer / type / assignee state on every open. The
   // caller may have prefilled buyer crit before the call (set via the
   // buyer-criteria card's task button) — keep that, but always reset the
@@ -42592,6 +42597,7 @@ function openCreateTaskModal(dealId=null,address='',source='deal',contactId=null
   // Priority: deal (most specific) → contact → general.
   let subtitle = 'General Task (no link)';
   if(dealId) subtitle = '📍 ' + address;
+  else if(portfolioId) subtitle = '📁 ' + (portfolioName || 'Linked portfolio');
   else if(contactId) subtitle = '👤 ' + (contactName || 'Linked contact');
   // v113.23: ensure the user list is loaded before painting the assignee picker
   _ensureUsersCache().catch(()=>{});
@@ -42666,6 +42672,7 @@ function closeTaskModal(){
   _taskModalDealId=null; _taskModalDealAddr='';
   _taskModalContactId=null; _taskModalContactName='';
   _taskModalBuyerCritId=null; _taskModalBuyerCritLabel='';
+  _taskModalPortfolioId=null; _taskModalPortfolioName='';
   _taskModalTypeOverride=null;
   _taskModalCommType='';
   _taskModalAssigneeId=(_currentUser && _currentUser.id) || null;
@@ -43088,6 +43095,7 @@ async function submitCreateTask(){
       };
       if(_taskModalDealId&&!_taskModalDealId.startsWith('demo')) sbTask.property_id=_taskModalDealId;
       if(_taskModalContactId) sbTask.contact_id=_taskModalContactId;
+      if(_taskModalPortfolioId) sbTask.portfolio_id = _taskModalPortfolioId;
       if(buyerCritId) sbTask.buyer_criteria_id = buyerCritId;
       if(_currentUser && _currentUser.id) sbTask.created_by_user_id = _currentUser.id;
       if(assigneeId) sbTask.assigned_to_user_id = assigneeId;

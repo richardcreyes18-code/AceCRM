@@ -144,17 +144,22 @@ export function _portfolioFinancials(children, portfolio){
     childrenWithExpenses: 0,
     childrenWithNOI: 0
   };
-  const getMo = (d, monthlyKey, yearlyKey) => {
-    const m = Number(d[monthlyKey] || 0);
-    if(m) return m;
-    const y = Number(d[yearlyKey] || 0);
-    return y ? y / 12 : 0;
+  // v355: read GRI/Expenses from any of the field names the deal layer uses.
+  // The canonical column today is 'Gross Rental Income (Monthly)' — the older
+  // 'Gross Revenue Monthly' name was kept on SB_PROP_MAP for legacy rows but
+  // most current deals only populate the canonical one, so we MUST check both.
+  const firstNum = (d, keys) => {
+    for(const k of keys){
+      const v = Number(d[k]);
+      if(v) return v;
+    }
+    return 0;
   };
-  const getYr = (d, monthlyKey, yearlyKey) => {
-    const y = Number(d[yearlyKey] || 0);
-    if(y) return y;
-    const m = Number(d[monthlyKey] || 0);
-    return m ? m * 12 : 0;
+  const getMoMulti = (d, monthlyKeys, yearlyKeys) => {
+    const m = firstNum(d, monthlyKeys);
+    if(m) return m;
+    const y = firstNum(d, yearlyKeys);
+    return y ? y / 12 : 0;
   };
   children.forEach(d => {
     const ask = Number(d['Asking Price']||0);
@@ -164,10 +169,13 @@ export function _portfolioFinancials(children, portfolio){
     const u   = Number(d['No. of Units']||d['Number of Units']||0);
     if(u)   agg.totalUnits += u;
 
-    // Actual side
-    const griMo = getMo(d, 'Gross Revenue Monthly', 'Gross Revenue Yearly');
+    // Actual side — v355: include 'Gross Rental Income (Monthly)' (canonical)
+    // and 'Gross Revenue Monthly' (legacy) as accepted source names.
+    const griMo = getMoMulti(d,
+      ['Gross Rental Income (Monthly)', 'Gross Revenue Monthly'],
+      ['Gross Revenue Yearly']);
     if(griMo){ agg.actual.griMonthly += griMo; agg.childrenWithGRI++; }
-    const expMo = getMo(d, 'Expenses Monthly', 'Expenses Yearly');
+    const expMo = getMoMulti(d, ['Expenses Monthly'], ['Expenses Yearly']);
     if(expMo){ agg.actual.expensesMonthly += expMo; agg.childrenWithExpenses++; }
     // Individual expense categories — sum monthly, best-effort
     agg.actual.exp_electric      += Number(d['Electric (Monthly)']||0);
@@ -185,19 +193,22 @@ export function _portfolioFinancials(children, portfolio){
     agg.actual.exp_admin         += Number(d['Admin Expenses (Monthly)']||0);
     agg.actual.exp_misc          += Number(d['Miscellaneous Expenses (Monthly)']||0);
 
-    // NOI — prefer stored, fallback to derived
+    // NOI — prefer stored, fallback to derived. v355: derive from griMo alone
+    // when expMo is missing (treat as zero) so partial-data children still
+    // contribute to the package NOI instead of being silently dropped.
     let noi = Number(d['NOI']||0);
-    if(!noi && griMo && expMo){ noi = (griMo - expMo) * 12; }
+    if(!noi && griMo){ noi = Math.max(0, (griMo - expMo) * 12); }
     if(noi){ agg.totalNOI += noi; agg.childrenWithNOI++; }
 
     // Debt service
     agg.actual.annualDebtService += Number(d['Annual Debt Service']||0);
 
     // Proforma side
-    const pfGriMo = getMo(d, 'Pro Forma Gross Revenue Monthly', 'Pro Forma Gross Revenue Yearly')
-                 || Number(d['Proforma Gross Rent (Monthly)']||0);
+    const pfGriMo = getMoMulti(d,
+      ['Pro Forma Gross Revenue Monthly', 'Proforma Gross Rent (Monthly)'],
+      ['Pro Forma Gross Revenue Yearly', 'Calculated Pro Forma Gross Revenue Yearly']);
     if(pfGriMo) agg.proforma.griMonthly += pfGriMo;
-    const pfExpMo = getMo(d, 'Pro Forma Expenses Monthly', 'Pro Forma Expenses Yearly');
+    const pfExpMo = getMoMulti(d, ['Pro Forma Expenses Monthly'], ['Pro Forma Expenses Yearly']);
     if(pfExpMo) agg.proforma.expensesMonthly += pfExpMo;
 
     // Unit mix
@@ -350,6 +361,11 @@ export function _portfolioUnitMix(children){
   bedroomTypes.forEach(t => {
     byType[t.key] = { label:t.label, count:0, countWithRent:0, vacant:0, totalRent:0, avgRent:null, sources:[] };
   });
+  // v355: add an "unspecified" bucket so children that have a total-unit count
+  // (`No. of Units`) but no bedroom-by-bedroom breakdown still contribute to
+  // the portfolio total. Without this the Tenant & Unit Mix tab undercounts
+  // (e.g. portfolio with 9 units across 2 properties showed only 5).
+  byType['unspec'] = { label:'Unspecified Bedrooms', count:0, countWithRent:0, vacant:0, totalRent:0, avgRent:null, sources:[] };
   let hasUnitData = false;
 
   children.forEach(d => {
@@ -357,12 +373,14 @@ export function _portfolioUnitMix(children){
     const { unitMix } = _pfParseUnitRentData(raw);
     const addr = d['Address'] || 'Unnamed';
 
+    let bedroomBreakdownTotal = 0;
     bedroomTypes.forEach(t => {
       const cnt = Number(d[t.countField] || 0);
       const vac = Number(d[t.vacField]   || 0);
       const avgRent = unitMix && unitMix.byType ? Number(unitMix.byType[t.key] || 0) : 0;
       if(cnt > 0){
         hasUnitData = true;
+        bedroomBreakdownTotal += cnt;
         byType[t.key].count  += cnt;
         byType[t.key].vacant += vac;
         if(avgRent > 0){
@@ -378,6 +396,18 @@ export function _portfolioUnitMix(children){
         }
       }
     });
+    // v355: if the deal has a total-unit count higher than what was broken
+    // down into bedroom types, push the remainder into the "unspecified"
+    // bucket so the portfolio total matches reality.
+    const totalUnitsOnDeal = Number(d['No. of Units']||d['Number of Units']||0);
+    if(totalUnitsOnDeal > bedroomBreakdownTotal){
+      const remainder = totalUnitsOnDeal - bedroomBreakdownTotal;
+      hasUnitData = true;
+      byType['unspec'].count += remainder;
+      byType['unspec'].sources.push({
+        deal: addr, dealId: d.id, count: remainder, avgRent: null, totalRent: 0
+      });
+    }
   });
 
   // Compute weighted avg rent per bedroom type — divide by units that
@@ -390,9 +420,12 @@ export function _portfolioUnitMix(children){
     }
   });
 
-  const totalUnits        = bedroomTypes.reduce((s, t) => s + byType[t.key].count,     0);
-  const totalVacant       = bedroomTypes.reduce((s, t) => s + byType[t.key].vacant,    0);
-  const totalMonthlyRent  = bedroomTypes.reduce((s, t) => s + byType[t.key].totalRent, 0);
+  // v355: include the "unspec" bucket in the totals so they match the
+  // financial tab's `_portfolioFinancials.totalUnits`.
+  const allTypeKeys = [...bedroomTypes.map(t => t.key), 'unspec'];
+  const totalUnits        = allTypeKeys.reduce((s, k) => s + byType[k].count,     0);
+  const totalVacant       = allTypeKeys.reduce((s, k) => s + byType[k].vacant,    0);
+  const totalMonthlyRent  = allTypeKeys.reduce((s, k) => s + byType[k].totalRent, 0);
   const totalAnnualRent   = totalMonthlyRent * 12;
 
   return { hasUnitData, byType, totalUnits, totalVacant, totalMonthlyRent, totalAnnualRent };
@@ -937,6 +970,8 @@ export function _renderPortfolioDetail(p){
     tabContent = _renderPortfolioTenantUnitMixTab(p, children, fmt$, fmtPct);
   } else if(_currentPortfolioTab === 'offers'){
     tabContent = _renderPortfolioOffersTab(p, children, fmt$, fmtPct);
+  } else if(_currentPortfolioTab === 'tasks'){
+    tabContent = _renderPortfolioTasksTab(p, children);
   } else {
     tabContent = _renderPortfolioSummaryTab(p, children, fmt$, fmtPct);
   }
@@ -1032,6 +1067,7 @@ export function _renderPortfolioDetail(p){
         ${tabBtn('financials', 'Financial Analysis',  '📊')}
         ${tabBtn('tenantmix',  'Tenant & Unit Mix',   '🏪')}
         ${tabBtn('offers',     'Offers',              '💰')}
+        ${tabBtn('tasks',      'Tasks',               '☑')}
       </div>
       <div id="pfTabContent" style="background:#fff;border:1px solid #e2e8f0;border-top:none;border-radius:0 0 10px 10px;padding:20px 22px;">
         ${tabContent}
@@ -1927,6 +1963,135 @@ export async function _poDeleteFromModal(){
   } catch(e) {
     alert('Failed to delete: ' + (e.message || 'unknown error'));
   }
+}
+
+// ── TASKS TAB RENDERER ────────────────────────────────────────────
+// v355: Portfolio-level tasks. Shows tasks linked DIRECTLY to this
+// portfolio (ace_tasks.portfolio_id) plus tasks on any of its child
+// properties (ace_tasks.property_id IN (childIds)) so a single tab
+// gives the user the complete picture without having to open each
+// child deal individually.
+export function _renderPortfolioTasksTab(p, children){
+  const childCount = children.length;
+  const escapeName = String(p['Name']||'Untitled').replace(/'/g,"\\'").replace(/</g,'&lt;');
+  // The tasks are loaded asynchronously by _pfLoadPortfolioTasks once
+  // the DOM node is mounted — keeps the synchronous render path fast.
+  setTimeout(() => _pfLoadPortfolioTasks(p.id, children), 0);
+  return `
+    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;flex-wrap:wrap;gap:10px;">
+      <div>
+        <div style="font-size:14px;font-weight:700;color:#0f172a;">Tasks for this portfolio</div>
+        <div style="font-size:11px;color:#64748b;margin-top:2px;">
+          Portfolio-level tasks + any task on the ${childCount} child ${childCount===1?'property':'properties'}.
+        </div>
+      </div>
+      <button onclick="openCreateTaskModal(null,'','portfolio',null,'','${p.id}','${escapeName}')"
+        style="background:#7c3aed;color:#fff;border:none;padding:7px 16px;border-radius:6px;font-size:12px;font-weight:600;cursor:pointer;">+ Create Task</button>
+    </div>
+    <div id="pfTasksContent" style="min-height:80px;">
+      <div style="text-align:center;padding:30px;color:#94a3b8;font-size:12px;">Loading tasks…</div>
+    </div>`;
+}
+
+// Async loader for portfolio tasks. Fetches:
+//   1. ace_tasks WHERE portfolio_id = <id>
+//   2. ace_tasks WHERE property_id IN (childIds)
+// Then unions them, dedupes, and renders into #pfTasksContent.
+export async function _pfLoadPortfolioTasks(portfolioId, children){
+  const el = document.getElementById('pfTasksContent');
+  if(!el) return;
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  if(!portfolioId || !UUID_RE.test(portfolioId)){
+    el.innerHTML = `<div style="text-align:center;padding:24px;color:#94a3b8;font-size:12px;">Save the portfolio first to add tasks.</div>`;
+    return;
+  }
+  const childIds = (children || []).map(c => c.id).filter(id => UUID_RE.test(id));
+  try {
+    const results = await Promise.all([
+      _sbGet(SB_TABLES.tasks, `portfolio_id=eq.${portfolioId}&select=*&order=due_date.asc.nullslast`),
+      childIds.length > 0
+        ? _sbGet(SB_TABLES.tasks, `property_id=in.(${childIds.join(',')})&select=*&order=due_date.asc.nullslast`)
+        : Promise.resolve([])
+    ]);
+    const pfRows = Array.isArray(results[0]) ? results[0] : [];
+    const propRows = Array.isArray(results[1]) ? results[1] : [];
+    // Merge + dedupe by id (a task could be linked to both portfolio + child)
+    const merged = new Map();
+    pfRows.forEach(r => merged.set(r.id, { ...r, _scope:'portfolio' }));
+    propRows.forEach(r => { if(!merged.has(r.id)) merged.set(r.id, { ...r, _scope:'child' }); });
+    const rows = [...merged.values()].sort((a,b) => {
+      const da = a.due_date || '9999-12-31';
+      const db = b.due_date || '9999-12-31';
+      return da.localeCompare(db);
+    });
+    _pfRenderTasksList(el, rows, children);
+  } catch(e){
+    console.warn('[_pfLoadPortfolioTasks] failed:', e);
+    el.innerHTML = `<div style="padding:16px;color:#dc2626;font-size:12px;">Failed to load tasks: ${(e && e.message)||'unknown error'}</div>`;
+  }
+}
+
+function _pfRenderTasksList(host, rows, children){
+  if(!rows || rows.length === 0){
+    host.innerHTML = `
+      <div style="background:#fff;border:1px dashed #cbd5e1;border-radius:10px;padding:40px 20px;text-align:center;">
+        <div style="font-size:36px;opacity:0.4;margin-bottom:8px;">☑</div>
+        <div style="font-size:13px;font-weight:600;color:#475569;margin-bottom:4px;">No tasks yet</div>
+        <div style="font-size:11px;color:#94a3b8;">Click "+ Create Task" to add the first one.</div>
+      </div>`;
+    return;
+  }
+  const childAddrById = {};
+  (children || []).forEach(d => { childAddrById[d.id] = d['Address'] || 'Unnamed'; });
+  const prioColor = (p) => {
+    const v = (p||'').toLowerCase();
+    if(v.includes('top'))    return '#dc2626';
+    if(v.includes('high'))   return '#ea580c';
+    if(v.includes('medium')) return '#0891b2';
+    if(v.includes('low'))    return '#64748b';
+    return '#94a3b8';
+  };
+  const fmtDue = (d) => {
+    if(!d) return '—';
+    try {
+      const dt = new Date(d);
+      if(isNaN(dt.getTime())) return d;
+      const today = new Date();
+      today.setHours(0,0,0,0);
+      const due = new Date(dt.getFullYear(), dt.getMonth(), dt.getDate());
+      const diffDays = Math.round((due - today) / 86400000);
+      const s = dt.toLocaleDateString('en-US',{month:'short',day:'numeric'});
+      if(diffDays < 0) return `<span style="color:#dc2626;font-weight:700;">${s} · ${-diffDays}d overdue</span>`;
+      if(diffDays === 0) return `<span style="color:#d97706;font-weight:700;">${s} · today</span>`;
+      if(diffDays <= 7) return `<span style="color:#059669;">${s} · in ${diffDays}d</span>`;
+      return s;
+    } catch(e){ return d; }
+  };
+
+  host.innerHTML = rows.map(r => {
+    const isDone = (r.status||'').toLowerCase() === 'done';
+    const pc = prioColor(r.priority);
+    const scopeBadge = r._scope === 'portfolio'
+      ? `<span style="background:#fef3c7;color:#92400e;font-size:9px;font-weight:700;padding:2px 7px;border-radius:99px;border:1px solid #fde68a;">📁 Portfolio</span>`
+      : `<span style="background:#dbeafe;color:#1e40af;font-size:9px;font-weight:700;padding:2px 7px;border-radius:99px;border:1px solid #bfdbfe;" title="${(childAddrById[r.property_id]||'').replace(/"/g,'&quot;')}">🏠 ${(childAddrById[r.property_id]||'Property').toString().split(',')[0].slice(0,28)}</span>`;
+    return `
+      <div onclick="openEditTaskModal('${r.id}', '${(r.task||'').replace(/'/g,"\\'").replace(/"/g,'&quot;')}', '${r.priority||''}', '${r.due_date||''}', '${(r.notes||'').replace(/'/g,"\\'").replace(/"/g,'&quot;')}', 'portfolio')"
+        style="display:grid;grid-template-columns:18px 1fr 110px 130px;gap:12px;align-items:center;padding:12px 14px;background:#fff;border:1px solid #e2e8f0;border-radius:8px;margin-bottom:6px;cursor:pointer;transition:border-color 0.15s;${isDone?'opacity:0.55;':''}"
+        onmouseover="this.style.borderColor='#7c3aed';"
+        onmouseout="this.style.borderColor='#e2e8f0';">
+        <div style="width:14px;height:14px;border-radius:50%;background:${pc};border:2px solid #fff;box-shadow:0 0 0 1px ${pc};"></div>
+        <div style="min-width:0;">
+          <div style="font-size:13px;font-weight:600;color:#0f172a;${isDone?'text-decoration:line-through;':''}white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${(r.task||'(untitled)').replace(/</g,'&lt;')}</div>
+          <div style="font-size:10px;color:#64748b;margin-top:3px;display:flex;gap:6px;align-items:center;flex-wrap:wrap;">
+            ${scopeBadge}
+            ${r.priority ? `<span style="color:${pc};font-weight:700;">${r.priority}</span>` : ''}
+            ${r.status ? `<span style="color:#64748b;">· ${r.status}</span>` : ''}
+          </div>
+        </div>
+        <div style="font-size:11px;color:#475569;text-align:right;">${fmtDue(r.due_date)}</div>
+        <div style="font-size:10px;color:#94a3b8;text-align:right;">${r.notes ? (r.notes.length > 32 ? r.notes.slice(0,32)+'…' : r.notes).replace(/</g,'&lt;') : ''}</div>
+      </div>`;
+  }).join('');
 }
 
 // ── OFFERS TAB RENDERER ───────────────────────────────────────────

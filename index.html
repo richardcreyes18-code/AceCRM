@@ -2469,19 +2469,22 @@ function buildSidebar(filter=''){
   const fNorm = f ? _normalizeAddr(f) : '';
   let deals=allDeals.filter(d=>{
     if(f){
-      const addr = (d['Address']||'').toLowerCase();
-      const id   = (d.id||'').toLowerCase();
-      // v105: also search by owner name + cleaned address for better matching
-      const ownerName = (d._ownerName || d['Owner Name'] || '').toLowerCase();
-      const cleanAddr = cleanAddress(d['Address']||'').toLowerCase();
-      // v144: address-normalized substring match in addition to raw substring
-      const normAddr = fNorm ? _normalizeAddr(d['Address']||'') : '';
-      const normMatches = fNorm && normAddr.indexOf(fNorm) !== -1;
-      // v354: also match property name + complex name (the nicknames the
-      // user sets via the Edit Property Name modal).
-      const propName = (d['Property Name']||'').toLowerCase();
-      const complex  = (d['Complex Name']||'').toLowerCase();
-      if(!addr.includes(f) && !id.includes(f) && !ownerName.includes(f) && !cleanAddr.includes(f) && !normMatches && !propName.includes(f) && !complex.includes(f)) return false;
+      // v359: tokenized search across address + owner + property nickname +
+      // deal id, including the normalized-address variant so "first ave"
+      // still finds "1st Avenue". Token AND-match means "299 fort lee"
+      // finds "299 W Fort Lee Rd" even though the words sit out of order.
+      const hay = [
+        d['Address']||'',
+        cleanAddress(d['Address']||''),
+        fNorm ? _normalizeAddr(d['Address']||'') : '',
+        d['Property Name']||'',
+        d['Complex Name']||'',
+        d._ownerName || d['Owner Name'] || '',
+        d.id||''
+      ];
+      // Match either the raw query OR the address-normalized query so
+      // ordinal/highway aliases keep working.
+      if(!_tokenMatch(f, hay) && !(fNorm && _tokenMatch(fNorm, hay))) return false;
     }
     if(_sideView==='archived') return !!d['Is Archived'];
     if(_sideView==='starred') return !!d['Top Priority'] && !d['Is Archived'];
@@ -2528,6 +2531,26 @@ function getStageShort(d){
     'Prospect / Lead':'PROS','Offer In':'OFFER','Under Contract':'U/C','Dead':'DEAD'};
   return map[s]||s.substring(0,4).toUpperCase();
 }
+
+// v359: tokenized AND-match. Every whitespace-separated token in `q` must
+// appear (case-insensitive substring) somewhere in `haystack`. Empty / null
+// query matches everything. Haystack can be a string or an array of fields;
+// arrays get joined with a \u0001 sentinel so a token can't straddle two
+// fields. Used by every contact / deal / address search bar so "Donita
+// Maynard" finds "Donita L Maynard" and "299 fort lee" finds
+// "299 W Fort Lee Rd, Bogota, NJ". Exposed on window so ES modules in
+// js/portfolios, js/buyer-search etc. can call it the same way.
+function _tokenMatch(q, haystack){
+  const query = String(q == null ? '' : q).trim().toLowerCase();
+  if(!query) return true;
+  const tokens = query.split(/\s+/).filter(Boolean);
+  if(!tokens.length) return true;
+  const hay = Array.isArray(haystack)
+    ? haystack.filter(v => v != null && v !== '').map(v => String(v).toLowerCase()).join(' \u0001 ')
+    : String(haystack == null ? '' : haystack).toLowerCase();
+  return tokens.every(t => hay.indexOf(t) !== -1);
+}
+window._tokenMatch = _tokenMatch;
 
 // v144: address normalization for fuzzy search — collapses every common
 // spelling variant of an address into a canonical form so a query like
@@ -8867,10 +8890,27 @@ async function _aoSearchContacts(q){
     if(query === _aoLastQuery) return;
     _aoLastQuery = query;
     try {
-      // ilike search on name, limit 20
+      // v359: broaden the DB query to the longest token and post-filter
+      // client-side with _tokenMatch so "Donita Maynard" finds
+      // "Donita L Maynard" (middle initial was blocking the old single-blob
+      // ilike). Search across name, email, company, phone (digits only).
+      const tokens = query.toLowerCase().split(/\s+/).filter(Boolean);
+      const broadest = tokens.slice().sort((a,b) => b.length - a.length)[0] || query;
+      const safeVal = String(broadest).replace(/[,()]/g, ' ').trim();
+      const phoneDigits = String(query).replace(/[^0-9]/g, '');
+      const conds = [
+        'name.ilike.*'    + safeVal + '*',
+        'email.ilike.*'   + safeVal + '*',
+        'company.ilike.*' + safeVal + '*'
+      ];
+      if(phoneDigits.length >= 3) conds.push('phone_number.ilike.*' + phoneDigits + '*');
       const rows = await _sbGet('ace_contacts',
-        `name=ilike.*${encodeURIComponent(query)}*&select=id,name,phone_number,email,company,type&limit=20&order=name.asc`);
-      _aoRenderSearchResults(rows || []);
+        'select=id,name,phone_number,email,company,type'
+        + '&or=(' + conds.join(',') + ')&deleted_at=is.null&limit=60&order=name.asc');
+      const filtered = (Array.isArray(rows) ? rows : [])
+        .filter(r => _tokenMatch(query, [r.name, r.phone_number, r.email, r.company]))
+        .slice(0, 20);
+      _aoRenderSearchResults(filtered);
     } catch(e) {
       console.warn('contact search failed:', e.message);
       box.innerHTML = `<div style="padding:12px;font-size:11px;color:#dc2626;">Search failed: ${e.message}</div>`;
@@ -14404,12 +14444,17 @@ function _dbComputeFilteredDeals(){
     const s = getStage(d);
     const c = (d['Simple County']||'').replace(/\s*county\s*/i,'').trim();
     const tFull = _dealAssetTypeFull(d);
-    const addr = (d['Address']||'').toLowerCase();
-    const notes = (d['Next Steps']||'').toLowerCase();
-    // v354: search also matches property name (nickname) + complex name
-    const propName = (d['Property Name']||'').toLowerCase();
-    const complex  = (d['Complex Name']||'').toLowerCase();
-    if(search && !(addr.includes(search) || c.toLowerCase().includes(search) || notes.includes(search) || tFull.toLowerCase().includes(search) || propName.includes(search) || complex.includes(search) || (d.id||'').toLowerCase().includes(search))) return false;
+    // v359: tokenized AND-match so a query like "299 fort lee" lands
+    // even when the words aren't contiguous in the stored address.
+    if(search && !_tokenMatch(search, [
+      d['Address']||'',
+      c,
+      d['Next Steps']||'',
+      tFull,
+      d['Property Name']||'',
+      d['Complex Name']||'',
+      d.id||''
+    ])) return false;
     if(selStages   && !selStages.includes(s)) return false;
     if(selCounties && !selCounties.includes(c)) return false;
     if(!_dealAssetTypeMatches(d, selTypes)) return false;
@@ -15075,13 +15120,17 @@ function renderDealBoard(){
     const c = (d['Simple County']||'').replace(/\s*county\s*/i,'').trim();
     // v111.3: full type (e.g. "Industrial: Warehouse") for smart filter matching
     const tFull = _dealAssetTypeFull(d);
-    const addr = (d['Address']||'').toLowerCase();
-    const countyLow = c.toLowerCase();
-    const notes = (d['Next Steps']||'').toLowerCase();
-    // v354: search also matches property name + complex name (nicknames)
-    const propName = (d['Property Name']||'').toLowerCase();
-    const complex  = (d['Complex Name']||'').toLowerCase();
-    const matchSearch  = !search || addr.includes(search) || countyLow.includes(search) || notes.includes(search) || tFull.toLowerCase().includes(search) || propName.includes(search) || complex.includes(search) || (d.id||'').toLowerCase().includes(search);
+    // v359: tokenized AND-match — same haystack shape as
+    // _dbComputeFilteredDeals so the list and the map agree.
+    const matchSearch  = !search || _tokenMatch(search, [
+      d['Address']||'',
+      c,
+      d['Next Steps']||'',
+      tFull,
+      d['Property Name']||'',
+      d['Complex Name']||'',
+      d.id||''
+    ]);
     const matchStage   = !selStages   || selStages.includes(s);
     const matchCounty  = !selCounties || selCounties.includes(c);
     const matchType    = _dealAssetTypeMatches(d, selTypes);
@@ -15733,22 +15782,22 @@ function _ddClearSearch(){
   requestAnimationFrame(() => { const s = document.getElementById('ddSearchInput'); if(s) s.focus(); });
 }
 
-// Returns groups filtered by the current search string. Match is a
-// case-insensitive substring test against every deal's address in a group —
-// if ANY deal in the group matches, the whole group is shown.
+// Returns groups filtered by the current search string. v359: tokenized
+// AND-match so "fort lee 299" finds "299 W Fort Lee Rd" even though the
+// words aren't contiguous in the stored address.
 function _ddFilteredGroups(){
-  const q = (_dealDedupeState.search||'').trim().toLowerCase();
+  const q = (_dealDedupeState.search||'').trim();
   if(!q) return _dealDedupeState.groups;
   return _dealDedupeState.groups.filter(g =>
-    g.deals.some(d => (d['Address']||'').toLowerCase().includes(q))
+    g.deals.some(d => _tokenMatch(q, d['Address']||''))
   );
 }
 
 function _ddFilteredFuzzyGroups(){
-  const q = (_dealDedupeState.search||'').trim().toLowerCase();
+  const q = (_dealDedupeState.search||'').trim();
   const all = _dealDedupeState.fuzzyGroups || [];
   if(!q) return all;
-  return all.filter(g => g.deals.some(d => (d['Address']||'').toLowerCase().includes(q)));
+  return all.filter(g => g.deals.some(d => _tokenMatch(q, d['Address']||'')));
 }
 
 function closeDealDedupeModal(){
@@ -16014,8 +16063,11 @@ function _ddRenderManualMergePanel(){
   let results = [];
   if(ql){
     for(const d of all){
-      const addr = (d['Address']||'').toLowerCase();
-      if(addr.includes(ql) || (qlNorm && _normalizeAddr(d['Address']||'').indexOf(qlNorm) !== -1)){
+      // v359: tokenized AND-match on the raw address OR the
+      // normalized form, so "fort lee 299" and "1616 nj 77" both work.
+      const addr = d['Address']||'';
+      const normAddr = _normalizeAddr(addr);
+      if(_tokenMatch(ql, [addr, normAddr]) || (qlNorm && _tokenMatch(qlNorm, normAddr))){
         if(!_ddManualMerge.selected.has(d.id)) results.push(d);
         if(results.length >= 30) break;
       }
@@ -19842,9 +19894,14 @@ function _filterContactsDebounced(){
 async function _liveSearchContacts(q){
   const myToken = ++_contactsLiveQueryToken;
 
-  // Build the PostgREST query. ilike with `%q%` pattern; search across 4 fields
-  // via or=(...) filter. All 4 have trigram indexes for speed.
-  const enc = encodeURIComponent(`*${q}*`);
+  // v359: tokenize the query and DB-search on the broadest token only.
+  // "Donita Maynard" used to hit *Donita Maynard* (one ilike), which the
+  // trigram index served fast but never matched "Donita L Maynard". Now
+  // we hit the longest token (still trigram-indexed), then post-filter
+  // client-side with _tokenMatch so every token has to land.
+  const tokens = q.toLowerCase().split(/\s+/).filter(Boolean);
+  const broadest = tokens.slice().sort((a,b) => b.length - a.length)[0] || q;
+  const enc = encodeURIComponent(`*${broadest}*`);
   const selectCols = 'id,name,phone_number,secondary_phone,email,company,contact_notes,type,date_added,import_source,fub_contact_id';
   // Also apply current type + source + scope filters in the server query when possible
   const typeFilterVal = document.getElementById('contactTypeFilter')?.value || '';
@@ -19886,6 +19943,10 @@ async function _liveSearchContacts(q){
     const minLevel    = minLevelStr ? parseInt(minLevelStr, 10) : 0;
     const filtered = adapted.filter(r => {
       const f = r.fields;
+      // v359: enforce token-AND on the full query so multi-word searches
+      // (e.g. "Donita Maynard") narrow correctly after the broad-token DB hit.
+      const matchQ = _tokenMatch(q, [f.Name, f['Phone Number'], f.Company, f.Email, f['Contact Notes']]);
+      if(!matchQ) return false;
       const matchT = !typeFilterVal || (f.Type || []).includes(typeFilterVal);
       const matchScope = agentActive ? _contactsAgentRelMap.has(r.id) : (!mineIds || mineIds.has(r.id));
       const matchSrc = !selSources || selSources.includes(f['Import Source'] || '(none)');
@@ -19961,12 +20022,11 @@ function filterContacts(){
   const mineIds = _contactScope === 'mine' ? _computeMyContactIds() : null;
   const selSources = _msGetSelected('cs');
 
-  // v238: tokenize query so middle initials / prefixes don't block a match.
-  // "joseph hadef" should find "Joseph N Hadef"; "646 samsonic" should find
-  // a contact whose phone is 6462072461 AND email contains samsonic. Each
-  // whitespace-separated token must appear somewhere in the haystack
-  // (substring match, case-insensitive). Empty query matches everything.
-  const qTokens = q.split(/\s+/).filter(Boolean);
+  // v238/v359: tokenized AND-match via shared _tokenMatch helper — every
+  // whitespace-separated token in the query must appear somewhere in the
+  // contact's [name, phone, company, email, notes] haystack. Solves
+  // "donita maynard" → "Donita L Maynard" and "646 samsonic" → phone +
+  // email partial match.
 
   // v190: agent-view filter overrides the mine/all scope (when active)
   const agentActive = !!_contactsAgentFilterId;
@@ -19975,14 +20035,7 @@ function filterContacts(){
 
   let filtered = allContacts.filter(r=>{
     const f = r.fields;
-    let matchQ = true;
-    if(qTokens.length){
-      // Concatenate candidate fields with a sentinel so a token can't
-      // straddle two fields. \u0001 (SOH) is fine — never appears in user data.
-      const haystack = [f.Name, f['Phone Number'], f.Company, f.Email, f['Contact Notes']]
-        .filter(Boolean).map(v => String(v).toLowerCase()).join(' \u0001 ');
-      matchQ = qTokens.every(t => haystack.includes(t));
-    }
+    const matchQ = _tokenMatch(q, [f.Name, f['Phone Number'], f.Company, f.Email, f['Contact Notes']]);
     const matchT = !type || (f.Type||[]).includes(type);
     const matchScope = agentActive ? _contactsAgentRelMap.has(r.id) : (!mineIds || mineIds.has(r.id));
     const matchSrc = !selSources || selSources.includes(f['Import Source'] || '(none)');
@@ -22406,11 +22459,11 @@ function _myPipelineApplyFilters(deals){
   const dealCounty = (d) => String(d['Simple County'] || d['County'] || '');
   return deals.filter(d => {
     if(q){
-      const hay = [
+      // v359: tokenized AND-match — "fort lee 299" finds "299 W Fort Lee Rd".
+      if(!_tokenMatch(q, [
         d['Address'], d['Owner'], d['Owner Name'], d['Agent'],
         dealCounty(d), d['CRM Asset Classification'], d['Asset Type'], d['City']
-      ].map(v => String(v||'').toLowerCase()).join(' | ');
-      if(hay.indexOf(q) === -1) return false;
+      ])) return false;
     }
     // Asset type — smart-match (top-level picks all subtypes), matches full pipeline
     if(f.assetTypes && f.assetTypes.length){
@@ -22501,11 +22554,11 @@ function _myPipelineApplyFiltersPortfolio(portfolios){
   const q = (f.search||'').toLowerCase();
   return portfolios.filter(p => {
     if(q){
-      const hay = [
+      // v359: tokenized AND-match for portfolio names + descriptions.
+      if(!_tokenMatch(q, [
         p['Name'], p['Assigned Agent'], p['Status'],
         p['Description'], p['Pipeline Stage']
-      ].map(v => String(v||'').toLowerCase()).join(' | ');
-      if(hay.indexOf(q) === -1) return false;
+      ])) return false;
     }
     // stages are applied at the column level in the render — no-op here.
     return true;
@@ -23633,16 +23686,13 @@ function _pitchDealSearchInput(){
     results.style.display = 'none';
     return;
   }
-  // Filter deals by address / county / id
+  // v359: tokenized AND-match — address words can sit in any order.
   const matches = (allDeals || [])
-    .filter(d => {
-      if(d['Is Archived']) return false;
-      const addr = (d['Address'] || '').toLowerCase();
-      const county = (d['Simple County'] || '').toLowerCase();
-      const id = (d.id || '').toLowerCase();
-      return addr.includes(q) || county.includes(q) || id.includes(q);
-    })
-    .slice(0, 12); // cap results
+    .filter(d => !d['Is Archived'] && _tokenMatch(q, [
+      d['Address']||'', d['Simple County']||'', d.id||'',
+      d['Property Name']||'', d['Complex Name']||''
+    ]))
+    .slice(0, 12);
 
   if(matches.length === 0){
     results.innerHTML = '<div style="padding:10px 12px;font-size:11px;color:#94a3b8;font-style:italic;">No deals match. Try a different search, or switch to Off-System.</div>';
@@ -23841,11 +23891,8 @@ function _pitchBuyerSearchInput(){
       const d = (typeof _contactDisplay === 'function') ? _contactDisplay(c)
         : { name:String(c['Name']||c.name||''), company:String(c['Company']||c.company||''),
             phone:String(c['Phone Number']||c.phone_number||''), email:String(c['Email']||c.email||'') };
-      const name = d.name.toLowerCase();
-      const co   = d.company.toLowerCase();
-      const ph   = d.phone.toLowerCase();
-      const em   = d.email.toLowerCase();
-      return name.includes(q) || co.includes(q) || ph.includes(q) || em.includes(q);
+      // v359: tokenized AND-match so "donita maynard" finds "Donita L Maynard".
+      return _tokenMatch(q, [d.name, d.company, d.phone, d.email]);
     })
     .slice(0, 15);
 
@@ -36481,17 +36528,15 @@ async function _clkSearch(prefix, query){
   dd.style.display = 'block';
   dd.innerHTML = '<div style="padding:14px;text-align:center;color:#94a3b8;font-size:12px;">Searching…</div>';
   try{
-    // Build a PostgREST OR filter across name, phone_number, email, company.
-    // Critical: do NOT encodeURIComponent the WHOLE filter string — that
-    // mangles the commas and dots that PostgREST uses as syntax. Only
-    // escape characters inside the search value that PostgREST treats as
-    // operators within an ilike pattern (parens, commas). Spaces inside
-    // ilike patterns work fine raw via _sbGet's normal URL handling.
-    //
-    // Also strip non-digit chars from the query when building the phone
-    // sub-filter, so "Alan Chin" doesn't try to match a phone — but
-    // "(646) 891" does (matching against digits-only stored phones).
-    const safeVal = String(query).replace(/[,()]/g, ' ').trim();
+    // v359: tokenize the query so middle initials don't block a match.
+    // "Donita Maynard" used to send one big ilike *Donita Maynard* which
+    // never matched "Donita L Maynard". Now we pick the longest token
+    // for the broad PostgREST query (cheap, hits the trigram index) then
+    // post-filter client-side with _tokenMatch against the full query
+    // so every token has to land somewhere in the row.
+    const tokens = String(query).trim().toLowerCase().split(/\s+/).filter(Boolean);
+    const broadest = tokens.slice().sort((a,b) => b.length - a.length)[0] || String(query).trim();
+    const safeVal = broadest.replace(/[,()]/g, ' ').trim();
     const phoneDigits = String(query).replace(/[^0-9]/g, '');
     const conds = [
       'name.ilike.*'    + safeVal + '*',
@@ -36503,17 +36548,14 @@ async function _clkSearch(prefix, query){
     }
     const rows = await _sbGet(SB_TABLES.contacts,
       'select=id,name,phone_number,email,company,type,date_added'
-      + '&or=(' + conds.join(',') + ')'
-      // Exclude soft-deleted rows. The contact merge RPC (merge_contacts)
-      // sets deleted_at on losers; the Contacts page already filters these
-      // out. Without this guard, the dropdown shows both the survivor and
-      // the dead-but-still-in-table loser, which made a user see two
-      // "Filippo F Bellome" results after a successful dedupe merge.
-      + '&deleted_at=is.null'
-      + '&limit=8');
+      // v359: bump limit so the post-filter has headroom; UI still shows top 8.
+      + '&or=(' + conds.join(',') + ')&deleted_at=is.null&limit=40');
     // Race-guard again — query may have changed during fetch
     if(_clkLastQuery[prefix] !== query) return;
-    _clkRenderDropdown(prefix, query, Array.isArray(rows) ? rows : []);
+    const filtered = (Array.isArray(rows) ? rows : [])
+      .filter(r => _tokenMatch(query, [r.name, r.phone_number, r.email, r.company]))
+      .slice(0, 8);
+    _clkRenderDropdown(prefix, query, filtered);
   }catch(e){
     console.error('contact lookup failed:', e);
     dd.innerHTML = '<div style="padding:14px;text-align:center;color:#dc2626;font-size:12px;">Search failed: ' + (e.message||'unknown') + '</div>';
@@ -37275,24 +37317,22 @@ function _ddSetSearch(v){
 function _ddRenderList(){
   const el = document.getElementById('ddList');
   if(!el) return;
-  // v358: tier filter + free-text search. Tokens are AND'd; each token
-  // must match at least one of: any contact's name / phone / email, or
-  // the candidate row's match_value.
-  const tokens = _ddSearch.toLowerCase().split(/\s+/).filter(Boolean);
+  // v358 + v359: tier filter + free-text token search. Delegates to the
+  // shared _tokenMatch helper for parity with every other CRM search bar.
   const candidateMatches = (c) => {
-    if(tokens.length === 0) return true;
-    const haystack = [];
-    haystack.push(String(c.match_value||'').toLowerCase());
+    if(!_ddSearch) return true;
+    const fields = [c.match_value||''];
     (Array.isArray(c.contact_ids) ? c.contact_ids : []).forEach(id => {
       const row = _ddContactCache[id];
       if(!row) return;
-      if(row.name)         haystack.push(String(row.name).toLowerCase());
-      if(row.email)        haystack.push(String(row.email).toLowerCase());
-      if(row.phone_number) haystack.push(String(row.phone_number).toLowerCase().replace(/\D/g,''));
-      if(row.phone_number) haystack.push(String(row.phone_number).toLowerCase());
+      if(row.name)         fields.push(row.name);
+      if(row.email)        fields.push(row.email);
+      if(row.phone_number){
+        fields.push(row.phone_number);
+        fields.push(String(row.phone_number).replace(/\D/g,''));
+      }
     });
-    const joined = haystack.join(' ');
-    return tokens.every(t => joined.indexOf(t) !== -1);
+    return _tokenMatch(_ddSearch, fields);
   };
   const filtered = _ddCandidates.filter(c =>
     (_ddTierFilter === 'all' || c.tier === _ddTierFilter) && candidateMatches(c));
@@ -42567,22 +42607,35 @@ async function _taskLinkSearchNow(kind, q){
   }
   let rows = [];
   try {
+    // v359: tokenize so middle initials / multi-word queries match.
+    const tokens = term.toLowerCase().split(/\s+/).filter(Boolean);
+    const broadest = tokens.slice().sort((a,b) => b.length - a.length)[0] || term;
     if(kind === 'deal'){
-      // Search loaded deals first, then fall back to a Supabase ilike.
+      // Local first (tokenized so "299 fort lee" hits "299 W Fort Lee Rd").
       const local = (allDeals||[])
-        .filter(d => (d['Address']||'').toLowerCase().includes(term.toLowerCase()))
+        .filter(d => _tokenMatch(term, [
+          d['Address']||'', d['Property Name']||'', d['Complex Name']||''
+        ]))
         .slice(0, 8)
         .map(d => ({ id: d.id, label: d['Address']||'Deal' }));
       if(local.length){ rows = local; }
       else {
         const sb = await _sbGet(SB_TABLES.properties,
-          `select=id,address&address=ilike.*${encodeURIComponent(term)}*&limit=8`);
-        rows = (sb||[]).map(r => ({ id:r.id, label:r.address || 'Deal' }));
+          `select=id,address&address=ilike.*${encodeURIComponent(broadest)}*&deleted_at=is.null&limit=40`);
+        rows = (Array.isArray(sb) ? sb : [])
+          .filter(r => _tokenMatch(term, r.address||''))
+          .slice(0, 8)
+          .map(r => ({ id:r.id, label:r.address || 'Deal' }));
       }
     } else if(kind === 'contact'){
+      // v359: broad-token DB query + client-side token AND-match so
+      // "Donita Maynard" finds "Donita L Maynard".
       const sb = await _sbGet(SB_TABLES.contacts,
-        `select=id,name&name=ilike.*${encodeURIComponent(term)}*&limit=8`);
-      rows = (sb||[]).map(r => ({ id:r.id, label:r.name || 'Contact' }));
+        `select=id,name,phone_number,email,company&name=ilike.*${encodeURIComponent(broadest)}*&deleted_at=is.null&limit=40`);
+      rows = (Array.isArray(sb) ? sb : [])
+        .filter(r => _tokenMatch(term, [r.name, r.phone_number, r.email, r.company]))
+        .slice(0, 8)
+        .map(r => ({ id:r.id, label:r.name || 'Contact' }));
     } else if(kind === 'buyer'){
       // v173.1: PostgREST doesn't allow embedded-resource columns
       // (ace_contacts.name) inside an or=() filter on the parent — it errors

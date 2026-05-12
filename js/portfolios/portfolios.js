@@ -1504,12 +1504,17 @@ export function _updateAddDealsCount(){
 }
 
 export function _addDealsFilter(){
-  const q = (document.getElementById('addDealsSearch')?.value || '').trim().toLowerCase();
+  const q = (document.getElementById('addDealsSearch')?.value || '').trim();
   const rows = document.querySelectorAll('#addDealsList .add-deals-row');
+  // v359: tokenized AND-match via shared window._tokenMatch — same
+  // behavior as every other CRM search bar.
   rows.forEach(row => {
     if(!q){ row.style.display = ''; return; }
     const text = row.getAttribute('data-search-text') || '';
-    row.style.display = text.indexOf(q) !== -1 ? '' : 'none';
+    const match = (typeof window._tokenMatch === 'function')
+      ? window._tokenMatch(q, text)
+      : text.toLowerCase().indexOf(q.toLowerCase()) !== -1;
+    row.style.display = match ? '' : 'none';
   });
 }
 

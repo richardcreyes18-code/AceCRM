@@ -28142,14 +28142,26 @@ function _reconRowHtml(r, fubBy, aceBy, actBy){
           <div style="color:#0f172a;font-weight:600;">New FUB: ${_reconEsc((fub&&fub.name)||'(no name)')} (#${r.fub_source_id})</div>
           <div style="color:#64748b;margin-top:2px;">${fubPhone ? '📞 '+_reconEsc(fubPhone)+' ' : ''}${fubEmail ? '✉ '+_reconEsc(fubEmail) : ''}</div>
         </div>`;
+      // v340: target ace_contact id — ace_target_id is set by the
+      // reconcile matcher; ids[0] is the fallback from candidate_matches.
+      const aceTargetId = r.ace_target_id || ids[0] || null;
       actions =
-        `<button onclick="_reconResolveMerge(${r.id},null,this)" style="background:#16a34a;color:#fff;border:none;padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Ignore new FUB record</button>` +
+        // v340: the recommended action when there's a strong dedup signal
+        // (phone or email match). Fills empty CRM fields from the FUB
+        // record (non-empty wins), unions fub_tags + addresses, adds the
+        // FUB record's assigned agent as a relationship (if resolvable),
+        // and finally runs the v339 mark-as-duplicate path. Primary
+        // styling so it reads as the default.
+        (aceTargetId ? `<button onclick="_reconMergeFieldsAndMarkDuplicate(${r.id}, '${_reconEsc(aceTargetId)}', ${existingFubId}, ${r.fub_source_id}, this)" style="background:#0f766e;color:#fff;border:none;padding:6px 12px;border-radius:6px;font-size:11px;font-weight:700;cursor:pointer;">✦ Merge fields + mark as duplicate</button>` : '') +
+        `<button onclick="_reconResolveMerge(${r.id},null,this)" style="background:transparent;border:1px solid #cbd5e1;color:#475569;padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Ignore new FUB record</button>` +
         // v338/v339: mark the incoming FUB id as a permanent duplicate
         // of the canonical (existingFubId). Moves existing activity,
         // registers the mapping so all future sync activity for the
         // duplicate id auto-flows onto the canonical record, and
         // auto-resolves any future queue rows for the same pair.
-        `<button onclick="_reconMergeHistoryIntoExisting(${r.id}, ${existingFubId}, ${r.fub_source_id}, this)" style="background:#1e3a8a;color:#fff;border:none;padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Mark as duplicate of FUB #${existingFubId}</button>` +
+        // (v340 demoted this to secondary — kept for cases where the
+        // user explicitly does NOT want field-level merging.)
+        `<button onclick="_reconMergeHistoryIntoExisting(${r.id}, ${existingFubId}, ${r.fub_source_id}, this)" style="background:transparent;border:1px solid #cbd5e1;color:#475569;padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Mark duplicate (calls/notes only)</button>` +
         (ids[0] ? `<button onclick="if(confirm('This will repoint this contact from FUB #${existingFubId} to FUB #${r.fub_source_id}. Notes/calls keyed to the old FUB id may become harder to find. Continue?')) _reconResolveMerge(${r.id},'${_reconEsc(ids[0])}',this)" style="background:transparent;border:1px solid #f59e0b;color:#b45309;padding:6px 12px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Relink to FUB #${r.fub_source_id}</button>` : '');
     } else {
       const candButtons = ids.map(id =>
@@ -28577,6 +28589,160 @@ async function _reconMergeHistoryIntoExisting(queueId, oldFubId, newFubId, btn){
       );
     } else {
       alert('Failed: ' + msg);
+    }
+    if(btn){ btn.disabled = false; btn.textContent = 'Retry'; }
+  }
+}
+
+// v340: field-merge variant of the FUB-side-duplicate handler. Pulls
+// the existing ace_contacts row + the incoming fub_contacts row,
+// computes a "non-empty wins" patch (CRM empty + FUB has value → copy),
+// unions tags + addresses, resolves fub.assigned_to to an ace_user
+// (via the same alias map relationships.js uses) and adds a
+// relationship row, then runs the v339 merge_fub_activity RPC to
+// move calls/notes + register the permanent duplicate mapping.
+// Used when the incoming FUB record has richer info than the existing
+// CRM row (the common case for phone-match FUB-side duplicates).
+async function _reconMergeFieldsAndMarkDuplicate(queueId, aceId, oldFubId, newFubId, btn){
+  if(!aceId){ alert('No ace_contact target id on this queue row — use "Mark duplicate (calls/notes only)" instead.'); return; }
+  if(btn){ btn.disabled = true; btn.textContent = '⏳ Loading…'; }
+
+  // 1. Load both sides.
+  let ace, fub;
+  try{
+    const [aceRows, fubRows] = await Promise.all([
+      _sbGet('ace_contacts', `select=id,name,phone_number,secondary_phone,email,secondary_email,company,contact_notes,fub_stage,fub_source,fub_assigned_to,fub_deal_name,fub_deal_status,fub_deal_price,fub_tags,addresses&id=eq.${aceId}`),
+      _sbGet('fub_contacts', `select=id,name,first_name,last_name,stage,source,assigned_to,tags,phones,emails,addresses,deal_name,deal_status,deal_price&id=eq.${newFubId}`),
+    ]);
+    ace = aceRows && aceRows[0];
+    fub = fubRows && fubRows[0];
+  }catch(e){
+    if(btn){ btn.disabled = false; btn.textContent = 'Retry'; }
+    alert('Failed to load contacts: ' + (e.message || e));
+    return;
+  }
+  if(!ace || !fub){
+    if(btn){ btn.disabled = false; btn.textContent = 'Retry'; }
+    alert('Could not find one or both contacts. Refresh and retry.');
+    return;
+  }
+
+  // 2. Compute the merge patch — non-empty wins for scalars.
+  const patch = {};
+  const isEmpty = v => v == null || (typeof v === 'string' && v.trim() === '');
+  const fill = (col, val) => {
+    if(!isEmpty(val) && isEmpty(ace[col])) patch[col] = val;
+  };
+  const fubFullName = [fub.first_name, fub.last_name].filter(Boolean).join(' ').trim() || fub.name || '';
+  const fubPrimaryPhone = (Array.isArray(fub.phones) && fub.phones[0]) ? fub.phones[0].value : '';
+  const fubPrimaryEmail = (Array.isArray(fub.emails) && fub.emails[0]) ? fub.emails[0].value : '';
+  fill('name',             fubFullName);
+  fill('phone_number',     fubPrimaryPhone);
+  fill('email',            fubPrimaryEmail);
+  fill('fub_stage',        fub.stage);
+  fill('fub_source',       fub.source);
+  fill('fub_assigned_to',  fub.assigned_to);
+  fill('fub_deal_name',    fub.deal_name);
+  fill('fub_deal_status',  fub.deal_status);
+  fill('fub_deal_price',   fub.deal_price);
+
+  // 3. Tag union.
+  const existingTags = Array.isArray(ace.fub_tags) ? ace.fub_tags : [];
+  const incomingTags = Array.isArray(fub.tags) ? fub.tags : [];
+  const tagSet = new Set(existingTags);
+  const tagsAdded = [];
+  for(const t of incomingTags){ if(t && !tagSet.has(t)){ tagSet.add(t); tagsAdded.push(t); } }
+  if(tagsAdded.length) patch.fub_tags = [...tagSet];
+
+  // 4. Address union by canonical key.
+  const existingAddrs = Array.isArray(ace.addresses) ? ace.addresses : [];
+  const incomingAddrs = Array.isArray(fub.addresses) ? fub.addresses : [];
+  const addrKey = a => [a && a.street, a && a.city, a && a.state, a && a.code]
+    .map(x => String(x||'').toLowerCase().trim()).filter(Boolean).join('|');
+  const seenKeys = new Set(existingAddrs.map(addrKey).filter(Boolean));
+  const addrsAdded = [];
+  for(const a of incomingAddrs){
+    const k = addrKey(a);
+    if(!k || seenKeys.has(k)) continue;
+    seenKeys.add(k); addrsAdded.push(a);
+  }
+  if(addrsAdded.length) patch.addresses = [...existingAddrs, ...addrsAdded];
+
+  // 5. Resolve fub.assigned_to → ace_user. Uses the same alias map
+  // that relationships.js uses for property-assignment sync.
+  let agentUser = null;
+  if(fub.assigned_to){
+    try {
+      const users = (typeof window._relLoadUsers === 'function')
+        ? await window._relLoadUsers()
+        : await _sbGet('ace_users', 'select=id,name,fub_name,role&order=fub_name.asc');
+      const ALIAS = {
+        'Dan Keenan':'Daniel Keenan', 'Joe Domenech':'Joseph Domenech',
+        'Joe Spinella':'Joseph Spinella', 'Tim Emrich':'Timothy Emrich',
+        'William Hartgers':'Will Hartgers', 'Everett James':'Everett McNulty',
+      };
+      const resolved = ALIAS[fub.assigned_to] || fub.assigned_to;
+      agentUser = (users || []).find(u => u.fub_name === resolved || u.name === resolved);
+    } catch(e){ console.warn('[recon merge-fields] user resolve failed:', e.message); }
+  }
+
+  // 6. Confirm with a summary.
+  const lines = [];
+  for(const [k, v] of Object.entries(patch)){
+    if(k === 'fub_tags') lines.push(`add ${tagsAdded.length} tag${tagsAdded.length===1?'':'s'}: ${tagsAdded.slice(0,3).join(', ')}${tagsAdded.length>3?', …':''}`);
+    else if(k === 'addresses') lines.push(`add ${addrsAdded.length} address${addrsAdded.length===1?'':'es'}`);
+    else if(typeof v === 'string') lines.push(`set ${k} → "${v.length > 50 ? v.slice(0,50)+'…' : v}"`);
+    else lines.push(`set ${k} → ${v}`);
+  }
+  if(agentUser) lines.push(`add agent "${agentUser.name || agentUser.fub_name}" as relationship`);
+  lines.push(`move calls/notes FUB #${newFubId} → FUB #${oldFubId}`);
+  lines.push(`mark FUB #${newFubId} as duplicate (permanent — future activity auto-routes)`);
+
+  const proceed = confirm(
+    `Merge FUB #${newFubId} into the existing CRM contact?\n\n` +
+    lines.map(l => '  • ' + l).join('\n') +
+    `\n\nNon-empty wins: nothing in the CRM gets overwritten — only empty fields are filled.`
+  );
+  if(!proceed){ if(btn){ btn.disabled = false; btn.textContent = '✦ Merge fields + mark as duplicate'; } return; }
+
+  if(btn){ btn.textContent = '⏳ Merging…'; }
+
+  // 7. Apply.
+  try{
+    if(Object.keys(patch).length){
+      await _sbPatch('ace_contacts', aceId, patch);
+    }
+    if(agentUser && typeof window._relAddAgent === 'function'){
+      try {
+        await window._relAddAgent(aceId, agentUser.id, {
+          source: 'fub_duplicate_merge',
+          sourceRefId: String(newFubId),
+        });
+      } catch(e){ console.warn('[recon merge-fields] relationship add failed (non-fatal):', e.message); }
+    }
+    const r = await _reconRpc('merge_fub_activity', { p_old_fub_id: oldFubId, p_new_fub_id: newFubId });
+    const result = Array.isArray(r) ? r[0] : r;
+    const callsMoved = (result && result.calls_moved) || 0;
+    const notesMoved = (result && result.notes_moved) || 0;
+    await _reconRpc('resolve_queue_merge', { p_queue_id: queueId, p_chosen_ace: null });
+    const row = document.getElementById(`reconRow-${queueId}`);
+    if(row) row.style.opacity = '0.4';
+    const fieldsApplied = Object.keys(patch).length;
+    const msg = `✓ Merged ${fieldsApplied} field${fieldsApplied===1?'':'s'} + ${callsMoved} call${callsMoved===1?'':'s'} + ${notesMoved} note${notesMoved===1?'':'s'}${agentUser?' + 1 agent relationship':''}`;
+    if(typeof showSaveConfirm === 'function') showSaveConfirm(msg);
+    else alert(msg);
+    setTimeout(() => _reconQueueRender(true), 400);
+  }catch(e){
+    const emsg = String(e.message || e || '');
+    if(emsg.toLowerCase().includes('does not exist') || emsg.includes('merge_fub_activity')){
+      alert(
+        'Server-side RPCs not deployed. Apply migrations:\n' +
+        '  • supabase/migrations/20260512000000_fub_known_duplicates.sql\n' +
+        '  • supabase/migrations/20260512000100_merge_fub_activity_records_duplicate.sql\n' +
+        'then retry.'
+      );
+    } else {
+      alert('Failed: ' + emsg);
     }
     if(btn){ btn.disabled = false; btn.textContent = 'Retry'; }
   }

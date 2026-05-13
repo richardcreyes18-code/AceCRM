@@ -4169,8 +4169,9 @@ function _refreshDealHeaderStats(dealId, changedFields){
     : { rate: (typeof _dealCapRate === 'function') ? _dealCapRate(d) : null, basis: 'asking' };
   const capPct = capInfo.rate;
   const capDisp = (capPct != null && capPct > 0) ? capPct.toFixed(2) + '%' : '<span class="muted">—</span>';
-  const capBasisLbl = capInfo.basis === 'pitch' ? 'Pitch Out'
-                    : capInfo.basis === 'offer' ? 'Offer'
+  const capBasisLbl = capInfo.basis === 'pitch'  ? 'Pitch Out'
+                    : capInfo.basis === 'offer'  ? 'Offer'
+                    : capInfo.basis === 'stored' ? 'Saved'
                     : 'Asking';
   const capBasisChip = (capPct != null && capInfo.basis && capInfo.basis !== 'asking')
     ? ' <span style="font-size:9px;font-weight:600;color:#7c3aed;text-transform:none;letter-spacing:0;">· '+capBasisLbl+'</span>'
@@ -4218,8 +4219,9 @@ function renderDealPage(){
     : { rate: (typeof _dealCapRate === 'function') ? _dealCapRate(d) : null, basis: 'asking' };
   const _capRate  = (_capInfo.rate != null && _capInfo.rate > 0) ? _capInfo.rate.toFixed(2) : '';
   const _capBasis = _capInfo.basis;
-  const _capBasisLbl = _capBasis === 'pitch' ? 'Pitch Out'
-                     : _capBasis === 'offer' ? 'Offer'
+  const _capBasisLbl = _capBasis === 'pitch'  ? 'Pitch Out'
+                     : _capBasis === 'offer'  ? 'Offer'
+                     : _capBasis === 'stored' ? 'Saved'
                      : 'Asking';
   // v350: NOI display — fall back to GRI minus Expenses (annualized) when
   // the stored NOI field is empty. The Financial tab's "simple" mode
@@ -4288,7 +4290,7 @@ function renderDealPage(){
           <span class="lbl">NOI</span>
           <span class="val">${_noiVal > 0 ? fmtMoney(_noiVal) : '<span class="muted">—</span>'}</span>
         </div>
-        <div class="dh-stat" title="${_capRate ? ('Cap rate using ' + _capBasisLbl + ' Price as the denominator. The KEY METRICS table below shows every basis side by side.') : ''}">
+        <div class="dh-stat" title="${_capRate ? (_capBasis === 'stored' ? 'Cap rate stored on this deal (Cap Rate (CRM) field). Edit on the Financial Analysis tab to recompute.' : 'Cap rate using ' + _capBasisLbl + ' Price as the denominator. The KEY METRICS table below shows every basis side by side.') : ''}">
           <span class="lbl">Cap Rate${_capRate && _capBasis !== 'asking' ? ' <span style="font-size:9px;font-weight:600;color:#7c3aed;text-transform:none;letter-spacing:0;">· '+_capBasisLbl+'</span>' : ''}</span>
           <span class="val">${_capRate ? (_capRate+'%') : '<span class="muted">—</span>'}</span>
         </div>
@@ -48388,16 +48390,29 @@ function _dealCapRate(d){
   return (noi / ask) * 100;
 }
 
-// v361: cap rate displayed on the deal header ticker. Picks the most-
-// advanced negotiated price as the denominator so the headline number
-// matches what the user is *actually* pitching at:
-//   Pitch Out Price → Offer Price → Asking Price
-// Returns { rate: number|null, basis: 'pitch'|'offer'|'asking'|null,
+// v361+v363: cap rate displayed on the deal header ticker. Priority:
+//   1. The stored `Cap Rate (CRM)` field — the user-established value
+//      (matches the pattern at index.html:5419-5432 and 26288, used by
+//      every other cap-rate reader so the header agrees with summary +
+//      Deal Board + buyer match).
+//   2. Else compute live: NOI ÷ Pitch Out Price (the active negotiated
+//      price), falling back to Offer Price, then Asking Price.
+// Returns { rate: number|null, basis: 'stored'|'pitch'|'offer'|'asking'|null,
 //           denom: number|null }.
 // The KEY METRICS table below the ticker still shows every basis side-
 // by-side, so nothing is hidden — the top stat just reflects the live deal.
 function _dealActiveCapRate(d){
   if(!d) return { rate: null, basis: null, denom: null };
+  // 1. Stored value — most authoritative. Saved as a decimal (0.0705) or,
+  // for legacy rows, a percent number (7.05). Normalize both.
+  const storedRaw = d['Cap Rate (CRM)'];
+  if(storedRaw != null && storedRaw !== ''){
+    const v = Number(storedRaw);
+    if(!isNaN(v) && v > 0){
+      return { rate: v < 1 ? v * 100 : v, basis: 'stored', denom: null };
+    }
+  }
+  // 2. Live compute, preferring the most-advanced negotiated price.
   const noi = _dealEstNOI(d);
   if(noi <= 0) return { rate: null, basis: null, denom: null };
   const po = Number(d['Pitch Out Price']) || 0;
@@ -48409,19 +48424,27 @@ function _dealActiveCapRate(d){
   return { rate: null, basis: null, denom: null };
 }
 
-// v350: best-effort NOI for display. Returns the stored d['NOI'] if set,
-// otherwise falls back to (GRI - Expenses) * 12 from the monthly fields.
-// The Financial tab's simple-mode editor writes GRI / Expenses but doesn't
-// always persist NOI to the column, so a deal can have a computable NOI
-// without d['NOI'] being filled — this helper picks up that case for the
-// ticker header + cap-rate computation.
+// v350+v363: best-effort NOI for display. Returns the stored d['NOI'] if
+// set, otherwise falls back to (GRI - Expenses) * 12 from the monthly
+// fields — but ONLY when both GRI and Expenses are present. v362 we used
+// to estimate NOI from GRI alone (treating null expenses as $0), which
+// over-inflated NOI by exactly the expense ratio and made the header cap
+// rate diverge from what the user actually established (e.g. NOI showed
+// $120K from $10K/mo GRI × 12 with no expense data, hiding the true
+// ~$95K NOI that produced the stored 7.05% cap rate).
 function _dealEstNOI(d){
   if(!d) return 0;
   const stored = Number(d['NOI']);
   if(stored > 0) return stored;
   const griMo = Number(d['Gross Rental Income (Monthly)']) || 0;
-  const expMo = Number(d['Expenses Monthly']) || 0;
-  if(griMo > 0) return Math.max(0, (griMo - expMo) * 12);
+  const expMoRaw = d['Expenses Monthly'];
+  // Require expenses to be EXPLICITLY filled (not null/undefined/empty)
+  // before deriving NOI from GRI. A null expense field means "unknown",
+  // not "zero" — better to refuse to estimate than to show an inflated NOI.
+  const expensesKnown = expMoRaw != null && expMoRaw !== '' && !isNaN(Number(expMoRaw));
+  if(griMo > 0 && expensesKnown){
+    return Math.max(0, (griMo - Number(expMoRaw)) * 12);
+  }
   return 0;
 }
 

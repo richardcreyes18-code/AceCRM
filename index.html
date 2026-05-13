@@ -4143,6 +4143,9 @@ function _naDecorate(root){
 // in the DOM (user navigated away mid-save).
 const _DEAL_HEADER_FIELDS = new Set([
   'Asking Price','Offer Price','NOI','Cap Rate (CRM)','Cap Rate',
+  // v361: Pitch Out Price drives the active cap-rate denominator, so a
+  // change to it has to repaint the ticker.
+  'Pitch Out Price',
   'Commission Split (%)','Commission Split',
   'Gross Rental Income (Monthly)','Expenses Monthly',
   'Pipeline Stage',
@@ -4159,8 +4162,19 @@ function _refreshDealHeaderStats(dealId, changedFields){
   if(!row2) return;
   const d = currentDeal;
   const prob = (typeof closeProb === 'function') ? closeProb(d) : 0;
-  const capPct = (typeof _dealCapRate === 'function') ? _dealCapRate(d) : null;
+  // v361: same active-cap-rate logic as the initial render — picks Pitch
+  // Out → Offer → Asking so the live-refreshed value matches.
+  const capInfo = (typeof _dealActiveCapRate === 'function')
+    ? _dealActiveCapRate(d)
+    : { rate: (typeof _dealCapRate === 'function') ? _dealCapRate(d) : null, basis: 'asking' };
+  const capPct = capInfo.rate;
   const capDisp = (capPct != null && capPct > 0) ? capPct.toFixed(2) + '%' : '<span class="muted">—</span>';
+  const capBasisLbl = capInfo.basis === 'pitch' ? 'Pitch Out'
+                    : capInfo.basis === 'offer' ? 'Offer'
+                    : 'Asking';
+  const capBasisChip = (capPct != null && capInfo.basis && capInfo.basis !== 'asking')
+    ? ' <span style="font-size:9px;font-weight:600;color:#7c3aed;text-transform:none;letter-spacing:0;">· '+capBasisLbl+'</span>'
+    : '';
   const noiVal = (typeof _dealEstNOI === 'function') ? _dealEstNOI(d) : (Number(d['NOI']) || 0);
   const noiDisp = noiVal > 0 ? fmtMoney(noiVal) : '<span class="muted">—</span>';
   const askDisp = ((typeof _dealAskingDisplay === 'function') && _dealAskingDisplay(d)) || '<span class="muted">—</span>';
@@ -4170,7 +4184,7 @@ function _refreshDealHeaderStats(dealId, changedFields){
     <div class="dh-stat"><span class="lbl">Asking</span><span class="val">${askDisp}</span></div>
     <div class="dh-stat"><span class="lbl">Offer</span><span class="val">${offerDisp}</span></div>
     <div class="dh-stat"><span class="lbl">NOI</span><span class="val">${noiDisp}</span></div>
-    <div class="dh-stat"><span class="lbl">Cap Rate</span><span class="val">${capDisp}</span></div>
+    <div class="dh-stat" title="${capPct != null ? 'Cap rate using ' + capBasisLbl + ' Price as the denominator.' : ''}"><span class="lbl">Cap Rate${capBasisChip}</span><span class="val">${capDisp}</span></div>
     <div class="dh-stat"><span class="lbl">Commission</span><span class="val green">${commDisp}</span></div>
     <div class="dh-stat"><span class="lbl">Close Prob.</span><span class="val">${prob}%</span><div class="progress-mini"><div style="width:${prob}%"></div></div></div>
   `;
@@ -4195,12 +4209,18 @@ function renderDealPage(){
   // Pre-compute meta-row pieces to keep the template readable.
   const _ownerName  = (d['Owner Name'] || d['_ownerName'] || '').trim();
   const _ownerPhone = (d['Owner Phone'] || '').trim();
-  // v350: cap rate display — pull through _dealCapRate which converts the
-  // stored decimal (0.0855) to a percent number (8.55). Previously the
-  // ticker just appended '%' to the raw decimal, so users saw "0.0855%"
-  // instead of "8.55%". Same helper the Deal Board list view uses.
-  const _capPct = (typeof _dealCapRate === 'function') ? _dealCapRate(d) : null;
-  const _capRate = (_capPct != null && _capPct > 0) ? _capPct.toFixed(2) : '';
+  // v361: cap rate display — uses _dealActiveCapRate which picks the most-
+  // advanced negotiated price (Pitch Out → Offer → Asking) as the
+  // denominator, so the ticker matches what the agent is actually pitching
+  // at. The KEY METRICS table below the ticker still shows every basis.
+  const _capInfo = (typeof _dealActiveCapRate === 'function')
+    ? _dealActiveCapRate(d)
+    : { rate: (typeof _dealCapRate === 'function') ? _dealCapRate(d) : null, basis: 'asking' };
+  const _capRate  = (_capInfo.rate != null && _capInfo.rate > 0) ? _capInfo.rate.toFixed(2) : '';
+  const _capBasis = _capInfo.basis;
+  const _capBasisLbl = _capBasis === 'pitch' ? 'Pitch Out'
+                     : _capBasis === 'offer' ? 'Offer'
+                     : 'Asking';
   // v350: NOI display — fall back to GRI minus Expenses (annualized) when
   // the stored NOI field is empty. The Financial tab's "simple" mode
   // updates GRI + Expenses but doesn't always write through to the NOI
@@ -4268,8 +4288,8 @@ function renderDealPage(){
           <span class="lbl">NOI</span>
           <span class="val">${_noiVal > 0 ? fmtMoney(_noiVal) : '<span class="muted">—</span>'}</span>
         </div>
-        <div class="dh-stat">
-          <span class="lbl">Cap Rate</span>
+        <div class="dh-stat" title="${_capRate ? ('Cap rate using ' + _capBasisLbl + ' Price as the denominator. The KEY METRICS table below shows every basis side by side.') : ''}">
+          <span class="lbl">Cap Rate${_capRate && _capBasis !== 'asking' ? ' <span style="font-size:9px;font-weight:600;color:#7c3aed;text-transform:none;letter-spacing:0;">· '+_capBasisLbl+'</span>' : ''}</span>
           <span class="val">${_capRate ? (_capRate+'%') : '<span class="muted">—</span>'}</span>
         </div>
         <div class="dh-stat">
@@ -48348,12 +48368,36 @@ function _dealAssetTypeMatches(d, selectedTypes){
   });
 }
 
-// Compute cap rate (as percent, e.g. 6.5) from a deal
+// Compute cap rate (as percent, e.g. 6.5) from a deal — ASKING-PRICE basis.
+// Kept for Deal Board sort + side panel + buyer match where consumers want
+// the asking-price benchmark and don't expect the value to drift as the
+// deal progresses through negotiation.
 function _dealCapRate(d){
   const ask = Number(d['Asking Price']) || 0;
   const noi = _dealEstNOI(d);
   if(ask <= 0 || noi <= 0) return null;
   return (noi / ask) * 100;
+}
+
+// v361: cap rate displayed on the deal header ticker. Picks the most-
+// advanced negotiated price as the denominator so the headline number
+// matches what the user is *actually* pitching at:
+//   Pitch Out Price → Offer Price → Asking Price
+// Returns { rate: number|null, basis: 'pitch'|'offer'|'asking'|null,
+//           denom: number|null }.
+// The KEY METRICS table below the ticker still shows every basis side-
+// by-side, so nothing is hidden — the top stat just reflects the live deal.
+function _dealActiveCapRate(d){
+  if(!d) return { rate: null, basis: null, denom: null };
+  const noi = _dealEstNOI(d);
+  if(noi <= 0) return { rate: null, basis: null, denom: null };
+  const po = Number(d['Pitch Out Price']) || 0;
+  if(po > 0)  return { rate: (noi/po)*100,  basis: 'pitch',  denom: po };
+  const off = Number(d['Offer Price']) || 0;
+  if(off > 0) return { rate: (noi/off)*100, basis: 'offer',  denom: off };
+  const ask = Number(d['Asking Price']) || 0;
+  if(ask > 0) return { rate: (noi/ask)*100, basis: 'asking', denom: ask };
+  return { rate: null, basis: null, denom: null };
 }
 
 // v350: best-effort NOI for display. Returns the stored d['NOI'] if set,

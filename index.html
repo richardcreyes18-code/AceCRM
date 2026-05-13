@@ -839,6 +839,17 @@
        Field Map moved to a button inside the Settings page (admin-only).
        Both routes still work via setNav() / URL fragment for backwards compat. -->
   <div class="nav-spacer"></div>
+  <!-- v364: top-nav global search. Mirrors the design-handoff layout
+       (sidebar search lifted to the top bar). Routes through sideFilter()
+       so the existing sidebar filter logic powers it. -->
+  <div class="topnav-search" id="topNavSearchWrap">
+    <span class="topnav-search-icon">🔍</span>
+    <input type="search" id="topNavSearch" placeholder="Search deals, contacts, addresses…"
+      oninput="_topNavSearchInput(this.value)"
+      onkeydown="if(event.key==='Escape'){this.value='';_topNavSearchInput('');this.blur();}"
+      autocomplete="off"/>
+    <span class="kbd" title="Press / to focus">/</span>
+  </div>
   <span class="nav-user" id="navUser">Welcome, Ricky</span>
   <!-- v102.7: online/offline indicator. Green when Supabase is reachable,
        red with tooltip when offline. Listens to window.online / window.offline
@@ -2525,6 +2536,51 @@ function buildSidebar(filter=''){
 function sideFilter(){
   buildSidebar(document.getElementById('sideSearch').value);
 }
+
+// v364: top-nav global search wiring. Mirrors the query into the sidebar
+// filter (always rebuilds the recent-deals list) and — when the user is on
+// the Contacts page, Deal Board, or Pipeline — also pushes the value into
+// that page's own search input so a single keystroke filters everything
+// at once. Routes through the existing _tokenMatch helper via each page's
+// existing oninput handler, so fuzzy matching just works.
+function _topNavSearchInput(v){
+  const val = String(v == null ? '' : v);
+  // 1. Always mirror into the sidebar's own search input so the recent-deals
+  // panel stays in sync with the top-nav query.
+  const sideEl = document.getElementById('sideSearch');
+  if(sideEl && sideEl.value !== val){
+    sideEl.value = val;
+    try { sideFilter(); } catch(_e){}
+  }
+  // 2. Push into whichever page-level search is currently visible.
+  const pageInputs = [
+    'contactSearch',          // Contacts page
+    'db_search',              // Deal Board
+    'myPipelineSearchBox',    // My Pipeline
+    'bcSearch',               // Buyer Criteria
+  ];
+  for(const id of pageInputs){
+    const el = document.getElementById(id);
+    if(el && el.offsetParent !== null && el.value !== val){
+      el.value = val;
+      // Fire the existing oninput handler so the page's own filter runs.
+      try { el.dispatchEvent(new Event('input', { bubbles:true })); } catch(_e){}
+    }
+  }
+}
+window._topNavSearchInput = _topNavSearchInput;
+
+// v364: "/" focuses the top-nav search bar from anywhere. Skips when the
+// user is already typing into a different input/textarea so it doesn't
+// hijack normal typing.
+document.addEventListener('keydown', (e) => {
+  if(e.key !== '/' || e.metaKey || e.ctrlKey || e.altKey) return;
+  const ae = document.activeElement;
+  const tag = ae && ae.tagName;
+  if(tag === 'INPUT' || tag === 'TEXTAREA' || (ae && ae.isContentEditable)) return;
+  const inp = document.getElementById('topNavSearch');
+  if(inp){ e.preventDefault(); inp.focus(); inp.select && inp.select(); }
+});
 function getStageShort(d){
   const s=getStage(d);
   const map={'New Lead':'NEW','Need INFO':'INFO','Needs Offer':'OFFER','Pitch Out':'PITCH','Limbo':'LIMBO','Needs a 1031':'1031','Negotiating':'NEG','Won':'WON','Closed':'CLSD','Overpriced':'OVER','Nurture':'NURT',

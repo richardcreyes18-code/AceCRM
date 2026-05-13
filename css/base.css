@@ -37,16 +37,125 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
 .nav-spacer{flex:1;}
 .nav-user{font-size:13px;color:#64748b;padding:0 10px;}
 
-/* ── LAYOUT ──────────────────────────────────────────────────── */
-.app-wrap{display:flex;height:calc(100vh - var(--nav-height));}
+/* v364: top-nav global search. Subtle dark-glass input that sits between
+   the nav-spacer and the user / bell cluster, mirroring the redesign mock
+   from /Users/rickyreyes/Downloads/new-crm-look/project/topnav.jsx. */
+.topnav-search{
+  display:inline-flex;align-items:center;gap:8px;
+  background:rgba(255,255,255,0.05);
+  border:1px solid rgba(255,255,255,0.08);
+  border-radius:6px;
+  padding:5px 10px;
+  margin-right:10px;
+  min-width:260px;max-width:380px;
+  transition:border-color 0.15s,background 0.15s;
+}
+.topnav-search:focus-within{
+  background:rgba(255,255,255,0.10);
+  border-color:rgba(251,191,36,0.45);
+}
+.topnav-search-icon{font-size:12px;color:#94a3b8;line-height:1;}
+.topnav-search input{
+  flex:1;background:transparent;border:none;outline:none;
+  color:#e2e8f0;font-size:12px;font-family:inherit;
+  min-width:0;
+}
+.topnav-search input::placeholder{color:#64748b;}
+.topnav-search .kbd{
+  font-family:'SF Mono',Menlo,monospace;
+  font-size:10px;color:#94a3b8;
+  background:rgba(255,255,255,0.06);
+  border:1px solid rgba(255,255,255,0.10);
+  border-radius:3px;padding:1px 5px;line-height:1;
+}
 
-/* ── SIDEBAR ─────────────────────────────────────────────────── */
+/* ── LAYOUT ──────────────────────────────────────────────────── */
+/* v364: reserve a 60px gutter for the mini sidebar; the sidebar itself
+   absolutely-positions inside that gutter so it can expand on hover
+   without pushing the main content sideways. */
+.app-wrap{display:flex;height:calc(100vh - var(--nav-height));position:relative;padding-left:60px;}
+
+/* ── SIDEBAR (v364: mini-by-default, expand on hover) ────────── */
+/* 200 ms transition-delay on hover prevents accidental expansion when
+   the cursor brushes the icon rail. Adding the `pinned` class (e.g. via
+   a future pin button) holds the expanded state without hover. */
 .sidebar{
-  width:220px;flex-shrink:0;
+  width:60px;
   background:var(--surface);
   border-right:1px solid var(--border);
   display:flex;flex-direction:column;
   overflow:hidden;
+  position:absolute;
+  top:0;left:0;bottom:0;
+  z-index:50;
+  transition:width 0.22s ease-out 0.20s;
+}
+.sidebar:hover,
+.sidebar.pinned{
+  width:240px;
+  box-shadow:6px 0 18px rgba(15,23,42,0.12);
+  transition-delay:0.20s,0s;
+}
+/* Hide text-heavy children while collapsed; reveal them on hover.
+   Targeting opacity + visibility (not display:none) so the rail
+   width-animation has something to reveal beneath. */
+.sidebar .sidebar-welcome,
+.sidebar .sidebar-logo .logo-sub,
+.sidebar .search-box,
+.sidebar .adv-search,
+.sidebar #sideViewTabs,
+.sidebar .recent-name,
+.sidebar .recent-id,
+.sidebar #sidebarCount,
+.sidebar .sidebar-footer,
+.sidebar .add-new-btn span:not(.plus){
+  opacity:0;
+  visibility:hidden;
+  transition:opacity 0.12s ease-out;
+  white-space:nowrap;
+}
+.sidebar:hover .sidebar-welcome,
+.sidebar:hover .sidebar-logo .logo-sub,
+.sidebar:hover .search-box,
+.sidebar:hover .adv-search,
+.sidebar:hover #sideViewTabs,
+.sidebar:hover .recent-name,
+.sidebar:hover .recent-id,
+.sidebar:hover #sidebarCount,
+.sidebar:hover .sidebar-footer,
+.sidebar:hover .add-new-btn span:not(.plus),
+.sidebar.pinned .sidebar-welcome,
+.sidebar.pinned .sidebar-logo .logo-sub,
+.sidebar.pinned .search-box,
+.sidebar.pinned .adv-search,
+.sidebar.pinned #sideViewTabs,
+.sidebar.pinned .recent-name,
+.sidebar.pinned .recent-id,
+.sidebar.pinned #sidebarCount,
+.sidebar.pinned .sidebar-footer,
+.sidebar.pinned .add-new-btn span:not(.plus){
+  opacity:1;
+  visibility:visible;
+  transition-delay:0.18s;
+}
+/* When collapsed, the recent-list rows show only a status dot. The
+   .dial-dot already exists at 8px — center it inside the 60px gutter. */
+.sidebar:not(:hover):not(.pinned) .recent-item{
+  justify-content:center;
+  padding:9px 0;
+}
+.sidebar:not(:hover):not(.pinned) .dial-dot{
+  margin-right:0;
+}
+.sidebar:not(:hover):not(.pinned) .add-new-btn{
+  justify-content:center;
+  padding:8px 0;
+}
+.sidebar:not(:hover):not(.pinned) .sidebar-logo{
+  padding:14px 0 10px;
+}
+.sidebar:not(:hover):not(.pinned) .sidebar-logo .logo-text{
+  font-size:22px;
 }
 /* v299: sidebar logo — kill the gradient per the redesign brief, use
    solid Bloomberg-black slate; gold accent on the lead "A" matches the

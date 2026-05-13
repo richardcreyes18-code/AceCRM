@@ -878,41 +878,49 @@
 <!-- APP WRAP -->
 <div class="app-wrap">
 
-  <!-- SIDEBAR -->
+  <!-- SIDEBAR (v365: dropped redundant logo + welcome blocks — top-nav owns
+       branding + user; sleeker collapsed state matches Claude Design rail) -->
   <div class="sidebar">
-    <div class="sidebar-logo">
-      <div class="logo-text"><span>A</span>ce</div>
-      <div class="logo-sub">ACQUISITIONS CRM</div>
+    <!-- Hidden welcome block kept off-screen so the existing logout / view-toggle
+         / gmail-status hooks still resolve (legacy code touches these IDs). -->
+    <div class="sidebar-welcome" hidden aria-hidden="true">
+      <strong id="sidebarUserName">...</strong>
+      <button id="btnMyDeals" onclick="setViewMode('my')">My Deals</button>
+      <button id="btnAllDeals" onclick="setViewMode('all')">All Deals</button>
+      <a onclick="doLogout()">Sign Out</a>
+      <div id="gmailStatusBadge"></div>
     </div>
-    <div class="sidebar-welcome">
-      Welcome,<br><strong id="sidebarUserName">...</strong><br>
-      <div id="viewToggleWrap" style="margin:5px 0 3px;display:flex;gap:4px;">
-        <button id="btnMyDeals" onclick="setViewMode('my')"
-          style="font-size:10px;padding:2px 8px;border-radius:99px;border:1px solid #1a3a6e;background:#1a3a6e;color:#fff;cursor:pointer;font-weight:600;">My Deals</button>
-        <button id="btnAllDeals" onclick="setViewMode('all')"
-          style="font-size:10px;padding:2px 8px;border-radius:99px;border:1px solid #ccc;background:transparent;color:#888;cursor:pointer;">All Deals</button>
-      </div>
-      <a onclick="doLogout()" style="font-size:10px;color:#c0392b;">Sign Out</a>
-      <div id="gmailStatusBadge" style="margin-top:4px;"></div>
-    </div>
-    <button class="add-new-btn" onclick="setNav(null,'leadintake')">
-      <span class="plus">+</span> Add New Deal
+    <button class="add-new-btn" onclick="setNav(null,'leadintake')" title="Add New Deal">
+      <span class="plus" aria-hidden="true">+</span>
+      <span class="add-new-label">Add New Deal</span>
     </button>
     <div class="search-box">
-      <input type="text" id="sideSearch" placeholder="Search Name or ID" oninput="sideFilter()" style="width:100%;"/>
-      <button onclick="sideFilter()">🔍</button>
+      <input type="text" id="sideSearch" placeholder="Search name or ID…" oninput="sideFilter()" style="width:100%;"/>
+      <span class="kbd" aria-hidden="true">⌘/</span>
     </div>
     <div class="adv-search" style="display:flex;justify-content:space-between;align-items:center;gap:10px;">
       <a onclick="sideFilter()">Advanced Search</a>
       <a onclick="openDealDedupeModal()" title="Find and merge duplicate deals"
-         style="font-size:11px;color:#64748b;cursor:pointer;white-space:nowrap;">🔍 Find Duplicates</a>
+         style="font-size:11px;color:#64748b;cursor:pointer;white-space:nowrap;">Find Duplicates</a>
     </div>
-    <!-- Sidebar view tabs -->
-    <div style="display:flex;border-bottom:1px solid var(--border);background:var(--surface);" id="sideViewTabs">
-      <button onclick="setSideView('all',this)" id="sideTab_all" style="flex:1;padding:6px 2px;border:none;border-bottom:2px solid var(--primary);background:none;font-size:10px;font-weight:600;color:var(--primary);cursor:pointer;">All</button>
-      <button onclick="setSideView('starred',this)" id="sideTab_starred" style="flex:1;padding:6px 2px;border:none;border-bottom:2px solid transparent;background:none;font-size:10px;font-weight:500;color:var(--text2);cursor:pointer;">⭐</button>
-      <button onclick="setSideView('snoozed',this)" id="sideTab_snoozed" style="flex:1;padding:6px 2px;border:none;border-bottom:2px solid transparent;background:none;font-size:10px;font-weight:500;color:var(--text2);cursor:pointer;">💤</button>
-      <button onclick="setSideView('archived',this)" id="sideTab_archived" style="flex:1;padding:6px 2px;border:none;border-bottom:2px solid transparent;background:none;font-size:10px;font-weight:500;color:var(--text2);cursor:pointer;">📦</button>
+    <!-- Sidebar view tabs (v365: SVG icons matching Claude Design icon set) -->
+    <div class="sb-view-tabs" id="sideViewTabs">
+      <button onclick="setSideView('all',this)" id="sideTab_all" class="active" title="All Deals" aria-label="All Deals">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="8" y1="6" x2="21" y2="6"/><line x1="8" y1="12" x2="21" y2="12"/><line x1="8" y1="18" x2="21" y2="18"/><line x1="3" y1="6" x2="3.01" y2="6"/><line x1="3" y1="12" x2="3.01" y2="12"/><line x1="3" y1="18" x2="3.01" y2="18"/></svg>
+        <span class="sb-tab-label">All</span>
+      </button>
+      <button onclick="setSideView('starred',this)" id="sideTab_starred" title="Starred" aria-label="Starred">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+        <span class="sb-tab-label">Starred</span>
+      </button>
+      <button onclick="setSideView('snoozed',this)" id="sideTab_snoozed" title="Snoozed" aria-label="Snoozed">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        <span class="sb-tab-label">Snoozed</span>
+      </button>
+      <button onclick="setSideView('archived',this)" id="sideTab_archived" title="Archived" aria-label="Archived">
+        <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="21 8 21 21 3 21 3 8"/><rect x="1" y="3" width="22" height="5"/><line x1="10" y1="12" x2="14" y2="12"/></svg>
+        <span class="sb-tab-label">Archived</span>
+      </button>
     </div>
     <div class="recent-list" id="recentList">
       <div style="padding:10px;font-size:10px;color:#666;text-align:center;">Loading deals...</div>

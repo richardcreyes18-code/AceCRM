@@ -75,10 +75,12 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
    without pushing the main content sideways. */
 .app-wrap{display:flex;height:calc(100vh - var(--nav-height));position:relative;padding-left:60px;}
 
-/* ── SIDEBAR (v364: mini-by-default, expand on hover) ────────── */
+/* ── SIDEBAR (v364: mini-by-default, expand on hover · v365: sleek rail) ── */
 /* 200 ms transition-delay on hover prevents accidental expansion when
    the cursor brushes the icon rail. Adding the `pinned` class (e.g. via
-   a future pin button) holds the expanded state without hover. */
+   a future pin button) holds the expanded state without hover. v365
+   drops the duplicate ".sidebar-logo" + ".sidebar-welcome" blocks since
+   the top-nav already owns branding + user identity. */
 .sidebar{
   width:60px;
   background:var(--surface);
@@ -89,6 +91,7 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   top:0;left:0;bottom:0;
   z-index:50;
   transition:width 0.22s ease-out 0.20s;
+  padding-top:10px;
 }
 .sidebar:hover,
 .sidebar.pinned{
@@ -96,44 +99,50 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   box-shadow:6px 0 18px rgba(15,23,42,0.12);
   transition-delay:0.20s,0s;
 }
+/* Hide the legacy logo + welcome blocks entirely — the top-nav has the
+   brand mark and the user-facing controls now live in the top-nav user
+   dropdown (Sign Out, etc.). The legacy IDs inside .sidebar-welcome are
+   kept off-screen via the `hidden` attribute so existing JS that pokes
+   them still resolves. */
+.sidebar .sidebar-logo,
+.sidebar .sidebar-welcome{ display:none !important; }
 /* Hide text-heavy children while collapsed; reveal them on hover.
    Targeting opacity + visibility (not display:none) so the rail
    width-animation has something to reveal beneath. */
-.sidebar .sidebar-welcome,
-.sidebar .sidebar-logo .logo-sub,
+/* v365: text-only elements that should fade away when the sidebar is
+   collapsed and fade back in when it expands. The icon-only siblings
+   (the SVG inside each view-tab button, the "+" glyph in the add-new
+   button, the colored dot in each recent-item) stay visible the whole
+   time so the rail never looks empty. */
 .sidebar .search-box,
 .sidebar .adv-search,
-.sidebar #sideViewTabs,
+.sidebar .sb-tab-label,
 .sidebar .recent-name,
 .sidebar .recent-id,
 .sidebar #sidebarCount,
 .sidebar .sidebar-footer,
-.sidebar .add-new-btn span:not(.plus){
+.sidebar .add-new-label{
   opacity:0;
   visibility:hidden;
   transition:opacity 0.12s ease-out;
   white-space:nowrap;
 }
-.sidebar:hover .sidebar-welcome,
-.sidebar:hover .sidebar-logo .logo-sub,
 .sidebar:hover .search-box,
 .sidebar:hover .adv-search,
-.sidebar:hover #sideViewTabs,
+.sidebar:hover .sb-tab-label,
 .sidebar:hover .recent-name,
 .sidebar:hover .recent-id,
 .sidebar:hover #sidebarCount,
 .sidebar:hover .sidebar-footer,
-.sidebar:hover .add-new-btn span:not(.plus),
-.sidebar.pinned .sidebar-welcome,
-.sidebar.pinned .sidebar-logo .logo-sub,
+.sidebar:hover .add-new-label,
 .sidebar.pinned .search-box,
 .sidebar.pinned .adv-search,
-.sidebar.pinned #sideViewTabs,
+.sidebar.pinned .sb-tab-label,
 .sidebar.pinned .recent-name,
 .sidebar.pinned .recent-id,
 .sidebar.pinned #sidebarCount,
 .sidebar.pinned .sidebar-footer,
-.sidebar.pinned .add-new-btn span:not(.plus){
+.sidebar.pinned .add-new-label{
   opacity:1;
   visibility:visible;
   transition-delay:0.18s;
@@ -183,19 +192,70 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
 }
 .sidebar-welcome strong{color:var(--primary-dark);font-weight:600;}
 
+/* v365: collapsed-state-aware Add New Deal button. In the mini rail it
+   shrinks to a 40×40 square with just a "+" glyph; when the sidebar
+   expands, it grows back to a full-width pill with the "Add New Deal"
+   label. The .add-new-label span is the text-only portion (hidden in
+   the mini rail via the .sidebar:not(:hover) selector below). */
 .add-new-btn{
-  margin:10px;
+  margin:10px auto;
+  width:40px;height:40px;
   background:var(--primary);
-  border:none;
-  border-radius:var(--radius-sm);
+  border:none;border-radius:var(--radius-sm);
   color:#fff;font-weight:600;font-size:13px;
-  padding:8px 12px;
-  display:flex;align-items:center;gap:6px;
+  display:flex;align-items:center;justify-content:center;gap:0;
   box-shadow:var(--shadow);
-  transition:background 0.15s;
+  transition:background 0.15s,width 0.22s ease-out 0.20s,gap 0.15s;
+  overflow:hidden;
+}
+.sidebar:hover .add-new-btn,
+.sidebar.pinned .add-new-btn{
+  margin:10px;
+  width:calc(100% - 20px);
+  gap:8px;justify-content:center;
+  padding:0 14px;
+  transition-delay:0.20s,0s,0s;
 }
 .add-new-btn:hover{background:var(--primary-dark);}
-.add-new-btn .plus{font-size:18px;line-height:1;}
+.add-new-btn .plus{font-size:18px;line-height:1;font-weight:400;}
+.add-new-label{white-space:nowrap;}
+
+/* v365: sidebar view tabs as icon-row in mini mode, label-row when
+   expanded. The .sb-tab-label sits next to the SVG when there's room
+   and disappears otherwise. */
+.sb-view-tabs{
+  display:flex;flex-direction:column;
+  gap:2px;padding:6px 6px 4px;
+}
+.sb-view-tabs > button{
+  display:flex;align-items:center;gap:10px;
+  background:transparent;border:none;
+  padding:8px;border-radius:6px;
+  color:var(--text2);cursor:pointer;
+  font-size:12px;font-weight:500;
+  transition:background 0.12s,color 0.12s;
+  width:100%;
+}
+.sb-view-tabs > button:hover{background:var(--primary-light);color:var(--primary);}
+.sb-view-tabs > button.active{
+  background:var(--primary-light);color:var(--primary);font-weight:600;
+}
+.sb-view-tabs svg{flex-shrink:0;}
+.sb-view-tabs .sb-tab-label{white-space:nowrap;}
+.sidebar:not(:hover):not(.pinned) .sb-view-tabs > button{
+  justify-content:center;
+}
+
+/* v365: the inline sideSearch kbd badge — mirrors the topnav .kbd styling
+   so the sidebar search and the topnav search both show the shortcut hint. */
+.sidebar .search-box .kbd{
+  font-family:'SF Mono',Menlo,monospace;
+  font-size:10px;color:var(--text3);
+  background:var(--surface2);
+  border:1px solid var(--border);
+  border-radius:3px;padding:1px 5px;line-height:1;
+  flex-shrink:0;
+}
 
 .search-box{
   margin:0 10px 8px;

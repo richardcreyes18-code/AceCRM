@@ -214,23 +214,36 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
 }
 .sidebar-welcome strong{color:var(--primary-dark);font-weight:600;}
 
-/* v365.1: collapsed-state-aware Add New Deal button. Mini state =
-   centered 40×40 blue square with the SVG plus icon; expanded state =
-   full-width blue pill with "Add New Deal" label. The button is wrapped
-   in a fixed-width container so the "+" stays put and the surrounding
-   chrome doesn't jitter as the sidebar resizes. */
+/* v365.2: Add New Deal button — bulletproof "+" glyph via ::before
+   (CSS-generated content always renders, never depends on font fallback
+   or SVG quirks). Mini state = a true 40×40 square; expanded state grows
+   to a full pill that also fits the "Add New Deal" label. Sized to match
+   the icon column below it so the rail reads as one tidy stack. */
 .add-new-btn{
-  margin:8px auto;
-  width:44px;height:44px;
+  position:relative;
+  display:flex;align-items:center;justify-content:center;
+  width:40px;height:40px;
+  margin:6px auto;
   background:var(--primary);
   border:none;border-radius:8px;
   color:#fff;font-weight:600;font-size:13px;
-  display:flex;align-items:center;justify-content:center;gap:6px;
-  box-shadow:var(--shadow-sm,0 1px 2px rgba(15,23,42,0.08));
+  box-shadow:0 1px 2px rgba(15,23,42,0.08);
   cursor:pointer;
-  transition:background 0.15s,width 0.18s cubic-bezier(0.2,0,0,1) 0.25s,
-             margin 0.18s cubic-bezier(0.2,0,0,1) 0.25s;
-  flex-shrink:0;
+  overflow:hidden;
+  transition:background 0.15s,
+             width 0.18s cubic-bezier(0.2,0,0,1) 0.25s,
+             margin 0.18s cubic-bezier(0.2,0,0,1) 0.25s,
+             border-radius 0.18s ease-out 0.25s;
+}
+.add-new-btn::before{
+  content:"+";
+  position:absolute;
+  inset:0;
+  display:flex;align-items:center;justify-content:center;
+  font-size:24px;font-weight:300;line-height:1;color:#fff;
+  font-family:-apple-system,BlinkMacSystemFont,'Inter',system-ui,sans-serif;
+  pointer-events:none;
+  transition:opacity 0.12s ease-out,font-size 0.12s ease-out;
 }
 .sidebar:hover .add-new-btn,
 .sidebar.pinned .add-new-btn{
@@ -238,34 +251,54 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   margin:8px 10px;
   transition-delay:0.08s;
 }
+.sidebar:hover .add-new-btn::before,
+.sidebar.pinned .add-new-btn::before{
+  position:static;
+  inset:auto;
+  font-size:16px;
+  margin-right:6px;
+  width:auto;height:auto;
+}
 .add-new-btn:hover{background:var(--primary-dark);}
-.add-new-btn .plus{color:#fff;display:block;}
 .add-new-label{white-space:nowrap;}
 
-/* v365: sidebar view tabs as icon-row in mini mode, label-row when
-   expanded. The .sb-tab-label sits next to the SVG when there's room
-   and disappears otherwise. */
+/* v365.2: sidebar view tabs. Mini mode → vertical column of 40×40
+   icon-only squares centered in the 60px rail. Expanded mode → wider
+   buttons with icon + label aligned left-of-center. Identical 40px
+   sizing as the Add New Deal button so the rail reads as one tidy stack. */
 .sb-view-tabs{
   display:flex;flex-direction:column;
-  gap:2px;padding:6px 6px 4px;
+  align-items:center;
+  gap:2px;padding:2px 0;
 }
 .sb-view-tabs > button{
-  display:flex;align-items:center;gap:10px;
+  display:flex;align-items:center;justify-content:center;
+  gap:0;
+  width:40px;height:40px;
+  margin:0 auto;
   background:transparent;border:none;
-  padding:8px;border-radius:6px;
+  border-radius:8px;
   color:var(--text2);cursor:pointer;
   font-size:12px;font-weight:500;
-  transition:background 0.12s,color 0.12s;
-  width:100%;
+  transition:background 0.12s,color 0.12s,width 0.18s cubic-bezier(0.2,0,0,1) 0.25s;
 }
 .sb-view-tabs > button:hover{background:var(--primary-light);color:var(--primary);}
 .sb-view-tabs > button.active{
   background:var(--primary-light);color:var(--primary);font-weight:600;
 }
-.sb-view-tabs svg{flex-shrink:0;}
-.sb-view-tabs .sb-tab-label{white-space:nowrap;}
-.sidebar:not(:hover):not(.pinned) .sb-view-tabs > button{
-  justify-content:center;
+.sb-view-tabs svg{flex-shrink:0;display:block;}
+.sb-view-tabs .sb-tab-label{white-space:nowrap;margin-left:10px;}
+.sidebar:hover .sb-view-tabs > button,
+.sidebar.pinned .sb-view-tabs > button{
+  width:calc(100% - 20px);
+  justify-content:flex-start;
+  padding:0 12px;
+  transition-delay:0.08s;
+}
+.sidebar:hover .sb-view-tabs,
+.sidebar.pinned .sb-view-tabs{
+  align-items:stretch;
+  padding:4px 10px;
 }
 
 /* v365: the inline sideSearch kbd badge — mirrors the topnav .kbd styling

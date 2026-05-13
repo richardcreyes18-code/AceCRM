@@ -1,0 +1,234 @@
+/* property-details.css — v366
+ *
+ * Property Details tab visual redesign — section cards with a dense
+ * field grid, monospaced numerics, italic N/A stamps. Mirrors the
+ * Claude Design handoff at /Users/rickyreyes/Downloads/NEW CRM LOOK/
+ * property.jsx + the matching `.section` / `.field-grid` rules in
+ * that bundle's styles.css.
+ *
+ * All selectors are prefixed with `pds-` (Property Details Section)
+ * so they don't collide with the legacy `.pd-field-grid` form layout
+ * still used elsewhere in the deal detail page. Color tokens are the
+ * existing --fg-*, --surface, --border, --primary, --font-mono set
+ * from css/design-system.css — no new vars introduced.
+ */
+
+/* ── Tab content wrapper ─────────────────────────────────────── */
+.pds-content { padding: 14px 20px; }
+
+/* ── Section card ────────────────────────────────────────────── */
+.pds-section {
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius, 8px);
+  margin-bottom: 14px;
+  overflow: hidden;
+}
+
+.pds-section-hd {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 9px 14px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  font-size: 11.5px;
+  font-weight: 700;
+  color: var(--fg-1);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+}
+.pds-section-hd svg {
+  width: 13px;
+  height: 13px;
+  color: var(--primary);
+  flex-shrink: 0;
+}
+.pds-section-hd .sub {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--fg-3);
+  text-transform: none;
+  letter-spacing: 0;
+  margin-left: 6px;
+}
+.pds-section-hd .right {
+  margin-left: auto;
+  display: flex;
+  gap: 6px;
+  align-items: center;
+}
+
+.pds-section-bd { padding: 14px 16px; }
+.pds-section-bd.pds-flush { padding: 0; }
+
+/* ── Field grid ──────────────────────────────────────────────── */
+.pds-grid {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 0;
+}
+.pds-grid.pds-cols-2 { grid-template-columns: repeat(2, 1fr); }
+.pds-grid.pds-cols-4 { grid-template-columns: repeat(4, 1fr); }
+
+.pds-field {
+  padding: 10px 14px;
+  border-right: 1px solid var(--border);
+  border-bottom: 1px solid var(--border);
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+  min-height: 60px;
+  position: relative;
+}
+
+/* Strip the trailing borders on the last col + row so the section
+   card's own border carries the outer edge. */
+.pds-grid > .pds-field:nth-child(3n) { border-right: none; }
+.pds-grid.pds-cols-2 > .pds-field:nth-child(2n) { border-right: none; }
+.pds-grid.pds-cols-4 > .pds-field:nth-child(4n) { border-right: none; }
+.pds-grid > .pds-field:nth-last-child(-n+3) { border-bottom: none; }
+.pds-grid.pds-cols-2 > .pds-field:nth-last-child(-n+2) { border-bottom: none; }
+.pds-grid.pds-cols-4 > .pds-field:nth-last-child(-n+4) { border-bottom: none; }
+
+.pds-lbl {
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--fg-3);
+}
+
+.pds-val {
+  font-size: 13px;
+  font-weight: 500;
+  color: var(--fg-1);
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3;
+}
+.pds-val.pds-mono {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+.pds-val.pds-muted { color: var(--fg-4); font-weight: 400; }
+.pds-val.pds-large { font-size: 15px; font-weight: 700; }
+.pds-val.pds-green { color: var(--green-dark); }
+.pds-val .pds-unit {
+  color: var(--fg-3);
+  font-size: 10px;
+  font-weight: 500;
+  margin-left: 2px;
+}
+
+/* ── Editable inputs that visually read as static values ─────── */
+/* Inputs / selects in the field grid look like the design's read-only
+   values until the user focuses — borderless, transparent background,
+   font matches the surrounding .pds-val.
+*/
+.pds-field input.pds-input,
+.pds-field select.pds-input,
+.pds-field textarea.pds-input {
+  display: block;
+  width: 100%;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  padding: 2px 6px;
+  margin: -2px -6px;
+  color: var(--fg-1);
+  font-family: inherit;
+  font-size: 13px;
+  font-weight: 500;
+  line-height: 1.3;
+  font-variant-numeric: tabular-nums;
+  transition: border-color 0.12s, background 0.12s;
+}
+.pds-field input.pds-input.pds-mono,
+.pds-field select.pds-input.pds-mono {
+  font-family: var(--font-mono);
+  font-weight: 600;
+}
+.pds-field input.pds-input:focus,
+.pds-field select.pds-input:focus,
+.pds-field textarea.pds-input:focus {
+  outline: none;
+  border-color: var(--primary);
+  background: #fff;
+}
+.pds-field input.pds-input:hover:not(:focus),
+.pds-field select.pds-input:hover:not(:focus) {
+  border-color: var(--border);
+}
+/* Native select arrow stays — but the chevron color shouldn't shout */
+.pds-field select.pds-input {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24' fill='none' stroke='%2394a3b8' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'><polyline points='6 9 12 15 18 9'/></svg>");
+  background-repeat: no-repeat;
+  background-position: right 4px center;
+  background-size: 12px;
+  padding-right: 22px;
+}
+
+/* ── Italic "N/A" stamp chip ─────────────────────────────────── */
+.pds-stamp {
+  font-family: var(--font-stamp);
+  font-style: italic;
+  font-size: 10px;
+  font-weight: 700;
+  color: var(--fg-3);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  transform: rotate(-2deg);
+  display: inline-block;
+  border: 1.5px solid var(--fg-3);
+  padding: 1px 7px;
+  border-radius: 3px;
+  opacity: 0.55;
+  margin-top: 2px;
+  align-self: flex-start;
+  background: transparent;
+}
+
+/* ── Segmented View toggle in the section header ─────────────── */
+.pds-btn-group {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--surface);
+}
+.pds-btn-group button {
+  padding: 4px 9px;
+  font-size: 11px;
+  font-weight: 600;
+  background: transparent;
+  border: none;
+  border-right: 1px solid var(--border);
+  color: var(--fg-2);
+  cursor: pointer;
+  transition: background 0.1s, color 0.1s;
+  text-transform: none;
+  letter-spacing: 0;
+}
+.pds-btn-group button:last-child { border-right: none; }
+.pds-btn-group button.active {
+  background: var(--primary-lighter);
+  color: var(--primary-darker);
+}
+.pds-btn-group button:hover:not(.active) {
+  background: var(--surface-2);
+  color: var(--fg-1);
+}
+
+/* ── Responsive: collapse to 2-col on narrow screens ─────────── */
+@media (max-width: 900px) {
+  .pds-grid,
+  .pds-grid.pds-cols-4 { grid-template-columns: repeat(2, 1fr); }
+  .pds-grid.pds-cols-2 { grid-template-columns: 1fr; }
+  /* Recompute the last-row border strip on 2-col fallback */
+  .pds-grid > .pds-field:nth-child(3n) { border-right: 1px solid var(--border); }
+  .pds-grid > .pds-field:nth-child(2n) { border-right: none; }
+  .pds-grid > .pds-field:nth-last-child(-n+3) { border-bottom: 1px solid var(--border); }
+  .pds-grid > .pds-field:nth-last-child(-n+2) { border-bottom: none; }
+}

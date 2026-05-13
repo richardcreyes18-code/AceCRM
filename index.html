@@ -15,6 +15,7 @@
 <link rel="stylesheet" href="css/modals.css"/>
 <link rel="stylesheet" href="css/pipeline.css"/>
 <link rel="stylesheet" href="css/deal-detail.css"/>
+<link rel="stylesheet" href="css/property-details.css"/>
 <link rel="stylesheet" href="css/buyer-criteria.css"/>
 <link rel="stylesheet" href="css/email-templates.css"/>
 <link rel="stylesheet" href="css/pdf-brochure.css"/>
@@ -5913,234 +5914,313 @@ function renderPropertyTab(d){
                       : _assetTypeStr.includes('retail') ? 'retail'
                       : _assetTypeStr.includes('office') ? 'office'
                       : 'mixed';
+  // v366: helpers to emit the design's section header (icon + uppercase
+  // title) and a single field cell. Inputs render as `.pds-input` so they
+  // visually read as static values until focused — matching the Claude
+  // Design property.jsx look while preserving the CRM's edit-in-place UX.
+  const _esc = s => String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
+  const _pdsIcons = {
+    'building-2': '<rect x="3" y="6" width="6" height="15" rx="1"/><rect x="13" y="3" width="8" height="18" rx="1"/><path d="M9 21V11M6 12h0M6 16h0M16 7h0M16 11h0M16 15h0M16 19h0"/>',
+    'maximize':   '<path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M21 8V5a2 2 0 0 0-2-2h-3"/><path d="M3 16v3a2 2 0 0 0 2 2h3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/>',
+    'layers':     '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
+    'package':    '<path d="M16.5 9.4 7.55 4.24"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><polyline points="3.27 6.96 12 12.01 20.73 6.96"/><line x1="12" y1="22.08" x2="12" y2="12"/>',
+    'compass':    '<circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/>',
+    'flame':      '<path d="M8.5 14.5A2.5 2.5 0 0 0 11 12c0-1.38-.5-2-1-3-1.072-2.143-.224-4.054 2-6 .5 2.5 2 4.9 4 6.5 2 1.6 3 3.5 3 5.5a7 7 0 1 1-14 0c0-1.153.433-2.294 1-3a2.5 2.5 0 0 0 2.5 2.5z"/>',
+    'tag':        '<path d="M20.59 13.41l-7.17 7.17a2 2 0 0 1-2.83 0L2 12V2h10l8.59 8.59a2 2 0 0 1 0 2.82z"/><line x1="7" y1="7" x2="7.01" y2="7"/>',
+    'hammer':     '<path d="m15 12-8.5 8.5c-.83.83-2.17.83-3 0 0 0 0 0 0 0a2.12 2.12 0 0 1 0-3L12 9"/><path d="M17.64 15 22 10.64"/><path d="m20.91 11.7-1.25-1.25c-.6-.6-.93-1.4-.93-2.25v-.86L16.01 4.6a5.56 5.56 0 0 0-3.94-1.64H9l.92.82A6.18 6.18 0 0 1 12 8.4v1.56l2 2h2.47l2.26 1.91"/>',
+    'sparkles':   '<path d="M12 3l1.5 4.5L18 9l-4.5 1.5L12 15l-1.5-4.5L6 9l4.5-1.5L12 3z"/><path d="M19 14l.8 2.4L22 17l-2.2.6L19 20l-.8-2.4L16 17l2.2-.6L19 14z"/>'
+  };
+  const _pdsIcon = (n) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${_pdsIcons[n]||''}</svg>`;
+  // Computed Price / Unit for the Units & Occupancy card
+  const _ask = Number(d['Asking Price'])||0;
+  const _units = Number(d['No. of Units']||d['Number of Units'])||0;
+  const _ppu = (_ask>0 && _units>0) ? (_ask/_units) : 0;
+  const _occ = (function(){
+    const u = _units;
+    const vac = Number(d['No. of Units Vacant']||0);
+    if(u<=0) return null;
+    const occ = ((u-vac)/u)*100;
+    if(!isFinite(occ)||occ<0) return null;
+    return Math.round(occ*10)/10;
+  })();
+
   return `
-    <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap;padding:0 2px;">
-      <div style="font-size:13px;font-weight:700;color:var(--fg-1);text-transform:uppercase;letter-spacing:0.06em;">Property Details</div>
-      <div style="display:flex;align-items:center;gap:8px;">
-        <span style="font-size:10px;color:var(--fg-3);font-weight:700;text-transform:uppercase;letter-spacing:.06em;">View Mode</span>
-        ${_sModeToggle('property', _propMode)}
+    <div class="pds-content">
+      <div style="display:flex;align-items:center;justify-content:space-between;gap:12px;margin-bottom:14px;flex-wrap:wrap;padding:0 2px;">
+        <div style="font-size:13px;font-weight:700;color:var(--fg-1);text-transform:uppercase;letter-spacing:0.06em;">Property Details</div>
+        <div style="display:flex;align-items:center;gap:8px;">
+          <span style="font-size:10px;color:var(--fg-3);font-weight:700;text-transform:uppercase;letter-spacing:.06em;">View Mode</span>
+          ${_sModeToggle('property', _propMode)}
+        </div>
       </div>
-    </div>
 
-    <!-- PROPERTY INFORMATION -->
-    <div class="info-box">
-      <div class="info-box-title">Property Information</div>
-      <table style="width:100%;border:none;font-size:11px;border-collapse:separate;border-spacing:0 7px;">
+      <!-- 1. BUILDING BASICS -->
+      <div class="pds-section">
+        <div class="pds-section-hd">${_pdsIcon('building-2')}Building Basics</div>
+        <div class="pds-section-bd pds-flush">
+          <div class="pds-grid">
+            <div class="pds-field">
+              <span class="pds-lbl">Year Built</span>
+              <input id="prop_yearBuilt" type="number" min="1800" max="2100" step="1" class="pds-input pds-mono" value="${d['Year Built']||''}" placeholder="—" oninput="markDirty()"/>
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Year Renovated</span>
+              <input id="prop_yearRenov" type="number" min="1800" max="2100" step="1" class="pds-input pds-mono" value="${d['Year Renovated']||''}" placeholder="—" oninput="markDirty()"/>
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">No. of Stories</span>
+              <input id="noStories" type="number" min="1" max="200" step="1" class="pds-input pds-mono" value="${d['No. of Stories']||''}" placeholder="—" oninput="markDirty()"/>
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">No. of Buildings</span>
+              <input id="prop_numBuildings" type="number" min="1" step="1" class="pds-input pds-mono" value="${d['No. of Buildings']||''}" placeholder="—" oninput="markDirty()"/>
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Construction</span>
+              <select id="constStatus" class="pds-input" onchange="markDirty()">
+                <option value="">—</option>
+                ${['Existing','Under Construction/Proposed'].map(v=>`<option${d['Construction Status']===v?' selected':''}>${v}</option>`).join('')}
+              </select>
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">HVAC</span>
+              <select id="prop_hvac" class="pds-input" onchange="markDirty()">
+                <option value="">—</option>
+                ${['Central','Window Units','Split System','Radiant Heat','Forced Air','None','Other'].map(v=>`<option${d['HVAC']===v?' selected':''}>${v}</option>`).join('')}
+              </select>
+            </div>
+          </div>
+        </div>
+      </div>
 
-        <!-- v113.73: Property Description / Location Description / AI
-             Clarifying Notes textareas moved to the Notes tab. The
-             columns are still saved (same input ids, just rendered in a
-             different tab) — Property Details now stays focused on the
-             numbers. Raw merged notes (general_property_notes) also
-             live on the Notes tab. -->
-
-        <tr>
-          <td colspan="2" style="padding-top:14px;">
-            <style>
-              /* v113.75: unified 5-col grid for the entire Property
-                 Information block. Every row gets the same column count so
-                 fields line up vertically across rows. Section dividers
-                 (.pd-subhdr) split the rows into logical groups. */
-              .pd-field-grid { display:grid; grid-template-columns:repeat(5,1fr); gap:12px 16px; margin-bottom:12px; }
-              .pd-field-grid .pd-field label.pd-lbl { display:block; font-size:10px; font-weight:700; color:#334155; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:4px; }
-              .pd-field-grid .pd-field .form-input,
-              .pd-field-grid .pd-field .form-select { width:100%; box-sizing:border-box; height:32px; }
-              .pd-field-grid .pd-field .pd-row { display:flex; align-items:center; gap:6px; }
-              .pd-field-grid .pd-field .pd-row .pd-unit { font-size:11px; font-weight:600; color:#64748b; flex-shrink:0; }
-              .pd-field-grid .pd-field .pd-row .form-input,
-              .pd-field-grid .pd-field .pd-row .form-select { min-width:0; }
-              .pd-subhdr { font-size:10px; font-weight:700; color:#64748b; text-transform:uppercase; letter-spacing:.06em; margin:14px 0 6px; padding-bottom:4px; border-bottom:1px solid #e2e8f0; }
-              .pd-subhdr:first-of-type { margin-top:6px; }
-              .pd-hl-section { margin-top:14px; }
-              .pd-hl-section .pd-lbl { display:block; font-size:10px; font-weight:700; color:#334155; text-transform:uppercase; letter-spacing:0.5px; margin-bottom:6px; }
-              @media (max-width:1300px){ .pd-field-grid { grid-template-columns:repeat(3,1fr); } }
-              @media (max-width:900px){  .pd-field-grid { grid-template-columns:repeat(2,1fr); } }
-            </style>
-
-            <!-- v113.75: Building Basics — first row of 5 -->
-            <div class="pd-subhdr">Building Basics</div>
-            <div class="pd-field-grid">
-              <div class="pd-field">
-                <label class="pd-lbl">Year Built</label>
-                <input id="prop_yearBuilt" type="number" min="1800" max="2100" step="1" class="form-input" value="${d['Year Built']||''}" placeholder="—" oninput="markDirty()"/>
+      <!-- 2. SIZE & PARKING -->
+      <div class="pds-section">
+        <div class="pds-section-hd">${_pdsIcon('maximize')}Size &amp; Parking</div>
+        <div class="pds-section-bd pds-flush">
+          <div class="pds-grid">
+            <div class="pds-field">
+              <span class="pds-lbl">Total Building SF</span>
+              <div style="display:flex;align-items:center;gap:4px;">
+                <input id="prop_totalBuildingSF" class="pds-input pds-mono num-input" type="text" inputmode="numeric" value="${_fmtNum(d['Total Building SF']||'')}" placeholder="—" oninput="markDirty()" style="flex:1;"/>
+                <span class="pds-unit">SF</span>
               </div>
-              <div class="pd-field">
-                <label class="pd-lbl">Year Renovated</label>
-                <input id="prop_yearRenov" type="number" min="1800" max="2100" step="1" class="form-input" value="${d['Year Renovated']||''}" placeholder="—" oninput="markDirty()"/>
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Net Rentable SF</span>
+              <div style="display:flex;align-items:center;gap:4px;">
+                <input id="prop_netRentableSF" class="pds-input pds-mono num-input" type="text" inputmode="numeric" value="${_fmtNum(d['Net Rentable SF']||'')}" placeholder="—" oninput="markDirty()" style="flex:1;"/>
+                <span class="pds-unit">SF</span>
               </div>
-              <div class="pd-field">
-                <label class="pd-lbl">No. of Stories</label>
-                <input id="noStories" type="number" min="1" max="200" step="1" class="form-input" value="${d['No. of Stories']||''}" placeholder="—" oninput="markDirty()"/>
-              </div>
-              <div class="pd-field">
-                <label class="pd-lbl">No. of Buildings</label>
-                <input id="prop_numBuildings" type="number" min="1" step="1" class="form-input" value="${d['No. of Buildings']||''}" placeholder="—" oninput="markDirty()"/>
-              </div>
-              <div class="pd-field">
-                <label class="pd-lbl">HVAC</label>
-                <select id="prop_hvac" class="form-select" onchange="markDirty()">
-                  <option value="">—</option>
-                  ${['Central','Window Units','Split System','Radiant Heat','Forced Air','None','Other'].map(v=>`<option${d['HVAC']===v?' selected':''}>${v}</option>`).join('')}
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Total Lot Size</span>
+              <div style="display:flex;align-items:center;gap:4px;">
+                <input id="prop_lotSize" class="pds-input pds-mono" value="${d['Total Lot Size']||''}" placeholder="—" oninput="markDirty()" style="flex:1;"/>
+                <select id="lotUnit" class="pds-input" onchange="markDirty()" style="width:60px;flex-shrink:0;font-size:11px;">
+                  <option value="acres"${(d['Lot Size Unit']||'acres')==='acres'?' selected':''}>Ac</option>
+                  <option value="sf"${d['Lot Size Unit']==='sf'?' selected':''}>SF</option>
                 </select>
               </div>
             </div>
-
-            <!-- v113.75: Size & Parking -->
-            <div class="pd-subhdr">Size & Parking</div>
-            <div class="pd-field-grid">
-              <div class="pd-field">
-                <label class="pd-lbl">Total Building SF</label>
-                <div class="pd-row">
-                  <input id="prop_totalBuildingSF" class="form-input num-input" type="text" inputmode="numeric" value="${_fmtNum(d['Total Building SF']||'')}" placeholder="—" oninput="markDirty()"/>
-                  <span class="pd-unit">SF</span>
-                </div>
-              </div>
-              <div class="pd-field">
-                <label class="pd-lbl">Net Rentable SF</label>
-                <div class="pd-row">
-                  <input id="prop_netRentableSF" class="form-input num-input" type="text" inputmode="numeric" value="${_fmtNum(d['Net Rentable SF']||'')}" placeholder="—" oninput="markDirty()"/>
-                  <span class="pd-unit">SF</span>
-                </div>
-              </div>
-              <div class="pd-field">
-                <label class="pd-lbl">Total Lot Size</label>
-                <div class="pd-row">
-                  <input id="prop_lotSize" class="form-input" value="${d['Total Lot Size']||''}" placeholder="—" oninput="markDirty()" style="flex:1;"/>
-                  <select id="lotUnit" class="form-select" onchange="markDirty()" style="width:80px;flex-shrink:0;">
-                    <option value="acres"${(d['Lot Size Unit']||'acres')==='acres'?' selected':''}>Ac</option>
-                    <option value="sf"${d['Lot Size Unit']==='sf'?' selected':''}>SF</option>
-                  </select>
-                </div>
-              </div>
-              <div class="pd-field">
-                <label class="pd-lbl">Parking Type</label>
-                <select id="prop_parkingType" class="form-select" onchange="markDirty()">
-                  <option value="">—</option>
-                  ${['Uncovered','Covered','Garage','Street','Underground','None'].map(v=>`<option${d['Parking Type']===v?' selected':''}>${v}</option>`).join('')}
-                </select>
-              </div>
-              <div class="pd-field">
-                <label class="pd-lbl">Spaces · Ratio</label>
-                <div class="pd-row">
-                  <input id="prop_parkingSpaces" type="number" min="0" step="1" class="form-input" value="${d['No. of Parking Spaces']||''}" placeholder="—" oninput="markDirty()" style="flex:1.4;"/>
-                  <input id="prop_parkingRatio" class="form-input" value="${d['Parking Ratio']||''}" placeholder="—" oninput="markDirty()" style="flex:1;"/>
-                </div>
-              </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Parking Type</span>
+              <select id="prop_parkingType" class="pds-input" onchange="markDirty()">
+                <option value="">—</option>
+                ${['Uncovered','Covered','Garage','Street','Underground','None'].map(v=>`<option${d['Parking Type']===v?' selected':''}>${v}</option>`).join('')}
+              </select>
             </div>
-
-            ${_propMode === 'simple' ? '' : `
-            <!-- v113.75: Property Use & Status — 5-col grid -->
-            <div class="pd-subhdr">Property Use &amp; Status</div>
-            <div class="pd-field-grid">
-              <div class="pd-field">
-                <label class="pd-lbl">Property Use</label>
-                <select id="propUse" class="form-select" onchange="markDirty()">
-                  <option value="">—</option>
-                  ${['Investment/Cash Flow','Owner/User','Vacant','Turnaround','Business Also For Sale']
-                    .map(v=>`<option${d['Property Use']===v?' selected':''}>${v}</option>`).join('')}
-                </select>
-              </div>
-              <div class="pd-field">
-                <label class="pd-lbl">Construction</label>
-                <select id="constStatus" class="form-select" onchange="markDirty()">
-                  <option value="">—</option>
-                  ${['Existing','Under Construction/Proposed']
-                    .map(v=>`<option${d['Construction Status']===v?' selected':''}>${v}</option>`).join('')}
-                </select>
-              </div>
-              <div class="pd-field">
-                <label class="pd-lbl">Distressed?</label>
-                <select id="distressed" class="form-select" onchange="markDirty()">
-                  <option value="">—</option>
-                  <option value="yes"${d['Is Distressed']===true?' selected':''}>Yes</option>
-                  <option value="no"${d['Is Distressed']===false?' selected':''}>No</option>
-                </select>
-              </div>
-              <div class="pd-field">
-                <label class="pd-lbl">Ground Lease?</label>
-                <select id="groundLease" class="form-select" onchange="markDirty()">
-                  <option value="">—</option>
-                  <option value="yes"${d['Is On Ground Lease']===true?' selected':''}>Yes</option>
-                  <option value="no"${d['Is On Ground Lease']===false?' selected':''}>No</option>
-                </select>
-              </div>
-              <div class="pd-field">
-                <label class="pd-lbl">Sale Leaseback?</label>
-                <select id="saleLeaseback" class="form-select" onchange="markDirty()">
-                  <option value="">—</option>
-                  <option value="yes"${d['Sale Leaseback']===true?' selected':''}>Yes</option>
-                  <option value="no"${d['Sale Leaseback']===false?' selected':''}>No</option>
-                </select>
-              </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Spaces</span>
+              <input id="prop_parkingSpaces" type="number" min="0" step="1" class="pds-input pds-mono" value="${d['No. of Parking Spaces']||''}" placeholder="—" oninput="markDirty()"/>
             </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Ratio (per unit)</span>
+              <input id="prop_parkingRatio" class="pds-input pds-mono" value="${d['Parking Ratio']||''}" placeholder="—" oninput="markDirty()"/>
+            </div>
+          </div>
+        </div>
+      </div>
 
-            <!-- v113.75: Asset Class — 5-col grid -->
-            <div class="pd-subhdr">Asset Class</div>
-            <div class="pd-field-grid">
-              <div class="pd-field">
-                <label class="pd-lbl">Property Class</label>
-                <select id="propClass" class="form-select" onchange="markDirty()">
-                  <option value="">—</option>
-                  ${['A','B','C','D'].map(v=>`<option${d['Property Class']===v?' selected':''}>${v}</option>`).join('')}
+      <!-- 3. PROPERTY USE & STATUS -->
+      <div class="pds-section">
+        <div class="pds-section-hd">${_pdsIcon('layers')}Property Use &amp; Status</div>
+        <div class="pds-section-bd pds-flush">
+          <div class="pds-grid">
+            <div class="pds-field">
+              <span class="pds-lbl">Property Type</span>
+              ${(()=>{ const t=(d['CRM Asset Classification']||d['Simple Text Property Type']||'').toString().trim();
+                return t ? `<span class="pds-val">${_esc(t)}</span>` : `<span class="pds-val pds-muted">—</span><span class="pds-stamp">Not set</span>`; })()}
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Property Class</span>
+              <select id="propClass" class="pds-input" onchange="markDirty()">
+                <option value="">—</option>
+                ${['A','B','C','D'].map(v=>`<option${d['Property Class']===v?' selected':''}>${v}</option>`).join('')}
+              </select>
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Condition</span>
+              <select id="propCondition" class="pds-input" onchange="markDirty()">
+                <option value="">—</option>
+                ${['Excellent','Good','Average','Fair','Poor'].map(v=>`<option${d['Property Condition']===v?' selected':''}>${v}</option>`).join('')}
+              </select>
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Location Type</span>
+              <select id="locationType" class="pds-input" onchange="markDirty()">
+                <option value="">—</option>
+                ${['Urban','Suburban','Rural'].map(v=>`<option${d['Location Type']===v?' selected':''}>${v}</option>`).join('')}
+              </select>
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Location Class</span>
+              <select id="locationClass" class="pds-input" onchange="markDirty()">
+                <option value="">—</option>
+                ${['A','B','C','D'].map(v=>`<option${d['Location Class']===v?' selected':''}>${v}</option>`).join('')}
+              </select>
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Trending</span>
+              <select id="locationTrending" class="pds-input" onchange="markDirty()">
+                <option value="">—</option>
+                ${['Up-and-coming','Stable','Declining'].map(v=>`<option${d['Location Trending']===v?' selected':''}>${v}</option>`).join('')}
+              </select>
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Property Use</span>
+              <select id="propUse" class="pds-input" onchange="markDirty()">
+                <option value="">—</option>
+                ${['Investment/Cash Flow','Owner/User','Vacant','Turnaround','Business Also For Sale'].map(v=>`<option${d['Property Use']===v?' selected':''}>${v}</option>`).join('')}
+              </select>
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Distressed</span>
+              <select id="distressed" class="pds-input" onchange="markDirty()">
+                <option value="">—</option>
+                <option value="yes"${d['Is Distressed']===true?' selected':''}>Yes</option>
+                <option value="no"${d['Is Distressed']===false?' selected':''}>No</option>
+              </select>
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Ground Lease / Sale Leaseback</span>
+              <div style="display:flex;gap:4px;align-items:center;">
+                <select id="groundLease" class="pds-input" onchange="markDirty()" style="flex:1;font-size:11px;">
+                  <option value="">GL —</option>
+                  <option value="yes"${d['Is On Ground Lease']===true?' selected':''}>GL Yes</option>
+                  <option value="no"${d['Is On Ground Lease']===false?' selected':''}>GL No</option>
                 </select>
-              </div>
-              <div class="pd-field">
-                <label class="pd-lbl">Condition</label>
-                <select id="propCondition" class="form-select" onchange="markDirty()">
-                  <option value="">—</option>
-                  ${['Excellent','Good','Average','Fair','Poor'].map(v=>`<option${d['Property Condition']===v?' selected':''}>${v}</option>`).join('')}
-                </select>
-              </div>
-              <div class="pd-field">
-                <label class="pd-lbl">Location Class</label>
-                <select id="locationClass" class="form-select" onchange="markDirty()">
-                  <option value="">—</option>
-                  ${['A','B','C','D'].map(v=>`<option${d['Location Class']===v?' selected':''}>${v}</option>`).join('')}
-                </select>
-              </div>
-              <div class="pd-field">
-                <label class="pd-lbl">Location Trending</label>
-                <select id="locationTrending" class="form-select" onchange="markDirty()">
-                  <option value="">—</option>
-                  ${['Up-and-coming','Stable','Declining'].map(v=>`<option${d['Location Trending']===v?' selected':''}>${v}</option>`).join('')}
-                </select>
-              </div>
-              <div class="pd-field">
-                <label class="pd-lbl">Location Type</label>
-                <select id="locationType" class="form-select" onchange="markDirty()">
-                  <option value="">—</option>
-                  ${['Urban','Suburban','Rural'].map(v=>`<option${d['Location Type']===v?' selected':''}>${v}</option>`).join('')}
+                <select id="saleLeaseback" class="pds-input" onchange="markDirty()" style="flex:1;font-size:11px;">
+                  <option value="">SLB —</option>
+                  <option value="yes"${d['Sale Leaseback']===true?' selected':''}>SLB Yes</option>
+                  <option value="no"${d['Sale Leaseback']===false?' selected':''}>SLB No</option>
                 </select>
               </div>
             </div>
+          </div>
+        </div>
+      </div>
 
-            <!-- v113.75 / v188: Highlights load saved values; default 2 rows. -->
-            <div class="pd-hl-section">
-              <div class="pd-subhdr" style="margin-top:0;">🔦 Property Highlights</div>
-              <div id="highlightsContainer">
-                <div style="display:flex;flex-direction:column;gap:5px;" id="highlightsList">
-                  ${(function(){
-                    let arr = [];
-                    const raw = d['Property Highlights'];
-                    if(Array.isArray(raw)) arr = raw;
-                    else if(typeof raw === 'string'){ try { const p = JSON.parse(raw); if(Array.isArray(p)) arr = p; } catch(_){} }
-                    arr = arr.map(s => String(s||'').trim()).filter(Boolean);
-                    while(arr.length < 2) arr.push('');
-                    return arr.map(v => `<div style="display:flex;gap:6px;align-items:center;"><input class="form-input" style="flex:1;height:32px;" placeholder="—" oninput="markDirty()" value="${String(v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}"/><button class="save-btn" style="padding:2px 7px;" onclick="removeHighlight(this)">✕</button></div>`).join('');
-                  })()}
-                </div>
-                <button class="save-btn" style="margin-top:8px;" onclick="addHighlight()">+ Add Highlight</button>
-              </div>
+      <!-- 4. UNITS & OCCUPANCY -->
+      <div class="pds-section">
+        <div class="pds-section-hd">${_pdsIcon('package')}Units &amp; Occupancy</div>
+        <div class="pds-section-bd pds-flush">
+          <div class="pds-grid pds-cols-4">
+            <div class="pds-field">
+              <span class="pds-lbl">No. of Units</span>
+              ${_units>0 ? `<span class="pds-val pds-mono pds-large">${_units.toLocaleString()}</span>` : `<span class="pds-val pds-muted">—</span>`}
             </div>
-            `}
-          </td>
-        </tr>
+            <div class="pds-field">
+              <span class="pds-lbl">No. Vacant</span>
+              ${(()=>{ const v=Number(d['No. of Units Vacant']);
+                return (v>=0 && _units>0) ? `<span class="pds-val pds-mono pds-large">${v.toLocaleString()}</span>` : `<span class="pds-val pds-muted">—</span>`; })()}
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Occupancy</span>
+              ${_occ!=null ? `<span class="pds-val pds-mono pds-large pds-green">${_occ}%</span>` : `<span class="pds-val pds-muted">—</span>`}
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Price / Unit</span>
+              ${_ppu>0 ? `<span class="pds-val pds-mono pds-large">$${Math.round(_ppu).toLocaleString()}</span>` : `<span class="pds-val pds-muted">—</span><span class="pds-stamp">Computed</span>`}
+            </div>
+          </div>
+        </div>
+      </div>
 
-      </table>
-      <div style="text-align:right;margin-top:6px;">
+      <!-- 5. ZONING, TAX & IDENTIFIERS -->
+      <!-- v366: Block, Lot, Parcel ID, Tax (TTM), Annual Tax/Unit, Assessed
+           Value, Flood Zone, Opportunity Zone, Last Sale Date are not yet
+           tracked in the DB. Rendered with read-only N/A stamps until the
+           schema migration (v367) lands. -->
+      <div class="pds-section">
+        <div class="pds-section-hd">${_pdsIcon('compass')}Zoning, Tax &amp; Identifiers</div>
+        <div class="pds-section-bd pds-flush">
+          <div class="pds-grid">
+            <div class="pds-field">
+              <span class="pds-lbl">Zoning</span>
+              ${d['Zoning'] ? `<span class="pds-val pds-mono">${_esc(d['Zoning'])}</span>` : `<span class="pds-val pds-muted">—</span><span class="pds-stamp">Not set</span>`}
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Block · Lot</span>
+              <span class="pds-val pds-muted">—</span><span class="pds-stamp">Not tracked</span>
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Parcel ID</span>
+              <span class="pds-val pds-muted">—</span><span class="pds-stamp">Not tracked</span>
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Tax (TTM)</span>
+              <span class="pds-val pds-muted">—</span><span class="pds-stamp">Not tracked</span>
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Annual Tax / Unit</span>
+              <span class="pds-val pds-muted">—</span><span class="pds-stamp">Computed</span>
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Assessed Value</span>
+              <span class="pds-val pds-muted">—</span><span class="pds-stamp">Not tracked</span>
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Flood Zone</span>
+              <span class="pds-val pds-muted">—</span><span class="pds-stamp">Not tracked</span>
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Opportunity Zone</span>
+              <span class="pds-val pds-muted">—</span><span class="pds-stamp">Not tracked</span>
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Last Sale</span>
+              ${d['Seller Original Purchase Date'] ? `<span class="pds-val pds-mono">${_esc(d['Seller Original Purchase Date'])}</span>` : `<span class="pds-val pds-muted">—</span><span class="pds-stamp">No record</span>`}
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- 6. PROPERTY HIGHLIGHTS (interactive list) -->
+      ${_propMode === 'simple' ? '' : `
+      <div class="pds-section">
+        <div class="pds-section-hd">${_pdsIcon('sparkles')}Property Highlights</div>
+        <div class="pds-section-bd">
+          <div id="highlightsContainer">
+            <div style="display:flex;flex-direction:column;gap:6px;" id="highlightsList">
+              ${(function(){
+                let arr = [];
+                const raw = d['Property Highlights'];
+                if(Array.isArray(raw)) arr = raw;
+                else if(typeof raw === 'string'){ try { const p = JSON.parse(raw); if(Array.isArray(p)) arr = p; } catch(_){} }
+                arr = arr.map(s => String(s||'').trim()).filter(Boolean);
+                while(arr.length < 2) arr.push('');
+                return arr.map(v => `<div style="display:flex;gap:6px;align-items:center;"><input class="form-input" style="flex:1;height:32px;font-size:12px;" placeholder="—" oninput="markDirty()" value="${String(v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}"/><button class="save-btn" style="padding:2px 7px;" onclick="removeHighlight(this)">✕</button></div>`).join('');
+              })()}
+            </div>
+            <button class="save-btn" style="margin-top:8px;" onclick="addHighlight()">+ Add Highlight</button>
+          </div>
+        </div>
+      </div>
+      `}
+      <div style="text-align:right;margin:-4px 2px 14px;">
         <button class="save-btn" onclick="masterSave().catch(e=>console.warn('manual save error:',e))">Save</button>
       </div>
-    </div>
+    </div><!-- /pds-content -->
 
     ${_showUnitMix ? _renderUnitMixSection(d) : ''}
     ${_assetTypeStr.includes('mixed use') ? _renderMixedUseTenantMixSection(d, 'mixed') : ''}
@@ -6170,23 +6250,10 @@ function renderPropertyTab(d){
       </div>
     </div>
 
-    <!-- v113.74: Asset Class section moved into Property Information.
-         Simple-mode keeps a hidden block so save logic still finds the IDs
-         when collectAllDealFields runs in simple mode. -->
-    ${_propMode === 'simple' ? `
-      <div style="display:none;">
-        <select id="propClass"><option value=""></option><option>A</option><option>B</option><option>C</option><option>D</option></select>
-        <select id="propCondition"><option value=""></option><option>Excellent</option><option>Good</option><option>Average</option><option>Fair</option><option>Poor</option></select>
-        <select id="locationClass"><option value=""></option><option>A</option><option>B</option><option>C</option><option>D</option></select>
-        <select id="locationTrending"><option value=""></option><option>Up-and-coming</option><option>Stable</option><option>Declining</option></select>
-        <select id="locationType"><option value=""></option><option>Urban</option><option>Suburban</option><option>Rural</option></select>
-        <select id="propUse"><option value=""></option><option>Investment/Cash Flow</option><option>Owner/User</option><option>Vacant</option><option>Turnaround</option><option>Business Also For Sale</option></select>
-        <select id="constStatus"><option value=""></option><option>Existing</option><option>Under Construction/Proposed</option></select>
-        <select id="distressed"><option value=""></option><option value="yes">Yes</option><option value="no">No</option></select>
-        <select id="groundLease"><option value=""></option><option value="yes">Yes</option><option value="no">No</option></select>
-        <select id="saleLeaseback"><option value=""></option><option value="yes">Yes</option><option value="no">No</option></select>
-      </div>
-    ` : ''}
+    <!-- v366: legacy hidden-id fallback dropped — all 5 design sections are
+         always rendered (regardless of simple/detailed mode), so the IDs
+         used by collectAllDealFields are always in the DOM. -->
+
 
     <!-- LISTING & SELLER DETAILS -->
     ${_propMode === 'simple' ? `

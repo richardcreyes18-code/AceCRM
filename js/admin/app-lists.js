@@ -255,6 +255,23 @@ export function _appListToggleCategory(cat){
   _appListRender('asset_types');
 }
 
+// v360: per-list search filter state. Currently consumed by preferred_cities
+// but generic enough to wire to any future flat list.
+const _appListSearch = {};
+export function _appListSetSearch(listKey, val){
+  _appListSearch[listKey] = String(val || '');
+  _appListRender(listKey);
+  // Restore focus to the search input after the re-render (innerHTML on the
+  // list only — the search input above it survives, but the focus may have
+  // moved if the user clicked elsewhere mid-typing).
+  const inp = document.getElementById('alSearch' + _appListDomKey(listKey));
+  if(inp && document.activeElement !== inp){
+    const wasFocused = inp.getAttribute('data-was-focused') === '1';
+    if(wasFocused) inp.focus();
+  }
+}
+if(typeof window !== 'undefined') window._appListSetSearch = _appListSetSearch;
+
 // Group flat asset_types rows into a {category: [subtypes]} map. Bare
 // category rows seed an empty subtype array so categories with no subtypes
 // still render. Categories appear in the order they first appear in the
@@ -344,14 +361,27 @@ export function _appListRender(listKey){
   }
 
   if(listKey === 'preferred_cities'){
-    // Flat list (unchanged from v102.34).
+    // Flat list. v360: support the search filter wired above the list.
     const values = window._appLists.preferred_cities || [];
-    if(countEl) countEl.textContent = values.length + ' item' + (values.length === 1 ? '' : 's');
+    const q = (_appListSearch.preferred_cities || '').trim();
+    const tokenMatch = (typeof window._tokenMatch === 'function')
+      ? window._tokenMatch
+      : (qq, hay) => String(hay).toLowerCase().indexOf(String(qq).toLowerCase()) !== -1;
+    const filtered = q ? values.filter(v => tokenMatch(q, v)) : values;
+    if(countEl){
+      countEl.textContent = q
+        ? (filtered.length + ' of ' + values.length + ' shown')
+        : (values.length + ' item' + (values.length === 1 ? '' : 's'));
+    }
     if(!values.length){
       listEl.innerHTML = '<div style="padding:14px;text-align:center;color:#94a3b8;font-size:11px;">No items yet — add one above.</div>';
       return;
     }
-    listEl.innerHTML = values.map(v => {
+    if(!filtered.length){
+      listEl.innerHTML = '<div style="padding:14px;text-align:center;color:#94a3b8;font-size:11px;">No cities match "' + _appListEsc(q) + '".</div>';
+      return;
+    }
+    listEl.innerHTML = filtered.map(v => {
       const safe = _appListEsc(v);
       const attr = _appListJsEsc(v);
       return '<div class="al-row" style="display:flex;align-items:center;gap:6px;padding:6px 8px;border-bottom:1px solid #e2e8f0;background:#fff;">'

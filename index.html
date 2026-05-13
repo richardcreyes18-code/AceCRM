@@ -27377,9 +27377,13 @@ function showSettingsPage(){
               <div style="font-size:13px;font-weight:700;color:#0f172a;">📍 Preferred Cities</div>
               <div id="alCountPreferredCities" style="font-size:11px;color:#64748b;">—</div>
             </div>
-            <div style="display:flex;gap:6px;margin-bottom:10px;">
+            <div style="display:flex;gap:6px;margin-bottom:8px;">
               <input id="alInputPreferredCities" placeholder="New city…" onkeydown="if(event.key==='Enter'){event.preventDefault();_appListAdd('preferred_cities');}" style="flex:1;padding:7px 10px;border:1px solid #cbd5e1;border-radius:6px;font-size:12px;font-family:inherit;background:#fff;"/>
               <button onclick="_appListAdd('preferred_cities')" style="background:#0f172a;color:#fff;border:none;padding:7px 14px;border-radius:6px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">+ Add</button>
+            </div>
+            <!-- v360: filter bar for the 300+ item list -->
+            <div style="position:relative;margin-bottom:8px;">
+              <input id="alSearchPreferredCities" type="search" placeholder="🔍 Filter cities…" oninput="_appListSetSearch('preferred_cities', this.value)" style="width:100%;padding:6px 28px 6px 10px;border:1px solid #e2e8f0;border-radius:6px;font-size:12px;font-family:inherit;background:#fff;box-sizing:border-box;"/>
             </div>
             <div id="alListPreferredCities" style="max-height:320px;overflow-y:auto;font-size:12px;">Loading…</div>
           </div>
@@ -31789,13 +31793,13 @@ async function bcOpenExpanded(recordId){
                     title="Click to remove">${c} <span style="opacity:0.7;font-size:10px;">✕</span></span>`).join('')}
               </div>
               <div style="position:relative;margin-bottom:4px;">
-                <input id="bcf_city_input" class="form-input" placeholder="Type city name to search NJ municipalities..." style="width:100%;font-size:11px;box-sizing:border-box;"
+                <input id="bcf_city_input" class="form-input" placeholder="Type city name to search…" style="width:100%;font-size:11px;box-sizing:border-box;"
                   oninput="_bcCitySearch(this.value)"
                   onkeydown="if(event.key==='Escape'){document.getElementById('bcf_city_dropdown').style.display='none';}"
                   autocomplete="off"/>
                 <div id="bcf_city_dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid #c0d0e8;border-radius:0 0 5px 5px;max-height:180px;overflow-y:auto;z-index:200;box-shadow:0 4px 12px rgba(0,0,0,0.15);"></div>
               </div>
-              <div style="font-size:10px;color:#888;margin-top:2px;">Searchable list of all NJ municipalities — uniform spelling guaranteed.</div>
+              <div style="font-size:10px;color:#888;margin-top:2px;">Searchable list from Settings → Preferred Cities — uniform spelling guaranteed.</div>
               <input type="hidden" id="bcf_cities_hidden" value="${(f['Preferred Cities']||'').split(',').map(c=>c.trim()).filter(_bcCleanPill).join(', ')}"/>
             </div>
           </div>
@@ -33435,12 +33439,20 @@ function _bcCitySearch(q){
   const dd = document.getElementById('bcf_city_dropdown');
   if(!dd) return;
   if(!q || q.length < 2){ dd.style.display='none'; return; }
-  const matches = _NJ_MUNICIPALITIES.filter(c=>c.toLowerCase().includes(q.toLowerCase())).slice(0,10);
+  // v360: read from the curated preferred_cities list in Settings (via
+  // _dbGetCities) so any city the user adds in the admin panel surfaces
+  // here too. Falls back to _NJ_MUNICIPALITIES inside the helper when
+  // the cache is cold. Tokenized match keeps "fort lee" / "lee fort"
+  // both working.
+  const sourceList = (typeof _dbGetCities === 'function')
+    ? _dbGetCities()
+    : (Array.isArray(_NJ_MUNICIPALITIES) ? _NJ_MUNICIPALITIES.slice() : []);
+  const matches = sourceList.filter(c => _tokenMatch(q, c)).slice(0,10);
   if(!matches.length){ dd.style.display='none'; return; }
   dd.innerHTML = matches.map(c=>`
     <div onclick="_bcAddCity('${c.replace(/'/,"\\'")}');" style="padding:6px 12px;cursor:pointer;font-size:12px;color:#1a3a6e;"
       onmouseenter="this.style.background='#e8f0fe'" onmouseleave="this.style.background=''">
-      📍 ${c}, NJ
+      📍 ${c}
     </div>`).join('');
   dd.style.display='block';
 }
@@ -33743,16 +33755,19 @@ function _bcAiBuildEditor(col, propVal, kind, options){
     </div>
     <input type="hidden" id="aiVal_${col}" data-edit-type="text" value="${esc([...selected].join(', '))}"/>`;
   }
-  // v209: preferred_cities — the server keeps it as csv text, but on the
-  // client we render the same chip+typeahead picker the BC edit form uses.
-  // Reads from window._NJ_MUNICIPALITIES (loaded with the BC page).
-  if(col === 'preferred_cities' && Array.isArray(window._NJ_MUNICIPALITIES) && window._NJ_MUNICIPALITIES.length){
+  // v209 + v360: preferred_cities — the server keeps it as csv text, but on
+  // the client we render the same chip+typeahead picker the BC edit form uses.
+  // Pulls the canonical list from Settings → Preferred Cities via
+  // _dbGetCities() (falls back to window._NJ_MUNICIPALITIES inside the
+  // helper when the cache is cold).
+  const cityList = (typeof _dbGetCities === 'function') ? _dbGetCities() : [];
+  if(col === 'preferred_cities' && cityList.length){
     const propStr = String(propVal == null ? '' : propVal);
     // v234: same canonicalization as the chip path so AI-proposed cities
     // pre-select even when they have a state suffix or stray whitespace.
     const raw = propStr.split(/[,;]/).map(s => s.trim()).filter(Boolean);
-    const selected = raw.map(t => _bcAiCanonicalize(t, window._NJ_MUNICIPALITIES)).filter(Boolean);
-    return _bcAiBuildTypeaheadEditor(col, selected, window._NJ_MUNICIPALITIES);
+    const selected = raw.map(t => _bcAiCanonicalize(t, cityList)).filter(Boolean);
+    return _bcAiBuildTypeaheadEditor(col, selected, cityList);
   }
   // text / csv / fallback
   return `<input id="aiVal_${col}" data-edit-type="text" value="${esc(propVal)}" style="width:100%;padding:5px 8px;font-size:11px;border:1px solid #cbd5e1;border-radius:5px;"/>`;
@@ -41554,7 +41569,7 @@ function _liRenderBuyerForm(){
           <label style="${_liLabelStyle()}">📍 Preferred Cities / Towns <span style="color:#94a3b8;font-weight:400;">(optional — click ✕ to remove)</span></label>
           <div id="li_b_city_pills" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px;min-height:28px;padding:6px;background:#f8faff;border:1px solid #e2e8f0;border-radius:8px;"></div>
           <div style="position:relative;margin-bottom:4px;">
-            <input id="li_b_city_input" placeholder="Type city name to search NJ municipalities..."
+            <input id="li_b_city_input" placeholder="Type city name to search…"
               oninput="_liCitySearch(this.value)"
               onkeydown="if(event.key==='Escape'){document.getElementById('li_b_city_dropdown').style.display='none';}"
               autocomplete="off"
@@ -41814,14 +41829,18 @@ function _liCitySearch(q){
   const dd = document.getElementById('li_b_city_dropdown');
   if(!dd) return;
   if(!q || q.length < 2){ dd.style.display='none'; return; }
-  if(typeof _NJ_MUNICIPALITIES === 'undefined'){ dd.style.display='none'; return; }
-  const matches = _NJ_MUNICIPALITIES.filter(c => c.toLowerCase().includes(q.toLowerCase())).slice(0, 10);
+  // v360: same source-of-truth as the BC form (Settings → Preferred Cities).
+  const sourceList = (typeof _dbGetCities === 'function')
+    ? _dbGetCities()
+    : (Array.isArray(_NJ_MUNICIPALITIES) ? _NJ_MUNICIPALITIES.slice() : []);
+  if(!sourceList.length){ dd.style.display='none'; return; }
+  const matches = sourceList.filter(c => _tokenMatch(q, c)).slice(0, 10);
   if(!matches.length){ dd.style.display='none'; return; }
   dd.innerHTML = matches.map(c => `
     <div onclick="_liAddCity('${c.replace(/'/g, "\\'")}')"
       style="padding:8px 12px;cursor:pointer;font-size:12px;color:#1a3a6e;"
       onmouseenter="this.style.background='#e8f0fe'" onmouseleave="this.style.background=''">
-      📍 ${c}, NJ
+      📍 ${c}
     </div>`).join('');
   dd.style.display = 'block';
 }

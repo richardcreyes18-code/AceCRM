@@ -864,15 +864,20 @@
   </span>
   <!-- v113.24: Notification bell. Polls every 30s for unread task notifications.
        Pulses + chimes on new arrivals; click to open the dropdown. -->
-  <div id="navBellWrap" style="position:relative;display:inline-block;margin-right:8px;">
-    <button id="navBellBtn" onclick="_notifToggleDropdown()" title="Notifications"
-      style="background:transparent;border:none;cursor:pointer;font-size:18px;padding:4px 8px;color:#1a3a6e;position:relative;">
-      🔔
-      <span id="navBellBadge" style="display:none;position:absolute;top:0;right:2px;background:#dc2626;color:#fff;border-radius:99px;font-size:9px;font-weight:700;padding:1px 5px;line-height:1;">0</span>
+  <!-- v365.1: top-nav icon buttons matching the Claude Design SVG set
+       (Lucide-style stroke icons, 1.75px). Bell + Sync get proper SVGs
+       in place of the emoji + arrow-glyph that don't match the design. -->
+  <div id="navBellWrap" class="topnav-icon-btn" style="position:relative;margin-right:2px;">
+    <button id="navBellBtn" onclick="_notifToggleDropdown()" title="Notifications" aria-label="Notifications"
+      style="background:transparent;border:none;cursor:pointer;padding:6px;color:#cbd5e1;display:flex;align-items:center;justify-content:center;position:relative;">
+      <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+      <span id="navBellBadge" style="display:none;position:absolute;top:4px;right:4px;width:8px;height:8px;border-radius:50%;background:#dc2626;border:1.5px solid #0f172a;font-size:0;line-height:0;">·</span>
     </button>
-    <div id="navBellDropdown" style="display:none;position:absolute;right:0;top:100%;width:340px;max-height:420px;overflow-y:auto;background:#fff;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,0.15);z-index:1000;margin-top:4px;"></div>
+    <div id="navBellDropdown" style="display:none;position:absolute;right:0;top:100%;width:340px;max-height:420px;overflow-y:auto;background:#fff;border:1px solid #e5e7eb;border-radius:8px;box-shadow:0 10px 30px rgba(0,0,0,0.15);z-index:1000;margin-top:4px;color:#0f172a;"></div>
   </div>
-  <button class="nav-btn" onclick="syncData()" id="syncNavBtn">↻ Sync</button>
+  <button class="topnav-icon-btn" onclick="syncData()" id="syncNavBtn" title="Sync" aria-label="Sync data" style="background:transparent;border:none;cursor:pointer;padding:6px;color:#cbd5e1;display:flex;align-items:center;justify-content:center;">
+    <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/></svg>
+  </button>
 </div>
 
 <!-- APP WRAP -->
@@ -891,7 +896,7 @@
       <div id="gmailStatusBadge"></div>
     </div>
     <button class="add-new-btn" onclick="setNav(null,'leadintake')" title="Add New Deal">
-      <span class="plus" aria-hidden="true">+</span>
+      <svg class="plus" viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
       <span class="add-new-label">Add New Deal</span>
     </button>
     <div class="search-box">

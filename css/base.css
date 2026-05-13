@@ -69,6 +69,24 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   border-radius:3px;padding:1px 5px;line-height:1;
 }
 
+/* v365.1: top-nav icon buttons (Bell, Sync). 30x30 grid-centered hit
+   target with a hover glow that matches the Claude Design top-nav. */
+.topnav-icon-btn{
+  width:30px;height:30px;
+  display:inline-grid;place-items:center;
+  border-radius:6px;
+  transition:background 0.15s,color 0.15s;
+}
+.topnav-icon-btn:hover{ background:rgba(255,255,255,0.06); }
+.topnav-icon-btn:hover button,
+.topnav-icon-btn:hover > svg{ color:#fff; }
+.topnav-icon-btn > button{
+  width:100%;height:100%;
+  display:inline-flex;align-items:center;justify-content:center;
+  background:transparent;border:none;cursor:pointer;
+  border-radius:6px;
+}
+
 /* ── LAYOUT ──────────────────────────────────────────────────── */
 /* v364: reserve a 60px gutter for the mini sidebar; the sidebar itself
    absolutely-positions inside that gutter so it can expand on hover
@@ -90,14 +108,18 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   position:absolute;
   top:0;left:0;bottom:0;
   z-index:50;
-  transition:width 0.22s ease-out 0.20s;
-  padding-top:10px;
+  /* v365.1: snappier hover-to-expand. Open at 80ms delay for forgiving
+     brush-by behavior; close at 250ms so the sidebar doesn't immediately
+     snap shut when the user moves toward content. Width transitions in
+     180ms so the motion feels crisp, not laggy. */
+  transition:width 0.18s cubic-bezier(0.2,0,0,1) 0.25s;
+  padding-top:6px;
 }
 .sidebar:hover,
 .sidebar.pinned{
   width:240px;
   box-shadow:6px 0 18px rgba(15,23,42,0.12);
-  transition-delay:0.20s,0s;
+  transition-delay:0.08s;
 }
 /* Hide the legacy logo + welcome blocks entirely — the top-nav has the
    brand mark and the user-facing controls now live in the top-nav user
@@ -192,32 +214,32 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
 }
 .sidebar-welcome strong{color:var(--primary-dark);font-weight:600;}
 
-/* v365: collapsed-state-aware Add New Deal button. In the mini rail it
-   shrinks to a 40×40 square with just a "+" glyph; when the sidebar
-   expands, it grows back to a full-width pill with the "Add New Deal"
-   label. The .add-new-label span is the text-only portion (hidden in
-   the mini rail via the .sidebar:not(:hover) selector below). */
+/* v365.1: collapsed-state-aware Add New Deal button. Mini state =
+   centered 40×40 blue square with the SVG plus icon; expanded state =
+   full-width blue pill with "Add New Deal" label. The button is wrapped
+   in a fixed-width container so the "+" stays put and the surrounding
+   chrome doesn't jitter as the sidebar resizes. */
 .add-new-btn{
-  margin:10px auto;
-  width:40px;height:40px;
+  margin:8px auto;
+  width:44px;height:44px;
   background:var(--primary);
-  border:none;border-radius:var(--radius-sm);
+  border:none;border-radius:8px;
   color:#fff;font-weight:600;font-size:13px;
-  display:flex;align-items:center;justify-content:center;gap:0;
-  box-shadow:var(--shadow);
-  transition:background 0.15s,width 0.22s ease-out 0.20s,gap 0.15s;
-  overflow:hidden;
+  display:flex;align-items:center;justify-content:center;gap:6px;
+  box-shadow:var(--shadow-sm,0 1px 2px rgba(15,23,42,0.08));
+  cursor:pointer;
+  transition:background 0.15s,width 0.18s cubic-bezier(0.2,0,0,1) 0.25s,
+             margin 0.18s cubic-bezier(0.2,0,0,1) 0.25s;
+  flex-shrink:0;
 }
 .sidebar:hover .add-new-btn,
 .sidebar.pinned .add-new-btn{
-  margin:10px;
   width:calc(100% - 20px);
-  gap:8px;justify-content:center;
-  padding:0 14px;
-  transition-delay:0.20s,0s,0s;
+  margin:8px 10px;
+  transition-delay:0.08s;
 }
 .add-new-btn:hover{background:var(--primary-dark);}
-.add-new-btn .plus{font-size:18px;line-height:1;font-weight:400;}
+.add-new-btn .plus{color:#fff;display:block;}
 .add-new-label{white-space:nowrap;}
 
 /* v365: sidebar view tabs as icon-row in mini mode, label-row when

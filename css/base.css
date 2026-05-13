@@ -142,11 +142,12 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
 /* Hide text-heavy children while collapsed; reveal them on hover.
    Targeting opacity + visibility (not display:none) so the rail
    width-animation has something to reveal beneath. */
-/* v365: text-only elements that should fade away when the sidebar is
-   collapsed and fade back in when it expands. The icon-only siblings
-   (the SVG inside each view-tab button, the "+" glyph in the add-new
-   button, the colored dot in each recent-item) stay visible the whole
-   time so the rail never looks empty. */
+/* v365.4: text-only elements are REMOVED FROM LAYOUT entirely when the
+   sidebar is collapsed (display:none, not visibility:hidden). The
+   previous visibility-hidden approach kept the elements in the flex
+   flow and their varying widths shoved the visible dot to inconsistent
+   positions — that's the staggering the user reported. With display:none
+   the recent-item has only the .dial-dot left, which centers cleanly. */
 .sidebar .search-box,
 .sidebar .adv-search,
 .sidebar .sb-tab-label,
@@ -155,31 +156,24 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
 .sidebar #sidebarCount,
 .sidebar .sidebar-footer,
 .sidebar .add-new-label{
-  opacity:0;
-  visibility:hidden;
-  transition:opacity 0.12s ease-out;
-  white-space:nowrap;
+  display:none;
 }
 .sidebar:hover .search-box,
-.sidebar:hover .adv-search,
-.sidebar:hover .sb-tab-label,
-.sidebar:hover .recent-name,
-.sidebar:hover .recent-id,
-.sidebar:hover #sidebarCount,
-.sidebar:hover .sidebar-footer,
-.sidebar:hover .add-new-label,
 .sidebar.pinned .search-box,
-.sidebar.pinned .adv-search,
+.sidebar:hover .adv-search,
+.sidebar.pinned .adv-search{display:flex;}
+.sidebar:hover .sb-tab-label,
 .sidebar.pinned .sb-tab-label,
+.sidebar:hover .recent-name,
 .sidebar.pinned .recent-name,
+.sidebar:hover .recent-id,
 .sidebar.pinned .recent-id,
+.sidebar:hover .add-new-label,
+.sidebar.pinned .add-new-label{display:inline;}
+.sidebar:hover #sidebarCount,
 .sidebar.pinned #sidebarCount,
-.sidebar.pinned .sidebar-footer,
-.sidebar.pinned .add-new-label{
-  opacity:1;
-  visibility:visible;
-  transition-delay:0.18s;
-}
+.sidebar:hover .sidebar-footer,
+.sidebar.pinned .sidebar-footer{display:block;}
 /* When collapsed, the recent-list rows show only a status dot. */
 .sidebar:not(:hover):not(.pinned) .recent-item{
   justify-content:center;
@@ -222,15 +216,20 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
 .add-new-btn{
   position:relative;
   display:grid;place-items:center;
-  width:100%;height:38px;
+  width:38px;height:38px;
+  margin:0 auto;
   background:var(--primary);
   border:none;border-radius:8px;
   color:#fff;font-weight:600;font-size:13px;
   box-shadow:0 1px 2px rgba(15,23,42,0.08);
   cursor:pointer;
   overflow:hidden;
-  margin:0;
-  transition:background 0.15s;
+  transition:background 0.15s,width 0.18s cubic-bezier(0.2,0,0,1) 0.25s;
+}
+.sidebar:hover .add-new-btn,
+.sidebar.pinned .add-new-btn{
+  width:100%;
+  transition-delay:0.08s;
 }
 .add-new-btn::before{
   content:"+";

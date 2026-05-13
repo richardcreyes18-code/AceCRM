@@ -10883,11 +10883,20 @@ function renderFinancialTab(d){
                       <tbody>
                         ${[1,2,3].map(n => {
                           const bal   = Number(fi['mort'+n+'_bal'])||0;
-                          const amort = fi['mort'+n+'_amort']||'--';
+                          // v362: stringify the numeric mortgage fields so
+                          // the strict-equality option-select check below
+                          // (`amort===v`) matches String('25') from the
+                          // <option> value. Before, the DB returned Number 25
+                          // and the dropdown rendered with no `selected`, so
+                          // a saved amortization always reloaded as "--" —
+                          // looked like the save itself was broken.
+                          const rawAmort = fi['mort'+n+'_amort'];
+                          const amort = rawAmort ? String(rawAmort) : '--';
                           const rate  = Number(fi['mort'+n+'_rate'])||0;
                           const type  = fi['mort'+n+'_type']||'--';
                           const assm  = fi['mort'+n+'_assumable']||false;
-                          const yrsRem= fi['mort'+n+'_yrsrem']||'--';
+                          const rawYrs = fi['mort'+n+'_yrsrem'];
+                          const yrsRem = rawYrs ? String(rawYrs) : '--';
                           // Calculate monthly payment
                           const moRate = rate/100/12;
                           const nPer   = Number(amort)*12;

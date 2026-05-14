@@ -1669,16 +1669,35 @@
   white-space: pre-wrap;
 }
 
-/* ── Map-location card (simulated tile + pin + zoom controls) ─── */
+/* ── Map-location card (real Leaflet map, simulated fallback) ──── */
 .map-wrap { display: flex; flex-direction: column; }
 .map-canvas {
   position: relative;
   width: 100%;
-  aspect-ratio: 4/3;
   background: #e6efe2;
   overflow: hidden;
   border-bottom: 1px solid var(--border, #e2e8f0);
+  /* v374.16: when used as a Leaflet container, the element gets an
+     explicit pixel height set inline (height:280px). The legacy
+     simulated map (still kept below for future fallback) used
+     aspect-ratio:4/3; we drop that default so the inline height wins. */
 }
+.map-canvas:not([id="summaryLeafletMap"]) { aspect-ratio: 4/3; }
+
+/* v374.16: keep the corner attribution small + readable inside the
+   .map-canvas shell (Leaflet's default 11px sits awkwardly against
+   the institutional palette). */
+.map-canvas .leaflet-control-attribution {
+  font-size: 9px;
+  background: rgba(255, 255, 255, 0.78);
+  padding: 1px 5px;
+  color: var(--fg-3, #94a3b8);
+}
+.map-canvas .leaflet-control-attribution a {
+  color: var(--primary, #2563eb);
+  text-decoration: none;
+}
+.map-canvas .leaflet-control-attribution a:hover { text-decoration: underline; }
 .map-tile {
   position: absolute;
   inset: 0;

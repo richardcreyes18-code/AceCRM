@@ -4474,6 +4474,8 @@ function renderDealPage(){
     </div>
   `;
   _rendering = false;
+  // v374.16: mount the Summary tab's Leaflet map after the DOM settles
+  requestAnimationFrame(() => { if(typeof _initSummaryMap === 'function') _initSummaryMap(); });
   // Restore any unsaved edits for this deal that were in progress
   restorePendingEdits();
   // Initialize MF rent unit list from deal data (for byUnit mode)
@@ -5284,6 +5286,10 @@ function switchTab(name, btn){
   _rendering = true;
   document.getElementById('tabContent').innerHTML = content[name]||'<p>Coming soon</p>';
   _rendering = false;
+  // v374.16: mount the Summary tab's Leaflet map after switching to it.
+  if(name === 'summary'){
+    requestAnimationFrame(() => { if(typeof _initSummaryMap === 'function') _initSummaryMap(); });
+  }
 
   // v102.22: Reset scroll position to the top of the tab when switching tabs.
   // Previously only #mainArea was reset, but the actual scrolling element is
@@ -5403,7 +5409,7 @@ async function _summaryToggleMode(section){
     if(currentTab === 'property')       tabContentEl.innerHTML = renderPropertyTab(currentDeal);
     // v168: financial tab now has sub-tabs — keep the sub-tab bar prefix.
     else if(currentTab === 'financial') tabContentEl.innerHTML = _finSubTabBarHTML() + renderFinancialTab(currentDeal);
-    else                                tabContentEl.innerHTML = renderSummaryTab(currentDeal);
+    else { tabContentEl.innerHTML = renderSummaryTab(currentDeal); requestAnimationFrame(() => _initSummaryMap()); }
     _rendering = false;
     if(typeof _naDecorate === 'function') _naDecorate(tabContentEl);
   }
@@ -5419,7 +5425,7 @@ async function _summaryToggleMode(section){
         _rendering = true;
         if(currentTab === 'property')       tabContentEl.innerHTML = renderPropertyTab(currentDeal);
         else if(currentTab === 'financial') tabContentEl.innerHTML = renderFinancialTab(currentDeal);
-        else                                tabContentEl.innerHTML = renderSummaryTab(currentDeal);
+        else { tabContentEl.innerHTML = renderSummaryTab(currentDeal); requestAnimationFrame(() => _initSummaryMap()); }
         _rendering = false;
         if(typeof _naDecorate === 'function') _naDecorate(tabContentEl);
       }
@@ -5778,27 +5784,11 @@ function renderSummaryTab(d){
         <span style="margin-left:auto;font-size:10px;color:var(--fg-3,#94a3b8);font-family:var(--font-mono,monospace);font-weight:500;text-transform:none;letter-spacing:0;">${latLngLabel}</span>
       </div>
       <div class="map-wrap">
-        <div class="map-canvas" role="img" aria-label="Map showing pinpoint at ${fullAddress.replace(/"/g,'&quot;')}">
-          <div class="map-tile"></div>
-          <div class="map-road map-road-h" style="top:28%;"></div>
-          <div class="map-road map-road-h" style="top:62%;"></div>
-          <div class="map-road map-road-v" style="left:34%;"></div>
-          <div class="map-road map-road-v" style="left:70%;"></div>
-          <div class="map-road map-road-d map-thin" style="top:80%;"></div>
-          <div class="map-park" style="top:8%;left:46%;width:22%;height:18%;"></div>
-          <div class="map-water" style="top:72%;left:-10%;width:45%;height:30%;"></div>
-          <div class="map-block" style="top:12%;left:12%;width:18%;height:14%;"></div>
-          <div class="map-block" style="top:34%;left:42%;width:24%;height:24%;"></div>
-          <div class="map-block" style="top:40%;left:12%;width:18%;height:18%;"></div>
-          <div class="map-block" style="top:68%;left:40%;width:16%;height:12%;"></div>
-          <div class="map-block" style="top:68%;left:74%;width:18%;height:20%;"></div>
-          <div class="map-pin">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" fill="#2563eb"/><circle cx="12" cy="10" r="3" fill="#fff" stroke="#fff"/></svg>
-          </div>
-          <div class="map-pulse"></div>
-          <div class="map-attr">© Maps · Approx.</div>
-          <div class="map-zoom"><button title="Zoom in" onclick="window.open('${mapsUrl}','_blank')">+</button><button title="Zoom out" onclick="window.open('${mapsUrl}','_blank')">−</button></div>
-        </div>
+        <!-- v374.16: real interactive Leaflet map. The map mounts after
+             the Summary tab innerHTML is inserted via _initSummaryMap()
+             (called by requestAnimationFrame in the render pipeline).
+             OSM/CARTO Voyager tiles, free + no API key. -->
+        <div class="map-canvas" id="summaryLeafletMap" role="img" aria-label="Map showing pinpoint at ${fullAddress.replace(/"/g,'&quot;')}" style="height:280px;"></div>
         <div class="map-addr">
           <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
           <div>
@@ -5924,6 +5914,115 @@ function renderSummaryTab(d){
         </div>
       </div>
     </div>`;
+}
+
+// ─────────────────────────────────────────────────────────────
+// v374.16 — Summary tab interactive Leaflet map
+// Lazy-loads Leaflet 1.9.4 via the same CDN as initDealMap, then
+// mounts a CARTO Voyager tile layer + pin on #summaryLeafletMap.
+// If the deal has no lat/lng, fires a single Nominatim geocode and
+// patches the result back to ace_properties so the next render is
+// instant.
+// ─────────────────────────────────────────────────────────────
+async function _loadLeaflet(){
+  if(window.L) return window.L;
+  if(!document.querySelector('link[href*="leaflet.min.css"]')){
+    const css = document.createElement('link');
+    css.rel = 'stylesheet';
+    css.href = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css';
+    document.head.appendChild(css);
+  }
+  if(!document.querySelector('script[src*="leaflet.min.js"]')){
+    await new Promise(resolve => {
+      const s = document.createElement('script');
+      s.src = 'https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js';
+      s.onload = resolve;
+      s.onerror = resolve;
+      document.head.appendChild(s);
+    });
+  } else if(!window.L){
+    // Script tag already in DOM but not loaded yet — wait briefly.
+    await new Promise(resolve => {
+      const t = setInterval(() => {
+        if(window.L){ clearInterval(t); resolve(); }
+      }, 50);
+      setTimeout(() => { clearInterval(t); resolve(); }, 5000);
+    });
+  }
+  return window.L;
+}
+
+async function _initSummaryMap(){
+  const mapEl = document.getElementById('summaryLeafletMap');
+  if(!mapEl || !currentDeal) return;
+  await _loadLeaflet();
+  if(!window.L) return; // CDN failed — silently skip
+  // Tear down any previous map (e.g. when re-rendering via mode toggle).
+  if(mapEl._leafletMap){
+    try { mapEl._leafletMap.remove(); } catch(e){}
+    mapEl._leafletMap = null;
+    mapEl.innerHTML = '';
+  }
+  const d = currentDeal;
+  let lat = Number(d['Latitude'] || d['Lat'] || 0);
+  let lng = Number(d['Longitude'] || d['Lng'] || d['Lon'] || 0);
+  // If no coords stored, attempt a single Nominatim geocode + cache.
+  if(!lat || !lng){
+    try {
+      const addr = [d['Address'], d['City'], d['State'], d['Zip']].filter(Boolean).join(', ');
+      if(addr){
+        const url = 'https://nominatim.openstreetmap.org/search?format=json&q=' +
+          encodeURIComponent(addr) + '&limit=1';
+        const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+        if(res.ok){
+          const data = await res.json();
+          if(data && data[0]){
+            lat = parseFloat(data[0].lat);
+            lng = parseFloat(data[0].lon);
+            d['Latitude'] = lat;
+            d['Longitude'] = lng;
+            // Persist (fire-and-forget) so next render is instant.
+            if(typeof isSupabase === 'function' && isSupabase() && typeof _sbPatch === 'function'){
+              _sbPatch(SB_TABLES.properties, d.id, { latitude: lat, longitude: lng }).catch(()=>{});
+            }
+          }
+        }
+      }
+    } catch(e){
+      console.warn('[summaryMap] geocode failed:', e.message);
+    }
+  }
+  const haveCoords = !!(lat && lng);
+  if(!haveCoords){ lat = 40.0583; lng = -74.4057; } // NJ fallback center
+  const map = window.L.map(mapEl, {
+    zoomControl: true,
+    scrollWheelZoom: true,
+    attributionControl: true,
+  }).setView([lat, lng], haveCoords ? 17 : 8);
+  window.L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png', {
+    maxZoom: 19,
+    attribution: '© <a href="https://www.openstreetmap.org/copyright" target="_blank" rel="noopener">OpenStreetMap</a> · © <a href="https://carto.com/attributions" target="_blank" rel="noopener">CARTO</a>',
+    subdomains: 'abcd',
+  }).addTo(map);
+  if(haveCoords){
+    const addrSafe = String(d['Address']||'Property').replace(/</g,'&lt;');
+    const citySafe = d['City'] ? String(d['City']).replace(/</g,'&lt;') : '';
+    const marker = window.L.marker([lat, lng]).addTo(map);
+    marker.bindPopup(`<b>${addrSafe}</b>${citySafe ? '<br/>'+citySafe : ''}`);
+  } else {
+    // Friendly overlay when we couldn't geocode.
+    const note = document.createElement('div');
+    note.style.cssText = 'position:absolute;top:50%;left:50%;transform:translate(-50%,-50%);' +
+      'background:rgba(255,255,255,0.95);border:1px solid var(--border,#cbd5e1);' +
+      'padding:8px 14px;border-radius:6px;font-size:11.5px;color:var(--text2,#475569);' +
+      'z-index:1000;font-weight:500;text-align:center;pointer-events:none;';
+    note.textContent = 'Address could not be located — showing NJ overview.';
+    mapEl.appendChild(note);
+  }
+  mapEl._leafletMap = map;
+  // Leaflet sometimes renders 0×0 inside a layout that's still settling.
+  // invalidateSize on the next frame fixes the grey-tile blank state.
+  requestAnimationFrame(() => { try { map.invalidateSize(); } catch(e){} });
 }
 
 // ── NUMBER FORMATTING WITH COMMAS ───────────────────────────

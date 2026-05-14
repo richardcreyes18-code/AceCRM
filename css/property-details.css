@@ -1082,8 +1082,12 @@
    specificity so the table inherits the design's typography
    and scenario-column tints without rewriting every cell.
    ───────────────────────────────────────────────────────────── */
-.fin-income-table-wrap { overflow-x: auto; margin-top: 4px; }
-.fin-income-table {
+.fin-income-table-wrap,
+.fin-opex-table-wrap,
+.fin-noi-table-wrap { overflow-x: auto; margin-top: 4px; transition: opacity 0.2s; }
+.fin-income-table,
+.fin-opex-table,
+.fin-noi-table {
   width: 100%;
   min-width: 900px;
   border-collapse: separate;
@@ -1095,7 +1099,9 @@
   border-radius: 8px;
   overflow: hidden;
 }
-.fin-income-table thead th {
+.fin-income-table thead th,
+.fin-opex-table thead th,
+.fin-noi-table thead th {
   background: var(--surface-2);
   border-bottom: 1px solid var(--border);
   padding: 9px 10px;
@@ -1104,21 +1110,37 @@
   text-align: right;
   color: var(--fg-2);
 }
-.fin-income-table thead tr.fin-scenarios th { padding: 10px 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
-.fin-income-table thead tr.fin-scenarios th.scen-actual { background: #eff6ff; color: #1d4ed8; border-bottom: 2px solid #93c5fd; text-align: center; }
-.fin-income-table thead tr.fin-scenarios th.scen-pro    { background: #f0fdf4; color: var(--green-dark); border-bottom: 2px solid #86efac; text-align: center; }
-.fin-income-table thead tr.fin-sub-th th { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--fg-3); padding: 7px 10px; }
-.fin-income-table thead tr.fin-sub-th th:first-child { background: var(--surface-2); }
+.fin-income-table thead tr.fin-scenarios th,
+.fin-opex-table thead tr.fin-scenarios th,
+.fin-noi-table thead tr.fin-scenarios th { padding: 10px 12px; font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+.fin-income-table thead tr.fin-scenarios th.scen-actual,
+.fin-opex-table thead tr.fin-scenarios th.scen-actual,
+.fin-noi-table thead tr.fin-scenarios th.scen-actual { background: #eff6ff; color: #1d4ed8; border-bottom: 2px solid #93c5fd; text-align: center; }
+.fin-income-table thead tr.fin-scenarios th.scen-pro,
+.fin-opex-table thead tr.fin-scenarios th.scen-pro,
+.fin-noi-table thead tr.fin-scenarios th.scen-pro { background: #f0fdf4; color: var(--green-dark); border-bottom: 2px solid #86efac; text-align: center; }
+.fin-income-table thead tr.fin-sub-th th,
+.fin-opex-table thead tr.fin-sub-th th,
+.fin-noi-table thead tr.fin-sub-th th { font-size: 10px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; color: var(--fg-3); padding: 7px 10px; }
+.fin-income-table thead tr.fin-sub-th th:first-child,
+.fin-opex-table thead tr.fin-sub-th th:first-child,
+.fin-noi-table thead tr.fin-sub-th th:first-child { background: var(--surface-2); }
 
 /* Column tints (Actual = blue, Proforma = green). Subtle background
    applied to col elements; transparent on header so scenario bands
    keep their tint. */
-.fin-income-table col.col-a { background: rgba(37, 99, 235, 0.035); }
-.fin-income-table col.col-p { background: rgba(21, 128, 61, 0.035); }
+.fin-income-table col.col-a,
+.fin-opex-table col.col-a,
+.fin-noi-table col.col-a { background: rgba(37, 99, 235, 0.035); }
+.fin-income-table col.col-p,
+.fin-opex-table col.col-p,
+.fin-noi-table col.col-p { background: rgba(21, 128, 61, 0.035); }
 
 /* Override every legacy inline-styled td/border inside the table
    so the visual matches the design without touching tbody markup. */
-.fin-income-table tbody td {
+.fin-income-table tbody td,
+.fin-opex-table tbody td,
+.fin-noi-table tbody td {
   padding: 7px 10px !important;
   border: none !important;
   border-bottom: 1px solid var(--border) !important;
@@ -1127,19 +1149,34 @@
   color: var(--fg-1);
   vertical-align: middle;
 }
-.fin-income-table tbody tr:last-child td { border-bottom: none !important; }
-.fin-income-table tbody td:first-child { font-weight: 500; color: var(--fg-1); text-align: left; }
-.fin-income-table tbody td:not(:first-child) { text-align: right; font-family: var(--font-mono); font-size: 12px !important; }
+.fin-income-table tbody tr:last-child td,
+.fin-opex-table tbody tr:last-child td,
+.fin-noi-table tbody tr:last-child td { border-bottom: none !important; }
+.fin-income-table tbody td:first-child,
+.fin-opex-table tbody td:first-child,
+.fin-noi-table tbody td:first-child { font-weight: 500; color: var(--fg-1); text-align: left; }
+.fin-income-table tbody td:not(:first-child),
+.fin-opex-table tbody td:not(:first-child),
+.fin-noi-table tbody td:not(:first-child) { text-align: right; font-family: var(--font-mono); font-size: 12px !important; }
 
-/* Total-row styling (matches existing background hints `#f0f0e0` and
-   `#e0e8f0` from the legacy markup — those rows still carry inline
-   `style="background:..."` so we just override colors / weight). */
-.fin-income-table tbody tr[style*="f0f0e0"] td { background: #fef9c3 !important; font-weight: 700 !important; }
+/* Total-row styling (matches existing background hints from legacy
+   markup — those rows still carry inline `style="background:..."` so
+   we override colors / weight via attribute selectors). */
+.fin-income-table tbody tr[style*="f0f0e0"] td,
+.fin-opex-table tbody tr[style*="f0f0e0"] td { background: #fef9c3 !important; font-weight: 700 !important; }
 .fin-income-table tbody tr[style*="e0e8f0"] td { background: #dbeafe !important; font-weight: 700 !important; color: #1d4ed8 !important; }
+.fin-opex-table tbody tr[style*="e8e0d0"] td { background: #fed7aa !important; font-weight: 700 !important; color: #9a3412 !important; }
+.fin-noi-table tbody tr[style*="e8f0e8"] td { background: #dcfce7 !important; font-weight: 700 !important; color: var(--green-dark) !important; }
+.fin-opex-table tbody tr.exp-subrow td { background: var(--surface-2) !important; padding: 5px 10px 5px 28px !important; font-size: 11px !important; color: var(--fg-2) !important; }
+.fin-opex-table tbody tr.exp-subrow td:first-child { padding-left: 28px !important; font-style: italic; }
 
 /* Inline-styled inputs inside the table get the .cell-input look. */
 .fin-income-table tbody input.num-input,
-.fin-income-table tbody input[id^="fin_"] {
+.fin-income-table tbody input[id^="fin_"],
+.fin-opex-table tbody input.num-input,
+.fin-opex-table tbody input[id^="fin_"],
+.fin-noi-table tbody input.num-input,
+.fin-noi-table tbody input[id^="fin_"] {
   border: 1px solid var(--border) !important;
   background: var(--surface) !important;
   padding: 5px 8px !important;
@@ -1151,10 +1188,41 @@
   transition: border-color 120ms ease, box-shadow 120ms ease;
 }
 .fin-income-table tbody input.num-input:focus,
-.fin-income-table tbody input[id^="fin_"]:focus {
+.fin-income-table tbody input[id^="fin_"]:focus,
+.fin-opex-table tbody input.num-input:focus,
+.fin-opex-table tbody input[id^="fin_"]:focus,
+.fin-noi-table tbody input.num-input:focus,
+.fin-noi-table tbody input[id^="fin_"]:focus {
   outline: none;
   border-color: var(--primary) !important;
   box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
 }
-.fin-income-table tbody span { color: var(--fg-3); }
+.fin-income-table tbody span,
+.fin-opex-table tbody span,
+.fin-noi-table tbody span { color: var(--fg-3); }
+
+/* Expandable category toggle link inside OpEx table. */
+.fin-opex-table tbody a[onclick*="toggleExpCat"] {
+  color: var(--primary) !important;
+  font-weight: 600 !important;
+  cursor: pointer;
+  text-decoration: none;
+}
+.fin-opex-table tbody a[onclick*="toggleExpCat"]:hover { text-decoration: underline; }
+
+/* OpEx % Ratio override row — modernize without rewriting markup. */
+#expRatioRow {
+  background: #fffbeb !important;
+  border: 1px solid #fde68a !important;
+  border-radius: 8px !important;
+  padding: 12px 16px !important;
+  margin-bottom: 10px !important;
+}
+#expRatioRow input.form-input {
+  border: 1px solid var(--border) !important;
+  background: var(--surface) !important;
+  padding: 5px 8px !important;
+  border-radius: 6px !important;
+  font-family: var(--font-mono) !important;
+}
 

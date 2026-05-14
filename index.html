@@ -10740,24 +10740,23 @@ function renderFinancialTab(d){
             </label>
           </div>
         </div>
-        <div id="expItemizedWrap" style="overflow-x:auto;transition:opacity 0.2s;opacity:${d['Expense Mode']==='ratio'?'0.35':'1'};">
-        <table style="width:100%;border-collapse:collapse;font-size:11px;min-width:900px;">
+        <div id="expItemizedWrap" class="fin-opex-table-wrap" style="opacity:${d['Expense Mode']==='ratio'?'0.35':'1'};">
+        <table class="dt fin-table dual fin-opex-table">
+          <colgroup>
+            <col class="col-lbl"/>
+            <col class="col-a"/><col class="col-a"/><col class="col-a"/><col class="col-a"/>
+            <col class="col-p"/><col class="col-p"/><col class="col-p"/><col class="col-p"/>
+          </colgroup>
           <thead>
-            <tr>
-              <td style="width:170px;"></td>
-              <td colspan="4" style="text-align:center;font-weight:bold;background:linear-gradient(180deg,#5599cc,#2060b0);color:#fff;padding:4px;border:1px solid #1a50a0;">Actual (current)</td>
-              <td colspan="4" style="text-align:center;font-weight:bold;background:linear-gradient(180deg,#60a060,#306030);color:#fff;padding:4px;border:1px solid #1a4020;">Proforma (projected)</td>
+            <tr class="fin-scenarios">
+              <th></th>
+              <th colspan="4" class="scen-actual">Actual (current)</th>
+              <th colspan="4" class="scen-pro">Proforma (projected)</th>
             </tr>
-            <tr style="background:#e8e4d8;">
-              <td style="padding:3px 6px;border:1px solid #ccc;"></td>
-              <td style="padding:3px 6px;border:1px solid #ccc;font-weight:bold;text-align:right;">Monthly</td>
-              <td style="padding:3px 6px;border:1px solid #ccc;font-weight:bold;text-align:right;">Yearly</td>
-              <td style="padding:3px 6px;border:1px solid #ccc;font-weight:bold;text-align:right;">% of EGI</td>
-              <td style="padding:3px 6px;border:1px solid #ccc;font-weight:bold;text-align:right;">Yearly PSF</td>
-              <td style="padding:3px 6px;border:1px solid #ccc;font-weight:bold;text-align:right;">Monthly</td>
-              <td style="padding:3px 6px;border:1px solid #ccc;font-weight:bold;text-align:right;">Yearly</td>
-              <td style="padding:3px 6px;border:1px solid #ccc;font-weight:bold;text-align:right;">% of EGI</td>
-              <td style="padding:3px 6px;border:1px solid #ccc;font-weight:bold;text-align:right;">Yearly PSF</td>
+            <tr class="fin-sub-th">
+              <th></th>
+              <th>Monthly</th><th>Yearly</th><th>% of EGI</th><th>Yearly PSF</th>
+              <th>Monthly</th><th>Yearly</th><th>% of EGI</th><th>Yearly PSF</th>
             </tr>
           </thead>
           <tbody id="expenseTableBody">
@@ -10867,24 +10866,23 @@ function renderFinancialTab(d){
             <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
             Net Operating Income
           </div>
-          <div style="overflow-x:auto;">
-          <table style="width:100%;border-collapse:collapse;font-size:11px;min-width:900px;">
+          <div class="fin-noi-table-wrap">
+          <table class="dt fin-table dual fin-noi-table">
+            <colgroup>
+              <col class="col-lbl"/>
+              <col class="col-a"/><col class="col-a"/><col class="col-a"/><col class="col-a"/>
+              <col class="col-p"/><col class="col-p"/><col class="col-p"/><col class="col-p"/>
+            </colgroup>
             <thead>
-              <tr>
-                <td style="width:170px;"></td>
-                <td colspan="4" style="text-align:center;font-weight:bold;background:linear-gradient(180deg,#5599cc,#2060b0);color:#fff;padding:4px;border:1px solid #1a50a0;">Actual (current)</td>
-                <td colspan="4" style="text-align:center;font-weight:bold;background:linear-gradient(180deg,#60a060,#306030);color:#fff;padding:4px;border:1px solid #1a4020;">Proforma (projected)</td>
+              <tr class="fin-scenarios">
+                <th></th>
+                <th colspan="4" class="scen-actual">Actual (current)</th>
+                <th colspan="4" class="scen-pro">Proforma (projected)</th>
               </tr>
-              <tr style="background:#e8e4d8;">
-                <td style="padding:3px 6px;border:1px solid #ccc;"></td>
-                <td style="padding:3px 6px;border:1px solid #ccc;font-weight:bold;text-align:right;">Monthly</td>
-                <td style="padding:3px 6px;border:1px solid #ccc;font-weight:bold;text-align:right;">Yearly</td>
-                <td style="padding:3px 6px;border:1px solid #ccc;font-weight:bold;text-align:right;">% of EGI</td>
-                <td style="padding:3px 6px;border:1px solid #ccc;font-weight:bold;text-align:right;">Yearly PSF</td>
-                <td style="padding:3px 6px;border:1px solid #ccc;font-weight:bold;text-align:right;">Monthly</td>
-                <td style="padding:3px 6px;border:1px solid #ccc;font-weight:bold;text-align:right;">Yearly</td>
-                <td style="padding:3px 6px;border:1px solid #ccc;font-weight:bold;text-align:right;">% of EGI</td>
-                <td style="padding:3px 6px;border:1px solid #ccc;font-weight:bold;text-align:right;">Yearly PSF</td>
+              <tr class="fin-sub-th">
+                <th></th>
+                <th>Monthly</th><th>Yearly</th><th>% of EGI</th><th>Yearly PSF</th>
+                <th>Monthly</th><th>Yearly</th><th>% of EGI</th><th>Yearly PSF</th>
               </tr>
             </thead>
             <tbody>

@@ -10494,106 +10494,147 @@ function renderFinancialTab(d){
           items:[{id:'est_grossMinusNoi',label:'Gross Income - NOI, expenses not given'}] },
       ];
 
-      // Build rows
+      // v374.7: build OpEx categories per-scenario so Actual + Proforma stack
+      // vertically. Each call to _opexCatRows(scen) returns the category +
+      // sub-row HTML for one scenario only (5 cols). toggleExpCat() now uses
+      // a class for the chevron icon so both sections sync when expanding.
+      const aCapRes_mo = Number(fi.aCapRes_mo)||0;
+      const pCapRes_mo = Number(fi.pCapRes_mo)||0;
+
+      // Pre-compute totals once (needed for the Total Variable / Total Fixed
+      // / Total OpEx rows which appear in both sections).
       let varTotalA=0, varTotalP=0, fixTotalA=0, fixTotalP=0;
-
-      const catRows = categories.map(cat => {
-        // Sum items for this category
-        let catTotalA_mo=0, catTotalP_mo=0;
-        cat.items.forEach(item => {
-          catTotalA_mo += Number(fi['a_'+item.id+'_mo'])||0;
-          catTotalP_mo += Number(fi['p_'+item.id+'_mo'])||0;
+      categories.forEach(cat=>{
+        let catA_mo=0, catP_mo=0;
+        cat.items.forEach(item=>{
+          catA_mo += Number(fi['a_'+item.id+'_mo'])||0;
+          catP_mo += Number(fi['p_'+item.id+'_mo'])||0;
         });
-        const catA_yr = catTotalA_mo*12;
-        const catP_yr = catTotalP_mo*12;
-        if(cat.fixed){ fixTotalA+=catA_yr; fixTotalP+=catP_yr; }
-        else         { varTotalA+=catA_yr;  varTotalP+=catP_yr; }
+        if(cat.fixed){ fixTotalA+=catA_mo*12; fixTotalP+=catP_mo*12; }
+        else         { varTotalA+=catA_mo*12;  varTotalP+=catP_mo*12; }
+      });
 
+      const _opexCatRows = (scen) => categories.map(cat => {
+        let catTotal_mo=0;
+        cat.items.forEach(item => { catTotal_mo += Number(fi[scen+'_'+item.id+'_mo'])||0; });
+        const cat_yr = catTotal_mo*12;
+        const base = scen==='a' ? egi : pegi;
         const isExpanded = fi['exp_'+cat.id] === true;
 
         const subRows = cat.items.map(item => {
-          const aVal = Number(fi['a_'+item.id+'_mo'])||0;
-          const pVal = Number(fi['p_'+item.id+'_mo'])||0;
+          const val = Number(fi[scen+'_'+item.id+'_mo'])||0;
           return `
-          <tr class="exp-subrow exp-subrow-${cat.id}" style="display:${isExpanded?'table-row':'none'};">
-            <td style="padding:2px 6px 2px 24px;border:1px solid #e0e0e0;color:#555;font-size:11px;">${item.label}</td>
-            <td style="padding:2px 4px;border:1px solid #e0e0e0;">
-              <div style="display:flex;gap:2px;align-items:center;">
-                <span style="font-size:10px;">$</span>
-                <input id="fin_a_${item.id}_mo" class="num-input" type="text" inputmode="numeric" style="width:70px;text-align:right;border:1px inset #aaa;padding:2px 3px;font-size:11px;background:#fff;" value="${_fmtNum(aVal||'')}" oninput="syncMoYr('fin_a_${item.id}_mo','fin_a_${item.id}_yr','mo');expenseCalc()"/>
-              </div>
-            </td>
-            <td style="padding:2px 4px;border:1px solid #e0e0e0;">
-              <div style="display:flex;gap:2px;align-items:center;">
-                <span style="font-size:10px;">$</span>
-                <input id="fin_a_${item.id}_yr" class="num-input" type="text" inputmode="numeric" style="width:70px;text-align:right;border:1px inset #aaa;padding:2px 3px;font-size:11px;background:#fff;" value="${_fmtNum(aVal?Math.round(aVal*12):'')}" oninput="syncMoYr('fin_a_${item.id}_mo','fin_a_${item.id}_yr','yr');expenseCalc()"/>
-              </div>
-            </td>
-            <td style="padding:2px 6px;border:1px solid #e0e0e0;"></td>
-            <td style="padding:2px 6px;border:1px solid #e0e0e0;"></td>
-            <td style="padding:2px 4px;border:1px solid #e0e0e0;">
-              <div style="display:flex;gap:2px;align-items:center;">
-                <span style="font-size:10px;">$</span>
-                <input id="fin_p_${item.id}_mo" class="num-input" type="text" inputmode="numeric" style="width:70px;text-align:right;border:1px inset #aaa;padding:2px 3px;font-size:11px;background:#fff;" value="${_fmtNum(pVal||'')}" oninput="syncMoYr('fin_p_${item.id}_mo','fin_p_${item.id}_yr','mo');expenseCalc()"/>
-              </div>
-            </td>
-            <td style="padding:2px 4px;border:1px solid #e0e0e0;">
-              <div style="display:flex;gap:2px;align-items:center;">
-                <span style="font-size:10px;">$</span>
-                <input id="fin_p_${item.id}_yr" class="num-input" type="text" inputmode="numeric" style="width:70px;text-align:right;border:1px inset #aaa;padding:2px 3px;font-size:11px;background:#fff;" value="${_fmtNum(pVal?Math.round(pVal*12):'')}" oninput="syncMoYr('fin_p_${item.id}_mo','fin_p_${item.id}_yr','yr');expenseCalc()"/>
-              </div>
-            </td>
-            <td style="padding:2px 6px;border:1px solid #e0e0e0;"></td>
-            <td style="padding:2px 6px;border:1px solid #e0e0e0;"></td>
-          </tr>`;
+            <tr class="exp-subrow exp-subrow-${cat.id}" style="display:${isExpanded?'table-row':'none'};">
+              <td class="row-lbl sub">${item.label}</td>
+              <td><div class="fin-mini-input"><span class="pre">$</span><input id="fin_${scen}_${item.id}_mo" class="num-input" type="text" inputmode="numeric" value="${_fmtNum(val||'')}" oninput="syncMoYr('fin_${scen}_${item.id}_mo','fin_${scen}_${item.id}_yr','mo');expenseCalc()"/></div></td>
+              <td><div class="fin-mini-input"><span class="pre">$</span><input id="fin_${scen}_${item.id}_yr" class="num-input" type="text" inputmode="numeric" value="${_fmtNum(val?Math.round(val*12):'')}" oninput="syncMoYr('fin_${scen}_${item.id}_mo','fin_${scen}_${item.id}_yr','yr');expenseCalc()"/></div></td>
+              <td></td>
+              <td></td>
+            </tr>`;
         }).join('');
 
-        return `
-        <tr style="background:#f8f8f8;">
-          <td style="padding:3px 6px;border:1px solid #ccc;">
-            <a onclick="toggleExpCat('${cat.id}')" style="color:#2060b0;font-weight:bold;cursor:pointer;text-decoration:none;">
-              ${cat.label} <span id="exp-icon-${cat.id}">${isExpanded?'▾':'▸'}</span>
-            </a>
-            ${tip('exp_'+cat.id, cat.tip)}
-          </td>
-          <td id="exp_a_${cat.id}_mo" style="padding:3px 6px;border:1px solid #ccc;text-align:right;font-size:11px;">${fd(catTotalA_mo)}</td>
-          <td id="exp_a_${cat.id}_yr" style="padding:3px 6px;border:1px solid #ccc;text-align:right;font-size:11px;">${fd(catA_yr)}</td>
-          <td style="padding:3px 6px;border:1px solid #ccc;text-align:right;font-size:11px;">${fpct(catA_yr,egi)}</td>
-          <td style="padding:3px 6px;border:1px solid #ccc;text-align:right;font-size:11px;">${fpsf(catA_yr,sf)}</td>
-          <td id="exp_p_${cat.id}_mo" style="padding:3px 6px;border:1px solid #ccc;text-align:right;font-size:11px;">${fd(catTotalP_mo)}</td>
-          <td id="exp_p_${cat.id}_yr" style="padding:3px 6px;border:1px solid #ccc;text-align:right;font-size:11px;">${fd(catP_yr)}</td>
-          <td style="padding:3px 6px;border:1px solid #ccc;text-align:right;font-size:11px;">${fpct(catP_yr,pegi)}</td>
-          <td style="padding:3px 6px;border:1px solid #ccc;text-align:right;font-size:11px;">${fpsf(catP_yr,sf)}</td>
-        </tr>
-        ${subRows}
-        ${cat.id==='misc' ? `
-        <tr style="background:#f0f0e0;font-weight:bold;">
-          <td style="padding:4px 6px;border:1px solid #bbb;">Total Variable Expenses</td>
-          <td id="exp_varTotal_a_mo" style="padding:3px 6px;border:1px solid #bbb;text-align:right;">${fd(varTotalA/12)}</td>
-          <td id="exp_varTotal_a_yr" style="padding:3px 6px;border:1px solid #bbb;text-align:right;">${fd(varTotalA)}</td>
-          <td style="padding:3px 6px;border:1px solid #bbb;text-align:right;">${fpct(varTotalA,egi)}</td>
-          <td style="padding:3px 6px;border:1px solid #bbb;text-align:right;">${fpsf(varTotalA,sf)}</td>
-          <td id="exp_varTotal_p_mo" style="padding:3px 6px;border:1px solid #bbb;text-align:right;">${fd(varTotalP/12)}</td>
-          <td id="exp_varTotal_p_yr" style="padding:3px 6px;border:1px solid #bbb;text-align:right;">${fd(varTotalP)}</td>
-          <td style="padding:3px 6px;border:1px solid #bbb;text-align:right;">${fpct(varTotalP,pegi)}</td>
-          <td style="padding:3px 6px;border:1px solid #bbb;text-align:right;">${fpsf(varTotalP,sf)}</td>
-        </tr>` : ''}
-        ${cat.id==='pm' ? `
-        <tr style="background:#f0f0e0;font-weight:bold;">
-          <td style="padding:4px 6px;border:1px solid #bbb;">Total Fixed Expenses</td>
-          <td id="exp_fixTotal_a_mo" style="padding:3px 6px;border:1px solid #bbb;text-align:right;">${fd(fixTotalA/12)}</td>
-          <td id="exp_fixTotal_a_yr" style="padding:3px 6px;border:1px solid #bbb;text-align:right;">${fd(fixTotalA)}</td>
-          <td style="padding:3px 6px;border:1px solid #bbb;text-align:right;">${fpct(fixTotalA,egi)}</td>
-          <td style="padding:3px 6px;border:1px solid #bbb;text-align:right;">${fpsf(fixTotalA,sf)}</td>
-          <td id="exp_fixTotal_p_mo" style="padding:3px 6px;border:1px solid #bbb;text-align:right;">${fd(fixTotalP/12)}</td>
-          <td id="exp_fixTotal_p_yr" style="padding:3px 6px;border:1px solid #bbb;text-align:right;">${fd(fixTotalP)}</td>
-          <td style="padding:3px 6px;border:1px solid #bbb;text-align:right;">${fpct(fixTotalP,pegi)}</td>
-          <td style="padding:3px 6px;border:1px solid #bbb;text-align:right;">${fpsf(fixTotalP,sf)}</td>
-        </tr>` : ''}`;
+        const catRow = `
+          <tr class="cat-row">
+            <td class="row-lbl">
+              <a onclick="toggleExpCat('${cat.id}')" class="cat-toggle">
+                ${cat.label} <span class="exp-icon-${cat.id} chev">${isExpanded?'▾':'▸'}</span>
+              </a>
+              ${tip('exp_'+cat.id+scen, cat.tip)}
+            </td>
+            <td id="exp_${scen}_${cat.id}_mo" class="num mono">${fd(catTotal_mo)}</td>
+            <td id="exp_${scen}_${cat.id}_yr" class="num mono">${fd(cat_yr)}</td>
+            <td class="num mono">${fpct(cat_yr,base)}</td>
+            <td class="num mono">${fpsf(cat_yr,sf)}</td>
+          </tr>${subRows}`;
+
+        // Inject the Total Variable / Total Fixed sub-totals after the
+        // appropriate category boundary.
+        const totVar = scen==='a' ? varTotalA : varTotalP;
+        const totFix = scen==='a' ? fixTotalA : fixTotalP;
+        const tail =
+          cat.id==='misc' ? `
+            <tr class="subtotal">
+              <td class="row-lbl strong">Total Variable Expenses</td>
+              <td id="exp_varTotal_${scen}_mo" class="num mono strong">${fd(totVar/12)}</td>
+              <td id="exp_varTotal_${scen}_yr" class="num mono strong">${fd(totVar)}</td>
+              <td class="num mono">${fpct(totVar,base)}</td>
+              <td class="num mono">${fpsf(totVar,sf)}</td>
+            </tr>`
+          : cat.id==='pm' ? `
+            <tr class="subtotal">
+              <td class="row-lbl strong">Total Fixed Expenses</td>
+              <td id="exp_fixTotal_${scen}_mo" class="num mono strong">${fd(totFix/12)}</td>
+              <td id="exp_fixTotal_${scen}_yr" class="num mono strong">${fd(totFix)}</td>
+              <td class="num mono">${fpct(totFix,base)}</td>
+              <td class="num mono">${fpsf(totFix,sf)}</td>
+            </tr>`
+          : '';
+        return catRow + tail;
       }).join('');
 
-      const aCapRes_mo = Number(fi.aCapRes_mo)||0;
-      const pCapRes_mo = Number(fi.pCapRes_mo)||0;
+      // Sum total opex once for use in both section footers + downstream NOI/CF.
+      const _opexTotals = (()=>{
+        const allCatIds = ['admin','rm','util','misc','tax','ins','pm','est'];
+        const itemMap = {
+          admin:['admin_mgmt','admin_acct','admin_legal','admin_other'],
+          rm:['rm_jan','rm_land','rm_maint','rm_sal','rm_pool','rm_sup'],
+          util:['util_elec','util_gas','util_water','util_trash','util_other'],
+          misc:['misc_adv','misc_other'],
+          tax:['tax_prop','tax_other'],
+          ins:['ins_prop','ins_liab'],
+          pm:['pm_fee','pm_other'],
+          est:['est_grossMinusNoi']
+        };
+        let aTotal_mo=0, pTotal_mo=0;
+        allCatIds.forEach(cat=>(itemMap[cat]||[]).forEach(id=>{
+          aTotal_mo += Number(fi['a_'+id+'_mo'])||0;
+          pTotal_mo += Number(fi['p_'+id+'_mo'])||0;
+        }));
+        aTotal_mo += aCapRes_mo;
+        pTotal_mo += pCapRes_mo;
+        return { aTotal_mo, pTotal_mo };
+      })();
+      window._aTotalOpEx_mo = _opexTotals.aTotal_mo;
+      window._pTotalOpEx_mo = _opexTotals.pTotal_mo;
+
+      const _opexFooter = (scen) => {
+        const capRes_mo = scen==='a' ? aCapRes_mo : pCapRes_mo;
+        const total_mo  = scen==='a' ? _opexTotals.aTotal_mo : _opexTotals.pTotal_mo;
+        const base      = scen==='a' ? egi : pegi;
+        return `
+          <tr>
+            <td class="row-lbl">Plus: Capital Reserve ${tip('capres'+scen,'Capital Reserve = funds set aside for major future repairs and replacements (roof, HVAC, etc.).')}</td>
+            <td><div class="fin-mini-input"><span class="pre">$</span><input id="fin_${scen}CapRes_mo" class="num-input" type="text" inputmode="numeric" value="${_fmtNum(capRes_mo||'')}" oninput="syncMoYr('fin_${scen}CapRes_mo','fin_${scen}CapRes_yr','mo');expenseCalc()"/></div></td>
+            <td><div class="fin-mini-input"><span class="pre">$</span><input id="fin_${scen}CapRes_yr" class="num-input" type="text" inputmode="numeric" value="${_fmtNum(capRes_mo?Math.round(capRes_mo*12):'')}" oninput="syncMoYr('fin_${scen}CapRes_mo','fin_${scen}CapRes_yr','yr');expenseCalc()"/></div></td>
+            <td class="num mono">${fpct(capRes_mo*12,base)}</td>
+            <td class="num mono">${fpsf(capRes_mo*12,sf)}</td>
+          </tr>
+          <tr class="total">
+            <td class="row-lbl strong">Total Operating Expenses</td>
+            <td id="exp_totalOpEx_${scen}_mo" class="num mono strong">${fd(total_mo)}</td>
+            <td id="exp_totalOpEx_${scen}_yr" class="num mono strong">${fd(total_mo*12)}</td>
+            <td class="num mono">${fpct(total_mo*12,base)}</td>
+            <td class="num mono">${fpsf(total_mo*12,sf)}</td>
+          </tr>`;
+      };
+
+      const _opexStackSection = (scen) => `
+        <div class="fin-stack-section ${scen==='a'?'is-actual':'is-pro'}">
+          <div class="fin-stack-hd"><span class="dot"></span>${scen==='a'?'Actual (current)':'Proforma (projected)'}</div>
+          <div class="fin-stack-tablewrap" style="opacity:${d['Expense Mode']==='ratio'?'0.35':'1'};">
+          <table class="dt fin-table fin-stack-table fin-opex-stack">
+            <colgroup>
+              <col class="col-lbl"/><col class="col-num"/><col class="col-num"/><col class="col-pct"/><col class="col-psf"/>
+            </colgroup>
+            <thead>
+              <tr class="fin-sub-th">
+                <th></th><th>Monthly</th><th>Yearly</th><th>% of EGI</th><th>Yearly PSF</th>
+              </tr>
+            </thead>
+            <tbody>${_opexCatRows(scen)}${_opexFooter(scen)}</tbody>
+          </table>
+          </div>
+        </div>`;
 
       return `
       <div class="pds-section fin-hide-simple" style="margin-top:12px;">
@@ -10601,165 +10642,36 @@ function renderFinancialTab(d){
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></svg>
           <span>Less: Operating Expenses</span>
           ${tip('opex','Operating Expenses = all costs to run the property excluding debt service. NOI = EGI minus Operating Expenses.')}
-          <div style="margin-left:auto;display:flex;align-items:center;gap:5px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:3px 6px;">
-            <span style="font-size:11px;color:var(--text2);white-space:nowrap;">Expense Mode:</span>
-            <label style="display:flex;align-items:center;gap:3px;cursor:pointer;font-size:11px;font-weight:600;white-space:nowrap;">
-              <input type="radio" name="expMode" id="expModeItemized" value="itemized" ${d['Expense Mode']==='ratio'?'':'checked'} onchange="toggleExpMode()" style="cursor:pointer;"/> Itemized
-            </label>
-            <label style="display:flex;align-items:center;gap:3px;cursor:pointer;font-size:11px;font-weight:600;white-space:nowrap;">
-              <input type="radio" name="expMode" id="expModeRatio" value="ratio" ${d['Expense Mode']==='ratio'?'checked':''} onchange="toggleExpMode()" style="cursor:pointer;"/> % Ratio
-            </label>
+          <div class="pds-seg sm" style="margin-left:auto;">
+            <label><input type="radio" name="expMode" id="expModeItemized" value="itemized" ${d['Expense Mode']==='ratio'?'':'checked'} onchange="toggleExpMode()"/> Itemized</label>
+            <label><input type="radio" name="expMode" id="expModeRatio" value="ratio" ${d['Expense Mode']==='ratio'?'checked':''} onchange="toggleExpMode()"/> % Ratio</label>
           </div>
-          <!-- v111.9: mirror of the Income section's one-click copy — snapshots
-               every Actual expense line into the Proforma column. -->
-          <button type="button" onclick="copyActualToProforma('expenses')"
-            title="Copy every Actual (current) expense input into the Proforma (projected) column"
-            style="background:#e0e7ff;color:#3730a3;border:1px solid #c7d2fe;padding:5px 12px;font-size:11px;border-radius:5px;cursor:pointer;font-weight:600;white-space:nowrap;">
-            ⇒ Copy Actual → Proforma
-          </button>
-          <!-- v112 Bug 4: scale every existing Proforma expense by user-specified % -->
-          <button type="button" onclick="bumpProformaExpenses()"
-            title="Scale every Proforma expense line by a percentage (e.g. +3% or -5%)"
-            style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;padding:5px 12px;font-size:11px;border-radius:5px;cursor:pointer;font-weight:600;white-space:nowrap;">
-            % Bump Proforma
-          </button>
-          <!-- v112 Bug 3: one-click clear for each side -->
-          <button type="button" onclick="clearExpenses('actual')"
-            title="Clear every Actual (current) expense input"
-            style="background:#fee2e2;color:#991b1b;border:1px solid #fecaca;padding:5px 10px;font-size:11px;border-radius:5px;cursor:pointer;font-weight:600;white-space:nowrap;">
-            ✕ Clear Actual
-          </button>
-          <button type="button" onclick="clearExpenses('proforma')"
-            title="Clear every Proforma (projected) expense input"
-            style="background:#fee2e2;color:#991b1b;border:1px solid #fecaca;padding:5px 10px;font-size:11px;border-radius:5px;cursor:pointer;font-weight:600;white-space:nowrap;">
-            ✕ Clear Proforma
-          </button>
-          <button class="save-btn" style="padding:3px 12px;" onclick="showAllExpCats()">Show All</button>
-          <button class="save-btn" style="padding:3px 12px;" onclick="hideAllExpCats()">Hide All</button>
+          <button type="button" onclick="copyActualToProforma('expenses')" title="Copy every Actual expense input into the Proforma column" class="fin-inline-btn lavender" style="margin-left:0;">⇒ Copy Actual → Proforma</button>
+          <button type="button" onclick="bumpProformaExpenses()" title="Scale every Proforma expense line by a percentage" class="fin-inline-btn amber">% Bump Proforma</button>
+          <button type="button" onclick="clearExpenses('actual')" title="Clear every Actual expense input" class="fin-inline-btn rose">✕ Clear Actual</button>
+          <button type="button" onclick="clearExpenses('proforma')" title="Clear every Proforma expense input" class="fin-inline-btn rose">✕ Clear Proforma</button>
+          <button type="button" class="fin-inline-btn ghost" onclick="showAllExpCats()">Show All</button>
+          <button type="button" class="fin-inline-btn ghost" onclick="hideAllExpCats()">Hide All</button>
         </div>
         <!-- Ratio override inputs — shown only in % Ratio mode -->
-        <div id="expRatioRow" style="display:${d['Expense Mode']==='ratio'?'block':'none'};background:#fef3c7;border:1px solid #fde68a;border-radius:6px;padding:10px 14px;margin-bottom:10px;">
-          <div style="font-size:11px;font-weight:600;color:#92400e;margin-bottom:8px;">% Ratio Override — expenses calculated as % of EGI. Itemized lines below are ignored.</div>
-          <div style="display:flex;gap:24px;flex-wrap:wrap;">
-            <label style="font-size:12px;display:flex;align-items:center;gap:6px;">
-              Actual Expense Ratio:
-              <input id="fin_aExpRatio" type="number" min="0" max="100" step="0.5" placeholder="—"
-                value="${d['Actual Expense Ratio %']!=null?d['Actual Expense Ratio %']:''}"
-                class="form-input" style="width:70px;text-align:center;"
-                oninput="expenseCalc(); _expRatioPreview()"/>
+        <div id="expRatioRow" style="display:${d['Expense Mode']==='ratio'?'block':'none'};">
+          <div class="ratio-note">% Ratio Override — expenses calculated as % of EGI. Itemized lines below are ignored.</div>
+          <div class="ratio-fields">
+            <label>Actual Expense Ratio:
+              <input id="fin_aExpRatio" type="number" min="0" max="100" step="0.5" placeholder="—" value="${d['Actual Expense Ratio %']!=null?d['Actual Expense Ratio %']:''}" class="form-input" oninput="expenseCalc(); _expRatioPreview()"/>
               <span>% of EGI</span>
-              <span id="fin_aExpRatio_preview" style="font-size:11px;color:#92400e;font-weight:600;margin-left:4px;"></span>
+              <span id="fin_aExpRatio_preview" class="ratio-preview"></span>
             </label>
-            <label style="font-size:12px;display:flex;align-items:center;gap:6px;">
-              Proforma Expense Ratio:
-              <input id="fin_pExpRatio" type="number" min="0" max="100" step="0.5" placeholder="—"
-                value="${d['Pro Forma Expense Ratio %']!=null?d['Pro Forma Expense Ratio %']:''}"
-                class="form-input" style="width:70px;text-align:center;"
-                oninput="expenseCalc(); _expRatioPreview()"/>
+            <label>Proforma Expense Ratio:
+              <input id="fin_pExpRatio" type="number" min="0" max="100" step="0.5" placeholder="—" value="${d['Pro Forma Expense Ratio %']!=null?d['Pro Forma Expense Ratio %']:''}" class="form-input" oninput="expenseCalc(); _expRatioPreview()"/>
               <span>% of EGI</span>
-              <span id="fin_pExpRatio_preview" style="font-size:11px;color:#92400e;font-weight:600;margin-left:4px;"></span>
+              <span id="fin_pExpRatio_preview" class="ratio-preview"></span>
             </label>
           </div>
         </div>
-        <div id="expItemizedWrap" class="fin-opex-table-wrap" style="opacity:${d['Expense Mode']==='ratio'?'0.35':'1'};">
-        <table class="dt fin-table dual fin-opex-table">
-          <colgroup>
-            <col class="col-lbl"/>
-            <col class="col-a"/><col class="col-a"/><col class="col-a"/><col class="col-a"/>
-            <col class="col-p"/><col class="col-p"/><col class="col-p"/><col class="col-p"/>
-          </colgroup>
-          <thead>
-            <tr class="fin-scenarios">
-              <th></th>
-              <th colspan="4" class="scen-actual">Actual (current)</th>
-              <th colspan="4" class="scen-pro">Proforma (projected)</th>
-            </tr>
-            <tr class="fin-sub-th">
-              <th></th>
-              <th>Monthly</th><th>Yearly</th><th>% of EGI</th><th>Yearly PSF</th>
-              <th>Monthly</th><th>Yearly</th><th>% of EGI</th><th>Yearly PSF</th>
-            </tr>
-          </thead>
-          <tbody id="expenseTableBody">
-            ${catRows}
-            <!-- CAPITAL RESERVE -->
-            <tr>
-              <td style="padding:3px 6px;border:1px solid #ddd;">Plus: Capital Reserve ${tip('capres','Capital Reserve = funds set aside for major future repairs and replacements (roof, HVAC, etc.).')}</td>
-              <td style="padding:3px 4px;border:1px solid #ddd;">
-                <div style="display:flex;gap:2px;align-items:center;"><span style="font-size:10px;">$</span>
-                  <input id="fin_aCapRes_mo" class="num-input" type="text" inputmode="numeric" style="width:70px;text-align:right;border:1px inset #808080;padding:2px 3px;font-size:11px;background:#fff;" value="${_fmtNum(aCapRes_mo||'')}" oninput="syncMoYr('fin_aCapRes_mo','fin_aCapRes_yr','mo');expenseCalc()"/>
-                </div>
-              </td>
-              <td style="padding:3px 4px;border:1px solid #ddd;">
-                <div style="display:flex;gap:2px;align-items:center;"><span style="font-size:10px;">$</span>
-                  <input id="fin_aCapRes_yr" class="num-input" type="text" inputmode="numeric" style="width:70px;text-align:right;border:1px inset #808080;padding:2px 3px;font-size:11px;background:#fff;" value="${_fmtNum(aCapRes_mo?Math.round(aCapRes_mo*12):'')}" oninput="syncMoYr('fin_aCapRes_mo','fin_aCapRes_yr','yr');expenseCalc()"/>
-                </div>
-              </td>
-              <td style="padding:3px 6px;border:1px solid #ddd;text-align:right;">${fpct(aCapRes_mo*12,egi)}</td>
-              <td style="padding:3px 6px;border:1px solid #ddd;text-align:right;">${fpsf(aCapRes_mo*12,sf)}</td>
-              <td style="padding:3px 4px;border:1px solid #ddd;">
-                <div style="display:flex;gap:2px;align-items:center;"><span style="font-size:10px;">$</span>
-                  <input id="fin_pCapRes_mo" class="num-input" type="text" inputmode="numeric" style="width:70px;text-align:right;border:1px inset #808080;padding:2px 3px;font-size:11px;background:#fff;" value="${_fmtNum(pCapRes_mo||'')}" oninput="syncMoYr('fin_pCapRes_mo','fin_pCapRes_yr','mo');expenseCalc()"/>
-                </div>
-              </td>
-              <td style="padding:3px 4px;border:1px solid #ddd;">
-                <div style="display:flex;gap:2px;align-items:center;"><span style="font-size:10px;">$</span>
-                  <input id="fin_pCapRes_yr" class="num-input" type="text" inputmode="numeric" style="width:70px;text-align:right;border:1px inset #808080;padding:2px 3px;font-size:11px;background:#fff;" value="${_fmtNum(pCapRes_mo?Math.round(pCapRes_mo*12):'')}" oninput="syncMoYr('fin_pCapRes_mo','fin_pCapRes_yr','yr');expenseCalc()"/>
-                </div>
-              </td>
-              <td style="padding:3px 6px;border:1px solid #ddd;text-align:right;">${fpct(pCapRes_mo*12,pegi)}</td>
-              <td style="padding:3px 6px;border:1px solid #ddd;text-align:right;">${fpsf(pCapRes_mo*12,sf)}</td>
-            </tr>
-
-            <!-- TOTAL OPERATING EXPENSES -->
-            ${(()=>{
-              // Sum all expense categories
-              // v131: include 'est' (Estimated Expenses) so the gross-NOI gap
-              // routes into Total Operating Expenses. Without this, typing into
-              // the Estimated Expenses sub-row left Total OpEx unchanged.
-              const allCatIds = ['admin','rm','util','misc','tax','ins','pm','est'];
-              let aTotalOpEx_mo=0, pTotalOpEx_mo=0;
-              allCatIds.forEach(cat => {
-                const items = {
-                  admin:['admin_mgmt','admin_acct','admin_legal','admin_other'],
-                  rm:['rm_jan','rm_land','rm_maint','rm_sal','rm_pool','rm_sup'],
-                  util:['util_elec','util_gas','util_water','util_trash','util_other'],
-                  misc:['misc_adv','misc_other'],
-                  tax:['tax_prop','tax_other'],
-                  ins:['ins_prop','ins_liab'],
-                  pm:['pm_fee','pm_other'],
-                  est:['est_grossMinusNoi']
-                }[cat]||[];
-                items.forEach(id=>{
-                  aTotalOpEx_mo += Number(fi['a_'+id+'_mo'])||0;
-                  pTotalOpEx_mo += Number(fi['p_'+id+'_mo'])||0;
-                });
-              });
-              aTotalOpEx_mo += aCapRes_mo;
-              pTotalOpEx_mo += pCapRes_mo;
-              const aTotalOpEx_yr = aTotalOpEx_mo*12;
-              const pTotalOpEx_yr = pTotalOpEx_mo*12;
-
-              // Store for use in NOI and Cash Flow sections below
-              window._aTotalOpEx_mo = aTotalOpEx_mo;
-              window._pTotalOpEx_mo = pTotalOpEx_mo;
-
-              return `
-              <tr style="background:#e8e0d0;font-weight:bold;">
-                <td style="padding:4px 6px;border:1px solid #bbb;">Total Operating Expenses</td>
-                <td id="exp_totalOpEx_a_mo" style="padding:3px 6px;border:1px solid #bbb;text-align:right;">${fd(aTotalOpEx_mo)}</td>
-                <td id="exp_totalOpEx_a_yr" style="padding:3px 6px;border:1px solid #bbb;text-align:right;">${fd(aTotalOpEx_yr)}</td>
-                <td style="padding:3px 6px;border:1px solid #bbb;text-align:right;">${fpct(aTotalOpEx_yr,egi)}</td>
-                <td style="padding:3px 6px;border:1px solid #bbb;text-align:right;">${fpsf(aTotalOpEx_yr,sf)}</td>
-                <td id="exp_totalOpEx_p_mo" style="padding:3px 6px;border:1px solid #bbb;text-align:right;">${fd(pTotalOpEx_mo)}</td>
-                <td id="exp_totalOpEx_p_yr" style="padding:3px 6px;border:1px solid #bbb;text-align:right;">${fd(pTotalOpEx_yr)}</td>
-                <td style="padding:3px 6px;border:1px solid #bbb;text-align:right;">${fpct(pTotalOpEx_yr,pegi)}</td>
-                <td style="padding:3px 6px;border:1px solid #bbb;text-align:right;">${fpsf(pTotalOpEx_yr,sf)}</td>
-              </tr>`;
-            })()}
-          </tbody>
-        </table>
-        </div>
+        <div id="expItemizedWrap">
+          ${_opexStackSection('a')}
+          ${_opexStackSection('p')}
         </div>
       </div>
 
@@ -10781,48 +10693,44 @@ function renderFinancialTab(d){
         window._aNOI_mo = aNOI_mo;
         window._pNOI_mo = pNOI_mo;
 
+        const _noiCard = (scen) => {
+          const NOI_mo = scen==='a'?aNOI_mo:pNOI_mo;
+          const NOI_yr = scen==='a'?aNOI_yr:pNOI_yr;
+          return `
+            <div class="fin-stack-section ${scen==='a'?'is-actual':'is-pro'}">
+              <div class="fin-stack-hd"><span class="dot"></span>${scen==='a'?'Actual (current)':'Proforma (projected)'}</div>
+              <div class="fin-stack-tablewrap">
+              <table class="dt fin-table fin-stack-table">
+                <colgroup>
+                  <col class="col-lbl"/><col class="col-num"/><col class="col-num"/><col class="col-pct"/><col class="col-psf"/>
+                </colgroup>
+                <thead>
+                  <tr class="fin-sub-th">
+                    <th></th><th>Monthly</th><th>Yearly</th><th>% of EGI</th><th>Yearly PSF</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr class="total">
+                    <td class="row-lbl strong">Net Operating Income (NOI) ${tip('noi2'+scen,'NOI = Effective Gross Income minus Total Operating Expenses. The core profitability measure of a property before debt service.')}</td>
+                    <td id="inc_${scen}NOI_mo" class="num mono strong">${fd(NOI_mo)}</td>
+                    <td id="inc_${scen}NOI_yr" class="num mono strong">${fd(NOI_yr)}</td>
+                    <td></td>
+                    <td class="num mono strong">${fpsf(NOI_yr,sf)}</td>
+                  </tr>
+                </tbody>
+              </table>
+              </div>
+            </div>`;
+        };
+
         return `
         <div class="pds-section fin-hide-simple" style="margin-top:12px;">
           <div class="pds-section-hd">
             <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
             Net Operating Income
           </div>
-          <div class="fin-noi-table-wrap">
-          <table class="dt fin-table dual fin-noi-table">
-            <colgroup>
-              <col class="col-lbl"/>
-              <col class="col-a"/><col class="col-a"/><col class="col-a"/><col class="col-a"/>
-              <col class="col-p"/><col class="col-p"/><col class="col-p"/><col class="col-p"/>
-            </colgroup>
-            <thead>
-              <tr class="fin-scenarios">
-                <th></th>
-                <th colspan="4" class="scen-actual">Actual (current)</th>
-                <th colspan="4" class="scen-pro">Proforma (projected)</th>
-              </tr>
-              <tr class="fin-sub-th">
-                <th></th>
-                <th>Monthly</th><th>Yearly</th><th>% of EGI</th><th>Yearly PSF</th>
-                <th>Monthly</th><th>Yearly</th><th>% of EGI</th><th>Yearly PSF</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr style="background:#e8f0e8;">
-                <td style="padding:4px 6px;border:1px solid #bbb;font-weight:bold;">
-                  Net Operating Income (NOI) ${tip('noi2','NOI = Effective Gross Income minus Total Operating Expenses. The core profitability measure of a property before debt service.')}
-                </td>
-                <td id="inc_aNOI_mo" style="padding:3px 6px;border:1px solid #bbb;text-align:right;font-weight:bold;color:#1a3a6e;">${fd(aNOI_mo)}</td>
-                <td id="inc_aNOI_yr" style="padding:3px 6px;border:1px solid #bbb;text-align:right;font-weight:bold;color:#1a3a6e;">${fd(aNOI_yr)}</td>
-                <td style="padding:3px 6px;border:1px solid #bbb;text-align:right;"></td>
-                <td style="padding:3px 6px;border:1px solid #bbb;text-align:right;font-weight:bold;">${fpsf(aNOI_yr,sf)}</td>
-                <td id="inc_pNOI_mo" style="padding:3px 6px;border:1px solid #bbb;text-align:right;font-weight:bold;color:#306030;">${fd(pNOI_mo)}</td>
-                <td id="inc_pNOI_yr" style="padding:3px 6px;border:1px solid #bbb;text-align:right;font-weight:bold;color:#306030;">${fd(pNOI_yr)}</td>
-                <td style="padding:3px 6px;border:1px solid #bbb;text-align:right;"></td>
-                <td style="padding:3px 6px;border:1px solid #bbb;text-align:right;font-weight:bold;">${fpsf(pNOI_yr,sf)}</td>
-              </tr>
-            </tbody>
-          </table>
-          </div>
+          ${_noiCard('a')}
+          ${_noiCard('p')}
         </div>`;
       })()}
 
@@ -10898,65 +10806,76 @@ function renderFinancialTab(d){
 
         const isMortgageExpanded = fi.exp_mortgage === true;
 
+        // v374.7: build each Cash Flow section per-scenario, stacked.
+        const _cfStackSection = (scen) => {
+          const EGI_mo  = scen==='a'?egi/12:pegi/12;
+          const EGI_yr  = scen==='a'?egi:pegi;
+          const OpEx_mo = scen==='a'?aTotalOpEx_mo:pTotalOpEx_mo;
+          const Mort_mo = scen==='a'?aMortgage_mo:pMortgage_mo;
+          const Mort_yr = scen==='a'?aMortgage_yr:pMortgage_yr;
+          const CF_mo   = scen==='a'?aCF_mo:pCF_mo;
+          const CF_yr   = scen==='a'?aCF_yr:pCF_yr;
+          const cfClr   = CF_mo>=0 ? (scen==='a'?'#1a3a6e':'#306030') : '#c00';
+          return `
+            <div class="fin-stack-section ${scen==='a'?'is-actual':'is-pro'}">
+              <div class="fin-stack-hd"><span class="dot"></span>${scen==='a'?'Actual (current)':'Proforma (projected)'}</div>
+              <div class="fin-stack-tablewrap">
+              <table class="dt fin-table fin-stack-table">
+                <colgroup>
+                  <col class="col-lbl"/><col class="col-num"/><col class="col-num"/>
+                </colgroup>
+                <thead>
+                  <tr class="fin-sub-th">
+                    <th></th><th>Monthly</th><th>Yearly</th>
+                  </tr>
+                </thead>
+                <tbody>
+                  <tr>
+                    <td class="row-lbl">Effective Gross Income</td>
+                    <td id="cf_${scen}EGI_mo" class="num mono">${fd(EGI_mo)}</td>
+                    <td id="cf_${scen}EGI_yr" class="num mono">${fd(EGI_yr)}</td>
+                  </tr>
+                  <tr>
+                    <td class="row-lbl">Total Operating Expenses</td>
+                    <td id="cf_${scen}OpEx_mo" class="num mono">${fd(OpEx_mo)}</td>
+                    <td id="cf_${scen}OpEx_yr" class="num mono">${fd(OpEx_mo*12)}</td>
+                  </tr>
+                  <tr class="cat-row">
+                    <td class="row-lbl">
+                      <a onclick="toggleMortgage()" class="cat-toggle">
+                        Mortgage Payments <span class="mortgage-icon chev">${isMortgageExpanded?'−':'+'}</span>
+                      </a>
+                      ${tip('mort'+scen,'Total monthly debt service across all loans. Auto-calculated from the mortgage inputs below.')}
+                    </td>
+                    <td id="cf_${scen}Mort_mo" class="num mono">${fd(Mort_mo)}</td>
+                    <td id="cf_${scen}Mort_yr" class="num mono">${fd(Mort_yr)}</td>
+                  </tr>
+                  <tr class="total">
+                    <td class="row-lbl strong">Cash Flow</td>
+                    <td id="cf_${scen}CF_mo" class="num mono strong" style="color:${cfClr};">${fd(CF_mo)}</td>
+                    <td id="cf_${scen}CF_yr" class="num mono strong" style="color:${cfClr};">${fd(CF_yr)}</td>
+                  </tr>
+                </tbody>
+              </table>
+              </div>
+            </div>`;
+        };
+
         return `
         <div class="pds-section fin-hide-simple" style="margin-top:12px;">
           <div class="pds-section-hd">
             <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
             Cash Flow
           </div>
-          <div class="fin-cfroll-table-wrap">
-          <table class="dt fin-table dual fin-cfroll-table">
-            <colgroup>
-              <col class="col-lbl-wide"/>
-              <col class="col-a"/><col class="col-a"/>
-              <col class="col-p"/><col class="col-p"/>
-            </colgroup>
-            <thead>
-              <tr class="fin-scenarios">
-                <th></th>
-                <th colspan="2" class="scen-actual">Actual (current)</th>
-                <th colspan="2" class="scen-pro">Proforma (projected)</th>
-              </tr>
-              <tr class="fin-sub-th">
-                <th></th>
-                <th>Monthly</th><th>Yearly</th>
-                <th>Monthly</th><th>Yearly</th>
-              </tr>
-            </thead>
-            <tbody>
-              <tr>
-                <td style="padding:3px 6px;border:1px solid #ddd;text-align:right;">Effective Gross Income</td>
-                <td id="cf_aEGI_mo" style="padding:3px 6px;border:1px solid #ddd;text-align:right;">${fd(egi/12)}</td>
-                <td id="cf_aEGI_yr" style="padding:3px 6px;border:1px solid #ddd;text-align:right;">${fd(egi)}</td>
-                <td id="cf_pEGI_mo" style="padding:3px 6px;border:1px solid #ddd;text-align:right;">${fd(pegi/12)}</td>
-                <td id="cf_pEGI_yr" style="padding:3px 6px;border:1px solid #ddd;text-align:right;">${fd(pegi)}</td>
-              </tr>
-              <tr>
-                <td style="padding:3px 6px;border:1px solid #ddd;text-align:right;">Total Operating Expenses</td>
-                <td id="cf_aOpEx_mo" style="padding:3px 6px;border:1px solid #ddd;text-align:right;">${fd(aTotalOpEx_mo)}</td>
-                <td id="cf_aOpEx_yr" style="padding:3px 6px;border:1px solid #ddd;text-align:right;">${fd(aTotalOpEx_mo*12)}</td>
-                <td id="cf_pOpEx_mo" style="padding:3px 6px;border:1px solid #ddd;text-align:right;">${fd(pTotalOpEx_mo)}</td>
-                <td id="cf_pOpEx_yr" style="padding:3px 6px;border:1px solid #ddd;text-align:right;">${fd(pTotalOpEx_mo*12)}</td>
-              </tr>
-              <!-- MORTGAGE PAYMENTS (expandable) -->
-              <tr>
-                <td style="padding:3px 6px;border:1px solid #ddd;">
-                  <a onclick="toggleMortgage()" style="color:#2060b0;font-weight:bold;cursor:pointer;text-decoration:none;">
-                    Mortgage Payments <span id="mortgageIcon">${isMortgageExpanded?'−':'+'}</span>
-                  </a>
-                  ${tip('mort','Total monthly debt service across all loans. Auto-calculated from the mortgage inputs below.')}
-                </td>
-                <td id="cf_aMort_mo" style="padding:3px 6px;border:1px solid #ddd;text-align:right;">${fd(aMortgage_mo)}</td>
-                <td id="cf_aMort_yr" style="padding:3px 6px;border:1px solid #ddd;text-align:right;">${fd(aMortgage_yr)}</td>
-                <td id="cf_pMort_mo" style="padding:3px 6px;border:1px solid #ddd;text-align:right;">${fd(pMortgage_mo)}</td>
-                <td id="cf_pMort_yr" style="padding:3px 6px;border:1px solid #ddd;text-align:right;">${fd(pMortgage_yr)}</td>
-              </tr>
-              <!-- MORTGAGE EXPANDED DETAIL -->
-              <tr class="mortgage-subrow" style="display:${isMortgageExpanded?'table-row':'none'};">
-                <td colspan="5" class="fin-mort-wrap">
-                  <div class="fin-mort-inner">
-                    <div class="fin-mort-hd">Mortgage Information &amp; Calculation</div>
-                    <table class="dt fin-table fin-mortgage-table">
+          ${_cfStackSection('a')}
+          ${_cfStackSection('p')}
+
+          <!-- Shared Mortgage Detail panel (toggled by toggleMortgage from
+               either Cash Flow section's Mortgage Payments row) -->
+          <div class="mortgage-subrow fin-mort-shared" style="display:${isMortgageExpanded?'block':'none'};">
+            <div class="fin-mort-inner">
+              <div class="fin-mort-hd">Mortgage Information &amp; Calculation</div>
+              <table class="dt fin-table fin-mortgage-table">
                       <thead>
                         <tr class="fin-mort-th">
                           <th class="mort-col-lbl"></th>
@@ -11051,19 +10970,7 @@ function renderFinancialTab(d){
                         </tr>
                       </tbody>
                     </table>
-                  </div>
-                </td>
-              </tr>
-              <!-- CASH FLOW -->
-              <tr style="background:#e8f0e8;">
-                <td style="padding:4px 6px;border:1px solid #bbb;text-align:right;font-weight:bold;">Cash Flow</td>
-                <td id="cf_aCF_mo" style="padding:3px 6px;border:1px solid #bbb;text-align:right;font-weight:bold;color:${aCF_mo>=0?'#1a3a6e':'#c00'};">${fd(aCF_mo)}</td>
-                <td id="cf_aCF_yr" style="padding:3px 6px;border:1px solid #bbb;text-align:right;font-weight:bold;color:${aCF_yr>=0?'#1a3a6e':'#c00'};">${fd(aCF_yr)}</td>
-                <td id="cf_pCF_mo" style="padding:3px 6px;border:1px solid #bbb;text-align:right;font-weight:bold;color:${pCF_mo>=0?'#306030':'#c00'};">${fd(pCF_mo)}</td>
-                <td id="cf_pCF_yr" style="padding:3px 6px;border:1px solid #bbb;text-align:right;font-weight:bold;color:${pCF_yr>=0?'#306030':'#c00'};">${fd(pCF_yr)}</td>
-              </tr>
-            </tbody>
-          </table>
+            </div>
           </div>
         </div>`;
       })()}
@@ -51606,10 +51513,13 @@ function _finUpdateKeyMetrics(){
 
 function toggleExpCat(catId){
   const rows = document.querySelectorAll('.exp-subrow-'+catId);
-  const icon = document.getElementById('exp-icon-'+catId);
+  // v374.7: chevrons are now class-based so both the Actual + Proforma
+  // stacked sections sync. Pre-v374.7 lookups used getElementById which
+  // returned only the first match.
+  const icons = document.querySelectorAll('.exp-icon-'+catId);
   const isHidden = rows.length>0 && rows[0].style.display==='none';
   rows.forEach(r => r.style.display = isHidden?'table-row':'none');
-  if(icon) icon.textContent = isHidden?'▾':'▸';
+  icons.forEach(i => i.textContent = isHidden?'▾':'▸');
   // v102.6: persist expand/collapse state to the small fin_ui_ localStorage
   // key. This is UI preference only (not deal data), so localStorage is fine.
   if(currentDeal){
@@ -51622,23 +51532,28 @@ function toggleExpCat(catId){
 }
 
 function showAllExpCats(){
-  document.querySelectorAll('[class^="exp-subrow"]').forEach(r=>r.style.display='table-row');
-  document.querySelectorAll('[id^="exp-icon-"]').forEach(i=>i.textContent='▾');
+  document.querySelectorAll('[class*="exp-subrow-"]').forEach(r=>r.style.display='table-row');
+  document.querySelectorAll('[class*="exp-icon-"]').forEach(i=>i.textContent='▾');
 }
 
 function hideAllExpCats(){
-  document.querySelectorAll('[class^="exp-subrow"]').forEach(r=>r.style.display='none');
-  document.querySelectorAll('[id^="exp-icon-"]').forEach(i=>i.textContent='▸');
+  document.querySelectorAll('[class*="exp-subrow-"]').forEach(r=>r.style.display='none');
+  document.querySelectorAll('[class*="exp-icon-"]').forEach(i=>i.textContent='▸');
 }
 
 function toggleMortgage(){
+  // v374.7: .mortgage-subrow can now be either a <tr> (legacy) or a <div>
+  // (new fin-mort-shared panel). Both use the same class so the toggle is
+  // structure-agnostic. Icons moved from id to class so both stacked Cash
+  // Flow sections (Actual + Proforma) sync their chevron.
   const rows = document.querySelectorAll('.mortgage-subrow');
-  const icon = document.getElementById('mortgageIcon');
-  const isHidden = rows.length>0 && rows[0].style.display==='none';
-  rows.forEach(r => r.style.display = isHidden?'table-row':'none');
-  if(icon) icon.textContent = isHidden?'▾':'▸';
-  // v102.6: persist mortgage expand/collapse state to the small fin_ui_ key
-  // (UI preference only, not deal data).
+  const icons = document.querySelectorAll('.mortgage-icon');
+  const isHidden = rows.length>0 && (rows[0].style.display==='none' || getComputedStyle(rows[0]).display==='none');
+  rows.forEach(r => {
+    const isDiv = r.tagName === 'DIV';
+    r.style.display = isHidden ? (isDiv ? 'block' : 'table-row') : 'none';
+  });
+  icons.forEach(i => i.textContent = isHidden?'−':'+');
   if(currentDeal){
     const uKey='fin_ui_'+currentDeal.id;
     let ui={};

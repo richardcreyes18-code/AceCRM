@@ -10267,242 +10267,163 @@ function renderFinancialTab(d){
       const pctInputTd = (id,val) => `<td style="padding:3px 6px;border:1px solid #ddd;display:flex;align-items:center;gap:2px;"><input id="${id}" ${inSF(val)}/><span style="font-size:10px;">%</span></td>`;
       const sf = aNetRentSF;
 
+      // v374.6: Build Gross Rental Income label cell once so both Actual and
+      // Proforma sections share the rent-roll details button. The label content
+      // is identical across scenarios — only the underlying inputs differ.
+      const _griLabelCell = (scen)=> {
+        const ac = (d['CRM Asset Classification']||d['Simple Text Property Type']||'').toLowerCase();
+        const isMixed = ac.includes('mixed use');
+        const isMF = ac.includes('multifamily') || isMixed;
+        const isInd = ac.includes('industrial') || ac.includes('warehouse') || ac.includes('flex');
+        const kind = isMixed ? 'mixed' : (isMF ? 'mf' : 'industrial');
+        const ttl = isMixed ? 'Edit apartments and retail tenants together'
+                  : (isMF ? 'Edit the rent roll without leaving Financial Analysis'
+                          : 'Edit tenant mix without leaving Financial Analysis');
+        const detailsBtn = (isMF || isInd) ? `<button type="button" onclick="_openRentRollModal('${d.id}', '${kind}')" title="${ttl}" class="fin-inline-btn primary">📋 Details</button>` : '';
+        // The Custom/Use-Unit-Mix toggle only applies to the Actual side.
+        if(!isMF || scen!=='a') return `Gross Rental Income ${tip('gri','Gross Rental Income = Total potential rent if 100% occupied. Enter the actual monthly rent roll.')} ${detailsBtn}`;
+        const savedSrc = fi.aGRISource || 'custom';
+        return `Gross Rental Income ${tip('gri','Gross Rental Income = Total potential rent if 100% occupied. Enter the actual monthly rent roll.')}
+          <div class="seg-mini" id="aGRISourceToggle">
+            <button type="button" onclick="setFinGRISource('custom')" id="aGRISrc_custom" class="${savedSrc==='custom'?'on':''}">Custom</button>
+            <button type="button" onclick="setFinGRISource('unitMix')" id="aGRISrc_unitMix" class="${savedSrc==='unitMix'?'on':''}">Use Unit Mix</button>
+          </div>
+          ${detailsBtn}
+          <div id="aGRIUnitMixNote" class="fin-inline-note" style="display:${savedSrc==='unitMix'?'block':'none'};">Auto from occupied units on Property Details</div>`;
+      };
+
+      // v374.6: stacked layout — Actual section then Proforma section, each
+      // full-width with the same 5-col structure ([Item, Monthly, Yearly,
+      // % of GRI, Yearly PSF]). Row labels align top↔bottom so the eye can
+      // map across scenarios easily.
+      const _incomeSectionRows = (scen)=> {
+        const G_mo = scen==='a'?aGRI_mo:pGRI_mo;
+        const G_yr = scen==='a'?aGRI_yr:pGRI_yr;
+        const Vac_mo = scen==='a'?aVac_mo:pVac_mo;
+        const Vac_yr = scen==='a'?aVac_yr:pVac_yr;
+        const NRU_yr = scen==='a'?aNRU_yr:pNRU_yr;
+        const BD_yr  = scen==='a'?aBD_yr:pBD_yr;
+        const Con_yr = scen==='a'?aCon_yr:pCon_yr;
+        const TRI_mo = scen==='a'?aTRI_mo:pTRI_mo;
+        const TRI_yr = scen==='a'?aTRI_yr:pTRI_yr;
+        const OI_mo  = scen==='a'?aOI_mo:pOI_mo;
+        const OI_yr  = scen==='a'?aOI_yr:pOI_yr;
+        const RUBS_mo= scen==='a'?aRUBS_mo:pRUBS_mo;
+        const RUBS_yr= scen==='a'?aRUBS_yr:pRUBS_yr;
+        const EGI_mo = scen==='a'?aEGI_mo:pEGI_mo;
+        const EGI_yr = scen==='a'?aEGI_yr:pEGI_yr;
+        const Vac    = scen==='a'?aVacancy:pVacancy;
+        return `
+          <tr>
+            <td class="row-lbl strong">${_griLabelCell(scen)}</td>
+            <td><div class="fin-mini-input"><span class="pre">$</span><input id="fin_${scen}GrossRent_mo" class="num-input" type="text" inputmode="numeric" value="${_fmtNum(G_mo||'')}" oninput="syncMoYr('fin_${scen}GrossRent_mo','fin_${scen}GrossRent_yr','mo');incomeCalc()"/></div></td>
+            <td><div class="fin-mini-input"><span class="pre">$</span><input id="fin_${scen}GrossRent_yr" class="num-input" type="text" inputmode="numeric" value="${_fmtNum(G_yr||'')}" oninput="syncMoYr('fin_${scen}GrossRent_mo','fin_${scen}GrossRent_yr','yr');incomeCalc()"/></div></td>
+            <td class="num mono">${fpct(G_yr,G_yr)}</td>
+            <td class="num mono">${fpsf(G_yr,sf)}</td>
+          </tr>
+          <tr>
+            <td class="row-lbl">Less: Vacancy ${tip('vac'+scen,'Vacancy Loss = Gross Rental Income × Vacancy Rate. Accounts for units that are unoccupied.')}</td>
+            <td id="inc_${scen}Vac_mo" class="num mono">${fd(Vac_mo)}</td>
+            <td id="inc_${scen}Vac_yr" class="num mono">${fd(Vac_yr)}</td>
+            <td><div class="fin-mini-input narrow"><input id="fin_${scen}Vacancy" value="${Vac}" oninput="incomeCalc()"/><span class="suf">%</span></div></td>
+            <td class="num mono">${fpsf(Vac_yr,sf)}</td>
+          </tr>
+          <tr>
+            <td class="row-lbl">Less: Non-Revenue Units ${tip('nru'+scen,'Non-Revenue Units = Units used by staff or not available for rent (e.g. model units, manager unit).')}</td>
+            <td id="inc_${scen}NRU_mo" class="num mono">${fd(NRU_yr/12)}</td>
+            <td id="inc_${scen}NRU_yr" class="num mono">${fd(NRU_yr)}</td>
+            <td><div class="fin-mini-input narrow"><input id="fin_${scen}NRU_pct" value="" oninput="incomeCalc()"/><span class="suf">%</span></div></td>
+            <td class="num mono">${fpsf(NRU_yr,sf)}</td>
+          </tr>
+          <tr>
+            <td class="row-lbl">Less: Bad Debt ${tip('bd'+scen,'Bad Debt = Rent collected but later written off due to non-payment or evictions.')}</td>
+            <td id="inc_${scen}BD_mo" class="num mono">${fd(BD_yr/12)}</td>
+            <td id="inc_${scen}BD_yr" class="num mono">${fd(BD_yr)}</td>
+            <td><div class="fin-mini-input narrow"><input id="fin_${scen}BD_pct" value="" oninput="incomeCalc()"/><span class="suf">%</span></div></td>
+            <td class="num mono">${fpsf(BD_yr,sf)}</td>
+          </tr>
+          <tr>
+            <td class="row-lbl">Less: Concessions ${tip('con'+scen,'Concessions = Free rent or move-in specials offered to attract tenants (e.g. first month free).')}</td>
+            <td id="inc_${scen}Con_mo" class="num mono">${fd(Con_yr/12)}</td>
+            <td id="inc_${scen}Con_yr" class="num mono">${fd(Con_yr)}</td>
+            <td><div class="fin-mini-input narrow"><input id="fin_${scen}Con_pct" value="" oninput="incomeCalc()"/><span class="suf">%</span></div></td>
+            <td class="num mono">${fpsf(Con_yr,sf)}</td>
+          </tr>
+          <tr class="subtotal">
+            <td class="row-lbl strong">Total Rental Income</td>
+            <td id="inc_${scen}TRI_mo" class="num mono strong">${fd(TRI_mo)}</td>
+            <td id="inc_${scen}TRI_yr" class="num mono strong">${fd(TRI_yr)}</td>
+            <td class="num mono">${fpct(TRI_yr,G_yr)}</td>
+            <td class="num mono">${fpsf(TRI_yr,sf)}</td>
+          </tr>
+          <tr>
+            <td class="row-lbl">Plus: Other Income ${tip('oi'+scen,'Other Income = Additional revenue not from rent (e.g. laundry, parking fees, storage).')}</td>
+            <td><div class="fin-mini-input"><span class="pre">$</span><input id="fin_${scen}OI_mo" class="num-input" type="text" inputmode="numeric" value="${_fmtNum(OI_mo||'')}" oninput="syncMoYr('fin_${scen}OI_mo','fin_${scen}OI_yr','mo');incomeCalc()"/></div></td>
+            <td><div class="fin-mini-input"><span class="pre">$</span><input id="fin_${scen}OI_yr" class="num-input" type="text" inputmode="numeric" value="${_fmtNum(OI_yr||'')}" oninput="syncMoYr('fin_${scen}OI_mo','fin_${scen}OI_yr','yr');incomeCalc()"/></div></td>
+            <td class="num mono">${fpct(OI_yr,G_yr)}</td>
+            <td class="num mono">${fpsf(OI_yr,sf)}</td>
+          </tr>
+          <tr>
+            <td class="row-lbl">Plus: RUBS/CAM Income ${tip('rubs'+scen,'RUBS = Ratio Utility Billing System. CAM = Common Area Maintenance. Income recovered from tenants for utilities or shared expenses.')}</td>
+            <td><div class="fin-mini-input"><span class="pre">$</span><input id="fin_${scen}RUBS_mo" class="num-input" type="text" inputmode="numeric" value="${_fmtNum(RUBS_mo||'')}" oninput="syncMoYr('fin_${scen}RUBS_mo','fin_${scen}RUBS_yr','mo');incomeCalc()"/></div></td>
+            <td><div class="fin-mini-input"><span class="pre">$</span><input id="fin_${scen}RUBS_yr" class="num-input" type="text" inputmode="numeric" value="${_fmtNum(RUBS_yr||'')}" oninput="syncMoYr('fin_${scen}RUBS_mo','fin_${scen}RUBS_yr','yr');incomeCalc()"/></div></td>
+            <td class="num mono">${fpct(RUBS_yr,G_yr)}</td>
+            <td class="num mono">${fpsf(RUBS_yr,sf)}</td>
+          </tr>
+          <tr class="total egi-row">
+            <td class="row-lbl strong">Effective Gross Income ${tip('egi'+scen,'Effective Gross Income = Total Rental Income + Other Income + RUBS/CAM. The total realistic income after all deductions.')}</td>
+            <td id="inc_${scen}EGI_mo" class="num mono strong">${fd(EGI_mo)}</td>
+            <td id="inc_${scen}EGI_yr" class="num mono strong">${fd(EGI_yr)}</td>
+            <td></td>
+            <td></td>
+          </tr>`;
+      };
+
       return `
       <div class="pds-section fin-hide-simple">
         <div class="pds-section-hd" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
           <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
           <span style="margin:0;">Income</span>
-          <span class="sub">Actual (current) vs Proforma (projected)</span>
-          <!-- v111.9: one-click snapshot from Actual to Proforma so the agent
-               can start from today's numbers and tweak from there. -->
-          <button type="button" onclick="copyActualToProforma('income')"
-            title="Copy every Actual (current) input into the Proforma (projected) column"
-            style="margin-left:auto;background:#e0e7ff;color:#3730a3;border:1px solid #c7d2fe;padding:5px 12px;font-size:11px;border-radius:5px;cursor:pointer;font-weight:600;white-space:nowrap;">
+          <span class="sub">Actual (current) and Proforma (projected) — stacked for side-by-side reading</span>
+          <button type="button" onclick="copyActualToProforma('income')" title="Copy every Actual (current) input into the Proforma (projected) column" class="fin-inline-btn lavender">
             ⇒ Copy Actual → Proforma
           </button>
         </div>
-        <div class="fin-income-table-wrap">
-        <table class="dt fin-table dual fin-income-table">
-          <colgroup>
-            <col class="col-lbl"/>
-            <col class="col-a"/><col class="col-a"/><col class="col-a"/><col class="col-a"/>
-            <col class="col-p"/><col class="col-p"/><col class="col-p"/><col class="col-p"/>
-          </colgroup>
-          <thead>
-            <tr class="fin-scenarios">
-              <th></th>
-              <th colspan="4" class="scen-actual">Actual (current)</th>
-              <th colspan="4" class="scen-pro">Proforma (projected)</th>
-            </tr>
-            <tr class="fin-sub-th">
-              <th></th>
-              <th>Monthly</th><th>Yearly</th><th>% of GRI</th><th>Yearly PSF</th>
-              <th>Monthly</th><th>Yearly</th><th>% of GRI</th><th>Yearly PSF</th>
-            </tr>
-          </thead>
-          <tbody>
 
-            <!-- GROSS RENTAL INCOME -->
-            <tr>
-              <td style="padding:3px 6px;border:1px solid #ddd;font-weight:bold;">
-                Gross Rental Income ${tip('gri','Gross Rental Income = Total potential rent if 100% occupied. Enter the actual monthly rent roll.')}
-                ${(()=>{
-                  const ac = (d['CRM Asset Classification']||d['Simple Text Property Type']||'').toLowerCase();
-                  const isMixed = ac.includes('mixed use');
-                  const isMF = ac.includes('multifamily') || isMixed;
-                  const isInd = ac.includes('industrial') || ac.includes('warehouse') || ac.includes('flex');
-                  // v113.80: "📋 Details" button opens a modal with the right
-                  // editor (rent roll for MF, tenant mix for industrial).
-                  // v146: Mixed-use shows BOTH (apartments on top, retail below).
-                  const kind = isMixed ? 'mixed' : (isMF ? 'mf' : 'industrial');
-                  const ttl = isMixed ? 'Edit apartments and retail tenants together'
-                            : (isMF ? 'Edit the rent roll without leaving Financial Analysis'
-                                    : 'Edit tenant mix without leaving Financial Analysis');
-                  const detailsBtn = (isMF || isInd) ? `
-                    <button type="button" onclick="_openRentRollModal('${d.id}', '${kind}')"
-                      title="${ttl}"
-                      style="margin-left:8px;background:#1a3a6e;color:#fff;border:none;padding:2px 9px;font-size:9px;font-weight:700;border-radius:4px;cursor:pointer;vertical-align:middle;">
-                      📋 Details
-                    </button>` : '';
-                  if(!isMF) return detailsBtn;
-                  const savedSrc = fi.aGRISource || 'custom';
-                  return `
-                    <div style="display:inline-flex;margin-left:10px;gap:0;border:1px solid #cbd5e1;border-radius:4px;overflow:hidden;vertical-align:middle;" id="aGRISourceToggle">
-                      <button type="button" onclick="setFinGRISource('custom')"
-                        id="aGRISrc_custom"
-                        style="padding:2px 8px;font-size:9px;font-weight:600;border:none;cursor:pointer;background:${savedSrc==='custom'?'#1a3a6e':'#f8fafc'};color:${savedSrc==='custom'?'#fff':'#475569'};">
-                        Custom
-                      </button>
-                      <button type="button" onclick="setFinGRISource('unitMix')"
-                        id="aGRISrc_unitMix"
-                        style="padding:2px 8px;font-size:9px;font-weight:600;border:none;cursor:pointer;background:${savedSrc==='unitMix'?'#1a3a6e':'#f8fafc'};color:${savedSrc==='unitMix'?'#fff':'#475569'};">
-                        Use Unit Mix
-                      </button>
-                    </div>
-                    ${detailsBtn}
-                    <div id="aGRIUnitMixNote" style="display:${savedSrc==='unitMix'?'block':'none'};font-size:9px;color:#2e7d32;font-weight:normal;margin-top:2px;">
-                      Auto from occupied units on Property Details
-                    </div>`;
-                })()}
-              </td>
-              <td style="padding:3px 6px;border:1px solid #ddd;">
-                <div style="display:flex;align-items:center;gap:2px;">
-                  <span style="font-size:10px;">$</span>
-                  <input id="fin_aGrossRent_mo" class="num-input" type="text" inputmode="numeric" style="width:80px;text-align:right;border:1px inset #808080;padding:2px 4px;background:#fff;font-size:11px;" value="${_fmtNum(aGRI_mo||'')}" oninput="syncMoYr('fin_aGrossRent_mo','fin_aGrossRent_yr','mo');incomeCalc()"/>
-                </div>
-              </td>
-              <td style="padding:3px 6px;border:1px solid #ddd;">
-                <div style="display:flex;align-items:center;gap:2px;">
-                  <span style="font-size:10px;">$</span>
-                  <input id="fin_aGrossRent_yr" class="num-input" type="text" inputmode="numeric" style="width:80px;text-align:right;border:1px inset #808080;padding:2px 4px;background:#fff;font-size:11px;" value="${_fmtNum(aGRI_yr||'')}" oninput="syncMoYr('fin_aGrossRent_mo','fin_aGrossRent_yr','yr');incomeCalc()"/>
-                </div>
-              </td>
-              ${pctTd(aGRI_yr,aGRI_yr)} ${psfTd(aGRI_yr,sf)}
-              <td style="padding:3px 6px;border:1px solid #ddd;">
-                <div style="display:flex;align-items:center;gap:2px;">
-                  <span style="font-size:10px;">$</span>
-                  <input id="fin_pGrossRent_mo" class="num-input" type="text" inputmode="numeric" style="width:80px;text-align:right;border:1px inset #808080;padding:2px 4px;background:#fff;font-size:11px;" value="${_fmtNum(pGRI_mo||'')}" oninput="syncMoYr('fin_pGrossRent_mo','fin_pGrossRent_yr','mo');incomeCalc()"/>
-                </div>
-              </td>
-              <td style="padding:3px 6px;border:1px solid #ddd;">
-                <div style="display:flex;align-items:center;gap:2px;">
-                  <span style="font-size:10px;">$</span>
-                  <input id="fin_pGrossRent_yr" class="num-input" type="text" inputmode="numeric" style="width:80px;text-align:right;border:1px inset #808080;padding:2px 4px;background:#fff;font-size:11px;" value="${_fmtNum(pGRI_yr||'')}" oninput="syncMoYr('fin_pGrossRent_mo','fin_pGrossRent_yr','yr');incomeCalc()"/>
-                </div>
-              </td>
-              ${pctTd(pGRI_yr,pGRI_yr)} ${psfTd(pGRI_yr,sf)}
-            </tr>
+        <!-- ACTUAL section -->
+        <div class="fin-stack-section is-actual">
+          <div class="fin-stack-hd"><span class="dot"></span>Actual (current)</div>
+          <div class="fin-stack-tablewrap">
+          <table class="dt fin-table fin-stack-table fin-income-table">
+            <colgroup>
+              <col class="col-lbl"/><col class="col-num"/><col class="col-num"/><col class="col-pct"/><col class="col-psf"/>
+            </colgroup>
+            <thead>
+              <tr class="fin-sub-th">
+                <th></th><th>Monthly</th><th>Yearly</th><th>% of GRI</th><th>Yearly PSF</th>
+              </tr>
+            </thead>
+            <tbody>${_incomeSectionRows('a')}</tbody>
+          </table>
+          </div>
+        </div>
 
-            <!-- LESS VACANCY -->
-            <tr>
-              <td style="padding:3px 6px;border:1px solid #ddd;">Less: Vacancy ${tip('vac','Vacancy Loss = Gross Rental Income × Vacancy Rate. Accounts for units that are unoccupied.')}</td>
-              <td id="inc_aVac_mo" style="padding:3px 6px;border:1px solid #ddd;text-align:right;font-size:11px;">${fd(aVac_mo)}</td>
-              <td id="inc_aVac_yr" style="padding:3px 6px;border:1px solid #ddd;text-align:right;font-size:11px;">${fd(aVac_yr)}</td>
-              <td style="padding:3px 6px;border:1px solid #ddd;"><div style="display:flex;align-items:center;gap:2px;"><input id="fin_aVacancy" style="width:40px;text-align:right;border:1px inset #808080;padding:2px 4px;background:#fff;font-size:11px;" value="${aVacancy}" oninput="incomeCalc()"/><span style="font-size:10px;">%</span></div></td>
-              ${psfTd(aVac_yr,sf)}
-              <td id="inc_pVac_mo" style="padding:3px 6px;border:1px solid #ddd;text-align:right;font-size:11px;">${fd(pVac_mo)}</td>
-              <td id="inc_pVac_yr" style="padding:3px 6px;border:1px solid #ddd;text-align:right;font-size:11px;">${fd(pVac_yr)}</td>
-              <td style="padding:3px 6px;border:1px solid #ddd;"><div style="display:flex;align-items:center;gap:2px;"><input id="fin_pVacancy" style="width:40px;text-align:right;border:1px inset #808080;padding:2px 4px;background:#fff;font-size:11px;" value="${pVacancy}" oninput="incomeCalc()"/><span style="font-size:10px;">%</span></div></td>
-              ${psfTd(pVac_yr,sf)}
-            </tr>
-
-            <!-- LESS NON-REVENUE UNITS -->
-            <tr>
-              <td style="padding:3px 6px;border:1px solid #ddd;">Less: Non-Revenue Units ${tip('nru','Non-Revenue Units = Units used by staff or not available for rent (e.g. model units, manager unit).')}</td>
-              <td id="inc_aNRU_mo" style="padding:3px 6px;border:1px solid #ddd;text-align:right;font-size:11px;">${fd(aNRU_yr/12)}</td>
-              <td id="inc_aNRU_yr" style="padding:3px 6px;border:1px solid #ddd;text-align:right;font-size:11px;">${fd(aNRU_yr)}</td>
-              <td style="padding:3px 6px;border:1px solid #ddd;"><div style="display:flex;align-items:center;gap:2px;"><input id="fin_aNRU_pct" style="width:40px;border:1px inset #808080;padding:2px 4px;background:#fff;font-size:11px;" value="" oninput="incomeCalc()"/><span style="font-size:10px;">%</span></div></td>
-              ${psfTd(aNRU_yr,sf)}
-              <td id="inc_pNRU_mo" style="padding:3px 6px;border:1px solid #ddd;text-align:right;font-size:11px;">${fd(pNRU_yr/12)}</td>
-              <td id="inc_pNRU_yr" style="padding:3px 6px;border:1px solid #ddd;text-align:right;font-size:11px;">${fd(pNRU_yr)}</td>
-              <td style="padding:3px 6px;border:1px solid #ddd;"><div style="display:flex;align-items:center;gap:2px;"><input id="fin_pNRU_pct" style="width:40px;border:1px inset #808080;padding:2px 4px;background:#fff;font-size:11px;" value="" oninput="incomeCalc()"/><span style="font-size:10px;">%</span></div></td>
-              ${psfTd(pNRU_yr,sf)}
-            </tr>
-
-            <!-- LESS BAD DEBT -->
-            <tr>
-              <td style="padding:3px 6px;border:1px solid #ddd;">Less: Bad Debt ${tip('bd','Bad Debt = Rent collected but later written off due to non-payment or evictions.')}</td>
-              <td id="inc_aBD_mo" style="padding:3px 6px;border:1px solid #ddd;text-align:right;font-size:11px;">${fd(aBD_yr/12)}</td>
-              <td id="inc_aBD_yr" style="padding:3px 6px;border:1px solid #ddd;text-align:right;font-size:11px;">${fd(aBD_yr)}</td>
-              <td style="padding:3px 6px;border:1px solid #ddd;"><div style="display:flex;align-items:center;gap:2px;"><input id="fin_aBD_pct" style="width:40px;border:1px inset #808080;padding:2px 4px;background:#fff;font-size:11px;" value="" oninput="incomeCalc()"/><span style="font-size:10px;">%</span></div></td>
-              ${psfTd(aBD_yr,sf)}
-              <td id="inc_pBD_mo" style="padding:3px 6px;border:1px solid #ddd;text-align:right;font-size:11px;">${fd(pBD_yr/12)}</td>
-              <td id="inc_pBD_yr" style="padding:3px 6px;border:1px solid #ddd;text-align:right;font-size:11px;">${fd(pBD_yr)}</td>
-              <td style="padding:3px 6px;border:1px solid #ddd;"><div style="display:flex;align-items:center;gap:2px;"><input id="fin_pBD_pct" style="width:40px;border:1px inset #808080;padding:2px 4px;background:#fff;font-size:11px;" value="" oninput="incomeCalc()"/><span style="font-size:10px;">%</span></div></td>
-              ${psfTd(pBD_yr,sf)}
-            </tr>
-
-            <!-- LESS CONCESSIONS -->
-            <tr>
-              <td style="padding:3px 6px;border:1px solid #ddd;">Less: Concessions ${tip('con','Concessions = Free rent or move-in specials offered to attract tenants (e.g. first month free).')}</td>
-              <td id="inc_aCon_mo" style="padding:3px 6px;border:1px solid #ddd;text-align:right;font-size:11px;">${fd(aCon_yr/12)}</td>
-              <td id="inc_aCon_yr" style="padding:3px 6px;border:1px solid #ddd;text-align:right;font-size:11px;">${fd(aCon_yr)}</td>
-              <td style="padding:3px 6px;border:1px solid #ddd;"><div style="display:flex;align-items:center;gap:2px;"><input id="fin_aCon_pct" style="width:40px;border:1px inset #808080;padding:2px 4px;background:#fff;font-size:11px;" value="" oninput="incomeCalc()"/><span style="font-size:10px;">%</span></div></td>
-              ${psfTd(aCon_yr,sf)}
-              <td id="inc_pCon_mo" style="padding:3px 6px;border:1px solid #ddd;text-align:right;font-size:11px;">${fd(pCon_yr/12)}</td>
-              <td id="inc_pCon_yr" style="padding:3px 6px;border:1px solid #ddd;text-align:right;font-size:11px;">${fd(pCon_yr)}</td>
-              <td style="padding:3px 6px;border:1px solid #ddd;"><div style="display:flex;align-items:center;gap:2px;"><input id="fin_pCon_pct" style="width:40px;border:1px inset #808080;padding:2px 4px;background:#fff;font-size:11px;" value="" oninput="incomeCalc()"/><span style="font-size:10px;">%</span></div></td>
-              ${psfTd(pCon_yr,sf)}
-            </tr>
-
-            <!-- TOTAL RENTAL INCOME -->
-            <tr style="background:#f0f0e0;">
-              <td style="padding:4px 6px;border:1px solid #bbb;font-weight:bold;">Total Rental Income</td>
-              <td id="inc_aTRI_mo" style="padding:3px 6px;border:1px solid #bbb;text-align:right;font-weight:bold;font-size:11px;">${fd(aTRI_mo)}</td>
-              <td id="inc_aTRI_yr" style="padding:3px 6px;border:1px solid #bbb;text-align:right;font-weight:bold;font-size:11px;">${fd(aTRI_yr)}</td>
-              ${pctTd(aTRI_yr,aGRI_yr)} ${psfTd(aTRI_yr,sf)}
-              <td id="inc_pTRI_mo" style="padding:3px 6px;border:1px solid #bbb;text-align:right;font-weight:bold;font-size:11px;">${fd(pTRI_mo)}</td>
-              <td id="inc_pTRI_yr" style="padding:3px 6px;border:1px solid #bbb;text-align:right;font-weight:bold;font-size:11px;">${fd(pTRI_yr)}</td>
-              ${pctTd(pTRI_yr,pGRI_yr)} ${psfTd(pTRI_yr,sf)}
-            </tr>
-
-            <!-- PLUS OTHER INCOME -->
-            <tr>
-              <td style="padding:3px 6px;border:1px solid #ddd;">Plus: Other Income ${tip('oi','Other Income = Additional revenue not from rent (e.g. laundry, parking fees, storage).')}</td>
-              <td style="padding:3px 6px;border:1px solid #ddd;">
-                <div style="display:flex;align-items:center;gap:2px;"><span style="font-size:10px;">$</span>
-                  <input id="fin_aOI_mo" class="num-input" type="text" inputmode="numeric" style="width:70px;text-align:right;border:1px inset #808080;padding:2px 4px;background:#fff;font-size:11px;" value="${_fmtNum(aOI_mo||'')}" oninput="syncMoYr('fin_aOI_mo','fin_aOI_yr','mo');incomeCalc()"/>
-                </div>
-              </td>
-              <td style="padding:3px 6px;border:1px solid #ddd;">
-                <div style="display:flex;align-items:center;gap:2px;"><span style="font-size:10px;">$</span>
-                  <input id="fin_aOI_yr" class="num-input" type="text" inputmode="numeric" style="width:70px;text-align:right;border:1px inset #808080;padding:2px 4px;background:#fff;font-size:11px;" value="${_fmtNum(aOI_yr||'')}" oninput="syncMoYr('fin_aOI_mo','fin_aOI_yr','yr');incomeCalc()"/>
-                </div>
-              </td>
-              ${pctTd(aOI_yr,aGRI_yr)} ${psfTd(aOI_yr,sf)}
-              <td style="padding:3px 6px;border:1px solid #ddd;">
-                <div style="display:flex;align-items:center;gap:2px;"><span style="font-size:10px;">$</span>
-                  <input id="fin_pOI_mo" class="num-input" type="text" inputmode="numeric" style="width:70px;text-align:right;border:1px inset #808080;padding:2px 4px;background:#fff;font-size:11px;" value="${_fmtNum(pOI_mo||'')}" oninput="syncMoYr('fin_pOI_mo','fin_pOI_yr','mo');incomeCalc()"/>
-                </div>
-              </td>
-              <td style="padding:3px 6px;border:1px solid #ddd;">
-                <div style="display:flex;align-items:center;gap:2px;"><span style="font-size:10px;">$</span>
-                  <input id="fin_pOI_yr" class="num-input" type="text" inputmode="numeric" style="width:70px;text-align:right;border:1px inset #808080;padding:2px 4px;background:#fff;font-size:11px;" value="${_fmtNum(pOI_yr||'')}" oninput="syncMoYr('fin_pOI_mo','fin_pOI_yr','yr');incomeCalc()"/>
-                </div>
-              </td>
-              ${pctTd(pOI_yr,pGRI_yr)} ${psfTd(pOI_yr,sf)}
-            </tr>
-
-            <!-- PLUS RUBS/CAM INCOME -->
-            <tr>
-              <td style="padding:3px 6px;border:1px solid #ddd;">Plus: RUBS/CAM Income ${tip('rubs','RUBS = Ratio Utility Billing System. CAM = Common Area Maintenance. Income recovered from tenants for utilities or shared expenses.')}</td>
-              <td style="padding:3px 6px;border:1px solid #ddd;">
-                <div style="display:flex;align-items:center;gap:2px;"><span style="font-size:10px;">$</span>
-                  <input id="fin_aRUBS_mo" class="num-input" type="text" inputmode="numeric" style="width:70px;text-align:right;border:1px inset #808080;padding:2px 4px;background:#fff;font-size:11px;" value="${_fmtNum(aRUBS_mo||'')}" oninput="syncMoYr('fin_aRUBS_mo','fin_aRUBS_yr','mo');incomeCalc()"/>
-                </div>
-              </td>
-              <td style="padding:3px 6px;border:1px solid #ddd;">
-                <div style="display:flex;align-items:center;gap:2px;"><span style="font-size:10px;">$</span>
-                  <input id="fin_aRUBS_yr" class="num-input" type="text" inputmode="numeric" style="width:70px;text-align:right;border:1px inset #808080;padding:2px 4px;background:#fff;font-size:11px;" value="${_fmtNum(aRUBS_yr||'')}" oninput="syncMoYr('fin_aRUBS_mo','fin_aRUBS_yr','yr');incomeCalc()"/>
-                </div>
-              </td>
-              ${pctTd(aRUBS_yr,aGRI_yr)} ${psfTd(aRUBS_yr,sf)}
-              <td style="padding:3px 6px;border:1px solid #ddd;">
-                <div style="display:flex;align-items:center;gap:2px;"><span style="font-size:10px;">$</span>
-                  <input id="fin_pRUBS_mo" class="num-input" type="text" inputmode="numeric" style="width:70px;text-align:right;border:1px inset #808080;padding:2px 4px;background:#fff;font-size:11px;" value="${_fmtNum(pRUBS_mo||'')}" oninput="syncMoYr('fin_pRUBS_mo','fin_pRUBS_yr','mo');incomeCalc()"/>
-                </div>
-              </td>
-              <td style="padding:3px 6px;border:1px solid #ddd;">
-                <div style="display:flex;align-items:center;gap:2px;"><span style="font-size:10px;">$</span>
-                  <input id="fin_pRUBS_yr" class="num-input" type="text" inputmode="numeric" style="width:70px;text-align:right;border:1px inset #808080;padding:2px 4px;background:#fff;font-size:11px;" value="${_fmtNum(pRUBS_yr||'')}" oninput="syncMoYr('fin_pRUBS_mo','fin_pRUBS_yr','yr');incomeCalc()"/>
-                </div>
-              </td>
-              ${pctTd(pRUBS_yr,pGRI_yr)} ${psfTd(pRUBS_yr,sf)}
-            </tr>
-
-            <!-- EFFECTIVE GROSS INCOME -->
-            <tr style="background:#e0e8f0;">
-              <td style="padding:4px 6px;border:1px solid #bbb;font-weight:bold;">Effective Gross Income ${tip('egi','Effective Gross Income = Total Rental Income + Other Income + RUBS/CAM. The total realistic income after all deductions.')}</td>
-              <td id="inc_aEGI_mo" style="padding:3px 6px;border:1px solid #bbb;text-align:right;font-weight:bold;color:#1a3a6e;font-size:11px;">${fd(aEGI_mo)}</td>
-              <td id="inc_aEGI_yr" style="padding:3px 6px;border:1px solid #bbb;text-align:right;font-weight:bold;color:#1a3a6e;font-size:11px;">${fd(aEGI_yr)}</td>
-              <td style="padding:3px 6px;border:1px solid #bbb;"></td><td style="padding:3px 6px;border:1px solid #bbb;"></td>
-              <td id="inc_pEGI_mo" style="padding:3px 6px;border:1px solid #bbb;text-align:right;font-weight:bold;color:#306030;font-size:11px;">${fd(pEGI_mo)}</td>
-              <td id="inc_pEGI_yr" style="padding:3px 6px;border:1px solid #bbb;text-align:right;font-weight:bold;color:#306030;font-size:11px;">${fd(pEGI_yr)}</td>
-              <td style="padding:3px 6px;border:1px solid #bbb;"></td><td style="padding:3px 6px;border:1px solid #bbb;"></td>
-            </tr>
-
-          </tbody>
-        </table>
+        <!-- PROFORMA section -->
+        <div class="fin-stack-section is-pro">
+          <div class="fin-stack-hd"><span class="dot"></span>Proforma (projected)</div>
+          <div class="fin-stack-tablewrap">
+          <table class="dt fin-table fin-stack-table fin-income-table">
+            <colgroup>
+              <col class="col-lbl"/><col class="col-num"/><col class="col-num"/><col class="col-pct"/><col class="col-psf"/>
+            </colgroup>
+            <thead>
+              <tr class="fin-sub-th">
+                <th></th><th>Monthly</th><th>Yearly</th><th>% of GRI</th><th>Yearly PSF</th>
+              </tr>
+            </thead>
+            <tbody>${_incomeSectionRows('p')}</tbody>
+          </table>
+          </div>
         </div>
       </div>`;
     })()}

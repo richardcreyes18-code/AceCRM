@@ -5966,6 +5966,19 @@ async function _initSummaryMap(){
   const d = currentDeal;
   let lat = Number(d['Latitude'] || d['Lat'] || 0);
   let lng = Number(d['Longitude'] || d['Lng'] || d['Lon'] || 0);
+  // v374.16.1: sanity-check stored coords. Some deals in the wild
+  // have junk lat/lng (e.g. coords in Hudson Bay for an Elmer, NJ
+  // property). If the stored values look obviously wrong — outside
+  // CONUS / Hawaii / Alaska / PR — treat them as missing and re-
+  // geocode from the address. CONUS box (rough): 24°-50°N, -125°W
+  // to -65°W; AK adds up to ~72°N / -180°W; HI ~19°N / -160°W; PR
+  // ~18°N / -66°W. Use a wide superset.
+  const looksBogus = (a, o) =>
+    (Math.abs(a) > 72) || (a < 17 && a > -1) || (o > -60 && o < 60) || (o < -180 || o > 180);
+  if(lat && lng && looksBogus(lat, lng)){
+    console.warn('[summaryMap] stored coords look bogus, will re-geocode:', lat, lng);
+    lat = 0; lng = 0;
+  }
   // If no coords stored, attempt a single Nominatim geocode + cache.
   if(!lat || !lng){
     try {

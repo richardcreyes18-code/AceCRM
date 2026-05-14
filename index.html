@@ -37353,6 +37353,40 @@ function _ddResolveBCMerge(bcRows, contactsById){
   };
 }
 
+// v369: quality-score a field value so the auto-pick prefers a real
+// value over sentinel placeholders ("No name", "Unknown", "(no name)",
+// "—", "N/A", …) AND prefers a longer/more-complete value over a
+// shorter one ("John Smith" beats "John"). Returns:
+//   0   → empty / null / whitespace-only
+//   1   → sentinel placeholder (technically non-empty but garbage)
+//   2+  → real value, score = 2 + trimmed length
+const _DD_NAME_SENTINELS = new Set([
+  '', 'no name', '(no name)', 'noname', '(noname)',
+  'unknown', 'unknown contact', 'unnamed', 'unnamed contact',
+  'no contact', '(no contact)', 'n/a', 'na', 'none', 'tbd',
+  'pending', '—', '-', '–', '?', '??', '???'
+]);
+function _ddFieldQuality(v){
+  if(v == null) return 0;
+  const s = String(v).trim();
+  if(!s) return 0;
+  if(_DD_NAME_SENTINELS.has(s.toLowerCase())) return 1;
+  return 2 + s.length;
+}
+// Pick the contact id whose value for `field` scores highest. Ties
+// (same score) break toward the preferred id (the surviving contact),
+// then by contact order. Returns null if every value is empty/sentinel.
+function _ddPickBestContactByField(contacts, field, preferredId){
+  let bestId = null;
+  let bestScore = -1;
+  for(const c of contacts){
+    const q = _ddFieldQuality(c && c[field]);
+    if(q > bestScore){ bestScore = q; bestId = c.id; }
+    else if(q === bestScore && c.id === preferredId){ bestId = preferredId; }
+  }
+  return bestScore > 0 ? bestId : null;
+}
+
 // v367: No-data-loss salvage pass — runs after the user picks per-field
 // winners but BEFORE merge_contacts() fires. For columns with a "primary
 // + secondary" pair (phone, email), if any loser holds a value the
@@ -37954,10 +37988,13 @@ function _ddRenderMergeDialog(cand, contacts, dealCounts){
     // survivor's id, which silently undid every click on a non-survivor
     // column. That's why right-column radios appeared unclickable.
     if(_ddMergePicks[f.key] !== undefined) return;
-    const survVal = (contacts.find(c => c.id === defaultSurvivor) || {})[f.key] || '';
-    if(survVal){ _ddMergePicks[f.key] = defaultSurvivor; return; }
-    const fallback = contacts.find(c => c[f.key]);
-    _ddMergePicks[f.key] = fallback ? fallback.id : defaultSurvivor;
+    // v369: quality-score each contact's value for this field and pick
+    // the best one. "No name" / "(no name)" / "Unknown" / "—" rank as
+    // garbage; "John Smith" beats "John" by length-bonus. Ties favor
+    // the surviving contact. Falls back to the survivor when every
+    // value is empty/sentinel so the radio always has SOMETHING picked.
+    const best = _ddPickBestContactByField(contacts, f.key, defaultSurvivor);
+    _ddMergePicks[f.key] = best || defaultSurvivor;
   });
   // Notes default to "combine all" if 2+ contacts have notes — but only
   // on first render, same reason as above.
@@ -39175,11 +39212,18 @@ function _ddAutoBuildFieldValues(contacts, survivorId){
   const survivor = contacts.find(c => c.id === survivorId);
   const losers = contacts.filter(c => c.id !== survivorId);
   const out = {};
-  const isEmpty = v => v === null || v === undefined || String(v||'').trim() === '';
+  const contactsById = {};
+  contacts.forEach(c => { contactsById[c.id] = c; });
+  // v369: pick the highest-quality value across the group for each
+  // field (skips sentinels like "No name", prefers longer values).
+  // Falls back to the survivor's raw value only when every contact's
+  // value is empty/sentinel — that way nothing accidentally writes a
+  // "No name" into the survivor when a loser has a real name.
   ['name','phone_number','secondary_phone','email','secondary_email','company'].forEach(f => {
-    if(!isEmpty(survivor[f])){ out[f] = survivor[f]; return; }
-    const fb = losers.find(c => !isEmpty(c[f]));
-    if(fb) out[f] = fb[f];
+    const bestId = _ddPickBestContactByField(contacts, f, survivorId);
+    if(bestId && contactsById[bestId] && _ddFieldQuality(contactsById[bestId][f]) >= 2){
+      out[f] = contactsById[bestId][f];
+    }
   });
   // Notes — combine with paragraph dedup
   const withNotes = contacts.filter(c => (c.contact_notes||'').trim());

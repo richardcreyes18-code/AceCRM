@@ -31159,6 +31159,32 @@ function _bcMountFilterCombos(){
   });
 }
 
+// v374.11: toggle the asset-type picker inside the BC detail view.
+// The picker (search bar + Category/Subtype 2-col panel) is collapsed
+// by default — the chip row above stays visible. Clicking the Add
+// Asset Type button in the section header reveals the picker and
+// flips the button label to "Cancel".
+function _bcToggleAssetPicker(btn){
+  const picker = document.getElementById('bcf_asset_picker');
+  if(!picker) return;
+  const wasHidden = picker.classList.contains('bc-collapsed');
+  picker.classList.toggle('bc-collapsed');
+  // Update button text/icon. Keep the SVG as the first child element.
+  const lbl = btn?.querySelector('.bc-add-asset-label');
+  if(lbl) lbl.textContent = wasHidden ? 'Cancel' : 'Add Asset Type';
+  const svg = btn?.querySelector('svg');
+  if(svg){
+    // Swap +  ⇄  ×
+    svg.innerHTML = wasHidden
+      ? '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>'
+      : '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>';
+  }
+  if(wasHidden){
+    // Picker just opened — focus the search input for fast typing.
+    setTimeout(() => { const s = document.getElementById('bcf_at_search'); if(s) s.focus(); }, 30);
+  }
+}
+
 function _bcToggleVip(){
   _bcVipFilter = !_bcVipFilter;
   _bcState.vip = _bcVipFilter;
@@ -31685,6 +31711,40 @@ async function bcOpenExpanded(recordId){
             return `<span class="bc-pill" style="background:#ede9fe;color:#5b21b6;border:1px solid #c4b5fd;" title="Last AI Auto-Fill apply: ${iso}">✦ AI autofilled ${rel}</span>`;
           })()}
         </div>
+
+        ${_bcBatchQueue ? '' : (() => {
+          // v374.11: center meta-strip — 4 KPI cells between .left and
+          // .right. Hidden in batch mode (the Exit Batch + progress bar
+          // already crowd the toolbar). Match Score is a placeholder
+          // until we wire a per-buyer scoring pass.
+          const matchScore = Number(f['Last Match Score']) || null;
+          const pitches    = Number(f['# of Interests (from Buyer)'] || f['# of Interests']) || 0;
+          const lastActIso = f['Last Activity At'] || f['Last AI Autofill At'] || '';
+          const lastAct    = lastActIso ? ((typeof _relTime === 'function') ? _relTime(lastActIso) : lastActIso.slice(0,10)) : '—';
+          const dateRaw    = f['Date Added Buyer'] || '';
+          const dateFmt    = dateRaw ? new Date(dateRaw + 'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'}) : '—';
+          const ph = '<span class="placeholder">—</span>';
+          return `
+            <div class="bc-toolbar-meta">
+              <div class="meta-cell">
+                <span class="meta-lbl">Match Score</span>
+                <span class="meta-val primary strong">${matchScore != null ? `${matchScore}<span class="meta-suf">/100</span>` : ph}</span>
+              </div>
+              <div class="meta-cell">
+                <span class="meta-lbl">Pitches Sent</span>
+                <span class="meta-val">${pitches || ph}</span>
+              </div>
+              <div class="meta-cell">
+                <span class="meta-lbl">Last Activity</span>
+                <span class="meta-val">${lastAct === '—' ? ph : lastAct}</span>
+              </div>
+              <div class="meta-cell">
+                <span class="meta-lbl">Date Added</span>
+                <span class="meta-val">${dateFmt === '—' ? ph : dateFmt}</span>
+              </div>
+            </div>`;
+        })()}
+
         <div class="right">
           ${_bcBatchQueue ? `
             <button class="bc-btn" style="background:#dcfce7;color:#15803d;border-color:#86efac;" onclick="bcBatchSaveAndNext('applied')" title="Save this buyer's changes and move to next">
@@ -31697,6 +31757,10 @@ async function bcOpenExpanded(recordId){
               Skip (Needs Review)
             </button>
           ` : `
+            <button class="bc-btn ghost" title="More actions (coming soon)" disabled style="opacity:0.55;cursor:not-allowed;padding:5px 7px;">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></svg>
+            </button>
+            <span class="bc-toolbar-divider"></span>
             <button class="bc-btn" style="background:#dcfce7;color:#15803d;border-color:#86efac;" onclick="bcSaveExpanded('${recordId}')">
               <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>
               Save
@@ -31705,10 +31769,10 @@ async function bcOpenExpanded(recordId){
               <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M12 3v3M12 18v3M3 12h3M18 12h3M5.6 5.6l2.1 2.1M16.3 16.3l2.1 2.1M5.6 18.4l2.1-2.1M16.3 7.7l2.1-2.1"/></svg>
               AI Auto-Fill
             </button>
-            <button class="bc-btn primary" onclick="showBuyerMatchFinder('${recordId}')">
-              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <button class="bc-btn primary lg" onclick="showBuyerMatchFinder('${recordId}')">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
               Find Matching Deals
-              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg>
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg>
             </button>
           `}
           <span id="bcSaveMsg" style="color:#15803d;font-size:11px;display:none;font-weight:600;"></span>
@@ -31860,51 +31924,63 @@ async function bcOpenExpanded(recordId){
           </div>
         </div>
 
-        <!-- ASSET TYPES & LOCATION -->
+        <!-- ASSET TYPES (chip row always visible, picker hidden behind toggle) -->
         <div class="info-box">
-          <div class="info-box-title">🎯 What They're Looking For</div>
+          <div class="info-box-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
+            <span>🎯 What They're Looking For <span style="font-weight:500;font-size:11px;color:var(--text3,#94a3b8);text-transform:none;letter-spacing:0;margin-left:6px;">Asset types this buyer is interested in</span></span>
+            <button class="bc-btn primary add-asset-btn" id="bcf_add_asset_toggle" onclick="_bcToggleAssetPicker(this)">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              <span class="bc-add-asset-label">Add Asset Type</span>
+            </button>
+          </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
             <div>
 
-              <!-- ASSET TYPES — same 3-panel selector as deal cards -->
-              <div class="bc-label" style="margin-bottom:6px;">Asset Types <span style="color:#888;font-weight:400;">(select from system types)</span></div>
-              <!-- Selected pills -->
-              <div id="bcf_asset_pills" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px;min-height:28px;padding:4px;background:#f8faff;border:1px solid #c0d0e8;border-radius:5px;">
+              <!-- ASSET TYPES — chip row stays compact + visible; picker hides -->
+              <div class="bc-label" style="margin-bottom:6px;">Asset Types <span style="color:#888;font-weight:400;">(click ✕ to remove · use the button above to add)</span></div>
+              <!-- Selected pills (always visible, compact) -->
+              <div id="bcf_asset_pills" class="compact" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px;min-height:32px;padding:6px 10px;background:#f8faff;border:1px solid #c0d0e8;border-radius:5px;">
                 ${assets.map(a=>`
                   <span style="background:#1a3a6e;color:#fff;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:600;display:flex;align-items:center;gap:5px;cursor:pointer;"
                     onclick="this.remove();_bcSyncAssets()"
                     title="Click to remove">${a} <span style="opacity:0.7;font-size:10px;">✕</span></span>`).join('')}
               </div>
-              <!-- Search bar -->
-              <input id="bcf_at_search" oninput="_bcAtSearch()" placeholder="Search type or subtype..."
-                style="width:100%;border:1.5px solid #e2e8f0;border-radius:6px;padding:7px 10px;font-size:12px;box-sizing:border-box;margin-bottom:6px;"/>
-              <div id="bcf_at_results" style="display:none;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:4px;margin-bottom:8px;max-height:140px;overflow-y:auto;z-index:10;position:relative;"></div>
-              <!-- 2-col panel: category left, subtypes right -->
-              <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;margin-bottom:14px;">
-                <div>
-                  <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:4px;">Category</div>
-                  <select id="bcf_at_left" size="8" onchange="_bcAtUpdateSubs()"
-                    style="width:100%;border:1.5px solid #e2e8f0;border-radius:6px;font-size:11px;padding:3px;">
-                    ${Object.keys(ASSET_SUBTYPES).map(t=>`<option value="${t}">${t}</option>`).join('')}
-                  </select>
-                </div>
-                <div>
-                  <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:4px;">Subtype — click to add</div>
-                  <div id="bcf_at_subs" style="border:1.5px solid #e2e8f0;border-radius:6px;padding:4px;min-height:100px;max-height:160px;overflow-y:auto;font-size:11px;">
-                    ${(() => {
-                      // v234: same shape as _bcAtUpdateSubs — always offer
-                      // a "no subtype" row at the top so users can add the
-                      // bare category without picking a subtype.
-                      const t0 = Object.keys(ASSET_SUBTYPES)[0] || '';
-                      const safe0 = t0.replace(/'/g,"\\'");
-                      const subs0 = ASSET_SUBTYPES[t0] || [];
-                      const cat = `<div onclick="_bcAtSelect('${safe0}','')" style="padding:4px 7px;cursor:pointer;border-radius:4px;font-size:11px;font-weight:600;color:#1a3a6e;background:#eef4ff;border:1px dashed #c7d7ff;margin-bottom:4px;" onmouseover="this.style.background='#dbe7ff'" onmouseout="this.style.background='#eef4ff'" title="Add the category alone, no subtype">＋ Add "${t0}" (no subtype)</div>`;
-                      const rows = subs0.map(s=>`<div onclick="_bcAtSelect('${safe0}','${s.replace(/'/g,"\\'")}')" style="padding:4px 7px;cursor:pointer;border-radius:4px;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'">${s}</div>`).join('');
-                      return cat + rows;
-                    })()}
+              <!-- v374.11: picker collapses by default. Toggled by the
+                   Add Asset Type button in the section header above. -->
+              <div id="bcf_asset_picker" class="asset-picker-pop bc-collapsed">
+                <!-- Search bar -->
+                <input id="bcf_at_search" oninput="_bcAtSearch()" placeholder="Search type or subtype..."
+                  style="width:100%;border:1.5px solid #e2e8f0;border-radius:6px;padding:7px 10px;font-size:12px;box-sizing:border-box;margin-bottom:6px;"/>
+                <div id="bcf_at_results" style="display:none;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:4px;margin-bottom:8px;max-height:140px;overflow-y:auto;z-index:10;position:relative;"></div>
+                <!-- 2-col panel: category left, subtypes right -->
+                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
+                  <div>
+                    <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:4px;">Category</div>
+                    <select id="bcf_at_left" size="8" onchange="_bcAtUpdateSubs()"
+                      style="width:100%;border:1.5px solid #e2e8f0;border-radius:6px;font-size:11px;padding:3px;">
+                      ${Object.keys(ASSET_SUBTYPES).map(t=>`<option value="${t}">${t}</option>`).join('')}
+                    </select>
+                  </div>
+                  <div>
+                    <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:4px;">Subtype — click to add</div>
+                    <div id="bcf_at_subs" style="border:1.5px solid #e2e8f0;border-radius:6px;padding:4px;min-height:100px;max-height:160px;overflow-y:auto;font-size:11px;background:#fff;">
+                      ${(() => {
+                        // v234: same shape as _bcAtUpdateSubs — always offer
+                        // a "no subtype" row at the top so users can add the
+                        // bare category without picking a subtype.
+                        const t0 = Object.keys(ASSET_SUBTYPES)[0] || '';
+                        const safe0 = t0.replace(/'/g,"\\'");
+                        const subs0 = ASSET_SUBTYPES[t0] || [];
+                        const cat = `<div onclick="_bcAtSelect('${safe0}','')" style="padding:4px 7px;cursor:pointer;border-radius:4px;font-size:11px;font-weight:600;color:#1a3a6e;background:#eef4ff;border:1px dashed #c7d7ff;margin-bottom:4px;" onmouseover="this.style.background='#dbe7ff'" onmouseout="this.style.background='#eef4ff'" title="Add the category alone, no subtype">＋ Add "${t0}" (no subtype)</div>`;
+                        const rows = subs0.map(s=>`<div onclick="_bcAtSelect('${safe0}','${s.replace(/'/g,"\\'")}')" style="padding:4px 7px;cursor:pointer;border-radius:4px;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'">${s}</div>`).join('');
+                        return cat + rows;
+                      })()}
+                    </div>
                   </div>
                 </div>
               </div>
+              <!-- end of asset picker -->
+              <div style="height:14px;"></div>
               <input type="hidden" id="bcf_assets_hidden" value="${assets.join(', ')}"/>
 
               <!-- STATES — multi-select pill UI -->
@@ -31930,14 +32006,14 @@ async function bcOpenExpanded(recordId){
               <!-- v110.3: NJ Region quick-add chips. Clicking a region adds all
                    counties in that region to the pill list. Ocean (South+Central)
                    and Hunterdon (North+Central) are handled by _countyRegions. -->
-              <div style="display:flex;flex-wrap:wrap;gap:6px;margin-bottom:8px;align-items:center;">
-                <span style="font-size:10px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-right:4px;">Quick add:</span>
-                <button type="button" onclick="_bcAddRegionCounties('All NJ')" style="background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;padding:3px 10px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;">🗽 All NJ</button>
-                <button type="button" onclick="_bcAddRegionCounties('North NJ')" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;padding:3px 10px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;">⬆ North NJ</button>
-                <button type="button" onclick="_bcAddRegionCounties('Central NJ')" style="background:#ecfccb;color:#3f6212;border:1px solid #d9f99d;padding:3px 10px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;">▬ Central NJ</button>
-                <button type="button" onclick="_bcAddRegionCounties('South NJ')" style="background:#fce7f3;color:#9d174d;border:1px solid #fbcfe8;padding:3px 10px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;">⬇ South NJ</button>
-                <button type="button" onclick="_bcAddRegionCounties('Tri-State')" style="background:#e0e7ff;color:#3730a3;border:1px solid #c7d2fe;padding:3px 10px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;" title="Adds all NJ counties + enables NY/PA states">🗺 Tri-State</button>
-                <button type="button" onclick="_bcClearCounties()" style="background:#fef2f2;color:#991b1b;border:1px solid #fecaca;padding:3px 10px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;margin-left:4px;">✕ Clear all</button>
+              <div style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px;align-items:center;">
+                <span style="font-size:10px;color:#64748b;font-weight:600;text-transform:uppercase;letter-spacing:0.05em;margin-right:2px;">Quick add:</span>
+                <button type="button" onclick="_bcAddRegionCounties('All NJ')" title="All NJ counties" style="background:#eff6ff;color:#1e40af;border:1px solid #bfdbfe;padding:3px 9px;font-size:10.5px;font-weight:600;border-radius:99px;cursor:pointer;">🗽 All NJ</button>
+                <button type="button" onclick="_bcAddRegionCounties('North NJ')" title="North NJ" style="background:#fef3c7;color:#92400e;border:1px solid #fde68a;padding:3px 9px;font-size:10.5px;font-weight:600;border-radius:99px;cursor:pointer;">⬆ N</button>
+                <button type="button" onclick="_bcAddRegionCounties('Central NJ')" title="Central NJ" style="background:#ecfccb;color:#3f6212;border:1px solid #d9f99d;padding:3px 9px;font-size:10.5px;font-weight:600;border-radius:99px;cursor:pointer;">— C</button>
+                <button type="button" onclick="_bcAddRegionCounties('South NJ')" title="South NJ" style="background:#fce7f3;color:#9d174d;border:1px solid #fbcfe8;padding:3px 9px;font-size:10.5px;font-weight:600;border-radius:99px;cursor:pointer;">⬇ S</button>
+                <button type="button" onclick="_bcAddRegionCounties('Tri-State')" title="Adds all NJ counties + enables NY/PA states" style="background:#e0e7ff;color:#3730a3;border:1px solid #c7d2fe;padding:3px 9px;font-size:10.5px;font-weight:600;border-radius:99px;cursor:pointer;">🌉 Tri</button>
+                <button type="button" onclick="_bcClearCounties()" title="Clear all counties" style="background:#fef2f2;color:#991b1b;border:1px solid #fecaca;padding:3px 9px;font-size:10.5px;font-weight:600;border-radius:99px;cursor:pointer;margin-left:4px;">✕ Clear</button>
               </div>
 
               <div id="bcf_county_pills" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px;min-height:28px;padding:4px;background:#f8faff;border:1px solid #c0d0e8;border-radius:5px;">

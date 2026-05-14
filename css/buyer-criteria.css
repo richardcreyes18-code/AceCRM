@@ -1039,3 +1039,132 @@
   padding: 14px 18px !important;
   margin-bottom: 14px !important;
 }
+
+/* ─────────────────────────────────────────────────────────────
+   v374.11 — BC detail layout refinements.
+   1. Center meta-strip in the sticky toolbar (4 KPI cells).
+   2. Add-Asset-Type toggle pattern: chip row stays visible, picker
+      hides behind a primary button in the section header.
+   3. Geographic + Financial sections side-by-side (.bc-two-col).
+   ───────────────────────────────────────────────────────────── */
+
+/* Center meta-strip (between .left and .right inside .bc-detail-toolbar) */
+.bc-detail-toolbar .bc-toolbar-meta {
+  display: flex;
+  align-items: stretch;
+  gap: 0;
+  flex: 1 1 auto;
+  min-width: 0;
+  margin: 0 12px;
+  justify-content: flex-end;
+}
+.bc-detail-toolbar .meta-cell {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 2px 14px;
+  border-left: 1px solid var(--border, #e2e8f0);
+  min-width: 88px;
+}
+.bc-detail-toolbar .meta-cell:first-child { border-left: 0; padding-left: 0; }
+.bc-detail-toolbar .meta-lbl {
+  font-size: 9.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--text3, #94a3b8);
+  white-space: nowrap;
+}
+.bc-detail-toolbar .meta-val {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--text, #0f172a);
+  line-height: 1.15;
+  font-family: var(--font-mono, ui-monospace, SFMono-Regular, monospace);
+  display: inline-flex;
+  align-items: baseline;
+  gap: 2px;
+}
+.bc-detail-toolbar .meta-val.primary { color: #1d4ed8; }
+.bc-detail-toolbar .meta-val.strong  { font-weight: 800; }
+.bc-detail-toolbar .meta-suf {
+  font-size: 10px;
+  color: var(--text3, #94a3b8);
+  font-weight: 500;
+}
+.bc-detail-toolbar .meta-val .placeholder {
+  color: var(--text3, #cbd5e1);
+  font-style: italic;
+  font-weight: 500;
+}
+
+/* Vertical divider for the toolbar right side (between More and Save) */
+.bc-toolbar-divider {
+  width: 1px;
+  height: 22px;
+  background: var(--border, #e2e8f0);
+  margin: 0 4px;
+  display: inline-block;
+}
+
+/* Larger button variant */
+.bc-btn.lg,
+.bc-btn.primary.lg {
+  padding: 8px 14px;
+  font-size: 13px;
+  font-weight: 600;
+}
+
+/* Add Asset Type primary button (small shadow so it lifts off the
+   surface-2 section-header strip) */
+.add-asset-btn {
+  padding: 6px 12px !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  box-shadow: 0 1px 2px rgba(37, 99, 235, 0.18);
+}
+.add-asset-btn svg { stroke-width: 2.25; }
+
+/* Compact asset chip row (used when picker is collapsed) */
+.bc-detail #bcf_asset_pills.compact,
+.asset-chip-input.compact {
+  min-height: 32px !important;
+  padding: 6px 10px !important;
+  margin: 6px 0 0 0 !important;
+}
+
+/* Collapsible picker callout (search + Category/Subtype panels) */
+.asset-picker-pop {
+  margin-top: 12px;
+  padding: 14px;
+  background: var(--surface2, #f8fafc);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 8px;
+}
+.asset-picker-pop .bc-cat-grid,
+.asset-picker-pop > div[style*="grid-template-columns"] { margin-top: 10px; }
+
+/* Generic collapse helper — kept here (not in design-system.css) since
+   it's only used inside .bc-detail for now. */
+.bc-collapsed { display: none !important; }
+
+/* Geographic Coverage + Financial Parameters side-by-side row */
+.bc-two-col {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 14px;
+  align-items: start;
+  margin-bottom: 14px;
+}
+.bc-two-col > .info-box,
+.bc-two-col > .section {
+  margin-bottom: 0 !important;
+  min-width: 0; /* prevent overflow inside grid track */
+}
+
+/* Shorter quick-add region buttons (fit narrower half-width column) */
+.bc-detail .qa-mini {
+  padding: 3px 8px !important;
+  font-size: 10px !important;
+  min-width: 0 !important;
+}

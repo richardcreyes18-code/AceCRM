@@ -30670,67 +30670,86 @@ async function showBuyerCriteriaPage(){
   const filterCount = _bcCountActiveFilters();
 
   document.getElementById('mainArea').innerHTML = `
-    <div style="padding:0;height:100%;display:flex;flex-direction:column;">
-      <!-- v163: HEADER BAR — Pipeline-style filters. Removed Batch Review AI,
-           Auto-Configure (AI), and Filter:All buttons per request. The
-           type/county/units single-selects are replaced with a 🔍 Filters
-           toggle that opens a grouped-card panel (Location + Asset). -->
-      <div style="background:linear-gradient(180deg,#1a3a6e,#0e2244);padding:10px 16px;display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
-        <div style="color:#fff;font-size:15px;font-weight:bold;margin-right:8px;">🎯 Buyer Criteria</div>
-        <input id="bcSearch" value="${_bcState.search.replace(/"/g,'&quot;')}" placeholder="Search buyer name, phone, asset type, county..."
-          oninput="_bcState.search=this.value;renderBuyerCriteriaTable(allBuyerCriteria);_bcRefreshFilterChips()"
-          style="flex:1;min-width:240px;max-width:480px;font-size:12px;border:1px solid #aaa;border-radius:6px;padding:7px 12px;background:#fff;"/>
-        <button id="bcFilterToggleBtn" onclick="_bcToggleFilterPanel()"
-          style="background:${filterCount>0?'#1e3a8a':'rgba(255,255,255,0.12)'};color:#fff;border:1px solid ${filterCount>0?'#1e3a8a':'rgba(255,255,255,0.3)'};padding:6px 14px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;white-space:nowrap;">
-          🔍 Filters<span id="bcFilterCountBadge">${filterCount>0?` (${filterCount})`:''}</span>
-          <span id="bcFilterCaret" style="font-size:9px;margin-left:4px;">${_bcState.panelOpen?'▲':'▼'}</span>
-        </button>
-        <span id="bcSourceFilterWrap"></span>
-        <button id="bcVipBtn" onclick="_bcToggleVip()" style="${_bcState.vip?'background:#fbbf24;color:#000;':'background:rgba(255,255,255,0.12);color:#fbbf24;'}border:1px solid #fbbf24;padding:6px 14px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;">⭐ ${_bcState.vip?'VIP ✓':'VIP Only'}</button>
-        <span id="bc_count" style="color:#aad4ff;font-size:11px;margin-left:4px;"></span>
-        <button onclick="_bcLastLoadMs=0;showBuyerCriteriaPage()" style="margin-left:auto;background:rgba(255,255,255,0.15);color:#fff;border:1px solid rgba(255,255,255,0.3);padding:6px 12px;font-size:12px;border-radius:6px;cursor:pointer;">↻ Refresh</button>
+    <div style="padding:0;height:100%;display:flex;flex-direction:column;background:var(--surface2,#f8fafc);">
+      <!-- v374.9: institutional toolbar — replaces the navy gradient
+           header. Search uses a focused-blue ring, VIP toggle gets an
+           amber on-state, action buttons all use the .bc-btn vocab. -->
+      <div class="bc-page-toolbar">
+        <div class="left">
+          <div class="bc-page-title">
+            <svg viewBox="0 0 24 24" width="15" height="15" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><circle cx="12" cy="12" r="6"/><circle cx="12" cy="12" r="2"/></svg>
+            Buyer Criteria
+            <span class="muted" id="bc_count">·  loading…</span>
+          </div>
+        </div>
+        <div class="right">
+          <button id="bcFilterToggleBtn" class="bc-btn" onclick="_bcToggleFilterPanel()">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polygon points="22 3 2 3 10 12.46 10 19 14 21 14 12.46 22 3"/></svg>
+            Filters<span id="bcFilterCountBadge">${filterCount>0?` (${filterCount})`:''}</span>
+            <span id="bcFilterCaret" style="font-size:9px;margin-left:4px;color:var(--text3,#94a3b8);">${_bcState.panelOpen?'▲':'▼'}</span>
+          </button>
+          <div class="bc-search">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            <input id="bcSearch" value="${_bcState.search.replace(/"/g,'&quot;')}" placeholder="Search buyer name, phone, asset type, county…"
+              oninput="_bcState.search=this.value;renderBuyerCriteriaTable(allBuyerCriteria);_bcRefreshFilterChips()"/>
+          </div>
+          <span id="bcSourceFilterWrap"></span>
+          <label id="bcVipBtn" class="bc-vip${_bcState.vip?' on':''}" onclick="_bcToggleVip()">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="${_bcState.vip?'currentColor':'none'}" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+            ${_bcState.vip?'VIP ✓':'VIP Only'}
+          </label>
+          <button class="bc-btn" onclick="_bcLastLoadMs=0;showBuyerCriteriaPage()">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+            Refresh
+          </button>
+        </div>
       </div>
 
-      <!-- v163: Filter chip strip + collapsible panel -->
-      <div id="bcFilterChips" style="display:${filterCount>0?'flex':'none'};gap:6px;flex-wrap:wrap;padding:${filterCount>0?'10px 16px':'0'};background:#f8fafc;border-bottom:${filterCount>0?'1px solid #e2e8f0':'0'};">${_bcBuildFilterChipsHTML()}</div>
-      <div id="bcFilterPanel" style="display:${_bcState.panelOpen?'block':'none'};background:#f8fafc;border-bottom:1px solid #e2e8f0;">
+      <!-- Filter chip strip + collapsible panel (preserved verbatim) -->
+      <div id="bcFilterChips" style="display:${filterCount>0?'flex':'none'};gap:6px;flex-wrap:wrap;padding:${filterCount>0?'10px 20px':'0'};background:var(--surface,#fff);border-bottom:${filterCount>0?'1px solid var(--border,#e2e8f0)':'0'};">${_bcBuildFilterChipsHTML()}</div>
+      <div id="bcFilterPanel" style="display:${_bcState.panelOpen?'block':'none'};background:var(--surface2,#f8fafc);border-bottom:1px solid var(--border,#e2e8f0);">
         ${_bcBuildFilterPanelHTML()}
       </div>
-      <!-- TABLE -->
-      <div style="flex:1;overflow:auto;">
-        <table style="width:100%;border-collapse:collapse;font-size:11px;min-width:1100px;">
-          <thead>
-            <tr style="background:#243a5e;color:#fff;position:sticky;top:0;z-index:10;">
-              <th style="padding:7px 6px;width:36px;border-right:1px solid #1a2e4e;">⭐</th>
-              ${[
-                ['name','Buyer Name','160px'],
-                ['company','Company','110px'],
-                ['phone','Phone','100px'],
-                ['assets','Asset Types','160px'],
-                ['areas','Counties / Areas','180px'],
-                ['cap','Min CAP','70px'],
-                ['price','Price Range','110px'],
-                ['units','Units (MF)','85px'],
-                ['sf','SF Range (Wh)','105px'],
-                ['interests','Deals Sent','75px'],
-                ['date','Date Added','90px'],
-                ['notes','Requirements / Notes','180px'],
-              ].map(([col,label,w])=>`
-                <th style="padding:7px 8px;text-align:left;white-space:nowrap;width:${w};border-right:1px solid #1a2e4e;cursor:pointer;user-select:none;" onclick="_bcSortBy('${col}')">
-                  ${label} <span id="bc_sort_${col}" style="font-size:9px;opacity:0.7;"></span>
-                </th>`).join('')}
-              <th style="padding:7px 8px;width:150px;border-right:1px solid #1a2e4e;">Actions</th>
-            </tr>
-          </thead>
-          <tbody id="bcTableWrap">
-            <tr><td colspan="13" style="text-align:center;padding:30px;color:#888;">⏳ Loading buyer criteria...</td></tr>
-          </tbody>
-        </table>
+
+      <!-- BC table wrapped in a section card -->
+      <div class="bc-section" style="margin:14px 20px;flex:1;display:flex;flex-direction:column;overflow:hidden;">
+        <div class="bc-table-wrap" style="flex:1;overflow:auto;">
+          <table class="bc-table" id="bcTable">
+            <thead>
+              <tr>
+                <th style="width:34px;cursor:default;">
+                  <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="display:inline-block;vertical-align:middle;"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+                </th>
+                ${[
+                  ['name','Buyer Name'],
+                  ['company','Company'],
+                  ['phone','Phone'],
+                  ['assets','Asset Types'],
+                  ['areas','Counties / Areas'],
+                  ['cap','Min CAP', 'num'],
+                  ['price','Price Range', 'num'],
+                  ['units','Units (MF)', 'num'],
+                  ['sf','SF Range (Wh)', 'num'],
+                  ['interests','Deals Sent', 'num'],
+                  ['date','Date Added'],
+                  ['notes','Requirements / Notes'],
+                ].map(([col,label,kind])=>`
+                  <th${kind==='num'?' class="num"':''} onclick="_bcSortBy('${col}')">
+                    ${label} <span id="bc_sort_${col}" style="font-size:9px;opacity:0.7;color:var(--text3,#94a3b8);"></span>
+                  </th>`).join('')}
+                <th class="ta-right" style="cursor:default;">Actions</th>
+              </tr>
+            </thead>
+            <tbody id="bcTableWrap">
+              <tr><td colspan="14" class="bc-empty">⏳ Loading buyer criteria…</td></tr>
+            </tbody>
+          </table>
+        </div>
       </div>
     </div>`;
 
   const cfg = getConfig();
-  if(!cfg.key && !isSupabase()){ document.getElementById('bcTableWrap').innerHTML=`<tr><td colspan="11" style="padding:20px;color:#c00;">Connect your database first (Settings)</td></tr>`; return; }
+  if(!cfg.key && !isSupabase()){ document.getElementById('bcTableWrap').innerHTML=`<tr><td colspan="14" class="bc-empty" style="color:#c00;">Connect your database first (Settings)</td></tr>`; return; }
 
   // v163: wire the filter-panel combos that we just dropped into the DOM.
   // Idempotent — safe to call again on cached-load and post-fetch paths.
@@ -30835,7 +30854,7 @@ async function showBuyerCriteriaPage(){
 
     renderBuyerCriteriaTable(records);
   }catch(e){
-    document.getElementById('bcTableWrap').innerHTML=`<tr><td colspan="11" style="padding:20px;color:#c00;">Error: ${e.message}</td></tr>`;
+    document.getElementById('bcTableWrap').innerHTML=`<tr><td colspan="14" class="bc-empty" style="color:#c00;">Error: ${e.message}</td></tr>`;
   }
 }
 
@@ -31185,14 +31204,30 @@ const BC_TYPE_COLORS = {
   'Single Family':   {bg:'#065f46',color:'#fff'}, 'Hotel & Motel':   {bg:'#1e3a5f',color:'#fff'},
   'Body Shop':       {bg:'#374151',color:'#fff'}, 'Auto':            {bg:'#374151',color:'#fff'},
 };
+// v374.9: switched to .ast-chip semantic classes (Multifamily=green,
+// Retail=violet, Industrial=orange, Mixed=pink, Automotive=indigo,
+// Special=indigo-dark, Office=blue, Land=lime, Hospitality=red) so the
+// chip palette matches the design and stays consistent with the detail
+// view + asset-selector chips.
+function _bcAssetChipCls(label){
+  const lc = String(label||'').toLowerCase();
+  if(lc.includes('multifamily') || lc.includes('apartment'))           return 'ast-mf';
+  if(lc.includes('retail') || lc.includes('strip') || lc.includes('shopping')) return 'ast-retail';
+  if(lc.includes('industrial') || lc.includes('warehouse') || lc.includes('flex') || lc.includes('manufacturing')) return 'ast-ind';
+  if(lc.includes('mixed'))                                              return 'ast-mix';
+  if(lc.includes('automotive') || lc.includes('car wash') || lc.includes('auto'))  return 'ast-auto';
+  if(lc.includes('school') || lc.includes('gas') || lc.includes('special') || lc.includes('religious') || lc.includes('medical')) return 'ast-spec';
+  if(lc.includes('office'))                                             return 'ast-office';
+  if(lc.includes('land') || lc.includes('development'))                 return 'ast-land';
+  if(lc.includes('hospitality') || lc.includes('hotel') || lc.includes('motel')) return 'ast-hosp';
+  return 'ast-nc';
+}
 function getBcTypeBadge(typeStr){
-  if(!typeStr) return '<span style="color:#aaa;">—</span>';
+  if(!typeStr) return '<span class="ast-chip ast-nc">Needs Classification</span>';
   const clean = typeStr.replace(/[🔴🟠🟡🟢🔵🟣]/g,'').trim();
-  // v113.8: filter ✕ junk left over from the old buggy _bcGetPillTexts
-  return clean.split(',').map(t=>t.trim()).filter(t => t && t !== '✕' && t !== '✖' && t !== '×').map(t=>{
-    const c = BC_TYPE_COLORS[t] || {bg:'#475569',color:'#fff'};
-    return `<span style="display:inline-block;background:${c.bg};color:${c.color};padding:2px 8px;border-radius:4px;font-size:10px;font-weight:600;margin:1px 2px;white-space:nowrap;">${t}</span>`;
-  }).join('');
+  const parts = clean.split(',').map(t=>t.trim()).filter(t => t && t !== '✕' && t !== '✖' && t !== '×');
+  if(!parts.length) return '<span class="ast-chip ast-nc">Needs Classification</span>';
+  return parts.map(t => `<span class="ast-chip ${_bcAssetChipCls(t)}">${t}</span>`).join('');
 }
 
 function renderBuyerCriteriaTable(records){
@@ -31343,80 +31378,91 @@ function renderBuyerCriteriaTable(records){
   });
 
   const countEl=document.getElementById('bc_count');
-  if(countEl) countEl.textContent=`${filtered.length} buyer${filtered.length!==1?'s':''}`;
+  if(countEl) countEl.textContent = `·  ${filtered.length.toLocaleString()} buyer${filtered.length!==1?'s':''} tracked`;
 
   if(!filtered.length){
-    wrap.innerHTML=`<tr><td colspan="13" style="text-align:center;padding:30px;color:#888;">${_bcVipFilter?'No VIP buyers yet — click ⭐ on any buyer to mark them as VIP.':'No buyers match your search.'}</td></tr>`;
+    wrap.innerHTML=`<tr><td colspan="14" class="bc-empty">${_bcVipFilter?'No VIP buyers yet — click ⭐ on any buyer to mark them as VIP.':'No buyers match your search.'}</td></tr>`;
     return;
   }
 
-  wrap.innerHTML = filtered.map((r,i)=>{
+  // v374.9: per-row lead-dot signals review status at a glance.
+  //   - green = applied AI suggestions OR has full contact info (name+phone)
+  //   - amber = needs human review OR has asset types but missing contact info
+  //   - gray  = stub buyer with no asset types AND no contact info
+  const _leadDotKind = (f, contact) => {
+    const status = f['_reviewStatus'] || '';
+    if(status === 'needs_human_review') return 'amber';
+    const hasContact = !!(contact?.['Phone Number'] || contact?.Email);
+    const hasAssets  = !!(f['Simple Text Desired Property Type'] || '').trim();
+    if(!hasContact && !hasAssets) return 'gray';
+    if(!hasContact) return 'amber';
+    return 'green';
+  };
+
+  wrap.innerHTML = filtered.map((r)=>{
     const f = r.fields;
     const contactId = (f['Buyer']||[])[0];
     const contact = contactId ? allBuyerContacts[contactId] : null;
     const name   = contact?.Name || f['Name']?.split(' - ')[0] || '—';
-    const company= contact?.Company||'—';
-    const phone  = contact?.['Phone Number']||'—';
+    const company= contact?.Company||'';
+    const phone  = contact?.['Phone Number']||'';
     const assetStr=(f['Simple Text Desired Property Type']||'').replace(/[🔴🟠🟡🟢🔵🟣]/g,'').trim();
-    const areas  =(f['Simple Area Preference']||f['Location Preferences']||'—');
+    const areas  =(f['Simple Area Preference']||f['Location Preferences']||'');
     const areaShort=areas.length>55?areas.substring(0,55)+'…':areas;
-    const cap    =f['Minumum Cap Rate']?f['Minumum Cap Rate']+'%':'—';
+    const cap    =f['Minumum Cap Rate']?f['Minumum Cap Rate']+'%':'';
     const minPr=f['Min Purchase Price'],maxPr=f['Max Purchase Price'];
-    const priceRange=minPr||maxPr?`$${minPr?(Number(minPr)/1e6).toFixed(1)+'M':'?'} – $${maxPr?(Number(maxPr)/1e6).toFixed(1)+'M':'∞'}`:'—';
+    const priceRange=minPr||maxPr?`$${minPr?(Number(minPr)/1e6).toFixed(1)+'M':'?'} – $${maxPr?(Number(maxPr)/1e6).toFixed(1)+'M':'∞'}`:'';
     const minU=f['Minimum # of Units MF'],maxU=f['Max # of Units MF'];
-    const units  =minU||maxU?`${minU||'?'}–${maxU||'∞'}`:'—';
+    const units  =minU||maxU?`${minU||'?'}–${maxU||'∞'}`:'';
     const minSF=f['Warehouse Min Square Footage'],maxSF=f['Warehouse Max Square Footage'];
-    const sf     =minSF||maxSF?`${minSF?Number(minSF).toLocaleString():'?'}–${maxSF?Number(maxSF).toLocaleString():'∞'}`:'—';
+    const sf     =minSF||maxSF?`${minSF?Number(minSF).toLocaleString():'?'}–${maxSF?Number(maxSF).toLocaleString():'∞'}`:'';
     const interests=Number(f['# of Interests (from Buyer)']||f['# of Interests'])||0;
     const dateRaw=f['Date Added Buyer']||'';
-    const dateFmt=dateRaw?new Date(dateRaw+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'}):'—';
-    const notes  =(f['Other Requirements ']||'').substring(0,65)+(f['Other Requirements ']?.length>65?'…':'');
+    const dateFmt=dateRaw?new Date(dateRaw+'T00:00:00').toLocaleDateString('en-US',{month:'short',day:'numeric',year:'2-digit'}):'';
+    const notesFull = (f['Other Requirements ']||'').trim();
+    const notes = notesFull.length>65 ? notesFull.substring(0,65)+'…' : notesFull;
     const isVip  =!!f['Is VIP Buyer'];
     const vipTypes=(f['VIP Asset Types']||[]).join(', ');
-    const bg     =i%2===0?'#fff':'#f6f8fc';
-    const rowBg  =isVip?(bg==='#fff'?'#fffbeb':'#fef9c3'):bg;
+    const dot = _leadDotKind(f, contact);
+    const ph = '<span class="placeholder">—</span>';
 
-    return `<tr style="background:${rowBg};cursor:pointer;border-bottom:1px solid #e8ecf4;"
-      onclick="bcOpenExpanded('${r.id}')"
-      onmouseenter="this.style.background='#e8f0fe'"
-      onmouseleave="this.style.background='${rowBg}'">
-      <td style="padding:4px 6px;border-right:1px solid #e8ecf4;text-align:center;" onclick="event.stopPropagation()">
-        <button title="${isVip?'Remove VIP status':'Mark as VIP buyer'}"
-          onclick="_bcToggleStar('${r.id}',${isVip},event)"
-          style="background:none;border:none;cursor:pointer;font-size:16px;line-height:1;padding:2px;display:block;margin:0 auto;
-            color:${isVip?'#f5c400':'transparent'};transition:color 0.15s;"
-          onmouseenter="this.style.color='${isVip?'#f5c400':'#ddd'}'"
-          onmouseleave="this.style.color='${isVip?'#f5c400':'transparent'}'">⭐</button>
+    return `<tr class="bc-row${isVip?' vip':''}" onclick="bcOpenExpanded('${r.id}')">
+      <td onclick="event.stopPropagation()" style="text-align:center;">
+        <button class="star-btn${isVip?' on':''}" title="${isVip?'Remove VIP status':'Mark as VIP buyer'}" onclick="_bcToggleStar('${r.id}',${isVip},event)">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="${isVip?'currentColor':'none'}" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 15.09 8.26 22 9.27 17 14.14 18.18 21.02 12 17.77 5.82 21.02 7 14.14 2 9.27 8.91 8.26 12 2"/></svg>
+        </button>
       </td>
-      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;font-weight:bold;color:#1a3a6e;max-width:160px;">
-        <div style="display:flex;align-items:center;gap:5px;">
-          <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${name}">${name}</div>
-          ${isVip?`<span style="background:#fbbf24;color:#0f172a;font-size:9px;font-weight:700;padding:1px 5px;border-radius:99px;white-space:nowrap;flex-shrink:0;">VIP</span>`:''}
+      <td class="strong" style="max-width:180px;">
+        <div style="display:flex;align-items:center;gap:0;">
+          <span class="lead-dot dot-${dot}"></span>
+          <span style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${name.replace(/"/g,'&quot;')}">${name}</span>
+          ${isVip?`<span class="bc-pill stage-hot" style="margin-left:6px;flex-shrink:0;">VIP</span>`:''}
         </div>
-        ${vipTypes?`<div style="font-size:9px;color:#b45309;margin-top:1px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${vipTypes}">★ ${vipTypes}</div>`:''}
+        ${vipTypes?`<div style="font-size:9.5px;color:#b45309;margin-top:2px;margin-left:16px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${vipTypes.replace(/"/g,'&quot;')}">★ ${vipTypes}</div>`:''}
       </td>
-      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;font-size:11px;color:#555;max-width:110px;">
-        <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${company}</div>
-      </td>
-      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;font-size:11px;color:#333;">${phone}</td>
-      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;width:160px;max-width:160px;overflow:hidden;"><div style="display:flex;flex-wrap:wrap;gap:2px;align-items:flex-start;">${getBcTypeBadge(assetStr)}</div></td>
-      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;font-size:10px;color:#444;max-width:175px;" title="${areas}">
-        <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;">${areaShort}</div>
-      </td>
-      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;font-weight:bold;color:#1a5c1a;">${cap}</td>
-      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;font-size:10px;color:#555;white-space:nowrap;">${priceRange}</td>
-      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;font-size:11px;">${units}</td>
-      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;font-size:11px;">${sf}</td>
-      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;text-align:center;">
-        ${interests>0?`<span style="background:#1a3a6e;color:#fff;padding:1px 7px;border-radius:10px;font-size:10px;">${interests}</span>`:'—'}
-      </td>
-      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;font-size:10px;color:#555;white-space:nowrap;">${dateFmt}</td>
-      <td style="padding:6px 8px;border-right:1px solid #e8ecf4;font-size:10px;color:#555;max-width:180px;">
-        <div style="white-space:nowrap;overflow:hidden;text-overflow:ellipsis;" title="${(f['Other Requirements ']||'').replace(/"/g,'&quot;')}">${notes||'—'}</div>
-      </td>
-      <td style="padding:4px 8px;white-space:nowrap;" onclick="event.stopPropagation()">
-        <button onclick="showBuyerMatchFinder('${r.id}')" style="background:#1a3a6e;color:#fff;border:none;padding:3px 10px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;margin-right:4px;">Find Deals</button>
-        <button onclick="bcOpenExpanded('${r.id}')" style="background:none;border:1px solid #2563eb;color:#2563eb;padding:3px 8px;border-radius:4px;font-size:10px;font-weight:600;cursor:pointer;">Edit →</button>
+      <td class="fg-2 ellipsis" style="max-width:120px;">${company || ph}</td>
+      <td class="mono fg-2">${phone || ph}</td>
+      <td style="max-width:200px;"><span class="ast-chip-row">${assetStr ? getBcTypeBadge(assetStr) : '<span class=\"ast-chip ast-nc\">Needs Classification</span>'}</span></td>
+      <td class="fg-2 ellipsis" style="max-width:180px;" title="${areas.replace(/"/g,'&quot;')}">${areaShort || ph}</td>
+      <td class="num mono">${cap || ph}</td>
+      <td class="num mono" style="white-space:nowrap;">${priceRange || ph}</td>
+      <td class="num mono">${units || ph}</td>
+      <td class="num mono">${sf || ph}</td>
+      <td class="num mono">${interests>0?interests:ph}</td>
+      <td class="mono fg-2" style="white-space:nowrap;">${dateFmt || ph}</td>
+      <td class="fg-2 ellipsis" style="max-width:200px;" title="${notesFull.replace(/"/g,'&quot;')}">${notes || ph}</td>
+      <td class="ta-right" onclick="event.stopPropagation()">
+        <div class="row-actions">
+          <button class="lbtn" onclick="showBuyerMatchFinder('${r.id}')" title="Find matching deals">
+            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="11" cy="11" r="8"/><line x1="21" y1="21" x2="16.65" y2="16.65"/></svg>
+            Find Deals
+          </button>
+          <button class="lbtn" onclick="bcOpenExpanded('${r.id}')" title="Edit buyer criteria">
+            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>
+            Edit
+            <svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="7" y1="17" x2="17" y2="7"/><polyline points="7 7 17 7 17 17"/></svg>
+          </button>
+        </div>
       </td>
     </tr>`;
   }).join('');

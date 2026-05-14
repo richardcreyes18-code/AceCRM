@@ -46522,10 +46522,10 @@ async function loadPitchOutTab(dealId){
 
     <!-- BLOCK 5: ENTRY COSTS -->
     ${poBlock('💼 Entry Costs', [
-      ['Down Payment',      dpAmt>0?fmtD(dpAmt)+(dpType==='percent'?' ('+dpPct+'%)':''):'—',  '#1a3a6e', true],
+      ['Down Payment',      dpAmt>0?fmtD(dpAmt)+' ('+dpPct+'%)':'—',  '#1a3a6e', true],
       ['Loan Amount',       loanAmt>0?fmtD(loanAmt):'—',              '#555',    false],
       ['Total Cash In',     totalCash>0?fmtD(totalCash):'—',          '#1a3a6e', true],
-      Number(fi['aRenovation'])>0 ? ['Renovation Budget', fmtD(Number(fi['aRenovation'])), '#c07000', false] : null,
+      Number(d['Renovation Expense'])>0 ? ['Renovation Budget', fmtD(Number(d['Renovation Expense'])), '#c07000', false] : null,
     ])}
 
     <!-- BLOCK 6: PRICE METRICS -->

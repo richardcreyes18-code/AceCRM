@@ -37470,6 +37470,31 @@ function _ddSalvageNoDataLoss(fieldValues, contactsById, survivingId, loserIds){
     salvageLines.push('Prior company: ' + [...otherCompanies].join(', '));
   }
 
+  // v371.1: name salvage. The chosen primary name is just one of the
+  // values; if any loser carried a *different* real name (quality ≥ 2,
+  // i.e. not a "No name" sentinel), capture it as "Also known as" so
+  // the merged contact records every alias the agent had on file.
+  // Normalization for de-dup uses the same logic as _dd_names_similar
+  // (lowercase, strip middle initials + punctuation) — but since this
+  // is the JS side we just collapse whitespace + lowercase.
+  const chosenName = fieldValues.name !== undefined
+    ? String(fieldValues.name || '')
+    : String(survivor.name || '');
+  const nameNorm = s => String(s||'').toLowerCase().replace(/\s+/g,' ').trim();
+  const chosenNameN = nameNorm(chosenName);
+  const otherNames = new Set();
+  all.forEach(c => {
+    const v = String(c.name || '').trim();
+    // Skip sentinels ("No name", "(no name)", etc.) and the chosen name itself.
+    if(!v) return;
+    if(typeof _ddFieldQuality === 'function' && _ddFieldQuality(v) < 2) return;
+    if(nameNorm(v) === chosenNameN) return;
+    otherNames.add(v);
+  });
+  if(otherNames.size){
+    salvageLines.push('Also known as: ' + [...otherNames].join(', '));
+  }
+
   if(salvageLines.length){
     const block = '[Merge salvage]\n' + salvageLines.join('\n');
     const existing = (fieldValues.contact_notes != null)

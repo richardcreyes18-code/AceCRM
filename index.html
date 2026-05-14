@@ -37520,12 +37520,23 @@ function _ddCombineNotes(contactsWithNotes){
   }).join('\n\n');
 }
 
+// v371: cache of stub-mergeable medium-tier candidate IDs + suggested
+// survivors. Populated by _ddLoadStubMergeCandidates() so the Medium
+// tab banner can show "Auto-merge N stub duplicates" with the right
+// count, and the batch driver knows exactly which groups to run.
+let _ddStubMergeable = [];   // [{candidate_id, contact_ids, contacts_total, contacts_with_data}]
+
 async function _ddLoadCandidates(){
   const rows = await _sbGet('ace_contact_dedupe_candidates',
     'select=id,contact_ids,tier,match_signal,match_value,status,detected_at'
     + '&status=eq.pending'
     + '&order=tier.asc,detected_at.desc&limit=2000');
   _ddCandidates = Array.isArray(rows) ? rows : [];
+
+  // v371: refresh the stub-mergeable list in the background. Not awaited
+  // so it doesn't slow the initial render; the Medium tab banner will
+  // appear once this resolves. Falls back silently if the RPC fails.
+  _ddLoadStubMergeable().catch(e => console.warn('stub-mergeable load failed (non-fatal):', e.message));
 
   // v108.1: Pre-fetch contact names for every contact_id across all
   // candidates in one batched query, so _ddRenderList can show names at
@@ -37550,6 +37561,23 @@ async function _ddLoadCandidates(){
       }
     }
   }catch(e){ console.warn('dedupe name pre-fetch failed (non-fatal):', e.message); }
+}
+
+// v371: fetch the stub-mergeable medium-tier candidates via the
+// find_stub_mergeable_candidates() RPC. Returns rows shaped like
+// { candidate_id, cand_contact_ids, cand_match_signal, contacts_total,
+//   contacts_with_data }. Stored in _ddStubMergeable; triggers a list
+// re-render so the Medium banner appears.
+async function _ddLoadStubMergeable(){
+  try {
+    const rows = await _sbRpc('find_stub_mergeable_candidates', {});
+    _ddStubMergeable = Array.isArray(rows) ? rows : [];
+  } catch(e){
+    _ddStubMergeable = [];
+    throw e;
+  }
+  // If the list view is mounted, repaint so the banner shows up.
+  if(document.getElementById('ddList')) _ddRenderList();
 }
 
 function _ddRenderShell(){
@@ -37703,8 +37731,33 @@ function _ddRenderList(){
         </button>
       </div>`
     : '';
+
+  // v371: Stub-merge banner on the Medium tab — surfaces only when the
+  // find_stub_mergeable_candidates RPC returned at least one group with
+  // ≤1 contact carrying real attachments (props/BC/tasks/pitches/emails/
+  // notes). These are the prospecting-list dupes — multiple phone-only
+  // entries for the same person — where the survivor's all_phones jsonb
+  // already absorbs every loser phone, so nothing is lost.
+  const stubCount = (_ddStubMergeable || []).length;
+  const stubContactCount = (_ddStubMergeable || []).reduce((s, r) => s + (r.contacts_total||2), 0);
+  const stubBanner = (_ddTierFilter === 'medium' && stubCount > 0)
+    ? `
+      <div style="background:linear-gradient(135deg,#eff6ff 0%,#dbeafe 100%);border:1px solid #2563eb;border-radius:10px;padding:14px 18px;margin-bottom:12px;display:flex;align-items:center;gap:14px;">
+        <div style="font-size:22px;flex-shrink:0;">⚡</div>
+        <div style="flex:1;min-width:0;">
+          <div style="font-size:13px;font-weight:700;color:#1e40af;">Bulk-clean prospecting-list stub duplicates</div>
+          <div style="font-size:11px;color:#1d4ed8;margin-top:3px;line-height:1.5;">
+            ${stubCount} medium-tier group${stubCount===1?'':'s'} (${stubContactCount} contacts) where one contact owns all the real data and the others are empty stubs from a prior import. Survivor keeps every phone / email / address / FUB tag — losers vanish. Reversible for 30 days.
+          </div>
+        </div>
+        <button onclick="_ddConfirmStubMerge()" id="ddStubMergeBtn" style="font-size:12px;padding:9px 16px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-weight:700;cursor:pointer;flex-shrink:0;white-space:nowrap;">
+          ⚡ Auto-merge ${stubCount}
+        </button>
+      </div>`
+    : '';
   el.innerHTML = `
     ${autoBanner}
+    ${stubBanner}
     <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;">
       ${slice.map((c, i) => `
         <div style="padding:14px 18px;${i>0?'border-top:1px solid #f1f5f9;':''}display:flex;align-items:center;gap:12px;">
@@ -39241,6 +39294,105 @@ function _ddAutoBuildFieldValues(contacts, survivorId){
   // Tags (type[]): intentionally left OFF. merge_contacts_rpc auto-unions
   // when `type` is absent from p_field_values, which is exactly what we want.
   return out;
+}
+
+// v371: stub-merge confirmation modal for Medium-tier candidates where
+// only one contact carries real attachments. Mirrors _ddConfirmAutoMerge
+// but tweaks the copy to make the safety rationale clear (the survivor
+// inherits every phone / email / address / FUB tag via the v368
+// merge_contacts unions — nothing is lost when the empty stubs vanish).
+function _ddConfirmStubMerge(){
+  const stubs = _ddStubMergeable || [];
+  if(stubs.length === 0){ showSaveConfirm('No stub-merge candidates available.'); return; }
+  const contactTotal = stubs.reduce((s, r) => s + (r.contacts_total||2), 0);
+  const overlay = document.getElementById('ddMergeOverlay');
+  if(!overlay) return;
+  overlay.style.display = 'block';
+  overlay.innerHTML = `
+    <div style="position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9500;display:flex;align-items:center;justify-content:center;padding:20px;">
+      <div style="background:#fff;border-radius:12px;max-width:560px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.3);overflow:hidden;">
+        <div style="background:linear-gradient(135deg,#eff6ff 0%,#dbeafe 100%);padding:20px 24px;border-bottom:1px solid #93c5fd;">
+          <div style="font-size:18px;font-weight:700;color:#1e40af;">⚡ Auto-merge ${stubs.length} stub-pair group${stubs.length===1?'':'s'}?</div>
+          <div style="font-size:12px;color:#1d4ed8;margin-top:5px;line-height:1.5;">
+            ${contactTotal} contacts total across ${stubs.length} group${stubs.length===1?'':'s'} where at most one contact owns real data (deals, BC, tasks, notes). The rest are empty prospecting-list stubs.
+          </div>
+        </div>
+        <div style="padding:20px 24px;">
+          <div style="font-size:12px;font-weight:700;color:#334155;margin-bottom:10px;">What gets merged into the survivor:</div>
+          <ul style="font-size:12px;color:#475569;line-height:1.75;margin:0 0 16px 18px;padding:0;">
+            <li><strong>Survivor:</strong> the contact with attachments (or oldest record if all empty).</li>
+            <li><strong>Phones:</strong> every loser phone unioned into <code>all_phones</code>.</li>
+            <li><strong>Emails:</strong> same — unioned into <code>all_emails</code>.</li>
+            <li><strong>Addresses:</strong> all loser addresses unioned into <code>addresses</code>.</li>
+            <li><strong>FUB tags:</strong> every loser tag merged into the survivor's tag set.</li>
+            <li><strong>FUB links:</strong> every loser <code>ace_contact_fub_links</code> row re-points to the survivor.</li>
+          </ul>
+          <div style="background:#fef9c3;border:1px solid #facc15;border-radius:6px;padding:10px 12px;font-size:11px;color:#713f12;line-height:1.5;">
+            <strong>🛡 Reversible:</strong> every merge can be undone for 30 days from <strong>Settings → Restore merged contacts</strong>.
+          </div>
+        </div>
+        <div style="padding:14px 24px;background:#f8fafc;border-top:1px solid #e2e8f0;display:flex;justify-content:flex-end;gap:10px;">
+          <button onclick="_ddCloseAutoMergeDialog()" style="font-size:12px;padding:9px 16px;background:#fff;color:#475569;border:1px solid #cbd5e1;border-radius:6px;font-weight:600;cursor:pointer;">Cancel</button>
+          <button onclick="_ddRunStubAutoMerge()" style="font-size:12px;padding:9px 18px;background:#2563eb;color:#fff;border:none;border-radius:6px;font-weight:700;cursor:pointer;">⚡ Start stub-merge</button>
+        </div>
+      </div>
+    </div>`;
+}
+
+// v371: stub-merge driver. Reuses _ddAutoMergeOne (which already
+// handles survivor selection, BC checks, FK re-points). The only
+// difference vs the high-tier driver: candidates come from the
+// pre-computed _ddStubMergeable list instead of filtering by tier.
+async function _ddRunStubAutoMerge(){
+  if(_ddAutoMergeRunning) return;
+  // Hydrate the stub list into candidate-shaped objects (with `id`,
+  // `tier`, `match_signal`, `contact_ids`) so _ddAutoMergeOne sees the
+  // shape it expects. RPC returns cand_contact_ids / cand_match_signal.
+  const candidates = (_ddStubMergeable || []).map(r => ({
+    id:           r.candidate_id,
+    tier:         'medium',
+    match_signal: r.cand_match_signal || 'name',
+    match_value:  '',
+    contact_ids:  r.cand_contact_ids || [],
+  }));
+  if(candidates.length === 0){ _ddCloseAutoMergeDialog(); return; }
+
+  _ddAutoMergeRunning = true;
+  _ddAutoMergeTotal   = candidates.length;
+  _ddAutoMergeDone    = 0;
+  _ddAutoMergeMerged  = [];
+  _ddAutoMergeSkipped = [];
+  _ddAutoMergeAborted = false;
+  _ddRenderAutoMergeProgress(null);
+
+  const userId = (_currentUser && _currentUser.id) || null;
+
+  for(const cand of candidates){
+    if(_ddAutoMergeAborted) break;
+    _ddRenderAutoMergeProgress(cand);
+    try {
+      await _ddAutoMergeOne(cand, userId);
+    } catch(e){
+      console.error('stub-merge candidate failed:', cand.id, e);
+      _ddAutoMergeSkipped.push({
+        candidateId: cand.id,
+        reason: 'Unexpected error: ' + (e.message || 'unknown'),
+        names: _ddAutoMergeNames(cand),
+        tier: cand.tier,
+        matchSignal: cand.match_signal
+      });
+    }
+    _ddAutoMergeDone++;
+    _ddRenderAutoMergeProgress(cand);
+  }
+
+  _ddAutoMergeRunning = false;
+
+  try {
+    await _ddLoadCandidates();
+  } catch(e){ console.warn('post-stubmerge reload failed:', e.message); }
+
+  _ddRenderAutoMergeResults();
 }
 
 // Core driver — iterate high-tier candidates, merge each one that qualifies.

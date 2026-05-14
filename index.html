@@ -2331,6 +2331,15 @@ async function syncData(){
     // Land on Dashboard by default, not the first deal
     showDashboard();
     setTimeout(()=>_bgGeocodeAll(), 3000);
+    // v374.20.2: pre-load contacts in the background so the top-nav
+    // typeahead has data ready for the user's first keystroke. Without
+    // this, contacts only appeared after the user visited the Contacts
+    // page (which is what triggered the lazy load before).
+    setTimeout(() => {
+      if(typeof _ensureAllContactsLoaded === 'function'){
+        _ensureAllContactsLoaded().catch(()=>{});
+      }
+    }, 1500);
     // v102.6: run the one-shot legacy localStorage migration in the background.
     // Pushes any stale fin_${dealId} blobs on this laptop to Supabase so no data
     // is lost when we stop reading localStorage. Silent unless something's wrong.
@@ -2649,10 +2658,16 @@ async function _tnsRender(query){
     return;
   }
 
-  // Lazy-load contacts on first search so the dropdown isn't empty for
-  // users who haven't visited the Contacts page yet this session.
+  // Lazy-load contacts on first search if not pre-loaded at boot.
+  // v374.20.2: await the promise and re-render after the contacts land
+  // so the user sees results without having to keep typing.
   if((!Array.isArray(allContacts) || !allContacts.length) && typeof _ensureAllContactsLoaded === 'function'){
-    _ensureAllContactsLoaded(); // fire-and-forget; second keystroke will see results
+    _ensureAllContactsLoaded().then(() => {
+      // Only re-render if the input still has the same query (i.e. the
+      // user hasn't typed past this string while we were loading).
+      const inp = document.getElementById('topNavSearch');
+      if(inp && inp.value.trim().toLowerCase() === q) _tnsRender(inp.value);
+    }).catch(()=>{});
   }
 
   const items = []; // each: { kind, label, sub, action, contactId? }

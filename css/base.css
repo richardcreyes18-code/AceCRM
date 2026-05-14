@@ -59,18 +59,20 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   position:relative; /* v374.20: anchor for the typeahead dropdown */
 }
 
-/* v374.20: global typeahead dropdown */
+/* v374.20: global typeahead dropdown.
+   v374.20.1: position:fixed (was absolute) so the dropdown escapes the
+   parent .top-nav { overflow-y:hidden } clip. JS computes top/left
+   from the input's getBoundingClientRect() on every render. */
 .topnav-search-results{
-  position:absolute;
-  top:calc(100% + 6px);
-  left:0;right:0;
+  position:fixed;
+  top:0;left:0;
   background:#fff;
   border:1px solid #e2e8f0;
   border-radius:8px;
   box-shadow:0 12px 36px rgba(15,23,42,0.18);
   max-height:520px;
   overflow-y:auto;
-  z-index:9999;
+  z-index:10000;
   padding:4px 0;
   display:none;
   min-width:380px;

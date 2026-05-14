@@ -2797,6 +2797,7 @@ async function _tnsRender(query){
 
   dd.innerHTML = html;
   dd.classList.add('is-open');
+  _tnsPosition(); // v374.20.1: position the fixed dropdown under the input
   _tnsState = { items, activeIdx: -1 };
 
   // Wire click handlers (delegation: use event target's data-i)
@@ -2808,6 +2809,30 @@ async function _tnsRender(query){
     });
   });
 }
+
+// v374.20.1: position the typeahead dropdown using viewport coords
+// (position:fixed) so it escapes any parent overflow:hidden clipping.
+function _tnsPosition(){
+  const dd = document.getElementById('topNavSearchResults');
+  const wrap = document.getElementById('topNavSearchWrap');
+  if(!dd || !wrap) return;
+  const rect = wrap.getBoundingClientRect();
+  dd.style.top  = (rect.bottom + 6) + 'px';
+  dd.style.left = rect.left + 'px';
+  // Match the search input width as the min, but allow more room for
+  // long contact / address strings.
+  dd.style.minWidth = Math.max(rect.width, 380) + 'px';
+}
+// Keep the dropdown anchored if the page scrolls or the window resizes
+// while the dropdown is open.
+window.addEventListener('scroll', () => {
+  const dd = document.getElementById('topNavSearchResults');
+  if(dd && dd.classList.contains('is-open')) _tnsPosition();
+}, { passive: true, capture: true });
+window.addEventListener('resize', () => {
+  const dd = document.getElementById('topNavSearchResults');
+  if(dd && dd.classList.contains('is-open')) _tnsPosition();
+});
 
 function _tnsOpen(item){
   if(!item) return;

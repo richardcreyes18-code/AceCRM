@@ -2147,6 +2147,14 @@ async function syncData(){
 
     if(isSupabase()){
       if(typeof _splashStep==='function') _splashStep('Loading deals', 2, 8);
+      // v374.20.3: kick off the contacts pre-load IN PARALLEL with the
+      // deal load. The fetch streams batches into allContacts as they
+      // arrive (see _ensureAllContactsLoaded), so the top-nav typeahead
+      // has data ready as soon as the first 1k rows land — typically
+      // well before the user finishes typing the first contact name.
+      if(typeof _ensureAllContactsLoaded === 'function'){
+        _ensureAllContactsLoaded().catch(()=>{});
+      }
       // ── Supabase ────────────────────────────────────────────
       // Build agent filter based on current user + view mode
       let agentFilter = '';
@@ -2331,15 +2339,17 @@ async function syncData(){
     // Land on Dashboard by default, not the first deal
     showDashboard();
     setTimeout(()=>_bgGeocodeAll(), 3000);
-    // v374.20.2: pre-load contacts in the background so the top-nav
-    // typeahead has data ready for the user's first keystroke. Without
-    // this, contacts only appeared after the user visited the Contacts
-    // page (which is what triggered the lazy load before).
+    // v374.20.3: contacts pre-load now fires earlier (in parallel with
+    // the deal load) — see the kick-off above near _splashStep('Loading
+    // deals', 2, 8). _ensureAllContactsLoaded() has an in-flight guard
+    // so this is safe to leave commented as a fallback nudge for the
+    // rare case the parallel call didn't fire.
     setTimeout(() => {
-      if(typeof _ensureAllContactsLoaded === 'function'){
+      if(typeof _ensureAllContactsLoaded === 'function'
+         && (!Array.isArray(allContacts) || !allContacts.length)){
         _ensureAllContactsLoaded().catch(()=>{});
       }
-    }, 1500);
+    }, 3000);
     // v102.6: run the one-shot legacy localStorage migration in the background.
     // Pushes any stale fin_${dealId} blobs on this laptop to Supabase so no data
     // is lost when we stop reading localStorage. Silent unless something's wrong.
@@ -20132,18 +20142,12 @@ async function _ensureAllContactsLoaded(opts){
   if(typeof isSupabase !== 'function' || !isSupabase()) return allContacts;
   _ensureContactsInFlight = (async () => {
     try {
-      let cRows = [], cFrom = 0;
-      while(true){
-        const batch = await _sbGet(SB_TABLES.contacts,
-          'select=*&deleted_at=is.null&order=name.asc&limit=1000&offset=' + cFrom);
-        if(!batch || !batch.length) break;
-        cRows = cRows.concat(batch);
-        if(batch.length < 1000) break;
-        cFrom += 1000;
-      }
-      // Match the shape used by showContactsPage / sidebar refresh: top-level
-      // `id` plus `fields.{Name, Email, 'Phone Number', Company, Type, ...}`.
-      allContacts = cRows.map(r => ({
+      // v374.20.3: stream batches into allContacts incrementally so the
+      // typeahead has data ready after the FIRST batch (~1k rows) instead
+      // of waiting for the full 10k+ contact table to download. Each batch
+      // pushes its rows into allContacts and re-renders the active
+      // typeahead query if the user is searching.
+      const mapRow = (r) => ({
         id: r.id,
         fields: {
           Name: r.name, 'Phone Number': r.phone_number,
@@ -20154,7 +20158,30 @@ async function _ensureAllContactsLoaded(opts){
           'Import Source': r.import_source || null,
           _fubContactId: r.fub_contact_id || null,
         },
-      }));
+      });
+      allContacts = [];
+      let cFrom = 0;
+      while(true){
+        // v374.20.3: explicit column list (no select=*) — drops
+        // contact_notes which can be megabytes and isn't needed for the
+        // typeahead. The Contacts page still picks up the full row via
+        // its own loader when the user actually opens a contact.
+        const batch = await _sbGet(SB_TABLES.contacts,
+          'select=id,name,phone_number,secondary_phone,email,company,type,date_added,import_source,fub_contact_id&deleted_at=is.null&order=name.asc&limit=1000&offset=' + cFrom);
+        if(!batch || !batch.length) break;
+        // Append (don't replace) so the typeahead sees rows as they arrive.
+        for(const r of batch) allContacts.push(mapRow(r));
+        // Nudge the typeahead to re-render if the user is mid-search.
+        try {
+          const inp = document.getElementById('topNavSearch');
+          if(inp && inp.value && inp.value.trim().length >= 2
+             && typeof _tnsRender === 'function'){
+            _tnsRender(inp.value);
+          }
+        } catch(_e){}
+        if(batch.length < 1000) break;
+        cFrom += 1000;
+      }
       _contactsLastLoadMs = Date.now();
     } catch(e){
       console.warn('[v113.30] _ensureAllContactsLoaded failed:', e && e.message);

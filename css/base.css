@@ -115,11 +115,13 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   position:absolute;
   top:0;left:0;bottom:0;
   z-index:50;
-  /* v365.1: snappier hover-to-expand. Open at 80ms delay for forgiving
-     brush-by behavior; close at 250ms so the sidebar doesn't immediately
-     snap shut when the user moves toward content. Width transitions in
-     180ms so the motion feels crisp, not laggy. */
-  transition:width 0.18s cubic-bezier(0.2,0,0,1) 0.25s;
+  /* v374.17: smoother hover-to-expand animation.
+     - Open: 0ms delay (instant response) + 220ms width animation
+     - Close: 120ms delay (responsive but tolerant of brush-by) + 220ms
+     - cubic-bezier(0.4, 0, 0.2, 1) is Material-standard, feels natural
+     - will-change hints the compositor to GPU-accelerate the layer */
+  transition:width 0.22s cubic-bezier(0.4,0,0.2,1) 0.12s;
+  will-change:width;
   /* v365.3: inner padding gives symmetric breathing room. Everything
      inside the sidebar fills `width:100%` of the padded inner box so
      `place-items:center` truly centers content. */
@@ -130,7 +132,7 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   width:240px;
   padding:8px 10px 0;
   box-shadow:6px 0 18px rgba(15,23,42,0.12);
-  transition-delay:0.08s;
+  transition-delay:0s;
 }
 /* Hide the legacy logo + welcome blocks entirely — the top-nav has the
    brand mark and the user-facing controls now live in the top-nav user
@@ -139,41 +141,77 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
    them still resolves. */
 .sidebar .sidebar-logo,
 .sidebar .sidebar-welcome{ display:none !important; }
-/* Hide text-heavy children while collapsed; reveal them on hover.
-   Targeting opacity + visibility (not display:none) so the rail
-   width-animation has something to reveal beneath. */
-/* v365.4: text-only elements are REMOVED FROM LAYOUT entirely when the
-   sidebar is collapsed (display:none, not visibility:hidden). The
-   previous visibility-hidden approach kept the elements in the flex
-   flow and their varying widths shoved the visible dot to inconsistent
-   positions — that's the staggering the user reported. With display:none
-   the recent-item has only the .dial-dot left, which centers cleanly. */
+
+/* v374.17: smooth fade-in for labels.
+   - Top-level labels (search-box, adv-search, sb-tab-label, add-new-label,
+     #sidebarCount, .sidebar-footer): use opacity + max-width transitions so
+     the reveal animates rather than pops. White-space:nowrap keeps each
+     label single-line so max-width clipping looks clean.
+   - .recent-name / .recent-id stay on display:none (v365.4 fix) so the
+     dial-dot centers cleanly when collapsed — the dot's parent .recent-item
+     has variable text widths, and animating those would re-introduce
+     the staggering bug. */
 .sidebar .search-box,
 .sidebar .adv-search,
 .sidebar .sb-tab-label,
-.sidebar .recent-name,
-.sidebar .recent-id,
+.sidebar .add-new-label,
 .sidebar #sidebarCount,
-.sidebar .sidebar-footer,
-.sidebar .add-new-label{
+.sidebar .sidebar-footer{
+  opacity:0;
+  max-width:0;
+  overflow:hidden;
+  white-space:nowrap;
+  pointer-events:none;
+  transition:opacity 0.14s ease-out, max-width 0.20s ease-out;
+}
+.sidebar .recent-name,
+.sidebar .recent-id{
   display:none;
 }
 .sidebar:hover .search-box,
 .sidebar.pinned .search-box,
 .sidebar:hover .adv-search,
-.sidebar.pinned .adv-search{display:flex;}
+.sidebar.pinned .adv-search,
 .sidebar:hover .sb-tab-label,
 .sidebar.pinned .sb-tab-label,
-.sidebar:hover .recent-name,
-.sidebar.pinned .recent-name,
-.sidebar:hover .recent-id,
-.sidebar.pinned .recent-id,
 .sidebar:hover .add-new-label,
-.sidebar.pinned .add-new-label{display:inline;}
+.sidebar.pinned .add-new-label,
 .sidebar:hover #sidebarCount,
 .sidebar.pinned #sidebarCount,
 .sidebar:hover .sidebar-footer,
-.sidebar.pinned .sidebar-footer{display:block;}
+.sidebar.pinned .sidebar-footer{
+  opacity:1;
+  max-width:240px;
+  pointer-events:auto;
+  /* Slight delay so the width animation has a head start before the
+     labels start fading in — this gives a clean "open the door, then
+     reveal what's inside" feel. */
+  transition:opacity 0.18s ease-out 0.10s, max-width 0.22s ease-out 0.08s;
+}
+.sidebar:hover .recent-name,
+.sidebar.pinned .recent-name,
+.sidebar:hover .recent-id,
+.sidebar.pinned .recent-id{display:inline;}
+
+/* .search-box needs to be flex when revealed (input + ⌘/ badge) */
+.sidebar:hover .search-box,
+.sidebar.pinned .search-box{display:flex;}
+.sidebar .search-box{display:flex;}
+
+/* .adv-search needs flex-end layout for the right-aligned Find Duplicates link */
+.sidebar .adv-search{
+  display:flex;
+  justify-content:flex-end;
+  align-items:center;
+  gap:10px;
+}
+.sidebar .adv-search a{
+  font-size:11px;
+  color:#64748b;
+  cursor:pointer;
+  white-space:nowrap;
+}
+.sidebar .adv-search a:hover{color:var(--primary);}
 /* When collapsed, the recent-list rows show only a status dot. */
 .sidebar:not(:hover):not(.pinned) .recent-item{
   justify-content:center;

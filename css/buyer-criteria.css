@@ -1168,3 +1168,126 @@
   font-size: 10px !important;
   min-width: 0 !important;
 }
+
+/* ─────────────────────────────────────────────────────────────
+   v374.12 — Chip combobox (.cc-*).
+   Unified pattern that puts chips and the text input into a single
+   focused field with a dropdown of suggestions. Replaces the
+   chip-row-above-input pattern used for Asset Types and Geo
+   (States / Counties / Cities) selectors.
+   - Click anywhere on .cc-field → focuses the inline input
+   - Type to filter suggestions
+   - Enter → commit the highlighted suggestion (or free-text)
+   - Backspace on empty input → removes last chip
+   - Click outside → closes dropdown
+   ───────────────────────────────────────────────────────────── */
+.cc-root { position: relative; }
+.cc-field {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 5px;
+  min-height: 38px;
+  padding: 6px 30px 6px 10px;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 6px;
+  cursor: text;
+  transition: border-color 0.12s ease, box-shadow 0.12s ease;
+}
+.cc-field:hover { border-color: #93c5fd; }
+.cc-root.is-open .cc-field {
+  border-color: #2563eb;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.12);
+}
+
+.cc-input {
+  flex: 1;
+  min-width: 100px;
+  border: 0;
+  outline: none;
+  background: transparent;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--text, #0f172a);
+  padding: 2px 0;
+}
+.cc-input::placeholder { color: var(--text3, #94a3b8); }
+
+.cc-caret {
+  position: absolute;
+  right: 10px;
+  top: 50%;
+  transform: translateY(-50%);
+  color: var(--text3, #94a3b8);
+  pointer-events: none;
+  width: 12px;
+  height: 12px;
+}
+.cc-root.is-open .cc-caret { color: #2563eb; }
+
+.cc-pop {
+  position: absolute;
+  top: calc(100% + 4px);
+  left: 0;
+  right: 0;
+  z-index: 50;
+  background: var(--surface, #fff);
+  border: 1px solid var(--border, #e2e8f0);
+  border-radius: 6px;
+  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  max-height: 260px;
+  overflow-y: auto;
+  padding: 4px;
+}
+.cc-asset-pop { max-height: 340px; }
+
+.cc-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  padding: 7px 10px;
+  border: 0;
+  background: transparent;
+  text-align: left;
+  font-family: inherit;
+  font-size: 12.5px;
+  color: var(--text, #0f172a);
+  cursor: pointer;
+  border-radius: 4px;
+  transition: background 0.1s ease, color 0.1s ease;
+}
+.cc-row:hover { background: #dbeafe; color: #1e40af; }
+.cc-row.is-highlighted { background: #dbeafe; color: #1e40af; }
+.cc-row-new { color: #1d4ed8; font-weight: 600; }
+.cc-row-new b { font-weight: 700; }
+.cc-row-new .cc-hint {
+  color: var(--text3, #94a3b8);
+  font-size: 11px;
+  margin-left: auto;
+  font-weight: 500;
+}
+.cc-row-asset { padding: 4px 8px; }
+.cc-row-asset .ast-chip { font-size: 11px; }
+.cc-empty {
+  padding: 10px 12px;
+  font-size: 12px;
+  color: var(--text3, #94a3b8);
+  font-style: italic;
+}
+
+/* Existing pill-row containers inside .bc-detail get the .cc-field
+   chrome when they're inside a .cc-root wrapper (so chips and the
+   input read as one focused control). */
+.bc-detail .cc-root .cc-field > input {
+  border: 0 !important;
+  outline: none;
+  background: transparent !important;
+  font-size: 12.5px;
+  padding: 2px 0 !important;
+  margin: 0 !important;
+  flex: 1;
+  min-width: 100px;
+}
+.bc-detail .cc-root .cc-field > input:focus { border: 0 !important; box-shadow: none !important; }

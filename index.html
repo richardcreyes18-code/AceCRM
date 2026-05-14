@@ -31159,30 +31159,75 @@ function _bcMountFilterCombos(){
   });
 }
 
-// v374.11: toggle the asset-type picker inside the BC detail view.
-// The picker (search bar + Category/Subtype 2-col panel) is collapsed
-// by default — the chip row above stays visible. Clicking the Add
-// Asset Type button in the section header reveals the picker and
-// flips the button label to "Cancel".
+// v374.12: chip-combobox helpers for the Asset Type + State / County /
+// City selectors. The combobox merges the chip row and the filter
+// input into a single .cc-field, and the dropdown shows filtered
+// suggestions inside a .cc-pop panel.
+function _bcCcOpen(rootId){
+  const root = document.getElementById(rootId);
+  if(!root) return;
+  const wasOpen = root.classList.contains('is-open');
+  root.classList.add('is-open');
+  // Ensure outside-click closes the dropdown. Bind once per root via
+  // dataset flag so we don't stack listeners on every click.
+  if(!root.dataset.ccBound){
+    document.addEventListener('mousedown', (e) => {
+      if(!root.contains(e.target)) root.classList.remove('is-open');
+    });
+    root.dataset.ccBound = '1';
+  }
+  // Populate the dropdown the first time it opens (and on every open
+  // event — so the list reflects the current query/state).
+  if(!wasOpen){
+    if(rootId === 'bcf_asset_cc' && typeof _bcAtSearch === 'function') _bcAtSearch();
+    if(rootId === 'bcf_state_cc' && typeof _bcStateSearch === 'function'){
+      const inp = document.getElementById('bcf_state_input');
+      _bcStateSearch(inp ? inp.value : '');
+    }
+    if(rootId === 'bcf_county_cc' && typeof _bcCountySearch === 'function'){
+      const inp = document.getElementById('bcf_county_input');
+      _bcCountySearch(inp ? inp.value : '');
+    }
+    if(rootId === 'bcf_city_cc' && typeof _bcCitySearch === 'function'){
+      const inp = document.getElementById('bcf_city_input');
+      _bcCitySearch(inp ? inp.value : '');
+    }
+  }
+}
+function _bcCcClose(rootId){
+  const root = document.getElementById(rootId);
+  if(root) root.classList.remove('is-open');
+}
+
+// Enter / Backspace handler for the Asset Type combobox input. Enter
+// commits the first visible suggestion (or runs _bcAtSearch's natural
+// filter if no result yet). Backspace on empty input removes the last
+// chip.
+function _bcCcAssetKey(e){
+  if(e.key === 'Enter'){
+    e.preventDefault();
+    const pop = document.getElementById('bcf_at_results');
+    const first = pop?.querySelector('[data-cc-row]');
+    if(first) first.click();
+  } else if(e.key === 'Backspace'){
+    const input = e.target;
+    if(input.value === ''){
+      const field = input.closest('.cc-field');
+      const lastChip = field?.querySelector('.ast-chip:last-of-type');
+      if(lastChip){ lastChip.remove(); _bcSyncAssets(); }
+    }
+  } else if(e.key === 'Escape'){
+    _bcCcClose('bcf_asset_cc');
+    e.target.blur();
+  }
+}
+
+// v374.11 (kept for back-compat — no longer used in v374.12 since the
+// Add Asset Type toggle button is gone, replaced by the combobox).
 function _bcToggleAssetPicker(btn){
   const picker = document.getElementById('bcf_asset_picker');
   if(!picker) return;
-  const wasHidden = picker.classList.contains('bc-collapsed');
   picker.classList.toggle('bc-collapsed');
-  // Update button text/icon. Keep the SVG as the first child element.
-  const lbl = btn?.querySelector('.bc-add-asset-label');
-  if(lbl) lbl.textContent = wasHidden ? 'Cancel' : 'Add Asset Type';
-  const svg = btn?.querySelector('svg');
-  if(svg){
-    // Swap +  ⇄  ×
-    svg.innerHTML = wasHidden
-      ? '<line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/>'
-      : '<line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/>';
-  }
-  if(wasHidden){
-    // Picker just opened — focus the search input for fast typing.
-    setTimeout(() => { const s = document.getElementById('bcf_at_search'); if(s) s.focus(); }, 30);
-  }
 }
 
 function _bcToggleVip(){
@@ -31924,79 +31969,52 @@ async function bcOpenExpanded(recordId){
           </div>
         </div>
 
-        <!-- ASSET TYPES (chip row always visible, picker hidden behind toggle) -->
+        <!-- ASSET TYPES — v374.12 unified .cc-root combobox -->
         <div class="info-box">
           <div class="info-box-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
             <span>🎯 What They're Looking For <span style="font-weight:500;font-size:11px;color:var(--text3,#94a3b8);text-transform:none;letter-spacing:0;margin-left:6px;">Asset types this buyer is interested in</span></span>
-            <button class="bc-btn primary add-asset-btn" id="bcf_add_asset_toggle" onclick="_bcToggleAssetPicker(this)">
-              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
-              <span class="bc-add-asset-label">Add Asset Type</span>
-            </button>
           </div>
           <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
             <div>
 
-              <!-- ASSET TYPES — chip row stays compact + visible; picker hides -->
-              <div class="bc-label" style="margin-bottom:6px;">Asset Types <span style="color:#888;font-weight:400;">(click ✕ to remove · use the button above to add)</span></div>
-              <!-- Selected pills (always visible, compact) -->
-              <div id="bcf_asset_pills" class="compact" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:8px;min-height:32px;padding:6px 10px;background:#f8faff;border:1px solid #c0d0e8;border-radius:5px;">
-                ${assets.map(a=>`
-                  <span style="background:#1a3a6e;color:#fff;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:600;display:flex;align-items:center;gap:5px;cursor:pointer;"
-                    onclick="this.remove();_bcSyncAssets()"
-                    title="Click to remove">${a} <span style="opacity:0.7;font-size:10px;">✕</span></span>`).join('')}
-              </div>
-              <!-- v374.11: picker collapses by default. Toggled by the
-                   Add Asset Type button in the section header above. -->
-              <div id="bcf_asset_picker" class="asset-picker-pop bc-collapsed">
-                <!-- Search bar -->
-                <input id="bcf_at_search" oninput="_bcAtSearch()" placeholder="Search type or subtype..."
-                  style="width:100%;border:1.5px solid #e2e8f0;border-radius:6px;padding:7px 10px;font-size:12px;box-sizing:border-box;margin-bottom:6px;"/>
-                <div id="bcf_at_results" style="display:none;background:#fff;border:1px solid #e2e8f0;border-radius:6px;padding:4px;margin-bottom:8px;max-height:140px;overflow-y:auto;z-index:10;position:relative;"></div>
-                <!-- 2-col panel: category left, subtypes right -->
-                <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px;">
-                  <div>
-                    <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:4px;">Category</div>
-                    <select id="bcf_at_left" size="8" onchange="_bcAtUpdateSubs()"
-                      style="width:100%;border:1.5px solid #e2e8f0;border-radius:6px;font-size:11px;padding:3px;">
-                      ${Object.keys(ASSET_SUBTYPES).map(t=>`<option value="${t}">${t}</option>`).join('')}
-                    </select>
-                  </div>
-                  <div>
-                    <div style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:.05em;color:#64748b;margin-bottom:4px;">Subtype — click to add</div>
-                    <div id="bcf_at_subs" style="border:1.5px solid #e2e8f0;border-radius:6px;padding:4px;min-height:100px;max-height:160px;overflow-y:auto;font-size:11px;background:#fff;">
-                      ${(() => {
-                        // v234: same shape as _bcAtUpdateSubs — always offer
-                        // a "no subtype" row at the top so users can add the
-                        // bare category without picking a subtype.
-                        const t0 = Object.keys(ASSET_SUBTYPES)[0] || '';
-                        const safe0 = t0.replace(/'/g,"\\'");
-                        const subs0 = ASSET_SUBTYPES[t0] || [];
-                        const cat = `<div onclick="_bcAtSelect('${safe0}','')" style="padding:4px 7px;cursor:pointer;border-radius:4px;font-size:11px;font-weight:600;color:#1a3a6e;background:#eef4ff;border:1px dashed #c7d7ff;margin-bottom:4px;" onmouseover="this.style.background='#dbe7ff'" onmouseout="this.style.background='#eef4ff'" title="Add the category alone, no subtype">＋ Add "${t0}" (no subtype)</div>`;
+              <div class="bc-label" style="margin-bottom:6px;">Asset Types <span style="color:#888;font-weight:400;">(click to add · ✕ to remove)</span></div>
+              <!-- v374.12: chip-combobox — chips + filter input + dropdown
+                   live inside one focused field. Click anywhere to focus,
+                   type to filter, Enter commits the top suggestion (or
+                   the free-text input), Backspace on empty input removes
+                   the last chip. Outside-click closes the dropdown. -->
+              <div class="cc-root" id="bcf_asset_cc" onclick="_bcCcOpen('bcf_asset_cc')">
+                <div class="cc-field" id="bcf_asset_pills">${assets.map(a=>`<span class="ast-chip ${_bcAssetChipCls(a)}" onclick="event.stopPropagation();this.remove();_bcSyncAssets()" title="Click to remove">${a}<button class="chip-x" onclick="event.stopPropagation();this.closest('span').remove();_bcSyncAssets()"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></span>`).join('')}<input class="cc-input" id="bcf_at_search" oninput="_bcAtSearch();_bcCcOpen('bcf_asset_cc')" onfocus="_bcCcOpen('bcf_asset_cc')" onkeydown="_bcCcAssetKey(event)" placeholder="${assets.length?'Add another…':'Click to add an asset type…'}" autocomplete="off"/><svg class="cc-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></div>
+                <div class="cc-pop cc-asset-pop" id="bcf_at_results" style="display:none;"></div>
+                <!-- Hidden Category/Subtype select kept in DOM so existing
+                     _bcAtUpdateSubs / _bcAtSearch helpers can populate the
+                     dropdown by category. Wrapped in a 0-size container so
+                     it never paints. -->
+                <div style="position:absolute;width:0;height:0;overflow:hidden;visibility:hidden;" aria-hidden="true">
+                  <select id="bcf_at_left" onchange="_bcAtUpdateSubs()">
+                    ${Object.keys(ASSET_SUBTYPES).map(t=>`<option value="${t}">${t}</option>`).join('')}
+                  </select>
+                  <div id="bcf_at_subs">
+                    ${(() => {
+                      const t0 = Object.keys(ASSET_SUBTYPES)[0] || '';
+                      const safe0 = t0.replace(/'/g,"\\'");
+                      const subs0 = ASSET_SUBTYPES[t0] || [];
+                      const cat = `<div onclick="_bcAtSelect('${safe0}','')">＋ Add "${t0}" (no subtype)</div>`;
                         const rows = subs0.map(s=>`<div onclick="_bcAtSelect('${safe0}','${s.replace(/'/g,"\\'")}')" style="padding:4px 7px;cursor:pointer;border-radius:4px;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'">${s}</div>`).join('');
                         return cat + rows;
                       })()}
                     </div>
                   </div>
                 </div>
-              </div>
-              <!-- end of asset picker -->
+              <!-- end of asset combobox -->
               <div style="height:14px;"></div>
               <input type="hidden" id="bcf_assets_hidden" value="${assets.join(', ')}"/>
 
-              <!-- STATES — multi-select pill UI -->
-              <div class="bc-label" style="margin-bottom:6px;">🗺 States <span style="color:#888;font-weight:400;">(click ✕ to remove · leave empty for NJ default)</span></div>
-              <div id="bcf_state_pills" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px;min-height:28px;padding:4px;background:#fffbeb;border:1px solid #fde68a;border-radius:5px;">
-                ${(f['Preferred States']||'').split(',').map(s=>s.trim()).filter(_bcCleanPill).map(s=>`
-                  <span style="background:#f59e0b;color:#fff;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:600;display:flex;align-items:center;gap:5px;cursor:pointer;"
-                    onclick="this.remove();_bcSyncStates();document.getElementById('bcf_county_input').placeholder=_bcCountyPlaceholder();"
-                    title="Click to remove">${s} <span style="opacity:0.7;font-size:10px;">✕</span></span>`).join('')}
-              </div>
-              <div style="position:relative;margin-bottom:10px;">
-                <input id="bcf_state_input" class="form-input" placeholder="Type state name or code (e.g. FL, Florida, NJ...)" style="width:100%;font-size:11px;box-sizing:border-box;"
-                  oninput="_bcStateSearch(this.value)"
-                  onkeydown="if(event.key==='Escape'){document.getElementById('bcf_state_dropdown').style.display='none';}"
-                  autocomplete="off"/>
-                <div id="bcf_state_dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid #fde68a;border-radius:0 0 5px 5px;max-height:180px;overflow-y:auto;z-index:200;box-shadow:0 4px 12px rgba(0,0,0,0.15);"></div>
+              <!-- STATES — v374.12 combobox (chips + filter in one field) -->
+              <div class="bc-label" style="margin-bottom:6px;">🗺 States <span style="color:#888;font-weight:400;">(click box, type or pick · leave empty for NJ default)</span></div>
+              <div class="cc-root" id="bcf_state_cc" onclick="_bcCcOpen('bcf_state_cc')" style="margin-bottom:10px;">
+                <div class="cc-field" id="bcf_state_pills">${(f['Preferred States']||'').split(',').map(s=>s.trim()).filter(_bcCleanPill).map(s=>`<span class="ast-chip ast-nc" onclick="event.stopPropagation();this.remove();_bcSyncStates();const ci=document.getElementById('bcf_county_input');if(ci)ci.placeholder=_bcCountyPlaceholder();" title="Click to remove">${s}<button class="chip-x" onclick="event.stopPropagation();this.closest('span').remove();_bcSyncStates();"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></span>`).join('')}<input class="cc-input" id="bcf_state_input" placeholder="Click and start typing…" oninput="_bcStateSearch(this.value);_bcCcOpen('bcf_state_cc')" onfocus="_bcCcOpen('bcf_state_cc')" onkeydown="if(event.key==='Escape'){_bcCcClose('bcf_state_cc');this.blur();}" autocomplete="off"/><svg class="cc-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></div>
+                <div class="cc-pop" id="bcf_state_dropdown" style="display:none;"></div>
               </div>
               <input type="hidden" id="bcf_states_hidden" value="${(f['Preferred States']||'').split(',').map(s=>s.trim()).filter(_bcCleanPill).join(', ')}"/>
 
@@ -32016,28 +32034,20 @@ async function bcOpenExpanded(recordId){
                 <button type="button" onclick="_bcClearCounties()" title="Clear all counties" style="background:#fef2f2;color:#991b1b;border:1px solid #fecaca;padding:3px 9px;font-size:10.5px;font-weight:600;border-radius:99px;cursor:pointer;margin-left:4px;">✕ Clear</button>
               </div>
 
-              <div id="bcf_county_pills" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px;min-height:28px;padding:4px;background:#f8faff;border:1px solid #c0d0e8;border-radius:5px;">
-                ${(() => {
-                  // v102.15: Read both the legacy Simple Area Preference field
-                  // (pre-v102.9 buyers) and the new preferred_counties field
-                  // (v102.9+ intake), de-duplicating so each county only renders once.
+              <!-- v374.12: Counties combobox (chips + filter in one field) -->
+              <div class="cc-root" id="bcf_county_cc" onclick="_bcCcOpen('bcf_county_cc')" style="margin-bottom:6px;">
+                <div class="cc-field" id="bcf_county_pills">${(() => {
+                  // v102.15: Merge legacy Simple Area Preference + newer
+                  // Preferred Counties, de-duplicating so each county
+                  // only renders once.
                   const legacy = (f['Simple Area Preference']||'').split(',').map(c=>c.trim()).filter(_bcCleanPill);
                   const newer  = (f['Preferred Counties']||'').split(',').map(c=>c.trim()).filter(_bcCleanPill);
                   const merged = [...new Set([...legacy, ...newer])];
-                  return merged.map(c=>`
-                    <span style="background:#0ea5e9;color:#fff;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:600;display:flex;align-items:center;gap:5px;cursor:pointer;"
-                      onclick="this.remove();_bcSyncCounties()"
-                      title="Click to remove">${c} <span style="opacity:0.7;font-size:10px;">✕</span></span>`).join('');
-                })()}
+                  return merged.map(c=>`<span class="ast-chip ast-nc" onclick="event.stopPropagation();this.remove();_bcSyncCounties();" title="Click to remove">${c}<button class="chip-x" onclick="event.stopPropagation();this.closest('span').remove();_bcSyncCounties();"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></span>`).join('');
+                })()}<input class="cc-input" id="bcf_county_input" placeholder="Click and start typing…" oninput="_bcCountySearch(this.value);_bcCcOpen('bcf_county_cc')" onfocus="_bcCcOpen('bcf_county_cc')" onkeydown="if(event.key==='Escape'){_bcCcClose('bcf_county_cc');this.blur();}" autocomplete="off"/><svg class="cc-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></div>
+                <div class="cc-pop" id="bcf_county_dropdown" style="display:none;"></div>
               </div>
-              <div style="position:relative;margin-bottom:6px;">
-                <input id="bcf_county_input" class="form-input" placeholder="Type county name — add a state above for suggestions..." style="width:100%;font-size:11px;box-sizing:border-box;"
-                  oninput="_bcCountySearch(this.value)"
-                  onkeydown="if(event.key==='Escape'){document.getElementById('bcf_county_dropdown').style.display='none';}"
-                  autocomplete="off"/>
-                <div id="bcf_county_dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid #c0d0e8;border-radius:0 0 5px 5px;max-height:220px;overflow-y:auto;z-index:200;box-shadow:0 4px 12px rgba(0,0,0,0.15);"></div>
-              </div>
-              <div style="font-size:10px;color:#888;margin-top:2px;">NJ, NY, FL, CT, PA, MA have curated county lists · free-text supported for other states.</div>
+              <div class="bc-hint">NJ, NY, FL, CT, PA, MA have curated county lists · free-text supported for other states.</div>
               <input type="hidden" id="bcf_counties_hidden" value="${(() => {
                 const legacy = (f['Simple Area Preference']||'').split(',').map(c=>c.trim()).filter(_bcCleanPill);
                 const newer  = (f['Preferred Counties']||'').split(',').map(c=>c.trim()).filter(_bcCleanPill);
@@ -32121,22 +32131,13 @@ async function bcOpenExpanded(recordId){
                 </div>
               </div>`;
               })()}
-              <!-- PREFERRED CITIES -->
-              <div class="bc-label" style="margin-bottom:6px;">📍 Preferred Cities / Towns <span style="color:#888;font-weight:400;">(click ✕ to remove)</span></div>
-              <div id="bcf_city_pills" style="display:flex;flex-wrap:wrap;gap:5px;margin-bottom:6px;min-height:28px;padding:4px;background:#f8faff;border:1px solid #c0d0e8;border-radius:5px;">
-                ${(f['Preferred Cities']||'').split(',').map(c=>c.trim()).filter(_bcCleanPill).map(c=>`
-                  <span style="background:#7c3aed;color:#fff;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:600;display:flex;align-items:center;gap:5px;cursor:pointer;"
-                    onclick="this.remove();_bcSyncCities()"
-                    title="Click to remove">${c} <span style="opacity:0.7;font-size:10px;">✕</span></span>`).join('')}
+              <!-- PREFERRED CITIES — v374.12 combobox -->
+              <div class="bc-label" style="margin-bottom:6px;">📍 Preferred Cities / Towns <span style="color:#888;font-weight:400;">(click box, type or pick)</span></div>
+              <div class="cc-root" id="bcf_city_cc" onclick="_bcCcOpen('bcf_city_cc')" style="margin-bottom:4px;">
+                <div class="cc-field" id="bcf_city_pills">${(f['Preferred Cities']||'').split(',').map(c=>c.trim()).filter(_bcCleanPill).map(c=>`<span class="ast-chip ast-nc" onclick="event.stopPropagation();this.remove();_bcSyncCities();" title="Click to remove">${c}<button class="chip-x" onclick="event.stopPropagation();this.closest('span').remove();_bcSyncCities();"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></span>`).join('')}<input class="cc-input" id="bcf_city_input" placeholder="Click and start typing…" oninput="_bcCitySearch(this.value);_bcCcOpen('bcf_city_cc')" onfocus="_bcCcOpen('bcf_city_cc')" onkeydown="if(event.key==='Escape'){_bcCcClose('bcf_city_cc');this.blur();}" autocomplete="off"/><svg class="cc-caret" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg></div>
+                <div class="cc-pop" id="bcf_city_dropdown" style="display:none;"></div>
               </div>
-              <div style="position:relative;margin-bottom:4px;">
-                <input id="bcf_city_input" class="form-input" placeholder="Type city name to search…" style="width:100%;font-size:11px;box-sizing:border-box;"
-                  oninput="_bcCitySearch(this.value)"
-                  onkeydown="if(event.key==='Escape'){document.getElementById('bcf_city_dropdown').style.display='none';}"
-                  autocomplete="off"/>
-                <div id="bcf_city_dropdown" style="display:none;position:absolute;top:100%;left:0;right:0;background:#fff;border:1px solid #c0d0e8;border-radius:0 0 5px 5px;max-height:180px;overflow-y:auto;z-index:200;box-shadow:0 4px 12px rgba(0,0,0,0.15);"></div>
-              </div>
-              <div style="font-size:10px;color:#888;margin-top:2px;">Searchable list from Settings → Preferred Cities — uniform spelling guaranteed.</div>
+              <div class="bc-hint">Searchable list from Settings → Preferred Cities — uniform spelling guaranteed.</div>
               <input type="hidden" id="bcf_cities_hidden" value="${(f['Preferred Cities']||'').split(',').map(c=>c.trim()).filter(_bcCleanPill).join(', ')}"/>
             </div>
           </div>
@@ -33590,12 +33591,29 @@ function _bcAddPill(containerId, text, color, syncFn){
   if(!text) return;
   const existing = _bcGetPillTexts(containerId);
   if(existing.some(t=>t.toLowerCase()===text.toLowerCase())) return;
+  const container = document.getElementById(containerId);
+  if(!container) return;
   const pill = document.createElement('span');
-  pill.style.cssText = `background:${color};color:#fff;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:600;display:flex;align-items:center;gap:5px;cursor:pointer;`;
-  pill.title = 'Click to remove';
-  pill.innerHTML = `${text} <span style="opacity:0.7;font-size:10px;">✕</span>`;
-  pill.onclick = function(){ this.remove(); syncFn(); };
-  document.getElementById(containerId).appendChild(pill);
+  // v374.12: when adding to the asset combobox (which uses .ast-chip
+  // semantic palette), emit an ast-chip instead of the legacy color-pill.
+  // The pill is inserted before the .cc-input so chips stay left of the
+  // typing cursor inside the cc-field.
+  if(containerId === 'bcf_asset_pills' && container.classList.contains('cc-field')){
+    pill.className = `ast-chip ${_bcAssetChipCls(text)}`;
+    pill.title = 'Click to remove';
+    pill.innerHTML = `${text}<button class="chip-x" onclick="event.stopPropagation();this.closest('span').remove();${syncFn.name}()"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`;
+    pill.onclick = function(e){ e.stopPropagation(); this.remove(); syncFn(); };
+    const input = container.querySelector('.cc-input');
+    container.insertBefore(pill, input || null);
+  } else {
+    // Legacy colored pill (used for state / county / city until they're
+    // migrated to the combobox pattern).
+    pill.style.cssText = `background:${color};color:#fff;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:600;display:flex;align-items:center;gap:5px;cursor:pointer;`;
+    pill.title = 'Click to remove';
+    pill.innerHTML = `${text} <span style="opacity:0.7;font-size:10px;">✕</span>`;
+    pill.onclick = function(){ this.remove(); syncFn(); };
+    container.appendChild(pill);
+  }
   syncFn();
 }
 function _bcAddAsset(){
@@ -33623,15 +33641,26 @@ function _bcAtSearch(){
   const q = (document.getElementById('bcf_at_search')?.value||'').toLowerCase().trim();
   const res = document.getElementById('bcf_at_results');
   if(!res) return;
-  if(!q){ res.style.display='none'; return; }
+  // v374.12: when the input is focused (cc-root.is-open) but no query
+  // yet, show the full list grouped by category. Once the user types,
+  // filter to matching subtypes.
+  const root = document.getElementById('bcf_asset_cc');
+  const open = root && root.classList.contains('is-open');
   const matches = [];
   Object.entries(ASSET_SUBTYPES).forEach(([type,subs])=>{
-    if(type.toLowerCase().includes(q)) matches.push({type,sub:'',label:type});
-    subs.forEach(s=>{ if(s.toLowerCase().includes(q)) matches.push({type,sub:s,label:`${type}: ${s}`}); });
+    if(!q || type.toLowerCase().includes(q)) matches.push({type,sub:'',label:type});
+    subs.forEach(s=>{
+      if(!q || s.toLowerCase().includes(q)) matches.push({type,sub:s,label:`${type}: ${s}`});
+    });
   });
-  if(!matches.length){ res.style.display='none'; return; }
+  if(!open && !q){ res.style.display='none'; return; }
+  if(!matches.length){
+    res.style.display='block';
+    res.innerHTML = `<div class="cc-empty">No matches for "${q}".</div>`;
+    return;
+  }
   res.style.display='block';
-  res.innerHTML = matches.slice(0,12).map(m=>`<div onclick="_bcAtSelect('${m.type.replace(/'/g,"\\'")}','${m.sub.replace(/'/g,"\\'")}');document.getElementById('bcf_at_search').value='';document.getElementById('bcf_at_results').style.display='none';" style="padding:5px 10px;font-size:11px;cursor:pointer;border-radius:4px;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'">${m.label}</div>`).join('');
+  res.innerHTML = matches.slice(0, q ? 30 : 80).map(m=>`<button type="button" class="cc-row cc-row-asset" data-cc-row onclick="_bcAtSelect('${m.type.replace(/'/g,"\\'")}','${m.sub.replace(/'/g,"\\'")}');document.getElementById('bcf_at_search').value='';document.getElementById('bcf_at_results').style.display='none';"><span class="ast-chip ${_bcAssetChipCls(m.label)}">${m.label}</span></button>`).join('');
 }
 function _bcAtSelect(type, sub){
   const fullType = sub ? `${type}: ${sub}` : type;
@@ -33775,22 +33804,27 @@ if(typeof window !== 'undefined') window._NJ_MUNICIPALITIES = _NJ_MUNICIPALITIES
 function _bcCitySearch(q){
   const dd = document.getElementById('bcf_city_dropdown');
   if(!dd) return;
-  if(!q || q.length < 2){ dd.style.display='none'; return; }
-  // v360: read from the curated preferred_cities list in Settings (via
-  // _dbGetCities) so any city the user adds in the admin panel surfaces
-  // here too. Falls back to _NJ_MUNICIPALITIES inside the helper when
-  // the cache is cold. Tokenized match keeps "fort lee" / "lee fort"
-  // both working.
+  // v374.12: when the input is focused (cc-root.is-open) but no query
+  // yet, show top suggestions. With a query, filter to matches.
+  const root = document.getElementById('bcf_city_cc');
+  const open = root && root.classList.contains('is-open');
   const sourceList = (typeof _dbGetCities === 'function')
     ? _dbGetCities()
     : (Array.isArray(_NJ_MUNICIPALITIES) ? _NJ_MUNICIPALITIES.slice() : []);
-  const matches = sourceList.filter(c => _tokenMatch(q, c)).slice(0,10);
-  if(!matches.length){ dd.style.display='none'; return; }
-  dd.innerHTML = matches.map(c=>`
-    <div onclick="_bcAddCity('${c.replace(/'/,"\\'")}');" style="padding:6px 12px;cursor:pointer;font-size:12px;color:#1a3a6e;"
-      onmouseenter="this.style.background='#e8f0fe'" onmouseleave="this.style.background=''">
-      📍 ${c}
-    </div>`).join('');
+  let matches;
+  if(!q){
+    if(!open){ dd.style.display='none'; return; }
+    matches = sourceList.slice(0, 30);
+  } else if(q.length < 2){ dd.style.display='none'; return; }
+  else {
+    matches = sourceList.filter(c => _tokenMatch(q, c)).slice(0, 30);
+  }
+  if(!matches.length){
+    dd.style.display='block';
+    dd.innerHTML = `<div class="cc-empty">No matches for "${q}".</div>`;
+    return;
+  }
+  dd.innerHTML = matches.map(c=>`<button type="button" class="cc-row" data-cc-row onclick="_bcAddCity('${c.replace(/'/,"\\'")}');">📍 ${c}</button>`).join('');
   dd.style.display='block';
 }
 
@@ -33830,17 +33864,25 @@ function _bcSyncStates(skipAutosave){
 function _bcStateSearch(q){
   const dd = document.getElementById('bcf_state_dropdown');
   if(!dd) return;
-  if(!q || q.length < 1){ dd.style.display='none'; return; }
-  const qLow = q.toLowerCase();
-  const matches = _US_STATES.filter(([code,name]) =>
-    code.toLowerCase().includes(qLow) || name.toLowerCase().includes(qLow)
-  ).slice(0,10);
-  if(!matches.length){ dd.style.display='none'; return; }
-  dd.innerHTML = matches.map(([code,name])=>`
-    <div onclick="_bcAddState('${code}','${name.replace(/'/g,"\\'")}');" style="padding:6px 12px;cursor:pointer;font-size:12px;color:#1a3a6e;"
-      onmouseenter="this.style.background='#fef3c7'" onmouseleave="this.style.background=''">
-      🗺 ${code} — ${name}
-    </div>`).join('');
+  // v374.12: with no query but combobox open, show top states.
+  const root = document.getElementById('bcf_state_cc');
+  const open = root && root.classList.contains('is-open');
+  const qLow = (q||'').toLowerCase();
+  let matches;
+  if(!qLow){
+    if(!open){ dd.style.display='none'; return; }
+    matches = _US_STATES.slice(0, 50);
+  } else {
+    matches = _US_STATES.filter(([code,name]) =>
+      code.toLowerCase().includes(qLow) || name.toLowerCase().includes(qLow)
+    ).slice(0, 30);
+  }
+  if(!matches.length){
+    dd.style.display='block';
+    dd.innerHTML = `<div class="cc-empty">No matches for "${q}".</div>`;
+    return;
+  }
+  dd.innerHTML = matches.map(([code,name])=>`<button type="button" class="cc-row" data-cc-row onclick="_bcAddState('${code}','${name.replace(/'/g,"\\'")}');">🗺 ${code} — ${name}</button>`).join('');
   dd.style.display='block';
 }
 function _bcAddState(code, name){
@@ -33873,9 +33915,11 @@ function _bcCountyPlaceholder(){
 function _bcCountySearch(q){
   const dd = document.getElementById('bcf_county_dropdown');
   if(!dd) return;
-  if(!q || q.length < 1){ dd.style.display='none'; return; }
-  const qLow = q.toLowerCase();
-  // Determine which state datasets to search. Default: NJ if no states selected.
+  // v374.12: with no query but combobox open, show counties for the
+  // currently selected states (default NJ).
+  const root = document.getElementById('bcf_county_cc');
+  const open = root && root.classList.contains('is-open');
+  const qLow = (q||'').toLowerCase();
   const stateCodes = _bcGetPillTexts('bcf_state_pills').map(p => p.split(' ')[0]);
   const searchStates = stateCodes.length ? stateCodes : ['NJ'];
   const results = [];
@@ -33883,32 +33927,23 @@ function _bcCountySearch(q){
     const list = _COUNTIES_BY_STATE[st];
     if(!list) continue;
     for(const c of list){
-      if(c.toLowerCase().includes(qLow)){
+      if(!qLow || c.toLowerCase().includes(qLow)){
         results.push({county: c, state: st});
-        if(results.length >= 12) break;
+        if(results.length >= 30) break;
       }
     }
-    if(results.length >= 12) break;
+    if(results.length >= 30) break;
   }
-  // Always show a "use as typed" option at the bottom for free-form entry
+  if(!qLow && !open){ dd.style.display='none'; return; }
+  if(!results.length && !qLow){ dd.style.display='none'; return; }
   if(!results.length){
-    dd.innerHTML = `
-      <div onclick="_bcAddCountyV2('${q.replace(/'/g,"\\'")} County','')" style="padding:6px 12px;cursor:pointer;font-size:12px;color:#1a3a6e;"
-        onmouseenter="this.style.background='#e0f2fe'" onmouseleave="this.style.background=''">
-        ➕ Add "${q} County" (free text)
-      </div>`;
+    dd.innerHTML = `<button type="button" class="cc-row cc-row-new" data-cc-row onclick="_bcAddCountyV2('${q.replace(/'/g,"\\'")} County','')"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add "<b>${q} County</b>" <span class="cc-hint">— press Enter</span></button>`;
     dd.style.display='block';
     return;
   }
-  dd.innerHTML = results.map(r=>`
-    <div onclick="_bcAddCountyV2('${r.county.replace(/'/g,"\\'")} County','${r.state}')" style="padding:6px 12px;cursor:pointer;font-size:12px;color:#1a3a6e;"
-      onmouseenter="this.style.background='#e0f2fe'" onmouseleave="this.style.background=''">
-      📍 ${r.county} County, ${r.state}
-    </div>`).join('')
-    + `<div onclick="_bcAddCountyV2('${q.replace(/'/g,"\\'")} County','')" style="padding:6px 12px;cursor:pointer;font-size:11px;color:#64748b;border-top:1px solid #e2e8f0;"
-      onmouseenter="this.style.background='#f1f5f9'" onmouseleave="this.style.background=''">
-      ➕ Or add "${q} County" as free text
-    </div>`;
+  const rows = results.map(r=>`<button type="button" class="cc-row" data-cc-row onclick="_bcAddCountyV2('${r.county.replace(/'/g,"\\'")} County','${r.state}')">📍 ${r.county} County, ${r.state}</button>`).join('');
+  const tail = qLow ? `<button type="button" class="cc-row cc-row-new" data-cc-row onclick="_bcAddCountyV2('${q.replace(/'/g,"\\'")} County','')"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Or add "<b>${q} County</b>" as free text</button>` : '';
+  dd.innerHTML = rows + tail;
   dd.style.display='block';
 }
 function _bcAddCountyV2(countyLabel, stateCode){

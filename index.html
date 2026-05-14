@@ -11178,150 +11178,189 @@ function renderDocumentsTab(d){
   const airtableRecordUrl = `https://airtable.com/appKuHPzTwx9X3mKo/tbln5sLEUlNPydYJW/${d.id}`;
 
   return `
-    <!-- ══ PHOTO GALLERY ══════════════════════════════════════════ -->
-    <div class="section-hdr"><span class="icon">📷</span> Property Photos</div>
-    <div class="info-box" style="margin-bottom:14px;">
+  <div class="tab-content dense">
 
-      <!-- Upload controls — always uses Supabase Storage -->
-      <div style="display:flex;align-items:center;gap:10px;margin-bottom:14px;flex-wrap:wrap;">
-        <label for="photoFileInput" style="background:linear-gradient(180deg,#1a3a6e,#0e2244);color:#fff;padding:6px 16px;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;">
-          📤 Upload Photos
-        </label>
-        <input type="file" id="photoFileInput" accept="image/*" multiple style="display:none;" onchange="uploadPropertyPhotos('${d.id}')"/>
-        <button onclick="pullStreetViewPhoto('${d.id}')" id="streetViewBtn_${d.id}" style="background:linear-gradient(180deg,#059669,#047857);color:#fff;padding:6px 14px;border-radius:5px;font-size:12px;font-weight:700;cursor:pointer;white-space:nowrap;border:none;" title="Automatically grab Street View photo from Google for this property address">
-          📸 Pull Street View
-        </button>
-        <span style="font-size:11px;color:var(--text3);">or drag &amp; drop images onto the gallery below</span>
-        <span id="photoUploadStatus" style="font-size:11px;color:#2060b0;display:none;margin-left:4px;"></span>
-        <button onclick="refreshPropertyPhotos('${d.id}')" style="margin-left:auto;background:none;border:1px solid var(--border);color:var(--text2);padding:4px 10px;border-radius:4px;font-size:11px;cursor:pointer;">↻ Refresh</button>
+    <!-- v374.14: KPI strip — Photos + key Documents stats, with the
+         critical upload actions (Photos + Street View + Document) all
+         surfaced as primary buttons at the top so they're never buried. -->
+    <div class="kpi-row">
+      <div class="kpi"><span class="kpi-lbl">Photos</span><span class="kpi-val mono">${photos.length}</span></div>
+      <div class="kpi"><span class="kpi-lbl">Documents</span><span class="kpi-val mono" id="docKpiFiles">—</span></div>
+      <div class="kpi"><span class="kpi-lbl">Total Size</span><span class="kpi-val mono" id="docKpiSize">—</span></div>
+      <div class="kpi"><span class="kpi-lbl">Last Upload</span><span class="kpi-val mono" id="docKpiLastUpload">—</span></div>
+      <div class="kpi-spacer"></div>
+      <input type="file" id="photoFileInput" accept="image/*" multiple style="display:none;" onchange="uploadPropertyPhotos('${d.id}')"/>
+      <input type="file" id="docFileInput" style="display:none;" onchange="handleDocFileInputChange('${d.id}','${(d['Address']||'').replace(/'/g,"\\'")}')"/>
+      <button class="btn ghost" onclick="refreshPropertyPhotos('${d.id}');loadPropertyDocs('${d.id}')" title="Refresh photos + documents">
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+        Refresh
+      </button>
+      <button class="btn" onclick="document.getElementById('photoFileInput').click()" title="Upload property photos">
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+        Upload Photo
+      </button>
+      <button class="btn" onclick="pullStreetViewPhoto('${d.id}')" id="streetViewBtn_${d.id}" title="Automatically grab Street View photo from Google for this property address" style="background:#dcfce7;color:#15803d;border-color:#86efac;">
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+        Pull Street View
+      </button>
+      <button class="btn primary" onclick="document.getElementById('docFileInput').click()" title="Upload document">
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        Upload Doc
+      </button>
+    </div>
+
+    <!-- PHOTO GALLERY (preserved verbatim — user-critical) -->
+    <div class="section">
+      <div class="section-hd">
+        <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        Property Photos
+        <span class="sub">${photos.length} photo${photos.length===1?'':'s'} · drag &amp; drop to add</span>
+        <div class="right">
+          <span id="photoUploadStatus" style="font-size:11px;color:#2563eb;display:none;"></span>
+          <button class="btn sm ghost" onclick="document.getElementById('photoFileInput').click()" title="Upload more photos">
+            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+            Add
+          </button>
+          <button class="btn sm ghost" onclick="refreshPropertyPhotos('${d.id}')" title="Refresh">
+            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+          </button>
+        </div>
       </div>
-
-      <!-- Gallery grid -->
-      <div id="photoGallery"
-        ondragover="event.preventDefault();this.style.background='#e8f0fe'" ondragleave="this.style.background=''" ondrop="dropPhotosOnGallery(event,'${d.id}')"
-        style="min-height:80px;border:2px dashed #c0cce0;border-radius:8px;padding:10px;background:#fafbff;transition:background 0.15s;">
-        ${photos.length ? `
-          <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:10px;">
-            ${photos.map((p,i)=>{
-              const isMain = p.id===mainPhotoId || (i===0&&!mainPhotoId);
-              const thumb = p.thumbnails?.large?.url || p.thumbnails?.small?.url || p.url;
-              return `<div id="photo_${p.id}" class="photo-tile" style="position:relative;border-radius:8px;overflow:hidden;border:${isMain?'3px solid #1a3a6e':'2px solid #e0e6f0'};cursor:pointer;aspect-ratio:4/3;background:#111;"
-                onclick="openPhotoLightbox('${d.id}',${i})"
-                title="Click to view full size">
-                <img src="${thumb}" style="width:100%;height:100%;object-fit:cover;display:block;" loading="lazy"/>
-                ${isMain?`<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(26,58,110,0.85);color:#fff;font-size:10px;font-weight:700;text-align:center;padding:3px;pointer-events:none;">⭐ MAIN PHOTO</div>`:''}
-                <button class="photo-star-btn" onclick="event.stopPropagation();setMainPhoto('${d.id}','${p.id}')"
-                  title="${isMain?'Already main photo':'Set as main photo'}"
-                  style="position:absolute;top:4px;left:4px;background:rgba(26,58,110,0.85);color:#fff;border:none;border-radius:50%;width:22px;height:22px;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;opacity:0;transition:opacity 0.15s;">⭐</button>
-                <button class="photo-del-btn" onclick="event.stopPropagation();deletePropertyPhoto('${d.id}','${p.id}')"
-                  title="Delete photo"
-                  style="position:absolute;top:4px;right:4px;background:rgba(200,0,0,0.85);color:#fff;border:none;border-radius:50%;width:22px;height:22px;font-size:11px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;opacity:0;transition:opacity 0.15s;">✕</button>
-              </div>`;
-            }).join('')}
-          </div>
-          <div style="margin-top:10px;font-size:10px;color:var(--text3);">Click any photo to view it full size. Hover and click ⭐ to set as main photo, ✕ to delete.</div>
-        ` : `
-          <div style="text-align:center;padding:24px;color:var(--text3);">
-            <div style="font-size:32px;margin-bottom:8px;">🖼</div>
-            <div style="font-size:13px;font-weight:600;margin-bottom:6px;">No photos yet</div>
-            <div style="font-size:11px;">Drag &amp; drop images here, or click the Upload Photos button above</div>
-          </div>
-        `}
+      <div class="section-bd">
+        <div id="photoGallery"
+          ondragover="event.preventDefault();this.style.background='#eff6ff'" ondragleave="this.style.background=''" ondrop="dropPhotosOnGallery(event,'${d.id}')"
+          style="min-height:88px;border:2px dashed var(--border,#e2e8f0);border-radius:8px;padding:12px;background:var(--surface2,#f8fafc);transition:background 0.15s;">
+          ${photos.length ? `
+            <div style="display:grid;grid-template-columns:repeat(auto-fill,minmax(140px,1fr));gap:10px;">
+              ${photos.map((p,i)=>{
+                const isMain = p.id===mainPhotoId || (i===0&&!mainPhotoId);
+                const thumb = p.thumbnails?.large?.url || p.thumbnails?.small?.url || p.url;
+                return `<div id="photo_${p.id}" class="photo-tile" style="position:relative;border-radius:8px;overflow:hidden;border:${isMain?'3px solid #2563eb':'1px solid var(--border,#e2e8f0)'};cursor:pointer;aspect-ratio:4/3;background:#111;"
+                  onclick="openPhotoLightbox('${d.id}',${i})"
+                  title="Click to view full size">
+                  <img src="${thumb}" style="width:100%;height:100%;object-fit:cover;display:block;" loading="lazy"/>
+                  ${isMain?`<div style="position:absolute;bottom:0;left:0;right:0;background:rgba(37,99,235,0.92);color:#fff;font-size:10px;font-weight:700;text-align:center;padding:3px;pointer-events:none;letter-spacing:0.06em;text-transform:uppercase;">⭐ Main Photo</div>`:''}
+                  <button class="photo-star-btn" onclick="event.stopPropagation();setMainPhoto('${d.id}','${p.id}')"
+                    title="${isMain?'Already main photo':'Set as main photo'}"
+                    style="position:absolute;top:4px;left:4px;background:rgba(37,99,235,0.92);color:#fff;border:none;border-radius:50%;width:22px;height:22px;font-size:12px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;opacity:0;transition:opacity 0.15s;">⭐</button>
+                  <button class="photo-del-btn" onclick="event.stopPropagation();deletePropertyPhoto('${d.id}','${p.id}')"
+                    title="Delete photo"
+                    style="position:absolute;top:4px;right:4px;background:rgba(185,28,28,0.92);color:#fff;border:none;border-radius:50%;width:22px;height:22px;font-size:11px;cursor:pointer;display:flex;align-items:center;justify-content:center;line-height:1;opacity:0;transition:opacity 0.15s;">✕</button>
+                </div>`;
+              }).join('')}
+            </div>
+            <div style="margin-top:10px;font-size:10.5px;color:var(--text3,#94a3b8);">Click any photo to view full size · hover and click ⭐ to set as main, ✕ to delete</div>
+          ` : `
+            <div style="text-align:center;padding:28px 20px;color:var(--text3,#94a3b8);">
+              <svg viewBox="0 0 24 24" width="32" height="32" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:8px;opacity:0.5;"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+              <div style="font-size:13px;font-weight:600;margin-bottom:6px;color:var(--text2,#475569);">No photos yet</div>
+              <div style="font-size:11.5px;">Drag &amp; drop images here, or click <strong>Upload Photo</strong> · or <strong>Pull Street View</strong> to fetch automatically</div>
+            </div>
+          `}
+        </div>
       </div>
     </div>
 
-    <div class="section-hdr"><span class="icon">📁</span> Documents</div>
+    <!-- DOCUMENTS — folders sidebar + file list -->
+    <div class="two-col" style="display:grid;grid-template-columns:240px 1fr;gap:14px;align-items:start;">
 
-    <div class="two-pane">
-      <!-- LEFT: Add Document + uploaded list -->
-      <div>
-        <div class="info-box">
-          <div class="info-box-title">Add Document</div>
-
-          <div style="margin-bottom:12px;">
-            <label style="font-size:11px;font-weight:bold;color:#1a3a6e;display:block;margin-bottom:4px;">Document Type</label>
-            <select class="form-select" id="docTypeSelect" style="width:100%;margin-bottom:8px;">
-              <option value="">— Select type —</option>
-              ${DOC_TYPES.map(t=>`<option value="${t}">${t}</option>`).join('')}
-            </select>
-
-            <label style="font-size:11px;font-weight:bold;color:#1a3a6e;display:block;margin-bottom:4px;">Document Name (optional)</label>
-            <input class="form-input" id="docNameInput" placeholder="—" style="width:100%;margin-bottom:8px;"/>
-
-            <label style="font-size:11px;font-weight:bold;color:#1a3a6e;display:block;margin-bottom:4px;">Notes (optional)</label>
-            <input class="form-input" id="docNotes" placeholder="—" style="width:100%;margin-bottom:14px;"/>
-
-            <!-- Primary: Upload file directly to Supabase Storage -->
-            <div id="docDropZone"
-              style="border:2px dashed #4a90d9;background:#f0f4ff;border-radius:6px;padding:18px;text-align:center;cursor:pointer;transition:all 0.15s;margin-bottom:10px;"
-              ondragover="event.preventDefault();this.style.background='#dbeafe';this.style.borderColor='#1a3a6e';"
-              ondragleave="this.style.background='#f0f4ff';this.style.borderColor='#4a90d9';"
-              ondrop="handleDocDrop(event,'${d.id}','${(d['Address']||'').replace(/'/g,"\\'")}')"
-              onclick="document.getElementById('docFileInput').click()">
-              <div style="font-size:28px;margin-bottom:4px;">📤</div>
-              <div style="font-weight:bold;font-size:13px;color:#1a3a6e;margin-bottom:2px;">Drag &amp; drop a file here</div>
-              <div style="font-size:11px;color:#666;">or <span style="color:#2060b0;text-decoration:underline;">click to browse</span> · max 50 MB</div>
-              <input type="file" id="docFileInput" style="display:none;"
-                onchange="handleDocFileInputChange('${d.id}','${(d['Address']||'').replace(/'/g,"\\'")}')"/>
-            </div>
-
-            <!-- Upload progress bar -->
-            <div id="docUploadProgress" style="display:none;margin-bottom:10px;">
-              <div style="font-size:11px;color:#1a3a6e;margin-bottom:4px;" id="docUploadProgressLabel">Uploading...</div>
-              <div style="background:#e0e6f0;border-radius:4px;height:8px;overflow:hidden;">
-                <div id="docUploadProgressBar" style="background:linear-gradient(90deg,#4a90d9,#1a3a6e);height:100%;width:0%;transition:width 0.2s;"></div>
-              </div>
-            </div>
-
-            <!-- Fallback: Paste a link -->
-            <details style="border:1px solid #e0e6f0;border-radius:4px;padding:8px 10px;background:#fafbff;">
-              <summary style="cursor:pointer;font-size:11px;color:#555;font-weight:600;">
-                🔗 Or paste a share link instead (Google Drive, Dropbox, etc.)
-              </summary>
-              <div style="margin-top:8px;">
-                <input id="docFallbackUrl" class="form-input"
-                  placeholder="https://drive.google.com/..."
-                  style="width:100%;font-size:11px;margin-bottom:6px;box-sizing:border-box;"
-                  onkeydown="if(event.key==='Enter') saveDocLink('${d.id}','${(d['Address']||'').replace(/'/g,"\\'")}')"/>
-                <button onclick="saveDocLink('${d.id}','${(d['Address']||'').replace(/'/g,"\\'")}');" style="
-                  background:#2060b0;color:#fff;border:none;padding:5px 14px;border-radius:3px;
-                  font-size:11px;font-weight:bold;cursor:pointer;">
-                  💾 Save Link
-                </button>
-              </div>
-            </details>
-
-            <div id="docUploadStatus" style="margin-top:10px;font-size:11px;display:none;"></div>
-          </div>
+      <!-- Left: Folders -->
+      <div class="section" style="margin-bottom:0;">
+        <div class="section-hd">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+          Folders
         </div>
-
-        <!-- Uploaded documents list -->
-        <div class="info-box">
-          <div class="info-box-title" style="display:flex;justify-content:space-between;align-items:center;">
-            <span>Documents</span>
-            <button class="save-btn" style="padding:2px 10px;font-size:10px;" onclick="loadPropertyDocs('${d.id}')">↻ Refresh</button>
-          </div>
-          <div id="docList" style="font-size:11px;color:#666;">
-            <div style="text-align:center;padding:12px;color:#888;">Loading documents...</div>
-          </div>
+        <div class="folder-list" id="docFolders">
+          <button type="button" class="folder-row active" id="folder_ALL" onclick="filterDocsByType(null)">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/></svg>
+            <span class="folder-name">All Documents</span>
+            <span class="folder-count mono" id="folderCount_ALL">—</span>
+          </button>
+          <div class="folder-divider"></div>
+          ${DOC_TYPES.map(type=>`
+            <button type="button" class="folder-row" onclick="filterDocsByType('${type}')" id="folder_${type.replace(/[^a-z]/gi,'_')}">
+              <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M22 19a2 2 0 0 1-2 2H4a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2z"/></svg>
+              <span class="folder-name">${type}</span>
+              <span class="folder-count mono" id="folderCount_${type.replace(/[^a-z]/gi,'_')}">—</span>
+            </button>`).join('')}
         </div>
       </div>
 
-      <!-- RIGHT: Folders by category -->
-      <div>
-        <div class="info-box">
-          <div class="info-box-title">Document Folders</div>
-          <div id="docFolders">
-            ${DOC_TYPES.map(type=>`
-            <div class="doc-item" onclick="filterDocsByType('${type}')" id="folder_${type.replace(/[^a-z]/gi,'_')}" style="cursor:pointer;">
-              <span class="doc-icon">${DOC_ICONS[type]||'📎'}</span>
-              <span class="doc-name" style="color:#1a3a6e;">${type}</span>
-              <span class="doc-meta" id="folderCount_${type.replace(/[^a-z]/gi,'_')}" style="color:#aaa;">—</span>
-            </div>`).join('')}
+      <!-- Right: Documents list + add-form details -->
+      <div class="section" style="margin-bottom:0;">
+        <div class="section-hd">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+          <span id="docListTitle">All Documents</span>
+          <span class="sub" id="docListCount">—</span>
+          <div class="right">
+            <button class="btn sm ghost" onclick="loadPropertyDocs('${d.id}')" title="Refresh">
+              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg>
+              Refresh
+            </button>
+            <button class="btn sm primary" onclick="document.getElementById('docAddDetails').open=true;document.getElementById('docFileInput').click();">
+              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+              Add Document
+            </button>
           </div>
         </div>
+
+        <!-- Add Document — collapsible -->
+        <details id="docAddDetails" class="bc-collapsed-details" style="border-bottom:1px solid var(--border,#e2e8f0);padding:12px 16px;background:var(--surface2,#f8fafc);">
+          <summary style="cursor:pointer;font-size:11.5px;color:var(--text2,#475569);font-weight:600;display:flex;align-items:center;gap:6px;">
+            <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"/></svg>
+            Add new document — type, name, notes, upload or paste a link
+          </summary>
+          <div style="margin-top:10px;display:grid;grid-template-columns:1fr 1fr 1fr;gap:8px;">
+            <div>
+              <label style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--text3,#94a3b8);display:block;margin-bottom:4px;">Document Type</label>
+              <select class="form-select" id="docTypeSelect" style="width:100%;">
+                <option value="">— Select type —</option>
+                ${DOC_TYPES.map(t=>`<option value="${t}">${t}</option>`).join('')}
+              </select>
+            </div>
+            <div>
+              <label style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--text3,#94a3b8);display:block;margin-bottom:4px;">Name (optional)</label>
+              <input class="form-input" id="docNameInput" placeholder="—" style="width:100%;"/>
+            </div>
+            <div>
+              <label style="font-size:10px;font-weight:700;text-transform:uppercase;letter-spacing:0.06em;color:var(--text3,#94a3b8);display:block;margin-bottom:4px;">Notes (optional)</label>
+              <input class="form-input" id="docNotes" placeholder="—" style="width:100%;"/>
+            </div>
+          </div>
+          <div id="docDropZone"
+            style="margin-top:10px;border:1.5px dashed #93c5fd;background:#eff6ff;border-radius:6px;padding:14px;text-align:center;cursor:pointer;transition:all 0.15s;display:flex;align-items:center;gap:10px;justify-content:center;"
+            ondragover="event.preventDefault();this.style.background='#dbeafe';this.style.borderColor='#1d4ed8';"
+            ondragleave="this.style.background='#eff6ff';this.style.borderColor='#93c5fd';"
+            ondrop="handleDocDrop(event,'${d.id}','${(d['Address']||'').replace(/'/g,"\\'")}')"
+            onclick="document.getElementById('docFileInput').click()">
+            <svg viewBox="0 0 24 24" width="20" height="20" fill="none" stroke="#1d4ed8" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            <div style="text-align:left;">
+              <div style="font-weight:600;font-size:12.5px;color:#1d4ed8;">Drag &amp; drop a file here</div>
+              <div style="font-size:11px;color:var(--text2,#475569);">or <span style="color:#1d4ed8;text-decoration:underline;">click to browse</span> · max 50 MB</div>
+            </div>
+          </div>
+          <div id="docUploadProgress" style="display:none;margin-top:10px;">
+            <div style="font-size:11px;color:#1d4ed8;margin-bottom:4px;" id="docUploadProgressLabel">Uploading…</div>
+            <div style="background:var(--border,#e2e8f0);border-radius:4px;height:6px;overflow:hidden;">
+              <div id="docUploadProgressBar" style="background:linear-gradient(90deg,#60a5fa,#2563eb);height:100%;width:0%;transition:width 0.2s;"></div>
+            </div>
+          </div>
+          <details style="margin-top:10px;border:1px solid var(--border,#e2e8f0);border-radius:5px;padding:8px 10px;background:var(--surface,#fff);">
+            <summary style="cursor:pointer;font-size:11px;color:var(--text2,#475569);font-weight:600;">🔗 Or paste a share link (Google Drive, Dropbox, etc.)</summary>
+            <div style="margin-top:8px;display:flex;gap:6px;">
+              <input id="docFallbackUrl" class="form-input" placeholder="https://drive.google.com/..." style="flex:1;font-size:11.5px;" onkeydown="if(event.key==='Enter') saveDocLink('${d.id}','${(d['Address']||'').replace(/'/g,"\\'")}')"/>
+              <button class="btn sm primary" onclick="saveDocLink('${d.id}','${(d['Address']||'').replace(/'/g,"\\'")}');">Save</button>
+            </div>
+          </details>
+          <div id="docUploadStatus" style="margin-top:10px;font-size:11px;display:none;"></div>
+        </details>
+
+        <div id="docList" style="padding:12px 16px;">
+          <div style="text-align:center;padding:16px;color:var(--text3,#94a3b8);font-size:12px;">Loading documents…</div>
+        </div>
       </div>
-    </div>`;
+    </div>
+  </div>`;
 }
 
 async function saveSellerContact(propertyId){
@@ -47563,8 +47602,25 @@ async function loadPropertyDocs(propertyId){
     DOC_TYPES.forEach(type=>{
       const count = records.filter(r=>r.fields['Document Type']===type).length;
       const el = document.getElementById('folderCount_'+type.replace(/[^a-z]/gi,'_'));
-      if(el) el.textContent = count > 0 ? count+' file'+(count>1?'s':'') : 'Empty';
+      if(el) el.textContent = count;
     });
+    // v374.14: All Documents folder count + KPI strip totals
+    const allCountEl = document.getElementById('folderCount_ALL');
+    if(allCountEl) allCountEl.textContent = records.length;
+    const kpiFilesEl = document.getElementById('docKpiFiles');
+    if(kpiFilesEl) kpiFilesEl.textContent = records.length;
+    const totalBytes = records.reduce((s,r)=>s + (Number(r.fields['_fileSize'])||0), 0);
+    const fmtKpiSize = (b)=>{
+      if(!b) return '0 B';
+      if(b < 1024) return b+' B';
+      if(b < 1024*1024) return (b/1024).toFixed(1)+' KB';
+      return (b/1024/1024).toFixed(1)+' MB';
+    };
+    const kpiSizeEl = document.getElementById('docKpiSize');
+    if(kpiSizeEl) kpiSizeEl.textContent = fmtKpiSize(totalBytes);
+    const dates = records.map(r=>r.fields['Upload Date']).filter(Boolean).sort();
+    const kpiLastEl = document.getElementById('docKpiLastUpload');
+    if(kpiLastEl) kpiLastEl.textContent = dates.length ? dates[dates.length-1] : '—';
     window._docRecords = records;
     renderDocList(records);
   }catch(e){
@@ -47576,14 +47632,16 @@ async function loadPropertyDocs(propertyId){
 let _docFilter = null;
 
 function filterDocsByType(type){
-  _docFilter = (_docFilter === type) ? null : type;
-  // Highlight the active folder
-  const allFolders = document.querySelectorAll('#docFolders .doc-item');
-  allFolders.forEach(el => { el.style.background = ''; el.style.fontWeight = ''; });
-  if(_docFilter){
-    const active = document.getElementById('folder_' + type.replace(/[^a-z]/gi,'_'));
-    if(active){ active.style.background = '#e0ecff'; active.style.fontWeight = '600'; }
-  }
+  _docFilter = (type === null) ? null : (_docFilter === type ? null : type);
+  // v374.14: highlight via .folder-row.active class (institutional design)
+  const allFolders = document.querySelectorAll('#docFolders .folder-row');
+  allFolders.forEach(el => el.classList.remove('active'));
+  const activeId = _docFilter ? 'folder_' + _docFilter.replace(/[^a-z]/gi,'_') : 'folder_ALL';
+  const active = document.getElementById(activeId);
+  if(active) active.classList.add('active');
+  // Update the section title + count
+  const titleEl = document.getElementById('docListTitle');
+  if(titleEl) titleEl.textContent = _docFilter || 'All Documents';
   renderDocList(window._docRecords || []);
 }
 
@@ -47592,58 +47650,82 @@ function renderDocList(records){
   if(!listEl) return;
   const filtered = _docFilter ? records.filter(r => r.fields['Document Type'] === _docFilter) : records;
 
+  // v374.14: update the count badge in the section header
+  const countEl = document.getElementById('docListCount');
+  if(countEl) countEl.textContent = `${filtered.length} item${filtered.length===1?'':'s'}`;
+
   if(!filtered.length){
-    listEl.innerHTML = `<div style="text-align:center;padding:16px;color:#888;font-size:11px;">
-      ${_docFilter ? `No "${_docFilter}" documents yet.` : 'No documents yet — upload one above.'}
-      ${_docFilter ? `<br/><a onclick="filterDocsByType('${_docFilter}')" style="color:#2060b0;cursor:pointer;font-weight:600;">Clear filter</a>` : ''}
+    listEl.innerHTML = `<div style="text-align:center;padding:32px 16px;color:var(--text3,#94a3b8);font-size:12px;">
+      <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:8px;opacity:0.5;"><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><polyline points="14 2 14 8 20 8"/></svg>
+      <div style="font-weight:600;color:var(--text2,#475569);font-size:13px;margin-bottom:4px;">${_docFilter ? `No "${_docFilter}" documents yet.` : 'No documents yet'}</div>
+      <div style="font-size:11.5px;">${_docFilter ? '' : 'Click <strong>Upload Doc</strong> above to add the first one.'}</div>
+      ${_docFilter ? `<button class="btn sm ghost" style="margin-top:10px;" onclick="filterDocsByType(null)">Show all documents</button>` : ''}
     </div>`;
     return;
   }
 
-  const DOC_ICONS = {
-    'Rent Roll':'🏘','Profit & Loss Statement':'📊','Tax Returns':'🧾',
-    'Letter of Intent (LOI)':'✉️','Purchase Agreement':'📝','Due Diligence':'🔍',
-    'Inspection Report':'🔧','Title Report':'📋','Environmental Report':'🌿',
-    'T-12 Financials':'💰','Closing Documents':'✅','Other':'📎'
+  // v374.14: file-type chip mapping (PDF=red, XLSX=green, DOCX=blue, etc.)
+  const _docTypeChip = (typeStr, url) => {
+    const ext = (url||'').split('?')[0].split('.').pop().toLowerCase();
+    if(['pdf'].includes(ext)) return 'pdf';
+    if(['xlsx','xls','csv'].includes(ext)) return 'xlsx';
+    if(['docx','doc'].includes(ext)) return 'docx';
+    if(['zip','rar','7z'].includes(ext)) return 'zip';
+    if(['png','jpg','jpeg','gif','webp'].includes(ext)) return 'img';
+    return 'pdf'; // default fallback
   };
 
   const fmtSize = (bytes) => {
-    if(!bytes) return '';
+    if(!bytes) return '—';
     if(bytes < 1024) return bytes + ' B';
     if(bytes < 1024*1024) return (bytes/1024).toFixed(1) + ' KB';
     return (bytes/1024/1024).toFixed(1) + ' MB';
   };
 
+  // v374.14: render as a dt table for the new institutional look
   listEl.innerHTML = `
-    ${_docFilter ? `<div style="font-size:10px;color:#666;margin-bottom:8px;padding:4px 8px;background:#f0f4ff;border-radius:3px;">
-      Showing: <strong>${_docFilter}</strong> · <a onclick="filterDocsByType('${_docFilter}')" style="color:#2060b0;cursor:pointer;">clear</a>
-    </div>` : ''}
-    ${filtered.map(r => {
-      const f = r.fields;
-      const icon = DOC_ICONS[f['Document Type']] || '📎';
-      const url = f['File URL'] || f['File']?.[0]?.url || '';
-      const size = fmtSize(f['_fileSize']);
-      const isUploaded = !!f['_storagePath'];
-      return `
-        <div style="display:flex;align-items:flex-start;gap:10px;padding:10px;border:1px solid #e0e6f0;border-radius:5px;margin-bottom:6px;background:#fff;">
-          <div style="font-size:22px;flex-shrink:0;">${icon}</div>
-          <div style="flex:1;min-width:0;">
-            <div style="font-weight:600;font-size:12px;color:#1a3a6e;word-break:break-word;">
-              ${url
-                ? `<a href="${url}" target="_blank" style="color:#1a3a6e;text-decoration:none;">${f['Document Name']||'Untitled'}</a>`
-                : (f['Document Name']||'Untitled')}
-            </div>
-            <div style="font-size:10px;color:#666;margin-top:2px;">
-              ${f['Document Type']||''} ${f['Upload Date'] ? '· ' + f['Upload Date'] : ''} ${size ? '· ' + size : ''} ${isUploaded ? '· 📦 Stored' : (url ? '· 🔗 Link' : '')}
-            </div>
-            ${f['Notes'] ? `<div style="font-size:10px;color:#555;margin-top:4px;font-style:italic;">${f['Notes']}</div>` : ''}
-          </div>
-          <div style="display:flex;flex-direction:column;gap:4px;flex-shrink:0;">
-            ${url ? `<a href="${url}" target="_blank" style="font-size:10px;color:#2060b0;text-decoration:none;padding:2px 6px;border:1px solid #c0d0e8;border-radius:3px;text-align:center;">Open</a>` : ''}
-            <button onclick="deleteDoc('${r.id}')" style="font-size:10px;color:#c00;background:none;border:1px solid #f0c0c0;border-radius:3px;padding:2px 6px;cursor:pointer;">Delete</button>
-          </div>
-        </div>`;
-    }).join('')}
+    <table class="dt" style="width:100%;border-collapse:separate;border-spacing:0;font-size:12px;">
+      <thead>
+        <tr>
+          <th style="width:50px;"></th>
+          <th>Name</th>
+          <th style="width:130px;">Tag</th>
+          <th class="num" style="width:80px;">Size</th>
+          <th style="width:110px;">Uploaded</th>
+          <th style="width:120px;text-align:right;">Actions</th>
+        </tr>
+      </thead>
+      <tbody>
+        ${filtered.map(r => {
+          const f = r.fields;
+          const url = f['File URL'] || f['File']?.[0]?.url || '';
+          const chipKind = _docTypeChip(f['Document Type'], url);
+          const chipLabel = (url ? url.split('?')[0].split('.').pop().slice(0,4) : 'DOC').toUpperCase();
+          const size = fmtSize(f['_fileSize']);
+          const isUploaded = !!f['_storagePath'];
+          const docType = f['Document Type'] || '—';
+          return `
+            <tr>
+              <td><span class="file-chip ${chipKind}">${chipLabel}</span></td>
+              <td class="strong">
+                ${url
+                  ? `<a href="${url}" target="_blank" style="color:var(--text,#0f172a);text-decoration:none;font-weight:600;">${f['Document Name']||'Untitled'}</a>`
+                  : `<span style="color:var(--text,#0f172a);font-weight:600;">${f['Document Name']||'Untitled'}</span>`}
+                ${f['Notes'] ? `<div style="font-size:10.5px;color:var(--text3,#94a3b8);margin-top:2px;font-style:italic;">${f['Notes']}</div>` : ''}
+              </td>
+              <td><span class="bc-pill stage-prospect" style="font-size:10px;">${docType}</span></td>
+              <td class="num mono">${size}</td>
+              <td class="mono" style="color:var(--text2,#475569);font-size:11px;">${f['Upload Date']||'—'}</td>
+              <td style="text-align:right;">
+                <div style="display:inline-flex;gap:2px;">
+                  ${url ? `<a class="lbtn" href="${url}" target="_blank" title="Open / Download"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="7 10 12 15 17 10"/><line x1="12" y1="15" x2="12" y2="3"/></svg></a>` : ''}
+                  <button class="lbtn" onclick="deleteDoc('${r.id}')" title="Delete" style="color:#b91c1c;"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14a2 2 0 0 1-2 2H9a2 2 0 0 1-2-2L5 6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></svg></button>
+                </div>
+              </td>
+            </tr>`;
+        }).join('')}
+      </tbody>
+    </table>
   `;
 }
 
@@ -48448,15 +48530,66 @@ async function _sumNsSave(){
 
 // ─── TAB: CALENDAR ────────────────────────────────────────────
 function renderCalendarTab(){
+  // v374.14: institutional design — KPI strip + 2-col layout with month
+  // grid on the left and an "Up next" agenda sidebar on the right. The
+  // calendar is currently view-only (no events data wired) so KPIs read
+  // as zeros and the agenda shows a friendly empty state. When event
+  // data lands, just populate window._calEvents and call renderCal().
+  const today = new Date();
+  const todayLabel = today.toLocaleDateString('en-US',{month:'short',day:'numeric',weekday:'short'});
   return `
-    <div class="section-hdr"><span class="icon">📅</span> Calendar</div>
-    <div style="display:flex;gap:12px;align-items:center;margin-bottom:12px;">
-      <button class="save-btn" onclick="changeMonth(-1)">◀ Prev</button>
-      <strong style="font-size:14px;" id="calTitle">—</strong>
-      <button class="save-btn" onclick="changeMonth(1)">Next ▶</button>
-      <button class="save-btn" onclick="alert('Add event coming soon')">+ Add Event</button>
+  <div class="tab-content dense">
+    <div class="kpi-row">
+      <div class="kpi"><span class="kpi-lbl">Upcoming</span><span class="kpi-val mono" id="calKpiUpcoming">0</span></div>
+      <div class="kpi"><span class="kpi-lbl">Showings</span><span class="kpi-val mono" id="calKpiShowings">0</span></div>
+      <div class="kpi"><span class="kpi-lbl">Deadlines</span><span class="kpi-val mono" id="calKpiDeadlines">0</span></div>
+      <div class="kpi"><span class="kpi-lbl">Today</span><span class="kpi-val mono">${todayLabel}</span></div>
+      <div class="kpi-spacer"></div>
+      <div class="btn-group">
+        <button class="btn sm" id="calViewDay" onclick="_calSetView('day')">Day</button>
+        <button class="btn sm" id="calViewWeek" onclick="_calSetView('week')">Week</button>
+        <button class="btn sm active" id="calViewMonth" onclick="_calSetView('month')">Month</button>
+      </div>
+      <button class="btn primary" onclick="alert('Add event coming soon')">
+        <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>
+        New Event
+      </button>
     </div>
-    <div class="cal-grid" id="calGrid"></div>`;
+
+    <div class="two-col" style="display:grid;grid-template-columns:1fr 320px;gap:14px;align-items:start;">
+      <div class="section" style="margin-bottom:0;">
+        <div class="section-hd">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+          <span id="calTitle">—</span>
+          <div class="right">
+            <button class="btn sm ghost icon-only" onclick="changeMonth(-1)" title="Previous month">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="15 18 9 12 15 6"/></svg>
+            </button>
+            <button class="btn sm ghost" onclick="_calGoToday()">Today</button>
+            <button class="btn sm ghost icon-only" onclick="changeMonth(1)" title="Next month">
+              <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="9 18 15 12 9 6"/></svg>
+            </button>
+          </div>
+        </div>
+        <div class="cal-month-grid" id="calGrid"></div>
+      </div>
+
+      <div class="section" style="margin-bottom:0;">
+        <div class="section-hd">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+          Up Next
+          <span class="sub" id="calAgendaCount">0 events</span>
+        </div>
+        <div class="agenda" id="calAgenda">
+          <div style="padding:32px 16px;text-align:center;color:var(--text3,#94a3b8);font-size:12px;">
+            <svg viewBox="0 0 24 24" width="28" height="28" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" style="margin-bottom:8px;opacity:0.5;"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>
+            <div style="font-weight:600;color:var(--text2,#475569);font-size:12.5px;margin-bottom:4px;">No upcoming events</div>
+            <div style="font-size:11px;">Click <strong>New Event</strong> to schedule showings, calls, or deadlines.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>`;
 }
 
 function initCalendar(){
@@ -48466,6 +48599,28 @@ function initCalendar(){
 function changeMonth(dir){
   calMonth=new Date(calMonth.getFullYear(),calMonth.getMonth()+dir,1);
   renderCal();
+}
+
+// v374.14: jump back to current month
+function _calGoToday(){
+  calMonth = new Date();
+  renderCal();
+}
+
+// v374.14: view-mode toggle (day / week / month) — currently only
+// month is implemented; day + week are placeholders for future work.
+function _calSetView(view){
+  ['Day','Week','Month'].forEach(v=>{
+    const el = document.getElementById('calView'+v);
+    if(el) el.classList.toggle('active', v.toLowerCase() === view);
+  });
+  // Stub: future work — switch the cal grid render based on view.
+  if(view !== 'month'){
+    const grid = document.getElementById('calGrid');
+    if(grid) grid.innerHTML = `<div style="padding:48px 16px;text-align:center;color:var(--text3,#94a3b8);font-size:12px;grid-column:span 7;">${view.charAt(0).toUpperCase()+view.slice(1)} view is coming soon — for now, use the Month grid.</div>`;
+  } else {
+    renderCal();
+  }
 }
 
 function renderCal(){
@@ -48478,15 +48633,25 @@ function renderCal(){
   const firstDay=new Date(year,month,1).getDay();
   const daysInMonth=new Date(year,month+1,0).getDate();
   const today=new Date();
+  const events = window._calEvents || {};
 
-  let html=days.map(d=>`<div class="cal-hdr">${d}</div>`).join('');
-  for(let i=0;i<firstDay;i++) html+=`<div class="cal-day other-month"></div>`;
-  for(let d=1;d<=daysInMonth;d++){
-    const isToday=d===today.getDate()&&month===today.getMonth()&&year===today.getFullYear();
-    html+=`<div class="cal-day ${isToday?'today':''}">
-      <div class="cal-day-num">${d}</div>
+  let html=days.map(d=>`<div class="cal-dow">${d}</div>`).join('');
+  for(let i=0;i<firstDay;i++) html+=`<div class="cal-cell empty"></div>`;
+  for(let dd=1;dd<=daysInMonth;dd++){
+    const isToday = dd===today.getDate() && month===today.getMonth() && year===today.getFullYear();
+    const dayEvents = events[dd] || [];
+    const eventHtml = dayEvents.map(e =>
+      `<div class="cal-event evt-${e.type||'other'}" title="${(e.title||'').replace(/"/g,'&quot;')}"><span class="mono">${e.hour||''}</span> ${e.title||''}</div>`
+    ).join('');
+    html+=`<div class="cal-cell ${isToday?'today':''}">
+      <div class="cal-day-mark">${dd}</div>
+      ${eventHtml}
     </div>`;
   }
+  // Pad to a multiple of 7 so the grid bottom row aligns
+  const totalCells = firstDay + daysInMonth;
+  const pad = (7 - (totalCells % 7)) % 7;
+  for(let i=0;i<pad;i++) html+=`<div class="cal-cell empty"></div>`;
   grid.innerHTML=html;
 }
 

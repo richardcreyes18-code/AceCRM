@@ -221,6 +221,389 @@
   color: var(--fg-1);
 }
 
+/* ════════════════════════════════════════════════════════════════
+ * v373: design vocabulary for the lower Property Details sections —
+ * Highlights, Seller Motivation, Listing & Seller Details, Construction,
+ * Amenities, and the asset-type-aware Unit Mix / Industrial / Tenant Mix
+ * cards. Mirrors `/Users/rickyreyes/Downloads/styles.css` (Claude Design
+ * handoff) with `pds-` prefix so it doesn't collide with the legacy
+ * `.btn`, `.pill`, `.dt` rules elsewhere in the app.
+ * ════════════════════════════════════════════════════════════════ */
+
+/* ── Page toolbar (top of tab) ───────────────────────────────── */
+.pds-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 4px 4px 12px;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.pds-toolbar-title {
+  font-size: 13px;
+  font-weight: 700;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+  color: var(--fg-2);
+  margin: 0;
+}
+.pds-toolbar .right {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+.pds-viewmode {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-3);
+}
+
+/* ── Sub-headers inside a section body ───────────────────────── */
+.pds-subhd {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--fg-1);
+  padding: 4px 0 8px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+.pds-subhd .muted {
+  font-size: 11px;
+  font-weight: 500;
+  color: var(--fg-3);
+}
+.pds-subhd .right { margin-left: auto; }
+.pds-subhd-spaced {
+  margin-top: 18px;
+  padding-top: 14px;
+  border-top: 1px solid var(--border);
+}
+.pds-subhd-top {
+  border-top: 1px solid var(--border);
+  padding-top: 12px;
+  margin-top: 12px;
+}
+
+/* ── Badges ──────────────────────────────────────────────────── */
+.pds-badge-opt {
+  font-size: 9.5px;
+  font-weight: 700;
+  padding: 1px 6px;
+  border-radius: 3px;
+  background: var(--surface-2);
+  color: var(--fg-3);
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
+.pds-badge-count {
+  font-size: 10.5px;
+  font-weight: 600;
+  padding: 1px 7px;
+  border-radius: 10px;
+  background: var(--primary-lighter);
+  color: var(--primary-darker);
+  font-family: var(--font-mono);
+}
+
+/* ── Callout (info banner) ───────────────────────────────────── */
+.pds-callout {
+  display: flex;
+  gap: 10px;
+  padding: 10px 12px;
+  background: var(--primary-lighter);
+  border: 1px solid var(--primary-light, #c7d2fe);
+  border-radius: 5px;
+  margin-bottom: 14px;
+  align-items: flex-start;
+}
+.pds-callout svg {
+  color: var(--primary);
+  flex-shrink: 0;
+  margin-top: 1px;
+}
+.pds-callout .strong {
+  font-weight: 700;
+  color: var(--primary-darker);
+  font-size: 12.5px;
+}
+.pds-callout .muted {
+  font-size: 12px;
+  color: var(--fg-2);
+}
+
+/* ── Highlights list ─────────────────────────────────────────── */
+.pds-hl-list {
+  list-style: none;
+  padding: 0;
+  margin: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+.pds-hl-item {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--bg);
+}
+.pds-hl-bullet {
+  width: 18px;
+  height: 18px;
+  border-radius: 50%;
+  background: #dcfce7;
+  color: var(--green-dark);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+}
+.pds-hl-text {
+  flex: 1;
+  font-size: 12.5px;
+  color: var(--fg-1);
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 2px 6px;
+  margin: -2px -6px;
+  font-family: inherit;
+}
+.pds-hl-text:focus {
+  outline: none;
+  border-color: var(--primary);
+  background: #fff;
+}
+.pds-hl-x {
+  border: 0;
+  background: none;
+  color: var(--fg-3);
+  cursor: pointer;
+  padding: 4px;
+  border-radius: 3px;
+  display: inline-flex;
+  align-items: center;
+}
+.pds-hl-x:hover {
+  background: #fee2e2;
+  color: var(--red-dark, #b91c1c);
+}
+.pds-add-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-top: 8px;
+  padding: 5px 10px;
+  background: var(--surface-2);
+  border: 1px dashed var(--border-2);
+  border-radius: 5px;
+  font-size: 11.5px;
+  color: var(--fg-2);
+  cursor: pointer;
+  font-family: inherit;
+}
+.pds-add-btn:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+  border-style: solid;
+}
+
+/* ── Pills (status badges) ───────────────────────────────────── */
+.pds-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 3px 9px;
+  border-radius: 99px;
+  font-size: 11px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+}
+.pds-pill.hot     { background: #fee2e2; color: #991b1b; border: 1px solid #fca5a5; }
+.pds-pill.warm    { background: #ffedd5; color: #9a3412; border: 1px solid #fdba74; }
+.pds-pill.offer   { background: #dcfce7; color: #166534; border: 1px solid #86efac; }
+.pds-pill.prospect{ background: #fef9c3; color: #854d0e; border: 1px solid #fde68a; }
+.pds-pill.pitch   { background: #dbeafe; color: #1e40af; border: 1px solid #93c5fd; }
+.pds-pill.muted   { background: var(--surface-2); color: var(--fg-2); border: 1px solid var(--border); }
+
+/* ── Segmented toggle (Listed / Not Listed / Mortgage status) ─ */
+.pds-seg {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+  background: var(--surface);
+  flex-wrap: wrap;
+}
+.pds-seg button {
+  border: 0;
+  background: transparent;
+  padding: 5px 11px;
+  font-size: 11.5px;
+  color: var(--fg-2);
+  cursor: pointer;
+  font-family: inherit;
+  border-right: 1px solid var(--border);
+  white-space: nowrap;
+}
+.pds-seg button:last-child { border-right: 0; }
+.pds-seg button.active {
+  background: var(--primary-lighter);
+  color: var(--primary-darker);
+  font-weight: 600;
+}
+.pds-seg.sm button { padding: 4px 9px; font-size: 11px; }
+
+/* ── Chip rows (tags, seller types, amenities) ───────────────── */
+.pds-chip-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  align-items: center;
+}
+.pds-chip-check {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--surface);
+  font-size: 11.5px;
+  color: var(--fg-1);
+  cursor: pointer;
+  user-select: none;
+}
+.pds-chip-check input { margin: 0; accent-color: var(--primary); }
+.pds-chip-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  padding: 4px 9px;
+  border-radius: 99px;
+  background: #dcfce7;
+  color: var(--green-dark);
+  font-size: 11.5px;
+  font-weight: 500;
+}
+.pds-chip-tag .pds-tag-text {
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: 3px;
+  padding: 0 4px;
+  color: inherit;
+  font: inherit;
+}
+.pds-chip-tag .pds-tag-text:focus {
+  outline: none;
+  border-color: var(--green-dark);
+  background: #fff;
+}
+.pds-chip-tag .pds-tag-x {
+  border: 0;
+  background: none;
+  color: inherit;
+  opacity: 0.6;
+  cursor: pointer;
+  padding: 0 2px;
+  font-size: 12px;
+  line-height: 1;
+}
+.pds-chip-tag .pds-tag-x:hover { opacity: 1; }
+.pds-chip-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 9px;
+  border: 1px dashed var(--border-2);
+  border-radius: 99px;
+  background: transparent;
+  color: var(--fg-3);
+  font-size: 11.5px;
+  cursor: pointer;
+  font-family: inherit;
+}
+.pds-chip-add:hover {
+  border-color: var(--primary);
+  color: var(--primary);
+}
+
+/* ── Mini KV stats inside section headers ────────────────────── */
+.pds-kv-mini {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 6px;
+  padding: 0 10px;
+  border-left: 1px solid var(--border);
+  font-size: 11px;
+}
+.pds-kv-mini:first-of-type { border-left: 0; }
+.pds-kv-mini .lbl {
+  font-size: 10px;
+  color: var(--fg-3);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.pds-kv-mini .val {
+  color: var(--fg-1);
+  font-weight: 700;
+  font-family: var(--font-mono);
+}
+
+/* ── Textarea + paragraph styling for free-form content ──────── */
+.pds-ta {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  font-family: var(--font-sans);
+  font-size: 12.5px;
+  color: var(--fg-1);
+  line-height: 1.5;
+  background: var(--surface);
+  resize: vertical;
+  min-height: 60px;
+  box-sizing: border-box;
+}
+.pds-ta:focus { outline: none; border-color: var(--primary); }
+.pds-paragraph {
+  font-size: 12.5px;
+  color: var(--fg-1);
+  line-height: 1.55;
+  margin: 0;
+}
+
+/* ── Small inline button (light) used in tables ──────────────── */
+.pds-lbtn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border: 0;
+  background: none;
+  color: var(--fg-2);
+  border-radius: 3px;
+  cursor: pointer;
+  font-size: 11px;
+}
+.pds-lbtn:hover { background: var(--surface-2); color: var(--fg-1); }
+
+/* ── Amenities 2-col grid ────────────────────────────────────── */
+.pds-amen-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 24px;
+}
+@media (max-width: 700px) {
+  .pds-amen-grid { grid-template-columns: 1fr; gap: 16px; }
+}
+
 /* ── Responsive: collapse to 2-col on narrow screens ─────────── */
 @media (max-width: 900px) {
   .pds-grid,

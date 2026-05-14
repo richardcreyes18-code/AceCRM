@@ -6195,68 +6195,67 @@ function renderPropertyTab(d){
         </div>
       </div>
 
-      <!-- 6. PROPERTY HIGHLIGHTS (interactive list) -->
+      <!-- 6. PROPERTY HIGHLIGHTS (v373: interactive list, design vocabulary) -->
       ${_propMode === 'simple' ? '' : `
       <div class="pds-section">
-        <div class="pds-section-hd">${_pdsIcon('sparkles')}Property Highlights</div>
+        <div class="pds-section-hd">
+          ${_pdsIcon('sparkles')}Property Highlights
+          <div class="right"><button type="button" class="pds-add-btn" onclick="addHighlight()">${_pdsIcon('plus')}<span style="font-size:11px;">Add highlight</span></button></div>
+        </div>
         <div class="pds-section-bd">
-          <div id="highlightsContainer">
-            <div style="display:flex;flex-direction:column;gap:6px;" id="highlightsList">
-              ${(function(){
-                let arr = [];
-                const raw = d['Property Highlights'];
-                if(Array.isArray(raw)) arr = raw;
-                else if(typeof raw === 'string'){ try { const p = JSON.parse(raw); if(Array.isArray(p)) arr = p; } catch(_){} }
-                arr = arr.map(s => String(s||'').trim()).filter(Boolean);
-                while(arr.length < 2) arr.push('');
-                return arr.map(v => `<div style="display:flex;gap:6px;align-items:center;"><input class="form-input" style="flex:1;height:32px;font-size:12px;" placeholder="—" oninput="markDirty()" value="${String(v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}"/><button class="save-btn" style="padding:2px 7px;" onclick="removeHighlight(this)">✕</button></div>`).join('');
-              })()}
-            </div>
-            <button class="save-btn" style="margin-top:8px;" onclick="addHighlight()">+ Add Highlight</button>
-          </div>
+          <ul class="pds-hl-list" id="highlightsList">
+            ${(function(){
+              let arr = [];
+              const raw = d['Property Highlights'];
+              if(Array.isArray(raw)) arr = raw;
+              else if(typeof raw === 'string'){ try { const p = JSON.parse(raw); if(Array.isArray(p)) arr = p; } catch(_){} }
+              arr = arr.map(s => String(s||'').trim()).filter(Boolean);
+              while(arr.length < 2) arr.push('');
+              return arr.map(v => `<li class="pds-hl-item"><span class="pds-hl-bullet"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span><input class="pds-hl-text" type="text" placeholder="Type a highlight…" oninput="markDirty()" value="${String(v).replace(/&/g,'&amp;').replace(/"/g,'&quot;').replace(/</g,'&lt;')}"/><button class="pds-hl-x" type="button" title="Remove" onclick="removeHighlight(this)"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button></li>`).join('');
+            })()}
+          </ul>
         </div>
       </div>
       `}
       <div style="text-align:right;margin:-4px 2px 14px;">
         <button class="save-btn" onclick="masterSave().catch(e=>console.warn('manual save error:',e))">Save</button>
       </div>
-    </div><!-- /pds-content -->
 
-    ${_showUnitMix ? _renderUnitMixSection(d) : ''}
-    ${_assetTypeStr.includes('mixed use') ? _renderMixedUseTenantMixSection(d, 'mixed') : ''}
-    ${_showIndustrial ? _renderIndustrialSection(d) : ''}
-    ${_showTenantMixHere ? _renderMixedUseTenantMixSection(d, _tenantMixCtx) : ''}
+      <!-- Asset-type-aware Unit Mix / Industrial / Tenant Mix sections.
+           These keep their existing complex renderers (real data editors
+           with rent rolls, bedroom counts, tenant tables) — v373 wraps
+           them visually via .pds-section-shell styles in their helpers. -->
+      ${_showUnitMix ? _renderUnitMixSection(d) : ''}
+      ${_assetTypeStr.includes('mixed use') ? _renderMixedUseTenantMixSection(d, 'mixed') : ''}
+      ${_showIndustrial ? _renderIndustrialSection(d) : ''}
+      ${_showTenantMixHere ? _renderMixedUseTenantMixSection(d, _tenantMixCtx) : ''}
 
-    <!-- v113.74: Property Use & Status section removed — moved into the
-         compact dropdown row inside Property Information above. -->
-
-    <!-- SELLER MOTIVATION -->
-    <div class="info-box">
-      <div class="info-box-title">Seller Motivation</div>
-      <div class="pd-field-grid" style="grid-template-columns:1fr 1fr;">
-        <div class="pd-field">
-          <label class="pd-lbl">Motivation Level</label>
-          <select class="form-select" id="sellerMotivation" style="width:100%;box-sizing:border-box;" onchange="markDirty()">
-            <option>Not Motivated</option>
-            <option>Somewhat Motivated</option>
-            <option selected>Highly Motivated</option>
-            <option>Must Sell Now</option>
-          </select>
-        </div>
-        <div class="pd-field">
-          <label class="pd-lbl">Why Selling</label>
-          <textarea id="whySelling" class="form-textarea auto-expand" style="width:100%;min-height:60px;box-sizing:border-box;" placeholder="—" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px';markDirty()">${d['Why Selling']||''}</textarea>
+      <!-- 7. SELLER MOTIVATION -->
+      <div class="pds-section">
+        <div class="pds-section-hd">${_pdsIcon('flame')}Seller Motivation</div>
+        <div class="pds-section-bd pds-flush">
+          <div class="pds-grid pds-cols-2">
+            <div class="pds-field">
+              <span class="pds-lbl">Motivation Level</span>
+              <select id="sellerMotivation" class="pds-input" onchange="markDirty()">
+                <option>Not Motivated</option>
+                <option>Somewhat Motivated</option>
+                <option selected>Highly Motivated</option>
+                <option>Must Sell Now</option>
+              </select>
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Why Selling</span>
+              <textarea id="whySelling" class="pds-ta" style="min-height:54px;" placeholder="—" oninput="markDirty()">${_esc(d['Why Selling']||'')}</textarea>
+            </div>
+          </div>
         </div>
       </div>
-    </div>
 
-    <!-- v366: legacy hidden-id fallback dropped — all 5 design sections are
-         always rendered (regardless of simple/detailed mode), so the IDs
-         used by collectAllDealFields are always in the DOM. -->
-
-
-    <!-- LISTING & SELLER DETAILS -->
-    ${_propMode === 'simple' ? `
+      <!-- 8. LISTING & SELLER DETAILS (Detailed mode only). Simple mode
+           keeps a hidden DOM stub so collectAllDealFields still finds the
+           input IDs when persisting from the simpler view. -->
+      ${_propMode === 'simple' ? `
       <div style="display:none;">
         <input type="radio" name="propListed" value="notlisted" ${!d['Is Property Listed'] || d['Is Property Listed']==='notlisted' ? 'checked' : ''}/>
         <input type="radio" name="propListed" value="fsbo" ${d['Is Property Listed']==='fsbo' ? 'checked' : ''}/>
@@ -6270,181 +6269,206 @@ function renderPropertyTab(d){
         <input type="radio" name="mortgagePayments" value="current" checked/>
         <input type="radio" name="mortgagePayments" value="pastdue"/>
       </div>
-    ` : `
-      <div class="info-box">
-        <div class="info-box-title">Listing &amp; Seller Details</div>
-        <div class="pd-field-grid" style="grid-template-columns:1fr 1fr 1fr;">
-          <div class="pd-field">
-            <label class="pd-lbl">Is Property Listed?</label>
-            <div style="display:flex;flex-direction:column;gap:4px;font-size:11px;padding-top:4px;">
-              <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="radio" name="propListed" value="notlisted" ${!d['Is Property Listed'] || d['Is Property Listed']==='notlisted' ? 'checked' : ''} onchange="_toggleListingFields()"/> Not Listed</label>
-              <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="radio" name="propListed" value="fsbo" ${d['Is Property Listed']==='fsbo' ? 'checked' : ''} onchange="_toggleListingFields()"/> For Sale By Owner</label>
-              <label style="display:flex;align-items:center;gap:5px;cursor:pointer;"><input type="radio" name="propListed" value="broker" ${d['Is Property Listed']==='broker' ? 'checked' : ''} onchange="_toggleListingFields()"/> Broker</label>
-            </div>
-          </div>
-          <div class="pd-field">
-            <label class="pd-lbl">Commission Split</label>
-            <div class="pd-row"><input class="form-input" id="commSplit" value="${d['Commission Split (%)']||'3'}" style="width:60px;text-align:center;" oninput="markDirty()"/><span class="pd-unit">%</span></div>
-            <label class="pd-lbl" style="margin-top:10px;">Date on Market</label>
-            <input class="form-input" id="dateOnMarket" type="date" value="${d['Date Property Went on Market']||''}" style="width:100%;box-sizing:border-box;" oninput="markDirty()"/>
-          </div>
-          <div class="pd-field">
-            <label class="pd-lbl">Seller Original Purchase</label>
-            <div style="display:flex;flex-direction:column;gap:6px;">
-              <div>
-                <div style="font-size:10px;color:#64748b;margin-bottom:2px;">Date</div>
-                <input class="form-input" id="sellerOrigDate" type="date" value="${d['Seller Original Purchase Date']||''}" style="width:100%;box-sizing:border-box;" oninput="markDirty()"/>
+      ` : `
+      <div class="pds-section">
+        <div class="pds-section-hd">${_pdsIcon('tag')}Listing &amp; Seller Details</div>
+        <div class="pds-section-bd pds-flush">
+          <div class="pds-grid">
+            <div class="pds-field">
+              <span class="pds-lbl">Is Property Listed?</span>
+              <div class="pds-seg sm" id="pds-listed-seg">
+                <button type="button" class="${(!d['Is Property Listed']||d['Is Property Listed']==='notlisted')?'active':''}" onclick="_pdsSegPick(this,'propListed','notlisted')">Not Listed</button>
+                <button type="button" class="${d['Is Property Listed']==='fsbo'?'active':''}" onclick="_pdsSegPick(this,'propListed','fsbo')">For Sale By Owner</button>
+                <button type="button" class="${d['Is Property Listed']==='broker'?'active':''}" onclick="_pdsSegPick(this,'propListed','broker')">Broker</button>
               </div>
-              <div>
-                <div style="font-size:10px;color:#64748b;margin-bottom:2px;">Price</div>
-                <input class="form-input num-input" id="sellerOrigPrice" type="text" inputmode="numeric" value="${_fmtNum(d['Seller Original Purchase Price']||'')}" placeholder="—" style="width:100%;box-sizing:border-box;" oninput="markDirty()"/>
+              <span style="display:none;">
+                <input type="radio" name="propListed" value="notlisted" ${!d['Is Property Listed'] || d['Is Property Listed']==='notlisted' ? 'checked' : ''}/>
+                <input type="radio" name="propListed" value="fsbo" ${d['Is Property Listed']==='fsbo' ? 'checked' : ''}/>
+                <input type="radio" name="propListed" value="broker" ${d['Is Property Listed']==='broker' ? 'checked' : ''}/>
+              </span>
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Commission Split</span>
+              <div style="display:flex;align-items:center;gap:4px;">
+                <input id="commSplit" class="pds-input pds-mono" value="${d['Commission Split (%)']||'3'}" style="flex:1;text-align:right;" oninput="markDirty()"/>
+                <span class="pds-unit">%</span>
               </div>
             </div>
-          </div>
-        </div>
-        <div class="pd-field-grid" style="grid-template-columns:1fr 1fr 1fr;margin-top:4px;">
-          <div class="pd-field">
-            <label class="pd-lbl">Seller Type</label>
-            <div style="display:flex;flex-wrap:wrap;gap:3px 14px;font-size:11px;padding-top:4px;">
-              ${['Auction','Court Ordered','Individual','Investor Group','Short Sale','Bank Owned','Family','Institutional','Note Purchase','Tax Lien'].map(t=>`<label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="checkbox" name="sellerType" value="${t}" ${t==='Individual'?'checked':''}/>${t}</label>`).join('')}
+            <div class="pds-field">
+              <span class="pds-lbl">Date on Market</span>
+              <input id="dateOnMarket" type="date" class="pds-input pds-mono" value="${d['Date Property Went on Market']||''}" oninput="markDirty()"/>
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Seller Original Purchase Date</span>
+              <input id="sellerOrigDate" type="date" class="pds-input pds-mono" value="${d['Seller Original Purchase Date']||''}" oninput="markDirty()"/>
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Seller Original Purchase Price</span>
+              <input id="sellerOrigPrice" type="text" inputmode="numeric" class="pds-input pds-mono num-input" value="${_fmtNum(d['Seller Original Purchase Price']||'')}" placeholder="—" oninput="markDirty()"/>
+            </div>
+            <div class="pds-field">
+              <span class="pds-lbl">Financial Strength</span>
+              <select id="financialStrength" class="pds-input" onchange="markDirty()">
+                <option>Strong</option>
+                <option selected>Average</option>
+                <option>Weak</option>
+                <option>Distressed</option>
+              </select>
             </div>
           </div>
-          <div class="pd-field">
-            <label class="pd-lbl">Financial Strength</label>
-            <select class="form-select" id="financialStrength" style="width:100%;box-sizing:border-box;" onchange="markDirty()">
-              <option>Strong</option><option selected>Average</option><option>Weak</option><option>Distressed</option>
-            </select>
-          </div>
-          <div class="pd-field">
-            <label class="pd-lbl">Mortgage Payments</label>
-            <div class="pd-radio-row" style="padding-top:6px;">
-              <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="radio" name="mortgagePayments" value="current" checked/> Current</label>
-              <label style="display:flex;align-items:center;gap:4px;cursor:pointer;"><input type="radio" name="mortgagePayments" value="pastdue"/> Past Due</label>
+          <div class="pds-section-bd" style="padding:14px 16px;">
+            <div class="pds-subhd">Seller Type</div>
+            <div class="pds-chip-row">
+              ${['Auction','Court Ordered','Individual','Investor Group','Short Sale','Bank Owned','Family','Institutional','Note Purchase','Tax Lien'].map(t=>`<label class="pds-chip-check"><input type="checkbox" name="sellerType" value="${_esc(t)}" ${t==='Individual'?'checked':''} onchange="markDirty()"/>${_esc(t)}</label>`).join('')}
             </div>
+            <div class="pds-subhd pds-subhd-spaced">Mortgage Payments</div>
+            <div class="pds-seg sm">
+              <button type="button" class="active" onclick="_pdsSegPick(this,'mortgagePayments','current')">Current</button>
+              <button type="button" onclick="_pdsSegPick(this,'mortgagePayments','pastdue')">Past Due</button>
+            </div>
+            <span style="display:none;">
+              <input type="radio" name="mortgagePayments" value="current" checked/>
+              <input type="radio" name="mortgagePayments" value="pastdue"/>
+            </span>
           </div>
         </div>
       </div>
-    `}
+      `}
 
-    <!-- CONSTRUCTION (v130: read from deal data; default empty so each
-         field shows a "—" placeholder until the agent or AI fills it. The
-         old hardcoded "Pitched / Brick / Concrete / Brick / Siding / Tile /
-         Steel / Asphalt / Copper" defaults were misleading — they made
-         empty deals look fully populated.) -->
-    ${(()=>{
-      const _esc = s => String(s==null?'':s).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/"/g,'&quot;');
-      const sel = (cur, opt) => (String(cur||'').trim() === opt ? ' selected' : '');
-      const roofVal = d['Roof Type'] || '';
-      const ctVal   = d['Construction Type'] || '';
-      const roofOpts = ['Flat','Pitched','Hip','Gable','Metal','Rubber','Other'];
-      const ctOpts   = ['Brick','Wood Frame','Steel Frame','Concrete Block','Masonry','Other'];
-      const roofKnown = roofOpts.includes(roofVal);
-      const ctKnown   = ctOpts.includes(ctVal);
-      return `
-    <div class="info-box">
-      <div class="info-box-title">Construction</div>
-      <div class="pd-field-grid" style="grid-template-columns:repeat(4,1fr);">
-        <div class="pd-field">
-          <label class="pd-lbl">Roof</label>
-          <select id="prop_roofType" class="form-select" style="width:100%;box-sizing:border-box;" onchange="markDirty()">
-            <option value="" ${roofVal===''?'selected':''}>—</option>
-            ${roofOpts.map(o => `<option${sel(roofVal,o)}>${o}</option>`).join('')}
-            ${(!roofKnown && roofVal) ? `<option value="${_esc(roofVal)}" selected>${_esc(roofVal)}</option>` : ''}
-          </select>
-        </div>
-        <div class="pd-field">
-          <label class="pd-lbl">Construction Type</label>
-          <select id="prop_constructionType" class="form-select" style="width:100%;box-sizing:border-box;" onchange="markDirty()">
-            <option value="" ${ctVal===''?'selected':''}>—</option>
-            ${ctOpts.map(o => `<option${sel(ctVal,o)}>${o}</option>`).join('')}
-            ${(!ctKnown && ctVal) ? `<option value="${_esc(ctVal)}" selected>${_esc(ctVal)}</option>` : ''}
-          </select>
-        </div>
-        <div class="pd-field">
-          <label class="pd-lbl">Foundation</label>
-          <input id="prop_foundation" class="form-input" value="${_esc(d['Foundation']||'')}" placeholder="—" style="width:100%;box-sizing:border-box;" oninput="markDirty()"/>
-        </div>
-        <div class="pd-field">
-          <label class="pd-lbl">Exterior</label>
-          <input id="prop_exterior" class="form-input" value="${_esc(d['Exterior']||'')}" placeholder="—" style="width:100%;box-sizing:border-box;" oninput="markDirty()"/>
-        </div>
-      </div>
-      <div class="pd-field-grid" style="grid-template-columns:repeat(4,1fr);">
-        <div class="pd-field">
-          <label class="pd-lbl">Floor Covering</label>
-          <input id="prop_floorCovering" class="form-input" value="${_esc(d['Floor Covering']||'')}" placeholder="—" style="width:100%;box-sizing:border-box;" oninput="markDirty()"/>
-        </div>
-        <div class="pd-field">
-          <label class="pd-lbl">Piping</label>
-          <input id="prop_piping" class="form-input" value="${_esc(d['Piping']||'')}" placeholder="—" style="width:100%;box-sizing:border-box;" oninput="markDirty()"/>
-        </div>
-        <div class="pd-field">
-          <label class="pd-lbl">Paving</label>
-          <input id="prop_paving" class="form-input" value="${_esc(d['Paving']||'')}" placeholder="—" style="width:100%;box-sizing:border-box;" oninput="markDirty()"/>
-        </div>
-        <div class="pd-field">
-          <label class="pd-lbl">Wiring</label>
-          <input id="prop_wiring" class="form-input" value="${_esc(d['Wiring']||'')}" placeholder="—" style="width:100%;box-sizing:border-box;" oninput="markDirty()"/>
-        </div>
-      </div>
-    </div>`;
-    })()}
-
-    <!-- AMENITIES / FEATURES (hidden in simple mode) -->
-    ${_propMode === 'simple' ? '' : `
-    <div class="info-box">
-      <div class="info-box-title">Amenities / Features</div>
-      <table style="width:100%;border:none;font-size:11px;border-collapse:separate;border-spacing:0 8px;">
-        <tr>
-          <td style="width:180px;font-weight:bold;color:#333;text-align:right;padding-right:8px;vertical-align:top;padding-top:4px;">Amenities / Features</td>
-          <td>
-            <button onclick="addAmenityCategory()" style="
-              background:linear-gradient(180deg,#f06020 0%,#c03000 100%);
-              border:1px solid #a02000;color:#fff;font-weight:bold;
-              padding:5px 18px;border-radius:3px;font-size:12px;margin-bottom:12px;cursor:pointer;">
-              Add New
-            </button>
-
-            <!-- Community Facilities & Amenities -->
-            <div class="amenity-category" id="amenityCat_community">
-              <div style="font-weight:bold;font-size:12px;color:#1a3a6e;margin-bottom:6px;">Community Facilities &amp; Amenities</div>
-              <div class="amenity-list" id="amenityList_community" style="display:flex;flex-direction:column;gap:3px;">
-                ${(d['Community Amenities']||'').split('\n').filter(Boolean).map(item=>`
-                  <div style="display:flex;align-items:center;gap:6px;">
-                    <span style="color:#555;">•</span>
-                    <input class="form-input" value="${item.replace(/"/g,'&quot;')}" style="width:340px;" oninput="markDirty()"/>
-                    <button class="save-btn" style="padding:1px 6px;" onclick="this.closest('div').remove();markDirty()">✕</button>
-                  </div>`).join('')}
+      <!-- 9. CONSTRUCTION -->
+      ${(()=>{
+        const sel = (cur, opt) => (String(cur||'').trim() === opt ? ' selected' : '');
+        const roofVal = d['Roof Type'] || '';
+        const ctVal   = d['Construction Type'] || '';
+        const roofOpts = ['Flat','Pitched','Hip','Gable','Metal','Rubber','Other'];
+        const ctOpts   = ['Brick','Wood Frame','Steel Frame','Concrete Block','Masonry','Other'];
+        const roofKnown = roofOpts.includes(roofVal);
+        const ctKnown   = ctOpts.includes(ctVal);
+        return `
+        <div class="pds-section">
+          <div class="pds-section-hd">${_pdsIcon('hammer')}Construction</div>
+          <div class="pds-section-bd pds-flush">
+            <div class="pds-grid">
+              <div class="pds-field">
+                <span class="pds-lbl">Roof</span>
+                <select id="prop_roofType" class="pds-input" onchange="markDirty()">
+                  <option value="" ${roofVal===''?'selected':''}>—</option>
+                  ${roofOpts.map(o => `<option${sel(roofVal,o)}>${o}</option>`).join('')}
+                  ${(!roofKnown && roofVal) ? `<option value="${_esc(roofVal)}" selected>${_esc(roofVal)}</option>` : ''}
+                </select>
               </div>
-              <button class="save-btn" style="margin-top:5px;margin-left:14px;" onclick="addAmenityItem('amenityList_community')">+ Add Item</button>
-            </div>
-
-            <!-- Interior Feature -->
-            <div class="amenity-category" style="margin-top:12px;" id="amenityCat_interior">
-              <div style="font-weight:bold;font-size:12px;color:#1a3a6e;margin-bottom:6px;">Interior Feature</div>
-              <div class="amenity-list" id="amenityList_interior" style="display:flex;flex-direction:column;gap:3px;">
-                ${(d['Interior Features']||'').split('\n').filter(Boolean).map(item=>`
-                  <div style="display:flex;align-items:center;gap:6px;">
-                    <span style="color:#555;">•</span>
-                    <input class="form-input" value="${item.replace(/"/g,'&quot;')}" style="width:340px;" oninput="markDirty()"/>
-                    <button class="save-btn" style="padding:1px 6px;" onclick="this.closest('div').remove();markDirty()">✕</button>
-                  </div>`).join('')}
+              <div class="pds-field">
+                <span class="pds-lbl">Construction Type</span>
+                <select id="prop_constructionType" class="pds-input" onchange="markDirty()">
+                  <option value="" ${ctVal===''?'selected':''}>—</option>
+                  ${ctOpts.map(o => `<option${sel(ctVal,o)}>${o}</option>`).join('')}
+                  ${(!ctKnown && ctVal) ? `<option value="${_esc(ctVal)}" selected>${_esc(ctVal)}</option>` : ''}
+                </select>
               </div>
-              <button class="save-btn" style="margin-top:5px;margin-left:14px;" onclick="addAmenityItem('amenityList_interior')">+ Add Item</button>
+              <div class="pds-field">
+                <span class="pds-lbl">Foundation</span>
+                <input id="prop_foundation" class="pds-input" value="${_esc(d['Foundation']||'')}" placeholder="—" oninput="markDirty()"/>
+              </div>
+              <div class="pds-field">
+                <span class="pds-lbl">Exterior</span>
+                <input id="prop_exterior" class="pds-input" value="${_esc(d['Exterior']||'')}" placeholder="—" oninput="markDirty()"/>
+              </div>
+              <div class="pds-field">
+                <span class="pds-lbl">Floor Covering</span>
+                <input id="prop_floorCovering" class="pds-input" value="${_esc(d['Floor Covering']||'')}" placeholder="—" oninput="markDirty()"/>
+              </div>
+              <div class="pds-field">
+                <span class="pds-lbl">Piping</span>
+                <input id="prop_piping" class="pds-input" value="${_esc(d['Piping']||'')}" placeholder="—" oninput="markDirty()"/>
+              </div>
+              <div class="pds-field">
+                <span class="pds-lbl">Paving</span>
+                <input id="prop_paving" class="pds-input" value="${_esc(d['Paving']||'')}" placeholder="—" oninput="markDirty()"/>
+              </div>
+              <div class="pds-field">
+                <span class="pds-lbl">Wiring</span>
+                <input id="prop_wiring" class="pds-input" value="${_esc(d['Wiring']||'')}" placeholder="—" oninput="markDirty()"/>
+              </div>
             </div>
+          </div>
+        </div>`;
+      })()}
 
-            <div id="amenityExtraCategories"></div>
-          </td>
-        </tr>
-      </table>
-      <div style="text-align:right;margin-top:6px;">
-        <button class="save-btn" onclick="alert('Save coming soon.')">Save</button>
+      <!-- 10. AMENITIES & FEATURES (Detailed mode only) -->
+      ${_propMode === 'simple' ? '' : `
+      <div class="pds-section">
+        <div class="pds-section-hd">
+          ${_pdsIcon('sparkles')}Amenities &amp; Features
+        </div>
+        <div class="pds-section-bd">
+          <div class="pds-amen-grid">
+            <div>
+              <div class="pds-subhd">Community Facilities &amp; Amenities</div>
+              <div class="pds-chip-row" id="amenityList_community">
+                ${(d['Community Amenities']||'').split('\n').map(s=>s.trim()).filter(Boolean).map(item=>`<span class="pds-chip-tag" data-amen="community"><svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><input class="pds-tag-text" type="text" oninput="markDirty()" value="${_esc(item)}"/><button class="pds-tag-x" type="button" onclick="this.closest('.pds-chip-tag').remove();markDirty()">×</button></span>`).join('')}
+                <button class="pds-chip-add" type="button" onclick="_pdsAddAmenChip('community')"><svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Add item</button>
+              </div>
+            </div>
+            <div>
+              <div class="pds-subhd">Interior Features</div>
+              <div class="pds-chip-row" id="amenityList_interior">
+                ${(d['Interior Features']||'').split('\n').map(s=>s.trim()).filter(Boolean).map(item=>`<span class="pds-chip-tag" data-amen="interior"><svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg><input class="pds-tag-text" type="text" oninput="markDirty()" value="${_esc(item)}"/><button class="pds-tag-x" type="button" onclick="this.closest('.pds-chip-tag').remove();markDirty()">×</button></span>`).join('')}
+                <button class="pds-chip-add" type="button" onclick="_pdsAddAmenChip('interior')"><svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg>Add item</button>
+              </div>
+            </div>
+          </div>
+          <div id="amenityExtraCategories"></div>
+        </div>
       </div>
-    </div>
-    `}
-
-`;
+      `}
+    </div><!-- /pds-content -->
+  `;
 }
+
+// v373: helpers for the new design segments + amenity chips.
+// _pdsSegPick wires .pds-seg button clicks to the hidden radio with the
+// matching name+value, keeping the existing save flow (collectAllDealFields
+// reads checked radios) working unchanged.
+function _pdsSegPick(btn, radioName, value){
+  if(!btn) return;
+  const seg = btn.closest('.pds-seg');
+  if(seg){
+    seg.querySelectorAll('button').forEach(b => b.classList.remove('active'));
+    btn.classList.add('active');
+  }
+  // Reflect into the hidden radio input.
+  const radio = document.querySelector(`input[type=radio][name="${radioName}"][value="${value}"]`);
+  if(radio){
+    radio.checked = true;
+    if(radioName === 'propListed' && typeof _toggleListingFields === 'function'){
+      try { _toggleListingFields(); } catch(_){}
+    }
+  }
+  if(typeof markDirty === 'function') markDirty();
+}
+window._pdsSegPick = _pdsSegPick;
+
+// _pdsAddAmenChip appends a fresh editable chip to a community / interior
+// amenity row. Replaces the legacy bullet-list + .save-btn "Add Item"
+// pattern with the design's chip-tag UX.
+function _pdsAddAmenChip(category){
+  const host = document.getElementById('amenityList_' + category);
+  if(!host) return;
+  const chip = document.createElement('span');
+  chip.className = 'pds-chip-tag';
+  chip.setAttribute('data-amen', category);
+  chip.innerHTML =
+    '<svg viewBox="0 0 24 24" width="10" height="10" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg>'
+    + '<input class="pds-tag-text" type="text" oninput="markDirty()" placeholder="New item"/>'
+    + '<button class="pds-tag-x" type="button" onclick="this.closest(\'.pds-chip-tag\').remove();markDirty()">×</button>';
+  // Insert before the trailing "+ Add item" button so newest sits to its left.
+  const addBtn = host.querySelector('.pds-chip-add');
+  if(addBtn) host.insertBefore(chip, addBtn);
+  else host.appendChild(chip);
+  chip.querySelector('input')?.focus();
+  if(typeof markDirty === 'function') markDirty();
+}
+window._pdsAddAmenChip = _pdsAddAmenChip;
 
 // Renders the Unit Mix Information section. Extracted from renderPropertyTab so
 // the section can be conditionally included based on asset type.
@@ -7579,23 +7603,33 @@ function moveType(dir){
   else removeTypeFromSelected();
 }
 
+// v373: addHighlight / removeHighlight now emit the design's .pds-hl-item
+// chrome (green check bullet + edit-on-focus text + ✕ button). The
+// surrounding <ul class="pds-hl-list"> id="highlightsList" is rendered by
+// renderPropertyTab so this function can keep its old name + signature.
 function addHighlight(){
-  const list=document.getElementById('highlightsList');
+  const list = document.getElementById('highlightsList');
   if(!list) return;
-  const row=document.createElement('div');
-  row.style.cssText='display:flex;gap:6px;align-items:center;margin-top:4px;';
-  // v188: oninput→markDirty so autosave picks up new highlights without a manual save click.
-  row.innerHTML=`<input class="form-input" style="width:100%;" placeholder="Enter highlight..." oninput="markDirty()"/>
-    <button class="save-btn" style="padding:2px 7px;" onclick="removeHighlight(this)">✕</button>`;
-  list.appendChild(row);
+  const li = document.createElement('li');
+  li.className = 'pds-hl-item';
+  li.innerHTML =
+    '<span class="pds-hl-bullet"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2.25" stroke-linecap="round" stroke-linejoin="round"><polyline points="20 6 9 17 4 12"/></svg></span>'
+    + '<input class="pds-hl-text" type="text" placeholder="Type a highlight…" oninput="markDirty()"/>'
+    + '<button class="pds-hl-x" type="button" title="Remove" onclick="removeHighlight(this)"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>';
+  list.appendChild(li);
   markDirty();
-  row.querySelector('input').focus();
+  li.querySelector('input')?.focus();
 }
 
 function removeHighlight(btn){
-  const row=btn.closest('div');
-  if(document.getElementById('highlightsList').children.length>1) row.remove();
-  else btn.closest('div').querySelector('input').value='';
+  const li = btn.closest('li, div');
+  const list = document.getElementById('highlightsList');
+  if(!list || !li) return;
+  if(list.children.length > 1) li.remove();
+  else {
+    const inp = li.querySelector('input');
+    if(inp) inp.value = '';
+  }
   markDirty();
 }
 

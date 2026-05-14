@@ -9870,95 +9870,98 @@ function renderFinancialTab(d){
     <!-- RESULTS SUMMARY ──────────────────────────────────────── -->
     <div class="pds-section">
       <div class="pds-section-hd"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="14" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/></svg>Results Summary <span class="sub">Roll-up of property + financial inputs</span></div>
-      <table class="fin-results-table">
-        <tr>
-          <td class="row-label">Property</td>
-          <td>Type: <strong>${d['Simple Text Property Type']||'—'}</strong></td>
-          <td>Class: <strong>${d['Property Class']||'—'}</strong></td>
-          <td>Condition: <strong>${d['Property Condition']||'—'}</strong></td>
-        </tr>
-        <tr>
-          <td class="row-label">Location</td>
-          <td>Type: <strong>${d['Location Type']||'—'}</strong></td>
-          <td>Class: <strong>${d['Location Class']||'—'}</strong></td>
-          <td>Trending: <strong>${d['Location Trending']||'—'}</strong></td>
-        </tr>
-        <tr>
-          <td class="row-label">Price</td>
-          <td>Offer: <strong style="color:#080;">${fmtMoney(offer)}</strong></td>
-          <td>Asking: <strong style="color:#c00;">${fmtMoney(ask)}</strong></td>
-          <td>Representation: <strong>${
+      <div class="rs-table">
+        <div class="rs-row">
+          <span class="rs-key">Property</span>
+          <span class="rs-cell"><span class="rs-lbl">Type:</span> ${d['Simple Text Property Type'] ? `<span class="strong">${d['Simple Text Property Type']}</span>` : '<span class="placeholder">—</span>'}</span>
+          <span class="rs-cell"><span class="rs-lbl">Class:</span> ${d['Property Class'] ? `<span class="strong">${d['Property Class']}</span>` : '<span class="placeholder">—</span>'}</span>
+          <span class="rs-cell"><span class="rs-lbl">Condition:</span> ${d['Property Condition'] ? `<span class="strong">${d['Property Condition']}</span>` : '<span class="placeholder">—</span>'}</span>
+        </div>
+        <div class="rs-row">
+          <span class="rs-key">Location</span>
+          <span class="rs-cell"><span class="rs-lbl">Type:</span> ${d['Location Type'] ? `<span class="strong">${d['Location Type']}</span>` : '<span class="placeholder">—</span>'}</span>
+          <span class="rs-cell"><span class="rs-lbl">Class:</span> ${d['Location Class'] ? `<span class="strong">${d['Location Class']}</span>` : '<span class="placeholder">—</span>'}</span>
+          <span class="rs-cell"><span class="rs-lbl">Trending:</span> ${d['Location Trending'] ? `<span class="strong">${d['Location Trending']}</span>` : '<span class="placeholder">—</span>'}</span>
+        </div>
+        <div class="rs-row">
+          <span class="rs-key">Price</span>
+          <span class="rs-cell"><span class="rs-lbl">Offer:</span> ${offer ? `<span class="strong" style="color:var(--green-dark);">${fmtMoney(offer)}</span>` : '<span class="placeholder">—</span>'}</span>
+          <span class="rs-cell"><span class="rs-lbl">Asking:</span> ${ask ? `<span class="strong red">${fmtMoney(ask)}</span>` : '<span class="placeholder">—</span>'}</span>
+          <span class="rs-cell"><span class="rs-lbl">Representation:</span> <span class="strong">${
             d['Is Property Listed']==='broker' ? 'Broker Listed' :
-            d['Is Property Listed']==='fsbo' ? 'For Sale By Owner' :
+            d['Is Property Listed']==='fsbo'   ? 'For Sale By Owner' :
             'Not Listed'
-          }</strong></td>
-        </tr>
-        <tr>
-          <td class="row-label">Size</td>
-          <td>Net Rentable: <strong>${aNetRentSF?aNetRentSF.toLocaleString()+' sf':'—'}</strong></td>
-          <td>Total Size: <strong>${aTotalSF?aTotalSF.toLocaleString()+' sf':'—'}</strong></td>
-          <td>Occupancy: <strong>${aOccupancy?aOccupancy+'%':'—'}</strong></td>
-        </tr>
-        <tr>
-          <td class="row-label">Units</td>
-          <td>No. of Units: <strong>${aUnits||'—'}</strong></td>
-          <td>No. Vacant: <strong>${aUnits&&aOccupancy ? Math.round(aUnits*(1-aOccupancy/100)) : '—'}</strong></td>
-          <td>Price Per Unit: <strong style="color:#c00;">${aPPU?'$'+Math.round(aPPU).toLocaleString():'—'}</strong></td>
-        </tr>
-      </table>
+          }</span></span>
+        </div>
+        <div class="rs-row">
+          <span class="rs-key">Size</span>
+          <span class="rs-cell"><span class="rs-lbl">Net Rentable:</span> ${aNetRentSF ? `<span class="strong">${aNetRentSF.toLocaleString()} sf</span>` : '<span class="placeholder">—</span>'}</span>
+          <span class="rs-cell"><span class="rs-lbl">Total Size:</span> ${aTotalSF ? `<span class="strong">${aTotalSF.toLocaleString()} sf</span>` : '<span class="placeholder">—</span>'}</span>
+          <span class="rs-cell"><span class="rs-lbl">Occupancy:</span> ${aOccupancy ? `<span class="strong">${aOccupancy}%</span>` : '<span class="placeholder">—</span>'}</span>
+        </div>
+        <div class="rs-row">
+          <span class="rs-key">Units</span>
+          <span class="rs-cell"><span class="rs-lbl">No. of Units:</span> ${aUnits ? `<span class="strong">${aUnits}</span>` : '<span class="placeholder">—</span>'}</span>
+          <span class="rs-cell"><span class="rs-lbl">No. Vacant:</span> ${aUnits && aOccupancy ? `<span class="strong">${Math.round(aUnits*(1-aOccupancy/100))}</span>` : '<span class="placeholder">—</span>'}</span>
+          <span class="rs-cell"><span class="rs-lbl">Price Per Unit:</span> ${aPPU ? `<span class="strong red">$${Math.round(aPPU).toLocaleString()}</span>` : '<span class="placeholder">—</span>'}</span>
+        </div>
+      </div>
     </div>
 
     <!-- KEY METRICS (v192/v193: 3 data columns aligned to PPDP grid) -->
     <div class="pds-section">
       <div class="pds-section-hd"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>Key Metrics <span class="sub">3 scenarios side-by-side</span></div>
-      <table class="fin-metrics-table">
+      <table class="dt fin-table fin-metrics-table">
         <colgroup>
-          <col style="width:220px;"/><col/><col/><col/>
+          <col style="width:24%;"/>
+          <col style="width:25.33%;" class="col-actual"/>
+          <col style="width:25.33%;" class="col-pitch"/>
+          <col style="width:25.33%;" class="col-pro"/>
         </colgroup>
         <thead>
-          <tr>
-            <th style="text-align:left;">Metric</th>
-            <th style="background:linear-gradient(180deg,#5599cc,#2060b0);">Asking Price (actual)</th>
-            <th style="background:linear-gradient(180deg,#a78bfa,#7c3aed);">Pitch Out Price (actual)</th>
-            <th style="background:linear-gradient(180deg,#60a060,#306030);">Pitch Out Price (proforma)</th>
+          <tr class="fin-scenarios">
+            <th class="ta-left">Metric</th>
+            <th class="num scen-actual">Asking Price (Actual)</th>
+            <th class="num scen-pitch">Pitch Out Price (Actual)</th>
+            <th class="num scen-pro">Pitch Out Price (Proforma)</th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td class="metric-label">CAP Rate ${tip('cap',tooltips.cap)}</td>
-            <td id="top_caprate_a" style="color:${aNOI&&capAskPrice?'#000':'#aaa'};font-weight:${aNOI&&capAskPrice?'bold':'normal'};">${aNOI&&capAskPrice?pct(aCapRate):'Enter NOI + Price below'}</td>
-            <td id="top_caprate_m" style="color:${aNOI&&mPriceForCalcs?'#000':'#aaa'};font-weight:${aNOI&&mPriceForCalcs?'bold':'normal'};">${aNOI&&mPriceForCalcs?pct(mCapRate):'—'}</td>
-            <td id="top_caprate_p" style="color:${pNOI&&capOfferPrice?'#000':'#aaa'};font-weight:${pNOI&&capOfferPrice?'bold':'normal'};">${pNOI&&capOfferPrice?pct(pCapRate):'Enter Proforma NOI below'}</td>
+            <td class="metric">CAP Rate ${tip('cap',tooltips.cap)}</td>
+            <td class="num scen-actual mono" id="top_caprate_a" style="${aNOI&&capAskPrice?'':'color:var(--fg-4);'}">${aNOI&&capAskPrice?pct(aCapRate):'<span class="placeholder">Enter NOI + Price below</span>'}</td>
+            <td class="num scen-pitch mono"  id="top_caprate_m" style="${aNOI&&mPriceForCalcs?'':'color:var(--fg-4);'}">${aNOI&&mPriceForCalcs?pct(mCapRate):'<span class="placeholder">—</span>'}</td>
+            <td class="num scen-pro mono"    id="top_caprate_p" style="${pNOI&&capOfferPrice?'':'color:var(--fg-4);'}">${pNOI&&capOfferPrice?pct(pCapRate):'<span class="placeholder">Enter Proforma NOI below</span>'}</td>
           </tr>
           <tr>
-            <td class="metric-label">Cash On Cash Return ${tip('coc',tooltips.coc)}</td>
-            <td id="top_coc_a">${aCashFlow&&aTotalCash?pct(aCoC):'—'}</td>
-            <td id="top_coc_m">${mCashFlow&&mTotalCash?pct(mCoC):'—'}</td>
-            <td id="top_coc_p">${pCashFlow&&pTotalCash?pct(pCoC):'—'}</td>
+            <td class="metric">Cash On Cash Return ${tip('coc',tooltips.coc)}</td>
+            <td class="num scen-actual mono" id="top_coc_a">${aCashFlow&&aTotalCash?pct(aCoC):'<span class="placeholder">—</span>'}</td>
+            <td class="num scen-pitch mono"  id="top_coc_m">${mCashFlow&&mTotalCash?pct(mCoC):'<span class="placeholder">—</span>'}</td>
+            <td class="num scen-pro mono"    id="top_coc_p">${pCashFlow&&pTotalCash?pct(pCoC):'<span class="placeholder">—</span>'}</td>
           </tr>
           <tr>
-            <td class="metric-label">Debt Coverage Ratio (DCR) ${tip('dcr',tooltips.dcr)}</td>
-            <td id="top_dcr_a">${aNOI&&aAnnDebt?fix2(aDCR):'—'}</td>
-            <td id="top_dcr_m">${aNOI&&mAnnDebt?fix2(mDCR):'—'}</td>
-            <td id="top_dcr_p">${pNOI&&pAnnDebt?fix2(pDCR):'—'}</td>
+            <td class="metric">Debt Coverage Ratio (DCR) ${tip('dcr',tooltips.dcr)}</td>
+            <td class="num scen-actual mono" id="top_dcr_a">${aNOI&&aAnnDebt?fix2(aDCR):'<span class="placeholder">—</span>'}</td>
+            <td class="num scen-pitch mono"  id="top_dcr_m">${aNOI&&mAnnDebt?fix2(mDCR):'<span class="placeholder">—</span>'}</td>
+            <td class="num scen-pro mono"    id="top_dcr_p">${pNOI&&pAnnDebt?fix2(pDCR):'<span class="placeholder">—</span>'}</td>
           </tr>
           <tr>
-            <td class="metric-label">Gross Rent Multiplier ${tip('grm',tooltips.grm)}</td>
-            <td id="top_grm_a">${aGrossRent&&capAskPrice?fix2(aGRM):'—'}</td>
-            <td id="top_grm_m">${aGrossRent&&mPriceForCalcs?fix2(mGRM):'—'}</td>
-            <td id="top_grm_p">${pGrossRent&&capOfferPrice?fix2(pGRM):'—'}</td>
+            <td class="metric">Gross Rent Multiplier ${tip('grm',tooltips.grm)}</td>
+            <td class="num scen-actual mono" id="top_grm_a">${aGrossRent&&capAskPrice?fix2(aGRM):'<span class="placeholder">—</span>'}</td>
+            <td class="num scen-pitch mono"  id="top_grm_m">${aGrossRent&&mPriceForCalcs?fix2(mGRM):'<span class="placeholder">—</span>'}</td>
+            <td class="num scen-pro mono"    id="top_grm_p">${pGrossRent&&capOfferPrice?fix2(pGRM):'<span class="placeholder">—</span>'}</td>
           </tr>
           <tr>
-            <td class="metric-label">Occupancy Break Even Point ${tip('bep',tooltips.bep)}</td>
-            <td id="top_be_a">${aBreakEven?pct(aBreakEven/100):'—'}</td>
-            <td id="top_be_m">${mBreakEven?pct(mBreakEven/100):'—'}</td>
-            <td id="top_be_p">${pBreakEven?pct(pBreakEven/100):'—'}</td>
+            <td class="metric">Occupancy Break Even Point ${tip('bep',tooltips.bep)}</td>
+            <td class="num scen-actual mono" id="top_be_a">${aBreakEven?pct(aBreakEven/100):'<span class="placeholder">—</span>'}</td>
+            <td class="num scen-pitch mono"  id="top_be_m">${mBreakEven?pct(mBreakEven/100):'<span class="placeholder">—</span>'}</td>
+            <td class="num scen-pro mono"    id="top_be_p">${pBreakEven?pct(pBreakEven/100):'<span class="placeholder">—</span>'}</td>
           </tr>
           <tr>
-            <td class="metric-label">Price Per Foot ${tip('ppf',tooltips.ppf)}</td>
-            <td id="top_ppf_a">${aTotalSF>0 && capAskPrice>0     ? dol(capAskPrice    /aTotalSF) : '—'}</td>
-            <td id="top_ppf_m">${aTotalSF>0 && mPriceForCalcs>0  ? dol(mPriceForCalcs /aTotalSF) : '—'}</td>
-            <td id="top_ppf_p">${aTotalSF>0 && capOfferPrice>0   ? dol(capOfferPrice  /aTotalSF) : '—'}</td>
+            <td class="metric">Price Per Foot ${tip('ppf',tooltips.ppf)}</td>
+            <td class="num scen-actual mono" id="top_ppf_a">${aTotalSF>0 && capAskPrice>0     ? dol(capAskPrice    /aTotalSF) : '<span class="placeholder">—</span>'}</td>
+            <td class="num scen-pitch mono"  id="top_ppf_m">${aTotalSF>0 && mPriceForCalcs>0  ? dol(mPriceForCalcs /aTotalSF) : '<span class="placeholder">—</span>'}</td>
+            <td class="num scen-pro mono"    id="top_ppf_p">${aTotalSF>0 && capOfferPrice>0   ? dol(capOfferPrice  /aTotalSF) : '<span class="placeholder">—</span>'}</td>
           </tr>
         </tbody>
       </table>
@@ -9967,51 +9970,50 @@ function renderFinancialTab(d){
     <!-- CASH FLOW TABLE (v192/v193: 3 column groups, aligned to PPDP grid) -->
     <div class="pds-section">
       <div class="pds-section-hd"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>Cash Flow &amp; NOI <span class="sub">Monthly · Yearly · $/SF across all scenarios</span></div>
-      <table class="fin-cf-table" style="width:100%;">
+      <table class="dt fin-table cfnoi fin-cf-table">
         <colgroup>
-          <col style="width:220px;"/>
+          <col style="width:14%;"/>
           <col/><col/><col/>
           <col/><col/><col/>
           <col/><col/><col/>
         </colgroup>
         <thead>
-          <tr>
-            <th style="text-align:left;">Item</th>
-            <th colspan="3" style="background:linear-gradient(180deg,#5599cc,#2060b0);">Asking Price (actual)</th>
-            <th colspan="3" style="background:linear-gradient(180deg,#a78bfa,#7c3aed);">Pitch Out Price (actual)</th>
-            <th colspan="3" style="background:linear-gradient(180deg,#60a060,#306030);">Pitch Out Price (proforma)</th>
+          <tr class="fin-scenarios">
+            <th rowspan="2" class="ta-left">Item</th>
+            <th colspan="3" class="scen-actual">Asking Price (Actual)</th>
+            <th colspan="3" class="scen-pitch">Pitch Out Price (Actual)</th>
+            <th colspan="3" class="scen-pro">Pitch Out Price (Proforma)</th>
           </tr>
-          <tr>
-            <th style="text-align:left;"></th>
-            <th>Monthly</th><th>Yearly</th><th>Yearly PSF</th>
-            <th>Monthly</th><th>Yearly</th><th>Yearly PSF</th>
-            <th>Monthly</th><th>Yearly</th><th>Yearly PSF</th>
+          <tr class="fin-sub-th">
+            <th class="num">Monthly</th><th class="num">Yearly</th><th class="num">$/SF</th>
+            <th class="num">Monthly</th><th class="num">Yearly</th><th class="num">$/SF</th>
+            <th class="num">Monthly</th><th class="num">Yearly</th><th class="num">$/SF</th>
           </tr>
         </thead>
         <tbody>
           <tr>
-            <td class="cf-label">Cash Flow ${tip('cf',tooltips.cf)}</td>
-            <td id="top_cf_mo">${aCashFlow?dol(aCashFlow/12):'—'}</td>
-            <td id="top_cf_yr">${aCashFlow?dol(aCashFlow):'—'}</td>
-            <td id="top_cf_psf">${aCFPSF?'$'+aCFPSF.toFixed(2):'—'}</td>
-            <td id="top_mcf_mo">${mCashFlow?dol(mCashFlow/12):'—'}</td>
-            <td id="top_mcf_yr">${mCashFlow?dol(mCashFlow):'—'}</td>
-            <td id="top_mcf_psf">${mCFPSF?'$'+mCFPSF.toFixed(2):'—'}</td>
-            <td id="top_pcf_mo">${pCashFlow?dol(pCashFlow/12):'—'}</td>
-            <td id="top_pcf_yr">${pCashFlow?dol(pCashFlow):'—'}</td>
-            <td id="top_pcf_psf">${pCFPSF?'$'+pCFPSF.toFixed(2):'—'}</td>
+            <td class="strong">Cash Flow ${tip('cf',tooltips.cf)}</td>
+            <td class="num mono" id="top_cf_mo">${aCashFlow?dol(aCashFlow/12):'<span class="placeholder">—</span>'}</td>
+            <td class="num mono" id="top_cf_yr">${aCashFlow?dol(aCashFlow):'<span class="placeholder">—</span>'}</td>
+            <td class="num mono" id="top_cf_psf">${aCFPSF?'$'+aCFPSF.toFixed(2):'<span class="placeholder">—</span>'}</td>
+            <td class="num mono" id="top_mcf_mo">${mCashFlow?dol(mCashFlow/12):'<span class="placeholder">—</span>'}</td>
+            <td class="num mono" id="top_mcf_yr">${mCashFlow?dol(mCashFlow):'<span class="placeholder">—</span>'}</td>
+            <td class="num mono" id="top_mcf_psf">${mCFPSF?'$'+mCFPSF.toFixed(2):'<span class="placeholder">—</span>'}</td>
+            <td class="num mono" id="top_pcf_mo">${pCashFlow?dol(pCashFlow/12):'<span class="placeholder">—</span>'}</td>
+            <td class="num mono" id="top_pcf_yr">${pCashFlow?dol(pCashFlow):'<span class="placeholder">—</span>'}</td>
+            <td class="num mono" id="top_pcf_psf">${pCFPSF?'$'+pCFPSF.toFixed(2):'<span class="placeholder">—</span>'}</td>
           </tr>
           <tr>
-            <td class="cf-label">Net Operating Income ${tip('noi',tooltips.noi)}</td>
-            <td id="top_noi_mo">${aNOI?dol(aNOI/12):'—'}</td>
-            <td id="top_noi_yr">${aNOI?dol(aNOI):'—'}</td>
-            <td id="top_noi_psf">${aPSF?'$'+aPSF.toFixed(2):'—'}</td>
-            <td id="top_mnoi_mo">${aNOI?dol(aNOI/12):'—'}</td>
-            <td id="top_mnoi_yr">${aNOI?dol(aNOI):'—'}</td>
-            <td id="top_mnoi_psf">${mPSF?'$'+mPSF.toFixed(2):'—'}</td>
-            <td id="top_pnoi_mo">${pNOI?dol(pNOI/12):'—'}</td>
-            <td id="top_pnoi_yr">${pNOI?dol(pNOI):'—'}</td>
-            <td id="top_pnoi_psf">${pPSF?'$'+pPSF.toFixed(2):'—'}</td>
+            <td class="strong">Net Operating Income ${tip('noi',tooltips.noi)}</td>
+            <td class="num mono" id="top_noi_mo">${aNOI?dol(aNOI/12):'<span class="placeholder">—</span>'}</td>
+            <td class="num mono" id="top_noi_yr">${aNOI?dol(aNOI):'<span class="placeholder">—</span>'}</td>
+            <td class="num mono" id="top_noi_psf">${aPSF?'$'+aPSF.toFixed(2):'<span class="placeholder">—</span>'}</td>
+            <td class="num mono" id="top_mnoi_mo">${aNOI?dol(aNOI/12):'<span class="placeholder">—</span>'}</td>
+            <td class="num mono" id="top_mnoi_yr">${aNOI?dol(aNOI):'<span class="placeholder">—</span>'}</td>
+            <td class="num mono" id="top_mnoi_psf">${mPSF?'$'+mPSF.toFixed(2):'<span class="placeholder">—</span>'}</td>
+            <td class="num mono" id="top_pnoi_mo">${pNOI?dol(pNOI/12):'<span class="placeholder">—</span>'}</td>
+            <td class="num mono" id="top_pnoi_yr">${pNOI?dol(pNOI):'<span class="placeholder">—</span>'}</td>
+            <td class="num mono" id="top_pnoi_psf">${pPSF?'$'+pPSF.toFixed(2):'<span class="placeholder">—</span>'}</td>
           </tr>
         </tbody>
       </table>

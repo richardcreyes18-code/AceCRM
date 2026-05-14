@@ -31168,11 +31168,13 @@ function _bcCcOpen(rootId){
   if(!root) return;
   const wasOpen = root.classList.contains('is-open');
   root.classList.add('is-open');
-  // Ensure outside-click closes the dropdown. Bind once per root via
-  // dataset flag so we don't stack listeners on every click.
+  // v374.13: outside-click handler now also hides the .cc-pop dropdown
+  // (display:none) since display is controlled inline by the search
+  // helpers. Without this, the dropdown stayed visible after click-out.
+  // Bind once per root via dataset flag so we don't stack listeners.
   if(!root.dataset.ccBound){
     document.addEventListener('mousedown', (e) => {
-      if(!root.contains(e.target)) root.classList.remove('is-open');
+      if(!root.contains(e.target)) _bcCcClose(rootId);
     });
     root.dataset.ccBound = '1';
   }
@@ -31196,26 +31198,26 @@ function _bcCcOpen(rootId){
 }
 function _bcCcClose(rootId){
   const root = document.getElementById(rootId);
-  if(root) root.classList.remove('is-open');
+  if(!root) return;
+  root.classList.remove('is-open');
+  // Explicitly hide the .cc-pop dropdown (its display is set inline by
+  // the search helpers, so removing .is-open from the root isn't enough
+  // to make it disappear).
+  const pop = root.querySelector('.cc-pop');
+  if(pop) pop.style.display = 'none';
 }
 
-// Enter / Backspace handler for the Asset Type combobox input. Enter
-// commits the first visible suggestion (or runs _bcAtSearch's natural
-// filter if no result yet). Backspace on empty input removes the last
-// chip.
+// Enter / Escape handler for the Asset Type combobox input.
+// v374.13: removed the Backspace-removes-last-chip behavior per user
+// request — chips can ONLY be removed by clicking the × button on the
+// chip itself, never via keyboard. This prevents accidental chip loss
+// while editing the filter query.
 function _bcCcAssetKey(e){
   if(e.key === 'Enter'){
     e.preventDefault();
     const pop = document.getElementById('bcf_at_results');
     const first = pop?.querySelector('[data-cc-row]');
     if(first) first.click();
-  } else if(e.key === 'Backspace'){
-    const input = e.target;
-    if(input.value === ''){
-      const field = input.closest('.cc-field');
-      const lastChip = field?.querySelector('.ast-chip:last-of-type');
-      if(lastChip){ lastChip.remove(); _bcSyncAssets(); }
-    }
   } else if(e.key === 'Escape'){
     _bcCcClose('bcf_asset_cc');
     e.target.blur();

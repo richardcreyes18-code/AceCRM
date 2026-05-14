@@ -32383,6 +32383,10 @@ async function bcOpenExpanded(recordId){
   const contactId = (f['Buyer']||[])[0];
   const contact = contactId ? allBuyerContacts[contactId] : null;
   const buyerName = contact?.Name || f['Name']?.split(' - ')[0] || '—';
+  // v374.26: pre-escaped name for inline onclick handlers — single
+  // quotes in names like "O'Brien" would otherwise break the JS string
+  // literal embedded in HTML attributes.
+  const _buyerNameForJs = String(buyerName||'').replace(/\\/g, '\\\\').replace(/'/g, "\\'");
   const assetStr  = (f['Simple Text Desired Property Type']||'').replace(/[🔴🟠🟡🟢🔵🟣]/g,'').trim();
   // v113.8: filter out ✕ junk that older buggy _bcGetPillTexts may have
   // written to the DB. On the next save this string gets rewritten clean.
@@ -32646,6 +32650,11 @@ async function bcOpenExpanded(recordId){
             ${contactId ? `<div style="display:flex;gap:8px;flex-wrap:wrap;">
               <button onclick="bcOpenContactPitches('${contactId}')" style="background:#1a3a6e;color:#fff;border:1px solid #0a1f4a;padding:7px 14px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.08);white-space:nowrap;">📨 Pitch History ↗</button>
               <button onclick="bcOpenContact('${contactId}')" style="background:#fff;color:#1a3a6e;border:1px solid #1a3a6e;padding:7px 14px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.04);white-space:nowrap;">👤 View Contact Record ↗</button>
+              <!-- v374.26: + Task — opens the standard task modal pre-linked
+                   to this contact. openCreateTaskModal already supports the
+                   contactId / contactName params (used by the contact card's
+                   task button too). -->
+              <button onclick="openCreateTaskModal(null,'','contact','${contactId}','${_buyerNameForJs}')" style="background:#dcfce7;color:#15803d;border:1px solid #86efac;padding:7px 14px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.04);white-space:nowrap;" title="Create a task linked to this contact">✓ Add Task</button>
               <button id="bc_relBtn" onclick="toggleContactRelationshipFromBc('${contactId}')" title="${_isMyRelationship(contactId)?'In your relationships — click to remove':'Add to your personal relationships list'}" style="${_cdpRelBtnStyle(_isMyRelationship(contactId))}white-space:nowrap;">${_cdpRelBtnLabel(_isMyRelationship(contactId))}</button>
               <button class="wb-add-contact-btn" data-contact-id="${contactId}" onclick="addContactToWorkbench('${contactId}', this)" style="background:#1e3a8a;color:#fff;border:none;padding:7px 14px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;box-shadow:0 1px 2px rgba(0,0,0,0.08);white-space:nowrap;">+ Add to Workbench</button>
             </div>` : ''}

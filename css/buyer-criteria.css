@@ -1227,18 +1227,24 @@
 .cc-root.is-open .cc-caret { color: #2563eb; }
 
 .cc-pop {
-  position: absolute;
-  top: calc(100% + 4px);
+  /* v374.28: position:fixed (was absolute) so the dropdown escapes any
+     ancestor overflow:hidden / clip-path. JS computes top/left via
+     getBoundingClientRect on every open + on scroll/resize (see
+     _bcCcPosPop in index.html). Same fix the top-nav typeahead got
+     in v374.20.1. */
+  position: fixed;
+  top: 0;
   left: 0;
-  right: 0;
-  z-index: 50;
+  z-index: 9000;
   background: var(--surface, #fff);
   border: 1px solid var(--border, #e2e8f0);
   border-radius: 6px;
-  box-shadow: 0 8px 24px rgba(15, 23, 42, 0.12);
+  box-shadow: 0 12px 32px rgba(15, 23, 42, 0.18);
   max-height: 260px;
   overflow-y: auto;
   padding: 4px;
+  min-width: 240px;
+  max-width: min(560px, calc(100vw - 40px));
 }
 .cc-asset-pop { max-height: 340px; }
 

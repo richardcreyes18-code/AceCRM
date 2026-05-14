@@ -31867,6 +31867,36 @@ function _bcMountFilterCombos(){
 // City selectors. The combobox merges the chip row and the filter
 // input into a single .cc-field, and the dropdown shows filtered
 // suggestions inside a .cc-pop panel.
+// v374.28: position a .cc-pop dropdown via viewport coords. Required
+// because .cc-pop switched from position:absolute → position:fixed so
+// it escapes parent overflow:hidden. Called from _bcCcOpen + each
+// search helper after dd.innerHTML is set. Also re-runs on scroll +
+// resize while the dropdown is open.
+function _bcCcPosPop(rootId){
+  const root = document.getElementById(rootId);
+  if(!root) return;
+  const field = root.querySelector('.cc-field');
+  const pop   = root.querySelector('.cc-pop');
+  if(!field || !pop) return;
+  const rect = field.getBoundingClientRect();
+  pop.style.top      = (rect.bottom + 4) + 'px';
+  pop.style.left     = rect.left + 'px';
+  pop.style.minWidth = Math.max(rect.width, 240) + 'px';
+}
+// Reposition open BC dropdowns on scroll/resize so they stay anchored.
+window.addEventListener('scroll', () => {
+  ['bcf_asset_cc','bcf_state_cc','bcf_county_cc','bcf_city_cc'].forEach(id => {
+    const r = document.getElementById(id);
+    if(r && r.classList.contains('is-open')) _bcCcPosPop(id);
+  });
+}, { passive: true, capture: true });
+window.addEventListener('resize', () => {
+  ['bcf_asset_cc','bcf_state_cc','bcf_county_cc','bcf_city_cc'].forEach(id => {
+    const r = document.getElementById(id);
+    if(r && r.classList.contains('is-open')) _bcCcPosPop(id);
+  });
+});
+
 function _bcCcOpen(rootId){
   const root = document.getElementById(rootId);
   if(!root) return;
@@ -31878,10 +31908,19 @@ function _bcCcOpen(rootId){
   // Bind once per root via dataset flag so we don't stack listeners.
   if(!root.dataset.ccBound){
     document.addEventListener('mousedown', (e) => {
-      if(!root.contains(e.target)) _bcCcClose(rootId);
+      if(!root.contains(e.target)){
+        // v374.28: .cc-pop is now position:fixed and is rendered OUTSIDE
+        // the visual bounds of .cc-root, but is still a DOM descendant.
+        // root.contains correctly returns true for clicks on rows. No
+        // extra guard needed.
+        _bcCcClose(rootId);
+      }
     });
     root.dataset.ccBound = '1';
   }
+  // Reposition the dropdown on every open (handles tab switches / scroll
+  // jumps between opens).
+  if(rootId.startsWith('bcf_')) _bcCcPosPop(rootId);
   // Populate the dropdown the first time it opens (and on every open
   // event — so the list reflects the current query/state).
   if(!wasOpen){
@@ -34309,20 +34348,35 @@ function _bcAddPill(containerId, text, color, syncFn){
   const container = document.getElementById(containerId);
   if(!container) return;
   const pill = document.createElement('span');
-  // v374.12: when adding to the asset combobox (which uses .ast-chip
-  // semantic palette), emit an ast-chip instead of the legacy color-pill.
-  // The pill is inserted before the .cc-input so chips stay left of the
-  // typing cursor inside the cc-field.
-  if(containerId === 'bcf_asset_pills' && container.classList.contains('cc-field')){
-    pill.className = `ast-chip ${_bcAssetChipCls(text)}`;
+  // v374.12: when adding to an asset/state/county/city combobox (all of
+  // which use the .cc-field pattern with .ast-chip semantic palette),
+  // emit an ast-chip instead of the legacy colored-pill. The pill is
+  // inserted before the .cc-input so chips stay left of the typing
+  // cursor inside the cc-field.
+  // v374.28: extended to state / county / city containers — they all
+  // use the same .cc-field shell now, so a new city added via _bcAddCity
+  // should render as .ast-chip ast-nc (slate-neutral, matching the
+  // initial-render chips) rather than the legacy purple/sky/amber pill.
+  const ccFieldChip = container.classList.contains('cc-field') && (
+    containerId === 'bcf_asset_pills' ||
+    containerId === 'bcf_state_pills' ||
+    containerId === 'bcf_county_pills' ||
+    containerId === 'bcf_city_pills'
+  );
+  if(ccFieldChip){
+    // Asset chips get a semantic color per asset type; geographic chips
+    // use slate-neutral .ast-nc.
+    const chipCls = (containerId === 'bcf_asset_pills')
+      ? _bcAssetChipCls(text)
+      : 'ast-nc';
+    pill.className = `ast-chip ${chipCls}`;
     pill.title = 'Click to remove';
     pill.innerHTML = `${text}<button class="chip-x" onclick="event.stopPropagation();this.closest('span').remove();${syncFn.name}()"><svg viewBox="0 0 24 24" width="9" height="9" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><line x1="18" y1="6" x2="6" y2="18"/><line x1="6" y1="6" x2="18" y2="18"/></svg></button>`;
     pill.onclick = function(e){ e.stopPropagation(); this.remove(); syncFn(); };
     const input = container.querySelector('.cc-input');
     container.insertBefore(pill, input || null);
   } else {
-    // Legacy colored pill (used for state / county / city until they're
-    // migrated to the combobox pattern).
+    // Legacy colored pill — kept for any non-combobox call sites.
     pill.style.cssText = `background:${color};color:#fff;padding:3px 10px;border-radius:99px;font-size:11px;font-weight:600;display:flex;align-items:center;gap:5px;cursor:pointer;`;
     pill.title = 'Click to remove';
     pill.innerHTML = `${text} <span style="opacity:0.7;font-size:10px;">✕</span>`;
@@ -34398,6 +34452,7 @@ function _bcAtSearch(){
   if(!matches.length){
     res.style.display='block';
     res.innerHTML = `<div class="cc-empty">No matches for "${q}".</div>`;
+    _bcCcPosPop('bcf_asset_cc');
     return;
   }
   res.style.display='block';
@@ -34412,6 +34467,7 @@ function _bcAtSearch(){
   res.innerHTML = matches.slice(0, q ? 30 : 80).map(m =>
     `<button type="button" class="cc-row cc-row-asset" data-cc-row data-cc-type="${_bcAttrEsc(m.type)}" data-cc-sub="${_bcAttrEsc(m.sub)}"><span class="ast-chip ${_bcAssetChipCls(m.label)}">${_bcAttrEsc(m.label)}</span></button>`
   ).join('');
+  _bcCcPosPop('bcf_asset_cc');
   // Bind the delegated handler once per #bcf_at_results node lifetime.
   if(!res._bcCcClickBound){
     res.addEventListener('click', (e) => {
@@ -34592,13 +34648,69 @@ function _bcCitySearch(q){
   else {
     matches = sourceList.filter(c => _tokenMatch(q, c)).slice(0, 30);
   }
+  // v374.28: if the query is non-empty and either nothing matched OR
+  // no exact match exists, append an "Add '<query>' as new city" row
+  // so the user can quickly persist a city missing from the curated
+  // list. _bcAddUnlistedCity below upserts to ace_app_lists and adds
+  // the chip in one step.
+  const qTrim = (q || '').trim();
+  const hasExact = qTrim && sourceList.some(c => String(c).toLowerCase() === qTrim.toLowerCase());
+  const addNewRow = (qTrim && qTrim.length >= 2 && !hasExact)
+    ? `<button type="button" class="cc-row cc-row-new" data-cc-row onclick="_bcAddUnlistedCity('${qTrim.replace(/'/g,"\\'")}', this);"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add "<b>${_bcAttrEsc(qTrim)}</b>" as new city <span class="cc-hint">— saved to Settings list</span></button>`
+    : '';
   if(!matches.length){
     dd.style.display='block';
-    dd.innerHTML = `<div class="cc-empty">No matches for "${q}".</div>`;
+    dd.innerHTML = addNewRow || `<div class="cc-empty">No matches for "${_bcAttrEsc(q)}".</div>`;
+    _bcCcPosPop('bcf_city_cc');
     return;
   }
-  dd.innerHTML = matches.map(c=>`<button type="button" class="cc-row" data-cc-row onclick="_bcAddCity('${c.replace(/'/,"\\'")}');">📍 ${c}</button>`).join('');
+  dd.innerHTML = matches.map(c=>`<button type="button" class="cc-row" data-cc-row onclick="_bcAddCity('${c.replace(/'/g,"\\'")}');">📍 ${_bcAttrEsc(c)}</button>`).join('') + addNewRow;
   dd.style.display='block';
+  _bcCcPosPop('bcf_city_cc');
+}
+
+// v374.28: persist a brand-new city to ace_app_lists (preferred_cities
+// list), add it to the local in-memory window._appLists.preferred_cities
+// so other open BC sessions on this tab see it immediately, drop a chip
+// onto the BC city field, and broadcast app-lists.changed so sibling
+// tabs reload.
+async function _bcAddUnlistedCity(name, btn){
+  const cityName = String(name || '').trim();
+  if(!cityName) return;
+  if(btn){ btn.disabled = true; btn.style.opacity = '0.55'; btn.innerHTML = '⏳ Saving…'; }
+  try {
+    // Reactivate-or-insert via the existing admin upsert helper.
+    if(typeof window._appListUpsert === 'function'){
+      await window._appListUpsert('preferred_cities', cityName, { metadata: { state: 'NJ' } });
+    }
+    // Mirror into the in-memory list so _dbGetCities returns the new
+    // city on the very next render (avoid a round-trip).
+    if(window._appLists && Array.isArray(window._appLists.preferred_cities)){
+      if(!window._appLists.preferred_cities.some(c => String(c).toLowerCase() === cityName.toLowerCase())){
+        window._appLists.preferred_cities.push(cityName);
+        window._appLists.preferred_cities.sort((a,b) => String(a).localeCompare(String(b)));
+      }
+    } else if(window._appLists){
+      window._appLists.preferred_cities = [cityName];
+    }
+    // Drop the chip into the BC field
+    _bcAddCity(cityName);
+    // Cross-tab broadcast — other BC sessions reload _appLists.
+    try {
+      if(typeof window._aceSyncPost === 'function'){
+        window._aceSyncPost('app-lists.changed', { listKey: 'preferred_cities', at: Date.now() });
+      }
+    } catch(_e){}
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('Added "' + cityName + '" to Preferred Cities');
+  } catch(e){
+    console.warn('[bc] add unlisted city failed:', e.message);
+    if(btn){
+      btn.disabled = false;
+      btn.style.opacity = '';
+      btn.innerHTML = `<svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add "<b>${_bcAttrEsc(cityName)}</b>" as new city`;
+    }
+    if(typeof showSaveConfirm === 'function') showSaveConfirm('Add failed: ' + (e.message || 'unknown'));
+  }
 }
 
 // ─── STATES & COUNTIES ─────────────────────────────────────────
@@ -34653,10 +34765,12 @@ function _bcStateSearch(q){
   if(!matches.length){
     dd.style.display='block';
     dd.innerHTML = `<div class="cc-empty">No matches for "${q}".</div>`;
+    _bcCcPosPop('bcf_state_cc');
     return;
   }
   dd.innerHTML = matches.map(([code,name])=>`<button type="button" class="cc-row" data-cc-row onclick="_bcAddState('${code}','${name.replace(/'/g,"\\'")}');">🗺 ${code} — ${name}</button>`).join('');
   dd.style.display='block';
+  _bcCcPosPop('bcf_state_cc');
 }
 function _bcAddState(code, name){
   const pillText = `${code} — ${name}`;
@@ -34712,12 +34826,14 @@ function _bcCountySearch(q){
   if(!results.length){
     dd.innerHTML = `<button type="button" class="cc-row cc-row-new" data-cc-row onclick="_bcAddCountyV2('${q.replace(/'/g,"\\'")} County','')"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Add "<b>${q} County</b>" <span class="cc-hint">— press Enter</span></button>`;
     dd.style.display='block';
+    _bcCcPosPop('bcf_county_cc');
     return;
   }
   const rows = results.map(r=>`<button type="button" class="cc-row" data-cc-row onclick="_bcAddCountyV2('${r.county.replace(/'/g,"\\'")} County','${r.state}')">📍 ${r.county} County, ${r.state}</button>`).join('');
   const tail = qLow ? `<button type="button" class="cc-row cc-row-new" data-cc-row onclick="_bcAddCountyV2('${q.replace(/'/g,"\\'")} County','')"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"/><line x1="5" y1="12" x2="19" y2="12"/></svg> Or add "<b>${q} County</b>" as free text</button>` : '';
   dd.innerHTML = rows + tail;
   dd.style.display='block';
+  _bcCcPosPop('bcf_county_cc');
 }
 function _bcAddCountyV2(countyLabel, stateCode){
   // Include state suffix if provided: "Orange County, FL"

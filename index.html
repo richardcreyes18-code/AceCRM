@@ -37353,6 +37353,100 @@ function _ddResolveBCMerge(bcRows, contactsById){
   };
 }
 
+// v367: No-data-loss salvage pass — runs after the user picks per-field
+// winners but BEFORE merge_contacts() fires. For columns with a "primary
+// + secondary" pair (phone, email), if any loser holds a value the
+// winning row doesn't carry, that value is promoted into the survivor's
+// secondary slot (only when the secondary slot is empty in the pick).
+// Any 3rd+ distinct value, plus any "loser-only" company, gets appended
+// to the surviving contact's notes inside a `[Merge salvage]` block so
+// it's still retrievable.
+//
+// Mutates `fieldValues` in place; returns { salvageLines } describing
+// what was salvaged so the caller can surface it in the success toast.
+function _ddSalvageNoDataLoss(fieldValues, contactsById, survivingId, loserIds){
+  const survivor = contactsById[survivingId];
+  if(!survivor) return { salvageLines: [] };
+  const ids = [survivingId, ...loserIds];
+  const all = ids.map(id => contactsById[id]).filter(Boolean);
+  const salvageLines = [];
+
+  // Phone normalization: last-10-digits comparison so "(732) 829-5460",
+  // "732 829 5460" and "7328295460" all collapse to one value.
+  const phoneNorm = p => String(p == null ? '' : p).replace(/\D/g,'').slice(-10);
+
+  // Generic primary+secondary pair salvager. fieldVal lookup falls back to
+  // the survivor's stored value when the user didn't override the field.
+  const salvagePair = (primaryKey, secondaryKey, normalize, label) => {
+    const chosenPrimary = fieldValues[primaryKey] !== undefined
+      ? String(fieldValues[primaryKey] || '')
+      : String(survivor[primaryKey] || '');
+    const chosenSecondary = fieldValues[secondaryKey] !== undefined
+      ? String(fieldValues[secondaryKey] || '')
+      : String(survivor[secondaryKey] || '');
+    // Build a map<normalized → original> across every value in the group.
+    // Insertion order: chosen primary first (so it's never re-picked as
+    // the secondary), then chosen secondary, then each contact's pair.
+    const distinct = new Map();
+    const add = (v) => {
+      const n = normalize(v);
+      if(n && !distinct.has(n)) distinct.set(n, String(v).trim());
+    };
+    if(chosenPrimary) add(chosenPrimary);
+    if(chosenSecondary) add(chosenSecondary);
+    all.forEach(c => {
+      add(c[primaryKey]);
+      add(c[secondaryKey]);
+    });
+    if(distinct.size <= 1) return;  // nothing to salvage
+    // Fill the secondary slot if currently empty in the pick.
+    const primaryN = normalize(chosenPrimary);
+    if(!chosenSecondary){
+      for(const [n, orig] of distinct){
+        if(n !== primaryN){ fieldValues[secondaryKey] = orig; break; }
+      }
+    }
+    // Anything beyond primary + secondary → notes
+    const filled = new Set([primaryN, normalize(fieldValues[secondaryKey] || chosenSecondary)]);
+    const extras = [];
+    for(const [n, orig] of distinct){
+      if(!filled.has(n)) extras.push(orig);
+    }
+    if(extras.length){
+      salvageLines.push('Additional ' + label + ': ' + extras.join(', '));
+    }
+  };
+
+  salvagePair('phone_number', 'secondary_phone', phoneNorm, 'phone');
+  salvagePair('email', 'secondary_email', e => String(e||'').trim().toLowerCase(), 'email');
+
+  // Company has no secondary slot — if losers carry a different non-empty
+  // company than the chosen one, fold it into notes so the original
+  // employer history isn't lost.
+  const chosenCompany = fieldValues.company !== undefined
+    ? String(fieldValues.company || '')
+    : String(survivor.company || '');
+  const chosenCompanyN = chosenCompany.trim().toLowerCase();
+  const otherCompanies = new Set();
+  all.forEach(c => {
+    const v = String(c.company || '').trim();
+    if(v && v.toLowerCase() !== chosenCompanyN) otherCompanies.add(v);
+  });
+  if(otherCompanies.size){
+    salvageLines.push('Prior company: ' + [...otherCompanies].join(', '));
+  }
+
+  if(salvageLines.length){
+    const block = '[Merge salvage]\n' + salvageLines.join('\n');
+    const existing = (fieldValues.contact_notes != null)
+      ? String(fieldValues.contact_notes).trim()
+      : '';
+    fieldValues.contact_notes = existing ? existing + '\n\n' + block : block;
+  }
+
+  return { salvageLines };
+}
+
 // v108.1: Smart notes combiner — splits each contact's notes into
 // paragraphs, normalizes for comparison (whitespace + case), dedupes
 // identical paragraphs even across contacts, and rejoins with provenance.
@@ -37886,6 +37980,14 @@ function _ddRenderMergeDialog(cand, contacts, dealCounts){
         </div>
 
         <div id="ddMergeBody" style="padding:18px 24px;max-height:60vh;overflow-y:auto;">
+          <!-- v367: no-data-loss banner. Tells the user that any non-matching
+               phone / email gets promoted to the secondary slot, and any
+               extra company / 3rd-or-more phone-or-email is preserved in the
+               notes' [Merge salvage] block — so they can pick a winning
+               primary value without worrying about losing the other one. -->
+          <div style="background:#ecfeff;border:1px solid #67e8f9;border-radius:8px;padding:10px 14px;margin-bottom:14px;font-size:12px;color:#0c4a6e;line-height:1.5;">
+            🛡 <strong>No data lost.</strong> If phone or email differs between contacts, the loser's value lands in the survivor's secondary slot. Anything else that can't fit (extra phones, different companies) is appended to notes under a <code style="background:#cffafe;padding:1px 5px;border-radius:3px;">[Merge salvage]</code> block.
+          </div>
           ${_ddRenderPreviewBanner(_ddDialogPreviewCache, contacts)}
           ${_ddRenderMergeBody(cand, contacts, dealCounts, fields)}
         </div>
@@ -38845,6 +38947,13 @@ async function _ddSubmitMerge(candidateId){
     fieldValues.type = Array.from(_ddTagPicks);
   }
 
+  // v367: no-data-loss salvage. Promotes loser-only phone/email into the
+  // survivor's secondary slot, folds non-matching companies + extra
+  // phones/emails into the notes' [Merge salvage] block. Runs AFTER the
+  // user's manual field picks so explicit overrides still win, but
+  // ensures we never silently drop data when values differ.
+  const _salvage = _ddSalvageNoDataLoss(fieldValues, contactsById, survivingId, loserIds);
+
   const btn = document.getElementById('ddMergeBtn');
   if(btn){ btn.disabled = true; btn.textContent = 'Merging…'; }
 
@@ -38959,7 +39068,12 @@ async function _ddSubmitMerge(candidateId){
     const bcMsg = bcMerged
       ? ' + BC auto-merged (' + (_ddBCMerge.loser_ids.length+1) + ' → 1' + (bcConflictsResolved ? ', ' + bcConflictsResolved + ' conflict' + (bcConflictsResolved===1?'':'s') + ' resolved' : '') + ')'
       : '';
-    showSaveConfirm('✓ Merged ' + (loserIds.length+1) + ' contacts into 1 (' + (res.fk_repointed_count||0) + ' related rows re-pointed)' + propMsg + bcMsg);
+    // v367: surface salvage so the user sees what was preserved instead of
+    // dropped. Example: "+ 1 phone, 1 company saved to notes".
+    const salvageMsg = (_salvage && _salvage.salvageLines && _salvage.salvageLines.length)
+      ? ' + ' + _salvage.salvageLines.length + ' extra value' + (_salvage.salvageLines.length===1?'':'s') + ' preserved'
+      : '';
+    showSaveConfirm('✓ Merged ' + (loserIds.length+1) + ' contacts into 1 (' + (res.fk_repointed_count||0) + ' related rows re-pointed)' + propMsg + bcMsg + salvageMsg);
     _ddCloseMerge();
     // Refresh the queue so the merged candidate (and any subsumed groups)
     // disappear immediately.
@@ -39054,7 +39168,9 @@ function _ddCloseAutoMergeDialog(){
 
 // Build the per-candidate field_values object the same way the manual
 // merge dialog does — survivor's value if non-empty, else first non-empty
-// value from any loser. Notes combined via paragraph-level dedup.
+// value from any loser. Notes combined via paragraph-level dedup. v367
+// runs the no-data-loss salvage pass at the end so loser-only phones /
+// emails / companies aren't dropped during bulk auto-merge either.
 function _ddAutoBuildFieldValues(contacts, survivorId){
   const survivor = contacts.find(c => c.id === survivorId);
   const losers = contacts.filter(c => c.id !== survivorId);
@@ -39069,6 +39185,15 @@ function _ddAutoBuildFieldValues(contacts, survivorId){
   const withNotes = contacts.filter(c => (c.contact_notes||'').trim());
   if(withNotes.length > 0){
     out.contact_notes = _ddCombineNotes(withNotes);
+  }
+  // v367: salvage pass — same helper the manual flow runs, so auto-merge
+  // also folds loser-only phones / emails into secondary slots and any
+  // overflow into the notes [Merge salvage] block.
+  const contactsById = {};
+  contacts.forEach(c => { contactsById[c.id] = c; });
+  const loserIds = losers.map(c => c.id);
+  if(typeof _ddSalvageNoDataLoss === 'function'){
+    _ddSalvageNoDataLoss(out, contactsById, survivorId, loserIds);
   }
   // Tags (type[]): intentionally left OFF. merge_contacts_rpc auto-unions
   // when `type` is absent from p_field_values, which is exactly what we want.

@@ -12327,12 +12327,29 @@ async function saveAllPropertyDetails(){
   try{
     // For new deals — create the record first
     if(currentDeal._isNew){
+      // v374.25: validate the three required fields (Address, Asset Type,
+      // Owner Name). If any are missing, show the blank-deal modal that
+      // lets the user exit without saving or fill in what's missing.
       const addr = fields['Address'] || currentDeal['Address'];
-      if(!addr){
-        alert('Address is required. Fill in Street Address 1 (and City, State, Zip) in the Name & Location section.');
-        // Scroll to Name & Location
-        document.querySelector('#nameStreet1')?.scrollIntoView({behavior:'smooth', block:'center'});
-        if(msg) msg.style.display='none';
+      const assetType = fields['CRM Asset Classification']
+        || fields['Simple Text Property Type']
+        || currentDeal['CRM Asset Classification']
+        || currentDeal['Simple Text Property Type'];
+      const ownerName = fields['_sellerName'] || fields['_ownerName']
+        || fields['Owner Name'] || currentDeal['_sellerName']
+        || currentDeal['_ownerName'] || currentDeal['Owner Name']
+        || (currentDeal['Owner'] && currentDeal['Owner'].length ? '__linked__' : '');
+      const missing = [];
+      if(!addr || String(addr).trim().length < 3) missing.push('Property Address');
+      if(!assetType || String(assetType).trim() === '')   missing.push('Asset Type');
+      if(!ownerName || String(ownerName).trim() === '')   missing.push('Owner Name');
+      if(missing.length){
+        if(typeof _showBlankDealValidationModal === 'function'){
+          _showBlankDealValidationModal(missing);
+        } else {
+          alert('Required fields missing: ' + missing.join(', '));
+        }
+        if(msg) msg.style.display = 'none';
         return;
       }
       fields['Address'] = addr;
@@ -37466,7 +37483,7 @@ function showLeadIntakePage(){
         <div style="font-size:14px;color:#64748b;">Start by selecting the lead type below</div>
       </div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
-        <div onclick="_liSetMode('seller')" style="background:linear-gradient(135deg,#0f172a,#1e3a8a);border-radius:14px;padding:32px 24px;cursor:pointer;text-align:center;transition:transform 0.15s,box-shadow 0.15s;"
+        <div onclick="_liShowSellerChoice()" style="background:linear-gradient(135deg,#0f172a,#1e3a8a);border-radius:14px;padding:32px 24px;cursor:pointer;text-align:center;transition:transform 0.15s,box-shadow 0.15s;"
           onmouseover="this.style.transform='translateY(-3px)';this.style.boxShadow='0 12px 40px rgba(30,58,138,0.4)'"
           onmouseout="this.style.transform='none';this.style.boxShadow='none'">
           <div style="font-size:48px;margin-bottom:12px;">🏢</div>
@@ -37482,6 +37499,98 @@ function showLeadIntakePage(){
         </div>
       </div>
     </div>`;
+}
+
+// v374.25: after picking Seller Lead, offer two paths — fill out the
+// structured form OR open a blank deal card and fill fields freeform.
+function _liShowSellerChoice(){
+  const main = document.getElementById('mainArea');
+  if(!main) return;
+  main.innerHTML = `
+    <div style="max-width:680px;margin:0 auto;padding:32px 20px;">
+      <div style="text-align:center;margin-bottom:24px;">
+        <div style="font-size:13px;font-weight:600;color:#1e3a8a;text-transform:uppercase;letter-spacing:0.06em;margin-bottom:6px;">🏢 Seller Lead</div>
+        <div style="font-size:24px;font-weight:800;color:#0f172a;margin-bottom:6px;">How would you like to start?</div>
+        <div style="font-size:13px;color:#64748b;">Pick the guided form or jump straight into a blank deal card.</div>
+      </div>
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+        <div onclick="_liSetMode('seller')" style="background:linear-gradient(135deg,#1e3a8a,#2563eb);border-radius:14px;padding:28px 22px;cursor:pointer;text-align:center;transition:transform 0.15s,box-shadow 0.15s;color:#fff;"
+          onmouseover="this.style.transform='translateY(-3px)';this.style.boxShadow='0 12px 40px rgba(37,99,235,0.45)'"
+          onmouseout="this.style.transform='none';this.style.boxShadow='none'">
+          <div style="font-size:38px;margin-bottom:8px;">📋</div>
+          <div style="font-size:17px;font-weight:700;margin-bottom:6px;">Fill Out Form</div>
+          <div style="font-size:12px;color:rgba(255,255,255,0.85);line-height:1.5;">Guided seller intake — property, owner, financials, motivation, all in one place.</div>
+        </div>
+        <div onclick="_liOpenBlankDealCard()" style="background:linear-gradient(135deg,#374151,#1f2937);border-radius:14px;padding:28px 22px;cursor:pointer;text-align:center;transition:transform 0.15s,box-shadow 0.15s;color:#fff;"
+          onmouseover="this.style.transform='translateY(-3px)';this.style.boxShadow='0 12px 40px rgba(31,41,55,0.45)'"
+          onmouseout="this.style.transform='none';this.style.boxShadow='none'">
+          <div style="font-size:38px;margin-bottom:8px;">📝</div>
+          <div style="font-size:17px;font-weight:700;margin-bottom:6px;">Blank Deal Card</div>
+          <div style="font-size:12px;color:rgba(255,255,255,0.85);line-height:1.5;">Skip the form, open an empty deal page, fill any field at your own pace.</div>
+        </div>
+      </div>
+      <div style="text-align:center;margin-top:18px;">
+        <button onclick="showLeadIntakePage()" style="background:none;border:0;color:#64748b;font-size:12px;cursor:pointer;text-decoration:underline;">← Back to lead type</button>
+      </div>
+    </div>`;
+}
+
+// v374.25: open a draft (_isNew) deal directly in the deal-detail page.
+// The standard masterSave path validates the three required fields
+// (Address, Asset Type, Owner) before persisting — see the _isNew
+// branch in masterSave (~index.html:12329).
+function _liOpenBlankDealCard(){
+  // Create a draft deal in memory with sensible defaults
+  currentDeal = {
+    id: 'new_' + Date.now(),
+    _isNew: true,
+    'Address': '',
+    'Pipeline Stage': 'New Lead',
+    'Date Added': new Date().toISOString().slice(0, 10),
+    'CRM Asset Classification': '',
+    'Simple Text Property Type': '',
+    '_ownerName': '',
+    'Owner Name': '',
+  };
+  if(typeof renderDealPage === 'function') renderDealPage();
+}
+
+// v374.25: validation modal for the blank-deal save path. Shown when
+// the user hits Save on a draft deal but Address / Asset Type / Owner
+// are missing. Two actions:
+//   - Exit without saving → clears the draft and returns to Dashboard
+//   - Enter missing required fields → closes the modal, user fills in
+function _showBlankDealValidationModal(missing){
+  // Strip any prior instance first
+  document.getElementById('blankDealValidationModal')?.remove();
+  const list = missing.map(m => `<li style="margin-bottom:4px;">${m}</li>`).join('');
+  const overlay = document.createElement('div');
+  overlay.id = 'blankDealValidationModal';
+  overlay.style.cssText = 'position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:11000;display:flex;align-items:center;justify-content:center;padding:20px;';
+  overlay.innerHTML = `
+    <div style="background:#fff;border-radius:12px;max-width:440px;width:100%;padding:24px 26px;box-shadow:0 24px 48px rgba(0,0,0,0.2);">
+      <div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;">
+        <span style="width:36px;height:36px;border-radius:50%;background:#fef3c7;color:#92400e;display:grid;place-items:center;font-size:18px;">⚠</span>
+        <div style="font-size:17px;font-weight:700;color:#0f172a;">Required fields missing</div>
+      </div>
+      <div style="font-size:13px;color:#475569;line-height:1.55;margin-bottom:10px;">
+        A new deal card can't be saved until these are filled in:
+      </div>
+      <ul style="font-size:13px;color:#0f172a;font-weight:600;padding-left:22px;margin:0 0 16px 0;">${list}</ul>
+      <div style="display:flex;gap:10px;justify-content:flex-end;flex-wrap:wrap;">
+        <button id="bdvmExitBtn" style="background:#fff;color:#b91c1c;border:1px solid #fecaca;padding:8px 16px;font-size:12.5px;font-weight:600;border-radius:6px;cursor:pointer;">Exit without saving</button>
+        <button id="bdvmFillBtn" style="background:#2563eb;color:#fff;border:0;padding:8px 16px;font-size:12.5px;font-weight:600;border-radius:6px;cursor:pointer;">Enter missing required fields</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  document.getElementById('bdvmExitBtn').onclick = () => {
+    overlay.remove();
+    // Discard the draft and return to Dashboard
+    currentDeal = null;
+    if(typeof showDashboard === 'function') showDashboard();
+    else if(typeof setNav === 'function') setNav(null, 'dashboard');
+  };
+  document.getElementById('bdvmFillBtn').onclick = () => overlay.remove();
 }
 
 function _liSetMode(mode){

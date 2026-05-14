@@ -5178,24 +5178,33 @@ function _equalizeTextareaGroup(groupName){
 let _finSubTab = 'financial'; // 'financial' | 'offers' | 'tenantmix' | 'comps' | 'quickcalc'
 
 function _finSubTabBarHTML(){
-  // v303: re-skinned to a clean .btn-group sub-nav. Emoji prefixes
-  // dropped per the redesign brief; active state uses .active
-  // (primary-light bg). Sub-bar is full-width and visually attached
-  // to the parent tab row by sharing surface-2 bg + a hairline.
+  // v374: re-skinned to the .pds-tab-secondary-row vocabulary from the
+  // Claude Design handoff. Each sub-tab has a Lucide-style icon, the
+  // active sub-tab gets the primary-light highlight + bolder weight.
+  // Same `switchTab('<id>')` wiring as before so the existing router
+  // keeps working unchanged.
   const subs = [
-    ['financial', 'Financial Analysis'],
-    ['offers',    'Offers'],
-    ['tenantmix', 'Tenant Mix'],
-    ['comps',     'Comps'],
-    ['quickcalc', 'Quick Calculations'],
+    ['financial', 'Financial Analysis', 'bar-chart'],
+    ['offers',    'Offers',              'dollar-sign'],
+    ['tenantmix', 'Tenant Mix',          'users'],
+    ['comps',     'Comps',               'layers'],
+    ['quickcalc', 'Quick Calculations',  'zap'],
   ];
-  return `<div class="fin-subtabs" style="margin:-14px -18px 14px;padding:8px 18px;background:var(--surface-2);border-bottom:1px solid var(--border);">
-    <div class="btn-group">
-      ${subs.map(([k, label]) => {
-        const active = _finSubTab === k ? ' active' : '';
-        return `<button class="btn sm${active}" onclick="switchTab('${k}', this)">${label}</button>`;
-      }).join('')}
-    </div>
+  // Inline minimal Lucide-style SVGs so this works without a global icon helper.
+  const ICONS = {
+    'bar-chart':   '<line x1="12" y1="20" x2="12" y2="10"/><line x1="18" y1="20" x2="18" y2="4"/><line x1="6" y1="20" x2="6" y2="16"/>',
+    'dollar-sign': '<line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>',
+    'users':       '<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M23 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/>',
+    'layers':      '<polygon points="12 2 2 7 12 12 22 7 12 2"/><polyline points="2 17 12 22 22 17"/><polyline points="2 12 12 17 22 12"/>',
+    'zap':         '<polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2"/>'
+  };
+  const svg = (n) => `<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${ICONS[n]||''}</svg>`;
+  return `<div class="pds-tab-secondary-row">
+    ${subs.map(([k, label, icon]) => {
+      const active = _finSubTab === k ? ' active' : '';
+      return `<button class="pds-tab-secondary${active}" onclick="switchTab('${k}', this)">${svg(icon)} ${label}</button>`;
+    }).join('')}
+    <span class="pds-tab-secondary-spacer"></span>
   </div>`;
 }
 
@@ -9850,7 +9859,7 @@ function renderFinancialTab(d){
     </style>
     <div class="fin-tipbox" id="finTipBox"></div>
 
-    <div class="fin-${_finMode}">
+    <div class="fin-${_finMode} fin-content">
 
     <!-- v192: NO FINANCIALS stamp removed — replaced by a "No Financials" Deal Tag.
          Wrapper + label kept as empty div for any leftover JS/CSS reference safety. -->
@@ -9859,8 +9868,8 @@ function renderFinancialTab(d){
       <div id="finStampTarget">
 
     <!-- RESULTS SUMMARY ──────────────────────────────────────── -->
-    <div class="info-box">
-      <div class="info-box-title">📋 Results Summary</div>
+    <div class="pds-section">
+      <div class="pds-section-hd"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="14" rx="2"/><line x1="3" y1="9" x2="21" y2="9"/></svg>Results Summary <span class="sub">Roll-up of property + financial inputs</span></div>
       <table class="fin-results-table">
         <tr>
           <td class="row-label">Property</td>
@@ -9900,8 +9909,8 @@ function renderFinancialTab(d){
     </div>
 
     <!-- KEY METRICS (v192/v193: 3 data columns aligned to PPDP grid) -->
-    <div class="info-box">
-      <div class="info-box-title">📈 Key Metrics</div>
+    <div class="pds-section">
+      <div class="pds-section-hd"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>Key Metrics <span class="sub">3 scenarios side-by-side</span></div>
       <table class="fin-metrics-table">
         <colgroup>
           <col style="width:220px;"/><col/><col/><col/>
@@ -9956,8 +9965,8 @@ function renderFinancialTab(d){
     </div>
 
     <!-- CASH FLOW TABLE (v192/v193: 3 column groups, aligned to PPDP grid) -->
-    <div class="info-box">
-      <div class="info-box-title">💵 Cash Flow &amp; NOI</div>
+    <div class="pds-section">
+      <div class="pds-section-hd"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>Cash Flow &amp; NOI <span class="sub">Monthly · Yearly · $/SF across all scenarios</span></div>
       <table class="fin-cf-table" style="width:100%;">
         <colgroup>
           <col style="width:220px;"/>
@@ -10025,8 +10034,8 @@ function renderFinancialTab(d){
          Metric tables above stay 3-wide; the middle metric column shares the
          right card's down payment because it's the same Pitch Out scenario,
          just with actual income instead of proforma.) -->
-    <div class="info-box">
-      <div class="info-box-title">Purchase Price &amp; Down Payment</div>
+    <div class="pds-section">
+      <div class="pds-section-hd"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>Purchase Price &amp; Down Payment <span class="sub">Actual asking vs. our pitch-out number</span></div>
       <div style="display:grid;grid-template-columns:220px 1fr 2fr;gap:0;font-size:11px;">
         <!-- 220px gutter aligns the cards with the metric table columns above.
              Asking card occupies metric col 1; Pitch Out card spans cols 2 + 3. -->
@@ -10130,8 +10139,8 @@ function renderFinancialTab(d){
 
     <!-- SIMPLE INCOME & EXPENSES (simple mode only) ──────────── -->
     ${_finMode === 'simple' ? `
-    <div class="info-box" style="background:#f0f9ff;border-color:#93c5fd;">
-      <div class="info-box-title" style="color:#1e40af;">💵 Income &amp; Expenses</div>
+    <div class="pds-section" style="border-color:#93c5fd;">
+      <div class="pds-section-hd" style="background:#eff6ff;color:#1e40af;"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>Income &amp; Expenses <span class="sub">Simple mode</span></div>
       <div style="display:grid;grid-template-columns:1fr 1fr;gap:20px;font-size:11px;">
 
         <!-- GRI: Monthly + Yearly -->
@@ -10275,9 +10284,11 @@ function renderFinancialTab(d){
       const sf = aNetRentSF;
 
       return `
-      <div class="info-box fin-hide-simple">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
-          <div class="info-box-title" style="margin:0;">Income</div>
+      <div class="pds-section fin-hide-simple">
+        <div class="pds-section-hd" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 6 13.5 15.5 8.5 10.5 1 18"/><polyline points="17 6 23 6 23 12"/></svg>
+          <span style="margin:0;">Income</span>
+          <span class="sub">Actual (current) vs Proforma (projected)</span>
           <!-- v111.9: one-click snapshot from Actual to Proforma so the agent
                can start from today's numbers and tweak from there. -->
           <button type="button" onclick="copyActualToProforma('income')"
@@ -10681,9 +10692,10 @@ function renderFinancialTab(d){
       const pCapRes_mo = Number(fi.pCapRes_mo)||0;
 
       return `
-      <div class="info-box fin-hide-simple" style="margin-top:12px;">
-        <div style="display:flex;align-items:center;gap:10px;margin-bottom:8px;flex-wrap:wrap;">
-          <span style="font-weight:bold;font-size:13px;">Less: Operating Expenses</span>
+      <div class="pds-section fin-hide-simple" style="margin-top:12px;">
+        <div class="pds-section-hd" style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;">
+          <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="23 18 13.5 8.5 8.5 13.5 1 6"/><polyline points="17 18 23 18 23 12"/></svg>
+          <span>Less: Operating Expenses</span>
           ${tip('opex','Operating Expenses = all costs to run the property excluding debt service. NOI = EGI minus Operating Expenses.')}
           <div style="margin-left:auto;display:flex;align-items:center;gap:5px;background:var(--surface2);border:1px solid var(--border);border-radius:6px;padding:3px 6px;">
             <span style="font-size:11px;color:var(--text2);white-space:nowrap;">Expense Mode:</span>
@@ -10867,8 +10879,9 @@ function renderFinancialTab(d){
         window._pNOI_mo = pNOI_mo;
 
         return `
-        <div class="info-box fin-hide-simple" style="margin-top:12px;">
-          <div style="font-weight:bold;font-size:13px;margin-bottom:8px;">
+        <div class="pds-section fin-hide-simple" style="margin-top:12px;">
+          <div class="pds-section-hd">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>
             Net Operating Income
           </div>
           <div style="overflow-x:auto;">
@@ -10914,9 +10927,9 @@ function renderFinancialTab(d){
       <!-- v113.78: Custom NOI Override — neutral styling that blends with
            the rest of the financial tab. For deals where the seller only
            gave a top-line NOI without an itemized expense breakdown. -->
-      <div class="info-box" style="margin-top:12px;">
-        <div class="info-box-title" style="display:flex;justify-content:space-between;align-items:center;">
-          <span>📐 Custom NOI Override</span>
+      <div class="pds-section" style="margin-top:12px;">
+        <div class="pds-section-hd" style="display:flex;justify-content:space-between;align-items:center;">
+          <span><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="vertical-align:middle;margin-right:6px;"><path d="M11 4H4a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2v-7"/><path d="M18.5 2.5a2.121 2.121 0 0 1 3 3L12 15l-4 1 1-4 9.5-9.5z"/></svg>Custom NOI Override</span>
           <label style="font-size:11px;font-weight:500;display:flex;align-items:center;gap:5px;cursor:pointer;color:var(--text2);">
             <input type="checkbox" id="fin_noiOverride" ${d['NOI Override Active']?'checked':''} onchange="markDirty(); if(typeof debouncedRecalc==='function') debouncedRecalc();"/>
             Use Custom NOI (skip expense breakdown)
@@ -10985,8 +10998,11 @@ function renderFinancialTab(d){
         const isMortgageExpanded = fi.exp_mortgage === true;
 
         return `
-        <div class="info-box fin-hide-simple" style="margin-top:12px;">
-          <div style="font-weight:bold;font-size:13px;margin-bottom:8px;">Cash Flow</div>
+        <div class="pds-section fin-hide-simple" style="margin-top:12px;">
+          <div class="pds-section-hd">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+            Cash Flow
+          </div>
           <div style="overflow-x:auto;">
           <table style="width:100%;border-collapse:collapse;font-size:11px;min-width:700px;">
             <thead>

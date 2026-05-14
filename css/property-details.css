@@ -615,3 +615,464 @@
   .pds-grid > .pds-field:nth-last-child(-n+3) { border-bottom: 1px solid var(--border); }
   .pds-grid > .pds-field:nth-last-child(-n+2) { border-bottom: none; }
 }
+
+/* ════════════════════════════════════════════════════════════════
+ * v374: Financial Analysis tab vocabulary — sub-tab row, results
+ * summary, 3-scenario table headers, PP&DP dual cards, Custom NOI
+ * Override, expandable expense categories. Mirrors `/Users/rickyreyes/
+ * Downloads/styles (1).css` from the Claude Design handoff. Scoped
+ * under .fin-content (or used in tables wrapped by .pds-section) so
+ * the .dt / .cat-row / .sub-line names don't collide with legacy
+ * .dt rules elsewhere in the app.
+ * ════════════════════════════════════════════════════════════════ */
+
+/* Top wrapper analog to .pds-content but for the Financial tab body */
+.fin-content { padding: 14px 20px; }
+
+/* ── Sub-tab row (Financial Analysis / Offers / …) ───────────── */
+.pds-tab-secondary-row {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin: -14px -20px 14px;
+  padding: 8px 20px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.pds-tab-secondary {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 12px;
+  background: transparent;
+  border: none;
+  border-radius: 5px;
+  color: var(--fg-2);
+  font-size: 12px;
+  font-weight: 500;
+  cursor: pointer;
+  font-family: inherit;
+  white-space: nowrap;
+  position: relative;
+  transition: background 0.12s, color 0.12s;
+}
+.pds-tab-secondary svg { width: 12px; height: 12px; }
+.pds-tab-secondary:hover { background: var(--surface); color: var(--fg-1); }
+.pds-tab-secondary.active {
+  background: var(--primary-lighter);
+  color: var(--primary-darker);
+  font-weight: 600;
+}
+.pds-tab-secondary-spacer { flex: 1; }
+
+/* ── Results Summary table ───────────────────────────────────── */
+.rs-table { display: flex; flex-direction: column; }
+.rs-row {
+  display: grid;
+  grid-template-columns: 110px repeat(3, 1fr);
+  align-items: center;
+  gap: 12px;
+  padding: 9px 14px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12.5px;
+}
+.rs-row:last-child { border-bottom: 0; }
+.rs-key {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--fg-3);
+}
+.rs-cell { color: var(--fg-1); }
+.rs-lbl { color: var(--fg-2); }
+.rs-cell .red { color: #b91c1c; }
+.rs-cell .strong { font-weight: 600; }
+.rs-cell .placeholder { color: var(--fg-4); font-style: italic; font-family: var(--font-mono); }
+
+/* ── Financial tables (3-scenario + dual-column) ─────────────── */
+.dt {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  font-size: 12px;
+}
+.dt thead th {
+  background: var(--surface-2);
+  text-align: right;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-weight: 600;
+  font-size: 11px;
+  color: var(--fg-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.dt thead th.num, .dt tbody td.num { text-align: right; font-variant-numeric: tabular-nums; }
+.dt tbody td {
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--border);
+  font-size: 12px;
+  color: var(--fg-1);
+}
+.dt tbody tr:last-child td { border-bottom: none; }
+.dt tbody td.placeholder, .dt td.placeholder {
+  color: var(--fg-4);
+  font-family: var(--font-mono);
+}
+.dt tbody tr.total td {
+  background: var(--surface-2);
+  font-weight: 700;
+  border-top: 2px solid var(--border);
+}
+.dt tbody tr.sub-total td {
+  background: rgba(0,0,0,0.015);
+  font-weight: 600;
+}
+.dt .ta-left { text-align: left !important; }
+.dt .ta-right { text-align: right !important; }
+.dt .ml-6 { margin-left: 6px; }
+.dt .help {
+  display: inline-flex;
+  width: 12px;
+  height: 12px;
+  align-items: center;
+  justify-content: center;
+  background: var(--surface-2);
+  color: var(--fg-3);
+  border-radius: 50%;
+  font-size: 9px;
+  font-weight: 700;
+  margin-left: 4px;
+  cursor: help;
+  border: 1px solid var(--border);
+}
+.dt .mono { font-family: var(--font-mono); font-weight: 600; font-variant-numeric: tabular-nums; }
+.dt .strong { font-weight: 600; color: var(--fg-1); }
+.dt .primary { color: var(--primary); }
+.dt .fg-2 { color: var(--fg-2); }
+.dt .fg-3 { color: var(--fg-3); }
+
+.fin-table { border-collapse: separate; border-spacing: 0; }
+.fin-scenarios th {
+  font-size: 10.5px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 7px 10px;
+}
+.fin-scenarios th.ta-left { text-align: left; }
+.fin-sub-th th {
+  font-size: 10px;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 6px 10px;
+  background: var(--bg);
+  color: var(--fg-2);
+  text-align: right;
+}
+
+/* Three-scenario columns: blue / purple / green */
+.fin-table thead .scen-actual { background: #2563eb !important; color: #fff !important; }
+.fin-table thead .scen-pitch  { background: #7c3aed !important; color: #fff !important; }
+.fin-table thead .scen-pro    { background: #15803d !important; color: #fff !important; }
+
+/* Light tint stripes for body cells in scenario columns */
+.fin-table.dual tbody td:nth-child(n+2):nth-child(-n+5) { background: rgba(37,99,235,0.025); }
+.fin-table.dual tbody td:nth-child(n+6):nth-child(-n+9) { background: rgba(21,128,61,0.03); }
+.fin-table.cfnoi tbody td:nth-child(n+2):nth-child(-n+4) { background: rgba(37,99,235,0.025); }
+.fin-table.cfnoi tbody td:nth-child(n+5):nth-child(-n+7) { background: rgba(124,58,237,0.03); }
+.fin-table.cfnoi tbody td:nth-child(n+8):nth-child(-n+10){ background: rgba(21,128,61,0.03); }
+
+.fin-table tbody tr td.scen-actual { background: rgba(37,99,235,0.04); }
+.fin-table tbody tr td.scen-pitch  { background: rgba(124,58,237,0.04); }
+.fin-table tbody tr td.scen-pro    { background: rgba(21,128,61,0.04); }
+
+.fin-table td.metric { font-weight: 600; }
+.fin-table .placeholder { color: var(--fg-4); font-family: var(--font-mono); font-style: italic; }
+
+/* ── Inline currency / % cell input ──────────────────────────── */
+.cell-input-wrap {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  padding: 0 4px;
+  min-width: 90px;
+}
+.cell-input-wrap:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-lighter);
+}
+.cell-input-wrap .pre,
+.cell-input-wrap .suf { font-size: 11px; color: var(--fg-3); }
+.cell-input-wrap input.cell-input {
+  border: 0;
+  padding: 3px 2px;
+  font-size: 11.5px;
+  min-width: 0;
+  flex: 1;
+  background: transparent;
+  font-family: var(--font-mono);
+  text-align: right;
+  font-variant-numeric: tabular-nums;
+}
+.cell-input-wrap input.cell-input:focus { outline: none; }
+.cell-input-wrap .narrow { width: 36px; }
+.cell-input.mono { font-family: var(--font-mono); font-weight: 500; }
+
+/* ── Purchase Price & Down Payment dual cards ────────────────── */
+.ppdp-grid {
+  display: grid;
+  grid-template-columns: 1fr 1px 1fr;
+  gap: 0;
+  padding: 0;
+}
+.ppdp-divider { background: var(--border); }
+.ppdp-card { padding: 16px 20px; }
+.ppdp-card.is-actual .ppdp-title { color: #1d4ed8; }
+.ppdp-card.is-pro .ppdp-title { color: var(--green-dark); }
+.ppdp-title { font-size: 13px; font-weight: 700; }
+.ppdp-source {
+  font-size: 11px;
+  font-style: italic;
+  color: var(--fg-3);
+  margin-top: 2px;
+  margin-bottom: 14px;
+}
+.ppdp-rows { display: flex; flex-direction: column; gap: 10px; }
+.ppdp-row {
+  display: grid;
+  grid-template-columns: 160px 1fr;
+  align-items: center;
+  gap: 12px;
+  font-size: 12.5px;
+}
+.ppdp-row.total { padding-top: 10px; border-top: 1px solid var(--border); }
+.ppdp-lbl { color: var(--fg-2); font-weight: 500; }
+.ppdp-input { display: inline-flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.ppdp-input .cell-input-wrap { min-width: 140px; }
+.ppdp-radio { display: inline-flex; gap: 14px; font-size: 12px; }
+.ppdp-radio label { display: inline-flex; align-items: center; gap: 5px; cursor: pointer; }
+.ppdp-mono { font-size: 13px; font-weight: 700; font-family: var(--font-mono); }
+.ppdp-mono.primary { color: var(--primary); }
+
+@media (max-width: 900px) {
+  .ppdp-grid { grid-template-columns: 1fr; }
+  .ppdp-divider { height: 1px; width: 100%; }
+}
+
+/* ── Custom NOI Override ─────────────────────────────────────── */
+.ovr-row {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.ovr-fld { display: flex; flex-direction: column; gap: 4px; }
+.ovr-fld > span:first-child {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--fg-2);
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+.ovr-input {
+  display: inline-flex;
+  align-items: center;
+  gap: 1px;
+  background: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  padding: 0 8px;
+  min-width: 200px;
+}
+.ovr-input .pre, .ovr-input .suf { font-size: 12px; color: var(--fg-3); }
+.ovr-input input {
+  border: 0;
+  padding: 6px 4px;
+  font-size: 13px;
+  flex: 1;
+  min-width: 0;
+  background: transparent;
+  font-family: var(--font-mono);
+}
+.ovr-input input:focus { outline: none; }
+.ovr-input:focus-within {
+  border-color: var(--primary);
+  box-shadow: 0 0 0 2px var(--primary-lighter);
+}
+
+/* Checkbox helper */
+.fin-content .ck,
+.pds-section .ck {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font-size: 12px;
+  color: var(--fg-1);
+  cursor: pointer;
+}
+.fin-content .ck.sm,
+.pds-section .ck.sm { font-size: 11.5px; }
+
+/* ── Expandable expense categories ───────────────────────────── */
+.dt.exp-table .cat-row { cursor: pointer; }
+.dt.exp-table .cat-row td { background: var(--bg); }
+.dt.exp-table .cat-row .cat-label {
+  color: var(--primary-darker);
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+.dt.exp-table .cat-row .chev {
+  transition: transform 0.12s ease;
+  color: var(--fg-3);
+}
+.dt.exp-table .cat-row.open .chev {
+  transform: rotate(90deg);
+  color: var(--primary);
+}
+.dt.exp-table .cat-row:hover td { background: var(--surface-2); }
+.dt.exp-table tr.sub-line td {
+  background: var(--surface) !important;
+  font-size: 11.5px;
+}
+.dt.exp-table tr.sub-line td.sub-label {
+  padding-left: 26px;
+  color: var(--fg-2);
+}
+
+/* ── Header toolbar variants ─────────────────────────────────── */
+.btn.warn-ghost {
+  color: #b45309;
+  background: transparent;
+  border: 1px solid transparent;
+}
+.btn.warn-ghost:hover { background: #fef3c7; }
+.btn.danger-ghost {
+  color: #b91c1c;
+  background: transparent;
+  border: 1px solid transparent;
+}
+.btn.danger-ghost:hover { background: #fee2e2; }
+.btn.lg { padding: 9px 18px; font-size: 13.5px; }
+.btn.xs { padding: 2px 7px; font-size: 10.5px; }
+
+/* ── Mini segmented control (inside table rows) ──────────────── */
+.seg-mini {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  overflow: hidden;
+  background: var(--surface);
+}
+.seg-mini button {
+  border: 0;
+  background: transparent;
+  padding: 2px 6px;
+  font-size: 10px;
+  color: var(--fg-2);
+  cursor: pointer;
+  font-family: inherit;
+  border-right: 1px solid var(--border);
+}
+.seg-mini button:last-child { border-right: 0; }
+.seg-mini button.active {
+  background: var(--primary-lighter);
+  color: var(--primary-darker);
+  font-weight: 600;
+}
+.row-actions-inline {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-top: 4px;
+  flex-wrap: wrap;
+}
+
+/* ── Section action bars ─────────────────────────────────────── */
+.fin-actions {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 10px 14px;
+  border-top: 1px solid var(--border);
+  background: var(--surface-2);
+  flex-wrap: wrap;
+}
+.fin-auto {
+  font-size: 11px;
+  color: var(--fg-3);
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  margin-left: 4px;
+}
+.fin-auto .okg {
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+  background: #22c55e;
+  display: inline-block;
+}
+.fin-save-row { padding: 16px 0 4px; }
+
+/* ── Mortgage table cell select ──────────────────────────────── */
+.mortgage-table .cell-select {
+  padding: 4px 6px;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background: var(--surface);
+  font-size: 11.5px;
+  color: var(--fg-1);
+  min-width: 110px;
+  font-family: inherit;
+}
+.mortgage-table .cell-select:focus {
+  outline: none;
+  border-color: var(--primary);
+}
+.mortgage-table td { vertical-align: middle; }
+
+/* ── KPI strip (Offers / Tenants / Comps headers) ────────────── */
+.kpi-row {
+  display: flex;
+  align-items: center;
+  gap: 0;
+  margin: 0 -20px 14px;
+  padding: 12px 20px;
+  background: var(--surface-2);
+  border-bottom: 1px solid var(--border);
+  flex-wrap: wrap;
+}
+.kpi-row .kpi {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 0 18px;
+  border-right: 1px solid var(--border);
+  min-width: 0;
+}
+.kpi-row .kpi:last-of-type { border-right: none; }
+.kpi-row .kpi-lbl {
+  font-size: 10px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  color: var(--fg-3);
+}
+.kpi-row .kpi-val {
+  font-size: 14px;
+  font-weight: 700;
+  color: var(--fg-1);
+  font-family: var(--font-mono);
+}
+.kpi-row .kpi-val.primary { color: var(--primary); }
+.kpi-row .kpi-val.red { color: #b91c1c; }
+.kpi-row .kpi-spacer { flex: 1; }
+

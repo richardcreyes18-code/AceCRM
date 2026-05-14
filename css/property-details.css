@@ -1084,12 +1084,21 @@
    ───────────────────────────────────────────────────────────── */
 .fin-income-table-wrap,
 .fin-opex-table-wrap,
-.fin-noi-table-wrap { overflow-x: auto; margin-top: 4px; transition: opacity 0.2s; }
+.fin-noi-table-wrap,
+.fin-cfroll-table-wrap { overflow-x: auto; margin-top: 4px; transition: opacity 0.2s; }
 .fin-income-table,
 .fin-opex-table,
-.fin-noi-table {
+.fin-noi-table,
+.fin-cfroll-table {
   width: 100%;
-  min-width: 900px;
+  min-width: 960px;
+  /* v374.6: fixed table-layout + percentage colgroups so every dual-
+     scenario table (Income / OpEx / NOI / Cash Flow) lines up at the
+     same column widths. Without this, columns auto-sized to content —
+     Income shrank because every row has inputs while OpEx stayed wide
+     because category rows have plain text — making the four sections
+     read as different widths even though they share min-width. */
+  table-layout: fixed;
   border-collapse: separate;
   border-spacing: 0;
   font-size: 12px;
@@ -1098,6 +1107,33 @@
   border: 1px solid var(--border);
   border-radius: 8px;
   overflow: hidden;
+}
+/* Uniform colgroup proportions for every 9-col dual table.
+   Label = 22%; each metric col = 9.75% (×8 = 78%). */
+.fin-income-table col.col-lbl,
+.fin-opex-table col.col-lbl,
+.fin-noi-table col.col-lbl { width: 22%; }
+.fin-income-table col.col-a,
+.fin-income-table col.col-p,
+.fin-opex-table col.col-a,
+.fin-opex-table col.col-p,
+.fin-noi-table col.col-a,
+.fin-noi-table col.col-p { width: 9.75%; }
+
+/* Cash Flow rolled-up has 5 cols not 9 — give it wider data cells but
+   the same outer width as the other tables. Label still 22%; each of
+   the 4 data cols = 19.5%. */
+.fin-cfroll-table col.col-lbl-wide { width: 22%; }
+.fin-cfroll-table col.col-a,
+.fin-cfroll-table col.col-p { width: 19.5%; }
+
+/* Force inputs inside fixed-layout cells to fit their column rather
+   than expand the column. */
+.fin-income-table tbody input,
+.fin-opex-table tbody input,
+.fin-noi-table tbody input {
+  max-width: 100%;
+  box-sizing: border-box;
 }
 .fin-income-table thead th,
 .fin-opex-table thead th,
@@ -1262,20 +1298,9 @@
    v374.5 — Cash Flow rolled-up table (.fin-cfroll-table) +
    Mortgage Information sub-table (.fin-mortgage-table).
    ───────────────────────────────────────────────────────────── */
-.fin-cfroll-table-wrap { overflow-x: auto; margin-top: 4px; }
-.fin-cfroll-table {
-  width: 100%;
-  min-width: 700px;
-  border-collapse: separate;
-  border-spacing: 0;
-  font-size: 12px;
-  font-family: var(--font-sans);
-  background: var(--surface);
-  border: 1px solid var(--border);
-  border-radius: 8px;
-  overflow: hidden;
-}
-.fin-cfroll-table col.col-lbl-wide { width: 220px; }
+/* (Base .fin-cfroll-table layout merged into the unified rule above
+   at line ~1085 so all four dual tables share min-width + table-layout +
+   colgroup proportions. Only color tints declared here.) */
 .fin-cfroll-table col.col-a { background: rgba(37, 99, 235, 0.035); }
 .fin-cfroll-table col.col-p { background: rgba(21, 128, 61, 0.035); }
 .fin-cfroll-table thead th {

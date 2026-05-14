@@ -54884,6 +54884,32 @@ async function ndwCreateDeal(){
     renderDealPage();
     showSaveConfirm('✓ Deal created: '+addr);
 
+    // v374.24: auto-add the freshly-created deal to the current user's
+    // personal pipeline so a new seller lead shows up on their board
+    // immediately — no extra "Add to My Pipeline" click required.
+    // Fire-and-forget — failures are silent (the deal still exists in
+    // the main pipeline regardless). The agent_pipeline_add RPC is
+    // idempotent + returns the assigned stage_id so the in-memory
+    // _myPipeline maps stay in sync.
+    if(_currentUser && _currentUser.id && typeof _sbRpc === 'function'){
+      _sbRpc('agent_pipeline_add', { p_user_id: _currentUser.id, p_deal_id: newId })
+        .then(result => {
+          if(!result || result.error) return;
+          if(typeof _myPipelineDealIds !== 'undefined' && _myPipelineDealIds && _myPipelineDealIds.add){
+            _myPipelineDealIds.add(newId);
+          }
+          if(typeof _myPipelineDealStage !== 'undefined' && _myPipelineDealStage && _myPipelineDealStage.set && result.stage_id){
+            _myPipelineDealStage.set(newId, result.stage_id);
+          }
+          if(typeof _myPipelineSyncButtons === 'function') _myPipelineSyncButtons(newId);
+          if(typeof _myPipelineRerenderIfVisible === 'function') _myPipelineRerenderIfVisible();
+          if(typeof _aceSyncPost === 'function'){
+            _aceSyncPost('mypipeline.add', { dealId: newId, stageId: result.stage_id || null });
+          }
+        })
+        .catch(e => console.warn('[ndw] personal-pipeline auto-add failed:', e.message));
+    }
+
   }catch(e){
     if(btn){ btn.disabled=false; btn.textContent='✓ Create Deal'; }
     if(status) status.textContent = '⚠ '+e.message;

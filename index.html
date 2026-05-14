@@ -834,7 +834,10 @@
   <button class="nav-btn" data-page="workbench" onclick="setNav(this,'workbench')">Workbench</button>
   <button class="nav-btn" data-page="company" onclick="setNav(this,'company')">Company</button>
   <button class="nav-btn" data-page="tasks-nav" onclick="setNav(this,'tasks-nav')">Tasks</button>
-  <a class="nav-btn" href="/ace-agent/" target="_blank" rel="noopener" style="text-decoration:none;">Ace Agent</a>
+  <!-- v374.19: Ace Agent surface is admin-only while the feature is in
+       development. Hidden by default; revealed in the auth flow when
+       _currentUser.role === 'admin' (same pattern as #navSettingsBtn). -->
+  <a class="nav-btn" id="navAceAgentBtn" href="/ace-agent/" target="_blank" rel="noopener" style="text-decoration:none;display:none;">Ace Agent</a>
   <button class="nav-btn" id="navSettingsBtn" data-page="settings" onclick="setNav(this,'settings')" style="display:none;">Settings</button>
   <!-- v102.33: Portfolios moved to a toggle inside the Deal Board header.
        Field Map moved to a button inside the Settings page (admin-only).
@@ -55051,6 +55054,13 @@ function _applyUserToUI(user){
   // see the full settings panel as before.
   const settingsBtn = document.getElementById('navSettingsBtn');
   if(settingsBtn) settingsBtn.style.display = 'inline-block';
+  // v374.19: Ace Agent (nav link + voice widget) is admin-only until
+  // the feature is fully working.
+  const isAdminUser = user.role === 'admin';
+  const aceAgentBtn = document.getElementById('navAceAgentBtn');
+  if(aceAgentBtn) aceAgentBtn.style.display = isAdminUser ? 'inline-block' : 'none';
+  const voiceWidget = document.getElementById('voiceWidget');
+  if(voiceWidget) voiceWidget.style.display = isAdminUser ? 'block' : 'none';
 }
 
 async function setViewMode(mode){
@@ -55963,7 +55973,10 @@ function _aiSelectDealForUpdate(dealId){
 <!-- v222: Voice agent floating widget — sits above the ✦ AI button.
      Talks to /api/turn (Whisper → match command / crm-ai-assist → Claude → TTS)
      so you can use voice from anywhere in the CRM without leaving the page. -->
-<div id="voiceWidget" style="position:fixed;bottom:92px;right:24px;z-index:8001;font-family:'Inter',system-ui,sans-serif;">
+<!-- v374.19: voice widget (Ace Agent voice button) is admin-only while
+     the feature is in development. Hidden by default; the auth flow
+     flips display:block for admin users. -->
+<div id="voiceWidget" style="display:none;position:fixed;bottom:92px;right:24px;z-index:8001;font-family:'Inter',system-ui,sans-serif;">
   <button id="voiceFab" onclick="_voiceToggle()" title="Voice agent" style="width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#ff5b3a,#dc2626);color:#fff;border:none;box-shadow:0 4px 20px rgba(220,38,38,0.45);cursor:pointer;font-size:22px;display:flex;align-items:center;justify-content:center;transition:transform 0.2s;">🎙</button>
   <div id="voicePanel" style="display:none;position:absolute;bottom:68px;right:0;width:420px;max-width:calc(100vw - 40px);height:560px;max-height:calc(100vh - 120px);background:#0b0d10;border-radius:16px;box-shadow:0 12px 50px rgba(0,0,0,0.45);border:1px solid #232830;overflow:hidden;flex-direction:column;color:#e6e8eb;">
     <div style="background:linear-gradient(135deg,#0f172a,#dc2626);color:#fff;padding:14px 16px;display:flex;align-items:center;gap:10px;flex-shrink:0;">

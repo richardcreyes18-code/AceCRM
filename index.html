@@ -48285,12 +48285,89 @@ async function updateDealStage(dealId, newStage){
     if(typeof buildSidebar === 'function'){
       buildSidebar(document.getElementById('sideSearch')?.value || '');
     }
+    // v374.18: auto-pull Street View when a deal lands on a "high-touch"
+    // stage and has no photo yet. Fire-and-forget — failures are silent.
+    if(typeof _svAutoPullOnStageChange === 'function'){
+      _svAutoPullOnStageChange(d, prevStage, newStage);
+    }
     return true;
   } catch(e){
     d['Pipeline Stage'] = prevStage;
     if(currentDeal && currentDeal.id === dealId) currentDeal['Pipeline Stage'] = prevStage;
     console.warn('Stage update failed:', e.message);
     return false;
+  }
+}
+
+// v374.18: auto-pull Street View photo when a deal lands on a stage
+// that the user has marked as "auto-fill". Defaults to Active Listing /
+// Hot Active Listing / Market Price Active. User can edit the list via
+// _store.set('sv_auto_stages', JSON.stringify([...])). Skips when the
+// deal already has a photo, when there's no API key, or when not on
+// Supabase.
+function _svGetAutoStages(){
+  const raw = _store.get('sv_auto_stages');
+  if(raw){
+    try {
+      const arr = JSON.parse(raw);
+      if(Array.isArray(arr)) return arr;
+    } catch(e){}
+  }
+  return ['Active Listing', 'Hot Active Listing', 'Market Price Active'];
+}
+function _svSetAutoStages(arr){
+  try { _store.set('sv_auto_stages', JSON.stringify(arr || [])); } catch(e){}
+}
+async function _svAutoPullOnStageChange(deal, prevStage, newStage){
+  try {
+    if(!deal || !newStage) return;
+    if(prevStage === newStage) return;
+    const triggers = _svGetAutoStages();
+    if(!triggers.includes(newStage)) return;
+    if(!isSupabase()) return;
+    const key = _store.get('google_places_key');
+    if(!key) return;
+    const addr = deal['Address'] || '';
+    if(!addr || addr.trim().length < 5) return;
+    // Skip if the deal already has a photo. _docRecords isn't always
+    // hydrated here so check Supabase directly for the photo_attachments
+    // array on the property row.
+    const rows = await _sbGet(SB_TABLES.properties,
+      `id=eq.${deal.id}&select=photo_attachments,main_photo_attachment_id&limit=1`);
+    const row = Array.isArray(rows) && rows[0];
+    if(row){
+      const photos = Array.isArray(row.photo_attachments) ? row.photo_attachments : [];
+      const hasMain = !!row.main_photo_attachment_id;
+      if(photos.length > 0 || hasMain) return; // already has a photo — skip
+    }
+    // Fire the pull. Silent on failure — this is an automation, not
+    // an interactive action, so we don't want to alert() the user.
+    const result = await _pullStreetViewInternal(deal.id, addr, key);
+    if(result === 'ok'){
+      console.log('[svAuto] pulled Street View for', deal.id, addr, 'after stage →', newStage);
+      // Refresh the visible Summary tab map / photo aside if the deal
+      // is currently open. The Summary aside's Street View card pulls
+      // from photo_attachments so re-rendering picks up the new image.
+      if(currentDeal && currentDeal.id === deal.id && currentTab === 'summary'){
+        // Re-fetch the property row so PHOTO array is fresh, then re-render.
+        try {
+          const fresh = await _sbGet(SB_TABLES.properties, `id=eq.${deal.id}&select=*&limit=1`);
+          if(Array.isArray(fresh) && fresh[0]){
+            const ph = fresh[0].photo_attachments;
+            if(ph){ currentDeal['PHOTO'] = ph; }
+            const mp = fresh[0].main_photo_attachment_id;
+            if(mp){ currentDeal['Main Photo'] = mp; }
+            const tabContentEl = document.getElementById('tabContent');
+            if(tabContentEl){
+              tabContentEl.innerHTML = renderSummaryTab(currentDeal);
+              if(typeof _initSummaryMap === 'function') requestAnimationFrame(_initSummaryMap);
+            }
+          }
+        } catch(e){ /* non-fatal */ }
+      }
+    }
+  } catch(e){
+    console.warn('[svAuto] failed:', e.message);
   }
 }
 
@@ -52971,6 +53048,44 @@ function _streetViewBulkOpen(){
   _streetViewBulkScan();
 }
 
+// v374.18: stages the user can choose to include in a bulk run.
+// Defaults to all "active" stages (excludes Clean Up + Closed buckets).
+// Selection persists to _store under 'sv_bulk_stages'.
+const _SV_BULK_DEFAULT_EXCLUDE = ['Clean Up','Closed','Closed 2025','Closed 2026'];
+function _svBulkGetSelectedStages(){
+  const raw = _store.get('sv_bulk_stages');
+  if(raw){
+    try {
+      const arr = JSON.parse(raw);
+      if(Array.isArray(arr) && arr.length) return arr;
+    } catch(e){}
+  }
+  // Default — all stages except the close-out buckets
+  const all = (typeof NEW_PIPELINE_STAGES !== 'undefined' ? NEW_PIPELINE_STAGES : []);
+  return all.filter(s => !_SV_BULK_DEFAULT_EXCLUDE.includes(s));
+}
+function _svBulkSetSelectedStages(arr){
+  try { _store.set('sv_bulk_stages', JSON.stringify(arr || [])); } catch(e){}
+}
+function _svBulkToggleStage(stage){
+  const sel = new Set(_svBulkGetSelectedStages());
+  if(sel.has(stage)) sel.delete(stage); else sel.add(stage);
+  _svBulkSetSelectedStages([...sel]);
+  _streetViewBulkScan();
+}
+function _svBulkSelectAllStages(){
+  _svBulkSetSelectedStages(NEW_PIPELINE_STAGES.slice());
+  _streetViewBulkScan();
+}
+function _svBulkSelectDefaultStages(){
+  _svBulkSetSelectedStages(NEW_PIPELINE_STAGES.filter(s => !_SV_BULK_DEFAULT_EXCLUDE.includes(s)));
+  _streetViewBulkScan();
+}
+function _svBulkSelectNoneStages(){
+  _svBulkSetSelectedStages([]);
+  _streetViewBulkScan();
+}
+
 async function _streetViewBulkScan(){
   const body = document.getElementById('svBulkBody');
   if(!body) return;
@@ -52983,23 +53098,57 @@ async function _streetViewBulkScan(){
     body.innerHTML = '<div style="padding:40px;text-align:center;color:#dc2626;">Google Maps API key missing. Set it in Settings first.</div>';
     return;
   }
+  const selectedStages = _svBulkGetSelectedStages();
   try {
-    // Find active deals without a main photo AND without any photo_attachments
-    // Limit to realistic active pipeline stages — skip Clean Up, Closed, archived
-    const excludeStages = ['Clean Up','Closed','Closed 2025','Closed 2026'];
-    const stageFilter = excludeStages.map(s => `pipeline_stage.neq.${encodeURIComponent(s)}`).join(',');
-    // PostgREST: fetch deals needing photos; cap at 5000 for safety
-    const query = `select=id,address,pipeline_stage,main_photo_attachment_id,photo_attachments&deleted_at=is.null&address=not.is.null&and=(${stageFilter})&or=(main_photo_attachment_id.is.null,photo_attachments.is.null)&limit=5000`;
-    const rows = await _sbGet(SB_TABLES.properties, query);
-    // Filter client-side to also exclude deals that already have photos (even if no main set)
-    const needPhoto = (rows || []).filter(r => {
-      const addr = r.address || '';
-      if(!addr || addr.trim().length < 5) return false;
-      const photos = Array.isArray(r.photo_attachments) ? r.photo_attachments : [];
-      return photos.length === 0; // zero photos = needs fill
-    });
+    // v374.18: include-list of selected stages instead of hard-coded exclude
+    // list. If the user has none selected, show a friendly empty state instead
+    // of running an unbounded query.
+    let needPhoto = [];
+    if(selectedStages.length){
+      const stageFilter = selectedStages.map(s => `pipeline_stage.eq.${encodeURIComponent(s)}`).join(',');
+      const query = `select=id,address,pipeline_stage,main_photo_attachment_id,photo_attachments&deleted_at=is.null&address=not.is.null&or=(${stageFilter})&limit=5000`;
+      const rows = await _sbGet(SB_TABLES.properties, query);
+      // Filter client-side to exclude deals that already have photos.
+      needPhoto = (rows || []).filter(r => {
+        const addr = r.address || '';
+        if(!addr || addr.trim().length < 5) return false;
+        const photos = Array.isArray(r.photo_attachments) ? r.photo_attachments : [];
+        return photos.length === 0; // zero photos = needs fill
+      });
+    }
+
+    // Build the stage-picker chip row
+    const allStages = (typeof NEW_PIPELINE_STAGES !== 'undefined' ? NEW_PIPELINE_STAGES : []);
+    const stageColors = (typeof NEW_PIPELINE_COLORS !== 'undefined' ? NEW_PIPELINE_COLORS : {});
+    const stageChipsHtml = allStages.map(s => {
+      const isOn = selectedStages.includes(s);
+      const color = stageColors[s] || '#64748b';
+      const bg = isOn ? color : '#fff';
+      const fg = isOn ? '#fff' : '#475569';
+      const border = isOn ? color : '#cbd5e1';
+      return `<button onclick="_svBulkToggleStage('${s.replace(/'/g,"\\'")}')" style="background:${bg};color:${fg};border:1px solid ${border};padding:5px 11px;border-radius:99px;font-size:11px;font-weight:600;cursor:pointer;white-space:nowrap;transition:background 0.1s, border-color 0.1s;">${s}</button>`;
+    }).join('');
 
     body.innerHTML = `
+      <!-- v374.18: stage filter picker -->
+      <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:16px 20px;margin-bottom:14px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:10px;margin-bottom:10px;">
+          <div>
+            <div style="font-size:13px;font-weight:700;color:#0f172a;">Pipeline stages to include</div>
+            <div style="font-size:11px;color:#64748b;margin-top:2px;">Only deals at the selected stages will be considered.</div>
+          </div>
+          <div style="display:flex;gap:6px;">
+            <button onclick="_svBulkSelectAllStages()" style="background:#fff;color:#475569;border:1px solid #cbd5e1;padding:5px 11px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">All</button>
+            <button onclick="_svBulkSelectDefaultStages()" style="background:#fff;color:#475569;border:1px solid #cbd5e1;padding:5px 11px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">Active only</button>
+            <button onclick="_svBulkSelectNoneStages()" style="background:#fef2f2;color:#991b1b;border:1px solid #fecaca;padding:5px 11px;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;">None</button>
+          </div>
+        </div>
+        <div style="display:flex;flex-wrap:wrap;gap:6px;">${stageChipsHtml}</div>
+        <div style="font-size:10.5px;color:#94a3b8;margin-top:10px;">
+          ${selectedStages.length} of ${allStages.length} stage${allStages.length===1?'':'s'} selected · saved to your settings
+        </div>
+      </div>
+
       <div style="background:#fff;border:1px solid #e2e8f0;border-radius:10px;padding:20px;margin-bottom:16px;">
         <div style="display:flex;gap:20px;flex-wrap:wrap;">
           <div style="flex:1;min-width:180px;">
@@ -53024,12 +53173,12 @@ async function _streetViewBulkScan(){
           <li>Keep this tab open — cancels if you close or navigate away.</li>
           <li>Deals without Street View coverage (~5-15%) are skipped silently.</li>
           <li>You can cancel at any time; already-pulled photos are kept.</li>
-          <li>Stages "Clean Up", "Closed", "Closed 2025", "Closed 2026" are excluded.</li>
+          <li>${selectedStages.length === 0 ? 'No stages selected — nothing will run.' : `Including: <strong>${selectedStages.join(', ')}</strong>`}</li>
         </ul>
       </div>
       <div style="display:flex;gap:10px;align-items:center;">
-        <button id="svBulkStartBtn" onclick="_streetViewBulkStart()" style="background:#059669;color:#fff;border:none;padding:12px 22px;font-size:14px;font-weight:700;border-radius:8px;cursor:pointer;" ${needPhoto.length===0?'disabled':''}>
-          ${needPhoto.length===0 ? '✓ All deals have photos' : `📸 Start — fetch ${needPhoto.length.toLocaleString()} photos`}
+        <button id="svBulkStartBtn" onclick="_streetViewBulkStart()" style="background:${needPhoto.length===0?'#94a3b8':'#059669'};color:#fff;border:none;padding:12px 22px;font-size:14px;font-weight:700;border-radius:8px;cursor:${needPhoto.length===0?'not-allowed':'pointer'};" ${needPhoto.length===0?'disabled':''}>
+          ${needPhoto.length===0 ? (selectedStages.length===0 ? '⏸ Select stages above' : '✓ All matching deals have photos') : `📸 Start — fetch ${needPhoto.length.toLocaleString()} photos`}
         </button>
       </div>
       <div id="svBulkProgress" style="display:none;margin-top:20px;"></div>

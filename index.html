@@ -10038,104 +10038,86 @@ function renderFinancialTab(d){
          just with actual income instead of proforma.) -->
     <div class="pds-section">
       <div class="pds-section-hd"><svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="1" x2="12" y2="23"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></svg>Purchase Price &amp; Down Payment <span class="sub">Actual asking vs. our pitch-out number</span></div>
-      <div style="display:grid;grid-template-columns:220px 1fr 2fr;gap:0;font-size:11px;">
-        <!-- 220px gutter aligns the cards with the metric table columns above.
-             Asking card occupies metric col 1; Pitch Out card spans cols 2 + 3. -->
-        <div></div>
-
-        <!-- LEFT: ASKING / ACCEPTED FROM SELLER (Actual CoC, asking-price scenario) -->
-        <div style="padding:12px 14px 12px 0;border-right:2px solid #ddd;">
-          <div style="font-weight:bold;color:#2060b0;font-size:12px;margin-bottom:4px;padding-bottom:4px;border-bottom:1px solid #c0d0e8;">
-            Actual (Current) — ${(Number(d['Target Seller Net'])||0) > 0 ? 'Accepted from Seller' : 'Asking Price'}
-          </div>
-          <div style="font-size:9px;color:#64748b;margin-bottom:8px;font-style:italic;">
-            ${(Number(d['Target Seller Net'])||0) > 0
-              ? '↪ using seller-accepted net (overrides asking)'
-              : '↪ from Offers tab "Seller Original Asking"'}
-          </div>
-          <table style="width:100%;border:none;border-collapse:separate;border-spacing:0 6px;">
-            <tr>
-              <td style="width:155px;font-weight:bold;color:#333;text-align:right;padding-right:8px;">${(Number(d['Target Seller Net'])||0) > 0 ? 'Accepted Price' : 'Asking Price'}</td>
-              <td><span style="color:#333;margin-right:4px;">$</span>
-                <input class="form-input num-input" id="fin_askPrice" type="text" inputmode="numeric" value="${_fmtNum((Number(d['Target Seller Net'])||0) || ask || '')}" style="width:110px;" oninput="liveDownCalc()"/>
-              </td>
-            </tr>
-            <tr>
-              <td style="font-weight:bold;color:#333;text-align:right;padding-right:8px;">Renovation Expense</td>
-              <td><span style="color:#333;margin-right:4px;">$</span>
-                <input class="form-input num-input" id="fin_a_renovation" type="text" inputmode="numeric" value="${_fmtNum(fi.aRenovation||fi.renovation||'')}" style="width:110px;" oninput="liveDownCalc()"/>
-              </td>
-            </tr>
-            <tr>
-              <td style="font-weight:bold;color:#333;text-align:right;padding-right:8px;">Down Payment Type</td>
-              <td style="display:flex;gap:10px;align-items:center;padding-top:2px;flex-wrap:wrap;">
+      <div class="ppdp-grid">
+        <!-- LEFT (Actual / Asking) — blue card -->
+        <div class="ppdp-card is-actual">
+          <div class="ppdp-title">Actual (Current) — ${(Number(d['Target Seller Net'])||0) > 0 ? 'Accepted from Seller' : 'Asking Price'}</div>
+          <div class="ppdp-source">↪ ${(Number(d['Target Seller Net'])||0) > 0
+            ? 'using seller-accepted net (overrides asking)'
+            : 'from Offers tab "Seller Original Asking"'}</div>
+          <div class="ppdp-rows">
+            <div class="ppdp-row">
+              <span class="ppdp-lbl">${(Number(d['Target Seller Net'])||0) > 0 ? 'Accepted Price' : 'Asking Price'}</span>
+              <span class="ppdp-input">
+                <span class="cell-input-wrap"><span class="pre">$</span><input class="cell-input mono num-input" id="fin_askPrice" type="text" inputmode="numeric" value="${_fmtNum((Number(d['Target Seller Net'])||0) || ask || '')}" oninput="liveDownCalc()"/></span>
+              </span>
+            </div>
+            <div class="ppdp-row">
+              <span class="ppdp-lbl">Renovation Expense</span>
+              <span class="ppdp-input">
+                <span class="cell-input-wrap"><span class="pre">$</span><input class="cell-input mono num-input" id="fin_a_renovation" type="text" inputmode="numeric" value="${_fmtNum(fi.aRenovation||fi.renovation||'')}" oninput="liveDownCalc()"/></span>
+              </span>
+            </div>
+            <div class="ppdp-row">
+              <span class="ppdp-lbl">Down Payment Type</span>
+              <span class="ppdp-radio">
                 <label><input type="radio" name="aDP" id="aDpTypePct" value="percent" ${fi.aDpType!=='amount'?'checked':''} onchange="liveDownCalc()"/> Percent</label>
                 <label><input type="radio" name="aDP" id="aDpTypeAmt" value="amount" ${fi.aDpType==='amount'?'checked':''} onchange="liveDownCalc()"/> Amount</label>
-              </td>
-            </tr>
-            <tr>
-              <td style="font-weight:bold;color:#333;text-align:right;padding-right:8px;">Your Down Payment</td>
-              <td style="display:flex;gap:6px;align-items:center;padding-top:2px;flex-wrap:wrap;">
-                <strong id="fin_a_downDisplay" style="color:#2060b0;min-width:80px;">$0.00</strong>
-                <input class="form-input" id="fin_a_downPct" value="${fi.aDownPct||aDownPct}" style="width:46px;text-align:center;" oninput="liveDownCalc()"/>
-                <span id="fin_a_dpLabel" style="font-weight:bold;color:#333;">${fi.aDpType==='amount'?'$':'%'}</span>
-              </td>
-            </tr>
-            <tr>
-              <td style="font-weight:bold;color:#333;text-align:right;padding-right:8px;">
-                Total Cash Required ${tip('tcr','Down Payment + Renovation. Total out-of-pocket cash. Used for Actual Cash-on-Cash at the asking-price (or seller-accepted) scenario.')}
-              </td>
-              <td><strong id="fin_a_totalCash" style="color:#2060b0;font-size:13px;">$0.00</strong></td>
-            </tr>
-          </table>
+              </span>
+            </div>
+            <div class="ppdp-row">
+              <span class="ppdp-lbl">Your Down Payment</span>
+              <span class="ppdp-input">
+                <strong id="fin_a_downDisplay" class="ppdp-mono primary">$0.00</strong>
+                <span class="cell-input-wrap"><input class="cell-input mono narrow" id="fin_a_downPct" value="${fi.aDownPct||aDownPct}" oninput="liveDownCalc()"/><span class="suf" id="fin_a_dpLabel">${fi.aDpType==='amount'?'$':'%'}</span></span>
+              </span>
+            </div>
+            <div class="ppdp-row total">
+              <span class="ppdp-lbl">Total Cash Required ${tip('tcr','Down Payment + Renovation. Total out-of-pocket cash. Used for Actual Cash-on-Cash at the asking-price (or seller-accepted) scenario.')}</span>
+              <strong id="fin_a_totalCash" class="ppdp-mono primary">$0.00</strong>
+            </div>
+          </div>
         </div>
 
-        <!-- RIGHT: PITCH OUT — drives BOTH "Pitch Out (actual)" and "Pitch Out
-             (proforma)" metric columns. Single set of inputs since the down
-             payment is the same; metrics differ only in income/expense basis. -->
-        <!-- (v201: middle Pitch Out Actual card removed) -->
-        <div style="padding:12px 0 12px 14px;">
-          <div style="font-weight:bold;color:#2a7a2a;font-size:12px;margin-bottom:4px;padding-bottom:4px;border-bottom:1px solid #b0d8b0;">
-            Proforma (Projected) — Pitch Out Price
-          </div>
-          <div style="font-size:9px;color:#64748b;margin-bottom:8px;font-style:italic;">↪ from Offers tab "Pitch Out Price"</div>
-          <table style="width:100%;border:none;border-collapse:separate;border-spacing:0 6px;">
-            <tr>
-              <td style="width:155px;font-weight:bold;color:#333;text-align:right;padding-right:8px;">Pitch Out Price</td>
-              <td><span style="color:#333;margin-right:4px;">$</span>
-                <input class="form-input num-input" id="fin_p_price" type="text" inputmode="numeric" value="${_fmtNum(Number(d['Pitch Out Price'])||'')}" style="width:110px;" oninput="_finPoSync('p');liveDownCalc()"/>
-              </td>
-            </tr>
-            <tr>
-              <td style="font-weight:bold;color:#333;text-align:right;padding-right:8px;">Renovation Expense</td>
-              <td><span style="color:#333;margin-right:4px;">$</span>
-                <input class="form-input num-input" id="fin_renovation" type="text" inputmode="numeric" value="${_fmtNum(fi.renovation||'')}" style="width:110px;" oninput="liveDownCalc()"/>
-              </td>
-            </tr>
-            <tr>
-              <td style="font-weight:bold;color:#333;text-align:right;padding-right:8px;">Down Payment Type</td>
-              <td style="display:flex;gap:10px;align-items:center;padding-top:2px;flex-wrap:wrap;">
+        <div class="ppdp-divider"></div>
+
+        <!-- RIGHT (Proforma / Pitch Out) — green card -->
+        <div class="ppdp-card is-pro">
+          <div class="ppdp-title">Proforma (Projected) — Pitch Out Price</div>
+          <div class="ppdp-source">↪ from Offers tab "Pitch Out Price"</div>
+          <div class="ppdp-rows">
+            <div class="ppdp-row">
+              <span class="ppdp-lbl">Pitch Out Price</span>
+              <span class="ppdp-input">
+                <span class="cell-input-wrap"><span class="pre">$</span><input class="cell-input mono num-input" id="fin_p_price" type="text" inputmode="numeric" value="${_fmtNum(Number(d['Pitch Out Price'])||'')}" oninput="_finPoSync('p');liveDownCalc()"/></span>
+              </span>
+            </div>
+            <div class="ppdp-row">
+              <span class="ppdp-lbl">Renovation Expense</span>
+              <span class="ppdp-input">
+                <span class="cell-input-wrap"><span class="pre">$</span><input class="cell-input mono num-input" id="fin_renovation" type="text" inputmode="numeric" value="${_fmtNum(fi.renovation||'')}" oninput="liveDownCalc()"/></span>
+              </span>
+            </div>
+            <div class="ppdp-row">
+              <span class="ppdp-lbl">Down Payment Type</span>
+              <span class="ppdp-radio">
                 <label><input type="radio" name="pDP" id="pDpTypePct" value="percent" ${fi.pDpType!=='amount'?'checked':''} onchange="liveDownCalc()"/> Percent</label>
                 <label><input type="radio" name="pDP" id="pDpTypeAmt" value="amount" ${fi.pDpType==='amount'?'checked':''} onchange="liveDownCalc()"/> Amount</label>
-              </td>
-            </tr>
-            <tr>
-              <td style="font-weight:bold;color:#333;text-align:right;padding-right:8px;">Your Down Payment</td>
-              <td style="display:flex;gap:6px;align-items:center;padding-top:2px;flex-wrap:wrap;">
-                <strong id="fin_p_downDisplay" style="color:#2a7a2a;min-width:80px;">$0.00</strong>
-                <input class="form-input" id="fin_p_downPct" value="${fi.pDownPct||aDownPct}" style="width:46px;text-align:center;" oninput="liveDownCalc()"/>
-                <span id="fin_p_dpLabel" style="font-weight:bold;color:#333;">${fi.pDpType==='amount'?'$':'%'}</span>
-              </td>
-            </tr>
-            <tr>
-              <td style="font-weight:bold;color:#333;text-align:right;padding-right:8px;">
-                Total Cash Required ${tip('tcr2','Down Payment + Renovation. Used for Proforma Cash-on-Cash at the buyer-facing pitch-out price (using proforma income/expenses).')}
-              </td>
-              <td><strong id="fin_p_totalCash" style="color:#2a7a2a;font-size:13px;">$0.00</strong></td>
-            </tr>
-          </table>
+              </span>
+            </div>
+            <div class="ppdp-row">
+              <span class="ppdp-lbl">Your Down Payment</span>
+              <span class="ppdp-input">
+                <strong id="fin_p_downDisplay" class="ppdp-mono" style="color:var(--green-dark);">$0.00</strong>
+                <span class="cell-input-wrap"><input class="cell-input mono narrow" id="fin_p_downPct" value="${fi.pDownPct||aDownPct}" oninput="liveDownCalc()"/><span class="suf" id="fin_p_dpLabel">${fi.pDpType==='amount'?'$':'%'}</span></span>
+              </span>
+            </div>
+            <div class="ppdp-row total">
+              <span class="ppdp-lbl">Total Cash Required ${tip('tcr2','Down Payment + Renovation. Used for Proforma Cash-on-Cash at the buyer-facing pitch-out price (using proforma income/expenses).')}</span>
+              <strong id="fin_p_totalCash" class="ppdp-mono" style="color:var(--green-dark);">$0.00</strong>
+            </div>
+          </div>
         </div>
-
       </div>
     </div>
 

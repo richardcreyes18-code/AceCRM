@@ -48153,6 +48153,21 @@ async function refreshPropertyPhotos(dealId){
       photos = (data.fields?.PHOTO||[]).filter(a=>a.type&&a.type.startsWith('image/'));
       mainPhotoId = data.fields?.['Main Photo']||'';
     }
+    // v374.23: re-render the Summary tab so its Street View aside-card
+    // picks up the new main photo. Without this, the header thumbnail
+    // updates instantly but the Summary aside stayed stale until the
+    // user manually switched tabs.
+    if(currentDeal?.id === dealId && typeof currentTab !== 'undefined' && currentTab === 'summary'){
+      const tabContentEl = document.getElementById('tabContent');
+      if(tabContentEl && typeof renderSummaryTab === 'function'){
+        try {
+          _rendering = true;
+          tabContentEl.innerHTML = renderSummaryTab(currentDeal);
+          _rendering = false;
+          if(typeof _initSummaryMap === 'function') requestAnimationFrame(_initSummaryMap);
+        } catch(e){ _rendering = false; }
+      }
+    }
     const gallery = document.getElementById('photoGallery');
     if(!gallery) return;
     const imgPhotos = isSupabase() ? photos.filter(p=>p.url) : photos;

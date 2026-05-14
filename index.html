@@ -1550,6 +1550,7 @@ function _aceSyncDispatch(ev){
       case 'mypipeline.portfolio_remove': return _aceSyncHandleMyPipelinePortfolioRemove(msg.payload);
       case 'mypipeline.portfolio_move':   return _aceSyncHandleMyPipelinePortfolioMove(msg.payload);
       case 'mypipeline.views':    return _aceSyncHandleViewsDirty();
+      case 'bc.taxonomy.changed': return _aceSyncHandleBcTaxonomyChanged(msg.payload);
     }
   }catch(e){
     console.warn('_aceSyncDispatch error:', e);
@@ -1687,6 +1688,22 @@ function _aceSyncHandleViewsDirty(){
   _myPipelineLoadViews().then(() => {
     if(typeof _myPipelineRerenderIfVisible === 'function') _myPipelineRerenderIfVisible();
   });
+}
+
+// v374.27: BC taxonomy was changed in a sibling tab. Re-fetch from
+// ace_ai_settings so this tab's window.ASSET_SUBTYPES picks up the new
+// vocabulary, then nudge the BC asset combobox if it's currently open
+// so the dropdown reflects the change without a manual re-type.
+function _aceSyncHandleBcTaxonomyChanged(_payload){
+  if(typeof window._bcTaxonomyLoad === 'function'){
+    window._bcTaxonomyLoad().then(() => {
+      // If the BC detail combobox is open, re-render its current query.
+      const root = document.getElementById('bcf_asset_cc');
+      if(root && root.classList.contains('is-open') && typeof _bcAtSearch === 'function'){
+        try { _bcAtSearch(); } catch(e){ /* non-fatal */ }
+      }
+    }).catch(()=>{});
+  }
 }
 
 // Initialize immediately — BroadcastChannel is cheap and we want to
@@ -34322,7 +34339,8 @@ function _bcAtUpdateSubs(){
   const container = document.getElementById('bcf_at_subs');
   if(!sel||!container) return;
   const type = sel.value;
-  const subs = ASSET_SUBTYPES[type]||[];
+  // v374.27: shape-tolerant read from live window.ASSET_SUBTYPES
+  const subs = (typeof _bcGetAssetSubs === 'function') ? _bcGetAssetSubs(type) : (ASSET_SUBTYPES[type]||[]);
   const safeType = type.replace(/'/g,"\\'");
   // v234: always offer a "category-only" row at the top so the user can
   // add (e.g.) bare "Office" without being forced to pick CBD/Suburban/etc.
@@ -34335,6 +34353,31 @@ function _bcAtUpdateSubs(){
   const subRows = subs.map(s=>`<div onclick="_bcAtSelect('${safeType}','${s.replace(/'/g,"\\'")}')" style="padding:4px 7px;cursor:pointer;border-radius:4px;font-size:11px;" onmouseover="this.style.background='#f1f5f9'" onmouseout="this.style.background='transparent'">${s}</div>`).join('');
   container.innerHTML = categoryRow + subRows;
 }
+// v374.27: shape-tolerant reader for window.ASSET_SUBTYPES. The admin
+// taxonomy editor stores subtypes as `string[]` (admin/bc-taxonomy.js
+// _normalize), and the hardcoded bootstrap at index.html:8116 uses the
+// same shape — but future schemas may use `{key:'office',label:'Office'}`
+// objects. Normalize to `string[]` so the rest of the codepath stays
+// simple. Always reads from `window.ASSET_SUBTYPES` so admin mutations
+// AND cross-tab broadcasts are picked up live (the lexical
+// `ASSET_SUBTYPES` binding may be stale if a module captured it early).
+function _bcGetAssetSubs(type){
+  const all = (typeof window !== 'undefined' && window.ASSET_SUBTYPES) || (typeof ASSET_SUBTYPES !== 'undefined' ? ASSET_SUBTYPES : {});
+  const raw = all && all[type];
+  if(!raw) return [];
+  if(Array.isArray(raw)){
+    return raw.map(s => typeof s === 'string' ? s : (s && (s.label || s.name || s.key) || '')).filter(Boolean);
+  }
+  if(typeof raw === 'object'){
+    return Object.values(raw).map(v => typeof v === 'string' ? v : (v && (v.label || v.name || v.key) || '')).filter(Boolean);
+  }
+  return [];
+}
+function _bcGetAssetTypes(){
+  const all = (typeof window !== 'undefined' && window.ASSET_SUBTYPES) || (typeof ASSET_SUBTYPES !== 'undefined' ? ASSET_SUBTYPES : {});
+  return all ? Object.keys(all) : [];
+}
+
 function _bcAtSearch(){
   const q = (document.getElementById('bcf_at_search')?.value||'').toLowerCase().trim();
   const res = document.getElementById('bcf_at_results');
@@ -34345,12 +34388,12 @@ function _bcAtSearch(){
   const root = document.getElementById('bcf_asset_cc');
   const open = root && root.classList.contains('is-open');
   const matches = [];
-  Object.entries(ASSET_SUBTYPES).forEach(([type,subs])=>{
-    if(!q || type.toLowerCase().includes(q)) matches.push({type,sub:'',label:type});
-    subs.forEach(s=>{
-      if(!q || s.toLowerCase().includes(q)) matches.push({type,sub:s,label:`${type}: ${s}`});
-    });
-  });
+  for(const type of _bcGetAssetTypes()){
+    if(!q || type.toLowerCase().includes(q)) matches.push({type, sub:'', label: type});
+    for(const s of _bcGetAssetSubs(type)){
+      if(!q || s.toLowerCase().includes(q)) matches.push({type, sub: s, label: `${type}: ${s}`});
+    }
+  }
   if(!open && !q){ res.style.display='none'; return; }
   if(!matches.length){
     res.style.display='block';
@@ -34358,7 +34401,39 @@ function _bcAtSearch(){
     return;
   }
   res.style.display='block';
-  res.innerHTML = matches.slice(0, q ? 30 : 80).map(m=>`<button type="button" class="cc-row cc-row-asset" data-cc-row onclick="_bcAtSelect('${m.type.replace(/'/g,"\\'")}','${m.sub.replace(/'/g,"\\'")}');document.getElementById('bcf_at_search').value='';document.getElementById('bcf_at_results').style.display='none';"><span class="ast-chip ${_bcAssetChipCls(m.label)}">${m.label}</span></button>`).join('');
+  // v374.27: data-attrs + delegated click handler (bound once on res).
+  // The old inline `onclick="_bcAtSelect('${m.type}',…)"` string-templated
+  // the type/sub values into JS source — fragile when m.type contained
+  // quotes/slashes/special chars, and a long-standing inline-handler
+  // timing race meant clicks were silently dropped on some browsers.
+  // Single delegated click handler survives any DOM thrash + reads the
+  // values directly from data-* attributes (which use HTML escaping,
+  // not JS-string escaping — no interaction with single quotes).
+  res.innerHTML = matches.slice(0, q ? 30 : 80).map(m =>
+    `<button type="button" class="cc-row cc-row-asset" data-cc-row data-cc-type="${_bcAttrEsc(m.type)}" data-cc-sub="${_bcAttrEsc(m.sub)}"><span class="ast-chip ${_bcAssetChipCls(m.label)}">${_bcAttrEsc(m.label)}</span></button>`
+  ).join('');
+  // Bind the delegated handler once per #bcf_at_results node lifetime.
+  if(!res._bcCcClickBound){
+    res.addEventListener('click', (e) => {
+      const btn = e.target.closest('[data-cc-row]');
+      if(!btn) return;
+      const type = btn.getAttribute('data-cc-type') || '';
+      const sub  = btn.getAttribute('data-cc-sub')  || '';
+      try { _bcAtSelect(type, sub); }
+      catch(err){ console.warn('[bc] asset select failed:', err.message); }
+      const input = document.getElementById('bcf_at_search');
+      if(input){ input.value = ''; input.focus(); }
+      res.style.display = 'none';
+      _bcAtSearch(); // re-render with cleared query so user can continue browsing
+    });
+    res._bcCcClickBound = true;
+  }
+}
+// v374.27: minimal HTML-attribute escaper (handles &<>"'). Identical
+// behavior to the typeahead's _tnsEsc but kept local so this section
+// doesn't depend on the order modules load.
+function _bcAttrEsc(s){
+  return String(s == null ? '' : s).replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 }
 function _bcAtSelect(type, sub){
   const fullType = sub ? `${type}: ${sub}` : type;

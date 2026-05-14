@@ -98,6 +98,15 @@ export async function _bcTaxonomySave(taxonomy){
   } else {
     window.ASSET_SUBTYPES = _clone(clean);
   }
+  // v374.27: broadcast to sibling tabs so a BC detail page that was
+  // open before this admin save picks up the new vocabulary without a
+  // page reload. _aceSyncDispatch (index.html:1539) routes the message
+  // back through _bcTaxonomyLoad on the receiving tab.
+  try {
+    if(typeof window._aceSyncPost === 'function'){
+      window._aceSyncPost('bc.taxonomy.changed', { at: Date.now() });
+    }
+  } catch(e){ /* non-fatal */ }
   return clean;
 }
 

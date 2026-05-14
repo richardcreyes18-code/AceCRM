@@ -5699,20 +5699,229 @@ function renderSummaryTab(d){
       <div class="section-bd">${nsBody}</div>
     </div>`;
 
+  // v374.15: extra KPI cell for Price/Unit (replaces Agent in the strip
+  // for non-MF the cell falls back to Agent so the strip never goes empty).
+  const units = Number(d['Number of Units']||d['No. of Units']||0);
+  const askNum = Number(d['Asking Price']||0);
+  const pricePerUnit = (askNum && units) ? '$' + Math.round(askNum/units).toLocaleString() : '';
+
+  // v374.15: institutional hero + kpi strip. Replaces the v302 markup.
+  const heroAndKpi = `
+    <div class="hero-grid">
+      <div class="hero-card primary">
+        <div class="lbl">Asking Price</div>
+        <div class="val ${ask === '—' ? 'muted' : ''}">${ask}</div>
+        <div class="sub">${county ? county + ', NJ' : assetType}</div>
+      </div>
+      <div class="hero-card ${offer !== '—' ? 'green' : 'empty'}">
+        <div class="lbl">Offer Price</div>
+        <div class="val ${offer === '—' ? 'muted' : 'green'}">${offer}</div>
+        <div class="sub">${offer !== '—' ? 'Active offer' : 'No offer recorded'}</div>
+      </div>
+    </div>
+    <div class="kpi-strip">
+      <div class="kpi"><span class="lbl">NOI</span><span class="val ${noi === '—' ? 'muted' : ''}">${noi}</span><span class="sub">${noi !== '—' ? 'Trailing 12 mo.' : 'Pending'}</span></div>
+      <div class="kpi"><span class="lbl">Cap Rate</span><span class="val ${cap === '—' ? 'muted' : ''}">${cap}</span><span class="sub">${cap !== '—' ? 'Asking-price basis' : 'Pending NOI + price'}</span></div>
+      <div class="kpi"><span class="lbl">Commission</span><span class="val">${commAmt}</span><span class="sub">${commSplit}% rate</span></div>
+      <div class="kpi"><span class="lbl">${pricePerUnit ? 'Price / Unit' : 'Agent'}</span><span class="val ${pricePerUnit ? '' : ''}" style="font-size:${pricePerUnit?'18px':'13px'};font-weight:${pricePerUnit?'700':'600'};">${pricePerUnit || agent}</span><span class="sub">${pricePerUnit ? units+' units' : ''}</span></div>
+    </div>`;
+
+  // ──────────────────────────────────────────────────────────────
+  // RIGHT-ASIDE CARDS (Street View / Map / Contact / Pipeline / Activity)
+  // ──────────────────────────────────────────────────────────────
+  // Pull main photo from the same source used by the Documents tab so
+  // the Summary aside stays in sync with photo uploads.
+  const photos = (d['PHOTO']||[]).filter(a=>a.type&&a.type.startsWith('image/'));
+  const mainPhotoId = d['Main Photo']||'';
+  const mainPhoto = photos.find(p=>p.id===mainPhotoId) || (photos.length?photos[0]:null);
+  const mainPhotoUrl = mainPhoto?.thumbnails?.large?.url || mainPhoto?.url || '';
+
+  // Lat / Lng for the map card (read from the deal record; falls back
+  // to placeholder text when absent).
+  const lat = Number(d['Latitude']||d['Lat']||0);
+  const lng = Number(d['Longitude']||d['Lng']||d['Lon']||0);
+  const latLngLabel = (lat && lng) ? `${lat.toFixed(4)}° ${lat>=0?'N':'S'} · ${Math.abs(lng).toFixed(4)}° ${lng<=0?'W':'E'}` : '—';
+  const fullAddress = address + (d['City']?', '+d['City']:'') + (d['State']?', '+d['State']:'') + (d['Zip']?' '+d['Zip']:'');
+  const mapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(fullAddress)}`;
+  const directionsUrl = `https://www.google.com/maps/dir/?api=1&destination=${encodeURIComponent(fullAddress)}`;
+
+  const streetViewCard = `
+    <div class="aside-card">
+      <div class="hd">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+        Street View
+      </div>
+      <div style="padding:12px;">
+        <div class="photo-thumb ${mainPhotoUrl ? 'has-image' : ''}">
+          ${mainPhotoUrl
+            ? `<img class="photo-thumb-img" src="${mainPhotoUrl}" alt="Property main photo" onclick="if(typeof openPhotoLightbox==='function') openPhotoLightbox('${d.id}',0)"/>`
+            : `<svg class="glyph" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><rect x="4" y="2" width="16" height="20" rx="1"/><path d="M9 22v-5h6v5M8 6h.01M16 6h.01M12 6h.01M12 10h.01M12 14h.01M16 10h.01M16 14h.01M8 10h.01M8 14h.01"/></svg><span class="label">No photo · fetch or upload below</span>`}
+        </div>
+        <div class="row gap-6" style="margin-top:8px;">
+          <button class="btn sm" style="flex:1;justify-content:center;" onclick="if(typeof pullStreetViewPhoto==='function') pullStreetViewPhoto('${d.id}'); else alert('Open the Documents tab to fetch Street View.');">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+            Fetch Street View
+          </button>
+          <button class="btn sm" style="flex:1;justify-content:center;" onclick="document.getElementById('photoFileInput')?.click()||switchTab('documents')">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+            Upload
+          </button>
+        </div>
+      </div>
+    </div>`;
+
+  const mapCard = `
+    <div class="aside-card">
+      <div class="hd">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+        Map Location
+        <span style="margin-left:auto;font-size:10px;color:var(--fg-3,#94a3b8);font-family:var(--font-mono,monospace);font-weight:500;text-transform:none;letter-spacing:0;">${latLngLabel}</span>
+      </div>
+      <div class="map-wrap">
+        <div class="map-canvas" role="img" aria-label="Map showing pinpoint at ${fullAddress.replace(/"/g,'&quot;')}">
+          <div class="map-tile"></div>
+          <div class="map-road map-road-h" style="top:28%;"></div>
+          <div class="map-road map-road-h" style="top:62%;"></div>
+          <div class="map-road map-road-v" style="left:34%;"></div>
+          <div class="map-road map-road-v" style="left:70%;"></div>
+          <div class="map-road map-road-d map-thin" style="top:80%;"></div>
+          <div class="map-park" style="top:8%;left:46%;width:22%;height:18%;"></div>
+          <div class="map-water" style="top:72%;left:-10%;width:45%;height:30%;"></div>
+          <div class="map-block" style="top:12%;left:12%;width:18%;height:14%;"></div>
+          <div class="map-block" style="top:34%;left:42%;width:24%;height:24%;"></div>
+          <div class="map-block" style="top:40%;left:12%;width:18%;height:18%;"></div>
+          <div class="map-block" style="top:68%;left:40%;width:16%;height:12%;"></div>
+          <div class="map-block" style="top:68%;left:74%;width:18%;height:20%;"></div>
+          <div class="map-pin">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z" fill="#2563eb"/><circle cx="12" cy="10" r="3" fill="#fff" stroke="#fff"/></svg>
+          </div>
+          <div class="map-pulse"></div>
+          <div class="map-attr">© Maps · Approx.</div>
+          <div class="map-zoom"><button title="Zoom in" onclick="window.open('${mapsUrl}','_blank')">+</button><button title="Zoom out" onclick="window.open('${mapsUrl}','_blank')">−</button></div>
+        </div>
+        <div class="map-addr">
+          <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+          <div>
+            <div class="strong">${address}</div>
+            <div class="muted">${(d['City']||'') + (d['State']?', '+d['State']:'') + (d['Zip']?' '+d['Zip']:'') || (county ? county + ', NJ' : '')}</div>
+          </div>
+        </div>
+        <div class="row gap-6" style="padding:10px 12px 12px;gap:6px;">
+          <a class="btn sm" style="flex:1;justify-content:center;" href="${mapsUrl}" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>
+            Open in Maps
+          </a>
+          <a class="btn sm" style="flex:1;justify-content:center;" href="${directionsUrl}" target="_blank" rel="noopener">
+            <svg viewBox="0 0 24 24" width="12" height="12" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
+            Directions
+          </a>
+        </div>
+      </div>
+    </div>`;
+
+  // Contact card (Seller)
+  const sName  = d['_sellerName'] || d['_ownerName'] || '';
+  const sPhone = d['_sellerPhone'] || '';
+  const sEmail = d['_sellerEmail'] || '';
+  const sInit  = sName ? sName.trim().split(/\s+/).map(p=>p[0]||'').slice(0,2).join('').toUpperCase() : '?';
+  const dateAdded = d['Date Added'] ? new Date(d['Date Added']).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}) : '—';
+  const contactCard = `
+    <div class="aside-card">
+      <div class="hd">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></svg>
+        Contact
+      </div>
+      <div class="bd">
+        ${sName ? `
+        <div class="row gap-8" style="margin-bottom:8px;border-bottom:1px solid var(--border,#e2e8f0);padding-bottom:8px;">
+          <div style="width:32px;height:32px;border-radius:50%;background:linear-gradient(135deg,#1e3a8a,#2563eb);color:#fff;display:grid;place-items:center;font-weight:700;font-size:11px;flex-shrink:0;">${sInit}</div>
+          <div class="col" style="gap:0;">
+            <div style="font-weight:600;font-size:12.5px;color:var(--text,#0f172a);">${sName}</div>
+            <div style="font-size:11px;color:var(--text3,#94a3b8);">Seller · ${dateAdded === '—' ? 'lead' : 'added ' + dateAdded}</div>
+          </div>
+        </div>` : ''}
+        <div class="row"><span class="k"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;"><path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72 12.84 12.84 0 0 0 .7 2.81 2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45 12.84 12.84 0 0 0 2.81.7A2 2 0 0 1 22 16.92z"/></svg>Phone</span><span class="v ${sPhone?'':'muted'}">${sPhone || '—'}</span></div>
+        <div class="row"><span class="k"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;"><path d="M4 4h16c1.1 0 2 .9 2 2v12c0 1.1-.9 2-2 2H4c-1.1 0-2-.9-2-2V6c0-1.1.9-2 2-2z"/><polyline points="22 6 12 13 2 6"/></svg>Email</span><span class="v ${sEmail?'':'muted'}" style="font-family:inherit;font-size:11px;">${sEmail || '—'}</span></div>
+        <div class="row"><span class="k"><svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round" style="margin-right:4px;"><rect x="3" y="4" width="18" height="18" rx="2" ry="2"/><line x1="16" y1="2" x2="16" y2="6"/><line x1="8" y1="2" x2="8" y2="6"/><line x1="3" y1="10" x2="21" y2="10"/></svg>Added</span><span class="v ${dateAdded==='—'?'muted':''}">${dateAdded}</span></div>
+      </div>
+    </div>`;
+
+  // Pipeline Position — show all 17 stages compressed into 5 buckets,
+  // highlighting whichever bucket the current stage falls into.
+  const buckets = [
+    {key:'Lead',           match: s => /lead|prospect|initial/i.test(s)},
+    {key:'Pitch',          match: s => /pitch|presentation/i.test(s)},
+    {key:'Offer',          match: s => /offer|negotiat/i.test(s)},
+    {key:'Under Contract', match: s => /contract|due\s*dilig|escrow/i.test(s)},
+    {key:'Closed',         match: s => /clos(ed|ing)|won|dead/i.test(s)},
+  ];
+  const stageStr = String(stage||'');
+  const currentBucketIdx = buckets.findIndex(b => b.match(stageStr));
+  const pipelineAsideCard = `
+    <div class="aside-card">
+      <div class="hd">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polyline points="22 12 18 12 15 21 9 3 6 12 2 12"/></svg>
+        Pipeline Position
+      </div>
+      <div class="bd">
+        <div class="col gap-8">
+          ${buckets.map((b,i)=>{
+            const isCurrent = i === currentBucketIdx;
+            const isPast = currentBucketIdx >= 0 && i < currentBucketIdx;
+            const bg = isCurrent ? '#2563eb' : isPast ? '#94a3b8' : 'var(--surface-2,#f8fafc)';
+            const color = (isCurrent || isPast) ? '#fff' : '#94a3b8';
+            const border = (isCurrent || isPast) ? 'none' : '1px solid var(--border,#cbd5e1)';
+            return `
+              <div class="row gap-8" style="font-size:12px;">
+                <span style="width:18px;height:18px;border-radius:50%;background:${bg};border:${border};display:grid;place-items:center;color:${color};font-size:10px;font-weight:700;flex-shrink:0;">
+                  ${isPast ? '<svg viewBox=\"0 0 24 24\" width=\"10\" height=\"10\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"3\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"20 6 9 17 4 12\"/></svg>' : isCurrent ? '<svg viewBox=\"0 0 24 24\" width=\"10\" height=\"10\" fill=\"none\" stroke=\"currentColor\" stroke-width=\"3\" stroke-linecap=\"round\" stroke-linejoin=\"round\"><polyline points=\"20 6 9 17 4 12\"/></svg>' : (i+1)}
+                </span>
+                <span style="font-weight:${isCurrent?'700':'500'};color:${isCurrent?'#1d4ed8':isPast?'var(--text2,#475569)':'var(--text2,#475569)'};">${b.key}</span>
+                ${isCurrent ? `<span style="margin-left:auto;font-size:10px;color:var(--text3,#94a3b8);font-style:italic;">${stageStr}</span>` : ''}
+              </div>`;
+          }).join('')}
+        </div>
+      </div>
+    </div>`;
+
+  // Recent Activity (placeholder until activity feed is wired)
+  const activityCard = `
+    <div class="aside-card">
+      <div class="hd">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polyline points="12 6 12 12 16 14"/></svg>
+        Recent Activity
+      </div>
+      <div class="bd">
+        <div class="col gap-8" style="font-size:11.5px;">
+          ${dateAdded !== '—' ? `<div><span style="color:var(--text3,#94a3b8);">${dateAdded}</span> · Lead created${d['Lead Source']?' from '+d['Lead Source']:''}</div>` : ''}
+          ${agent !== 'Unassigned' ? `<div><span style="color:var(--text3,#94a3b8);">Most recent</span> · <span style="font-weight:600;">${agent}</span> is assigned</div>` : ''}
+          ${stage ? `<div><span style="color:var(--text3,#94a3b8);">Status</span> · stage is <span style="font-weight:600;">${stageStr}</span></div>` : ''}
+          ${(dateAdded === '—' && agent === 'Unassigned' && !stage) ? `<div style="color:var(--text3,#94a3b8);font-style:italic;">No activity recorded yet.</div>` : ''}
+        </div>
+      </div>
+    </div>`;
+
   return `
-    <div>
-      ${headerCard}
-      ${nsCard}
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
-        ${propCard}
-        ${finCard}
-      </div>
-      <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
-        ${sellerCard}
-        ${pipelineCard}
-      </div>
-      <div style="text-align:center;margin-top:14px;padding-top:14px;border-top:1px solid var(--border);font-size:10px;color:var(--fg-4);">
-        Internal summary view. Toggle Simple/Detailed on any section. Edit fields via the Property Details or Financial Analysis tabs.
+    <div class="tab-content">
+      <div class="two-col wide-aside">
+        <div>
+          ${heroAndKpi}
+          ${nsCard}
+          <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px;">
+            ${propCard}
+            ${finCard}
+          </div>
+          ${sellerCard}
+        </div>
+
+        <!-- RIGHT ASIDE -->
+        <div class="col gap-12">
+          ${streetViewCard}
+          ${mapCard}
+          ${contactCard}
+          ${pipelineAsideCard}
+          ${activityCard}
+        </div>
       </div>
     </div>`;
 }

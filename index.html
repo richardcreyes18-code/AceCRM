@@ -39232,9 +39232,8 @@ function _ddAutoBuildFieldValues(contacts, survivorId){
   }
   // v367: salvage pass — same helper the manual flow runs, so auto-merge
   // also folds loser-only phones / emails into secondary slots and any
-  // overflow into the notes [Merge salvage] block.
-  const contactsById = {};
-  contacts.forEach(c => { contactsById[c.id] = c; });
+  // overflow into the notes [Merge salvage] block. v369: reuses the
+  // contactsById built above for the quality-pick loop.
   const loserIds = losers.map(c => c.id);
   if(typeof _ddSalvageNoDataLoss === 'function'){
     _ddSalvageNoDataLoss(out, contactsById, survivorId, loserIds);

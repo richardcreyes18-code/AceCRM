@@ -873,3 +873,169 @@
 .bc-empty-sub { font-size: 12px; color: var(--text2, #475569); max-width: 460px; line-height: 1.5; }
 
 /* AI Auto-Fill Notes table reuses .bc-table styling */
+
+/* ─────────────────────────────────────────────────────────────
+   v374.10 — BC detail-view overlay.
+   The detail view body (bcOpenExpanded) is ~2000 lines of inline
+   HTML using legacy .info-box / .info-box-title / .bc-label / .bc-val
+   chrome. Rather than rewrite every line, the outer wrapper now
+   carries the .bc-detail class and these rules retarget the legacy
+   classes inside that wrapper to the new institutional design.
+   ───────────────────────────────────────────────────────────── */
+.bc-detail {
+  font-family: inherit;
+  color: var(--text, #0f172a);
+}
+
+.bc-detail .info-box {
+  background: var(--surface, #fff) !important;
+  border: 1px solid var(--border, #e2e8f0) !important;
+  border-radius: 8px !important;
+  margin: 0 0 14px 0 !important;
+  padding: 0 !important;
+  overflow: hidden;
+  box-shadow: none !important;
+}
+.bc-detail .info-box-title {
+  display: flex !important;
+  align-items: center;
+  gap: 10px;
+  padding: 9px 14px !important;
+  background: var(--surface2, #f8fafc) !important;
+  border-bottom: 1px solid var(--border, #e2e8f0) !important;
+  font-size: 11.5px !important;
+  font-weight: 700 !important;
+  color: var(--text, #0f172a) !important;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  border-radius: 0 !important;
+  margin: 0 !important;
+}
+.bc-detail .info-box > *:not(.info-box-title) {
+  padding: 14px 16px !important;
+}
+.bc-detail .info-box > div:not(.info-box-title) {
+  padding: 14px 16px !important;
+}
+
+.bc-detail .bc-label {
+  font-size: 9.5px !important;
+  font-weight: 700 !important;
+  text-transform: uppercase !important;
+  letter-spacing: 0.08em !important;
+  color: var(--text3, #94a3b8) !important;
+  margin-bottom: 4px !important;
+}
+.bc-detail .bc-val {
+  font-size: 13px !important;
+  font-weight: 500 !important;
+  color: var(--text, #0f172a) !important;
+  font-variant-numeric: tabular-nums;
+  line-height: 1.3 !important;
+  margin-bottom: 0 !important;
+}
+
+/* Native form inputs inside BC detail get a uniform institutional look */
+.bc-detail input.form-input,
+.bc-detail select.form-input,
+.bc-detail textarea.form-input,
+.bc-detail input.num-input {
+  border: 1px solid var(--border, #e2e8f0) !important;
+  background: var(--surface, #fff) !important;
+  border-radius: 5px !important;
+  padding: 6px 10px !important;
+  font-size: 12.5px !important;
+  font-family: inherit !important;
+  color: var(--text, #0f172a) !important;
+  transition: border-color 0.12s, box-shadow 0.12s !important;
+}
+.bc-detail input.form-input:focus,
+.bc-detail select.form-input:focus,
+.bc-detail textarea.form-input:focus,
+.bc-detail input.num-input:focus {
+  outline: none !important;
+  border-color: #2563eb !important;
+  box-shadow: 0 0 0 3px rgba(37, 99, 235, 0.10) !important;
+}
+.bc-detail textarea.form-input { line-height: 1.5; resize: vertical; }
+
+/* Asset pills inside the bc-detail page — convert the legacy
+   `background:#1a3a6e;color:#fff;border-radius:99px` pills (rendered
+   inline-styled in bcOpenExpanded's selected-assets row) to chip
+   semantic styling. Since they carry hard-coded inline styles, we
+   target the specific element shape. */
+.bc-detail #bcf_asset_pills {
+  background: var(--surface2, #f8fafc) !important;
+  border: 1px solid var(--border, #e2e8f0) !important;
+  border-radius: 6px !important;
+  padding: 8px 10px !important;
+  min-height: 40px !important;
+}
+.bc-detail #bcf_asset_pills > span {
+  /* Inline styles still apply but we override the visual chrome */
+  background: #dbeafe !important;
+  color: #1e40af !important;
+  border: 1px solid #93c5fd !important;
+  border-radius: 4px !important;
+  padding: 3px 9px !important;
+  font-size: 11px !important;
+  font-weight: 600 !important;
+}
+
+/* State pills (yellow amber chip group) */
+.bc-detail #bcf_state_pills,
+.bc-detail #bcf_county_pills,
+.bc-detail #bcf_city_pills {
+  background: var(--surface2, #f8fafc) !important;
+  border: 1px solid var(--border, #e2e8f0) !important;
+  border-radius: 6px !important;
+  padding: 8px 10px !important;
+  min-height: 40px !important;
+}
+
+/* Save/AI buttons in section headers — common .save-btn rules */
+.bc-detail .save-btn {
+  background: var(--surface, #fff) !important;
+  border: 1px solid var(--border, #e2e8f0) !important;
+  color: var(--text, #0f172a) !important;
+  border-radius: 5px !important;
+  padding: 5px 10px !important;
+  font-size: 12px !important;
+  font-weight: 600 !important;
+  font-family: inherit !important;
+  cursor: pointer;
+  transition: background 0.12s, border-color 0.12s !important;
+}
+.bc-detail .save-btn:hover {
+  background: var(--surface2, #f8fafc) !important;
+  border-color: #cbd5e1 !important;
+}
+
+/* Sticky header chrome that's set inline via the new toolbar */
+.bc-detail > .bc-detail-toolbar {
+  background: var(--surface, #fff);
+  border-bottom: 1px solid var(--border, #e2e8f0);
+  box-shadow: 0 1px 0 rgba(0, 0, 0, 0.02);
+}
+
+/* Grids inside info-box bodies should not get the !important padding
+   bump because they're already inside the section body. */
+.bc-detail .info-box > div[style*="grid"],
+.bc-detail .info-box > div[style*="flex"] {
+  /* Let the inline display rules win; only force padding. */
+}
+
+/* Inner section labels with the bc-label class */
+.bc-detail .bc-label[style*="margin-bottom"] {
+  margin-bottom: 6px !important;
+}
+
+/* AI Review Panel (yellow callout above contact card) — tone it down
+   to a softer amber so it doesn't fight the institutional palette. */
+.bc-detail #bcReviewPanel {
+  background: #fffbeb !important;
+  border: 1px solid #fde68a !important;
+  border-radius: 8px !important;
+  padding: 14px 18px !important;
+  margin-bottom: 14px !important;
+}

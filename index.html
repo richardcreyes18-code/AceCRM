@@ -903,10 +903,19 @@
          / gmail-status hooks still resolve (legacy code touches these IDs). -->
     <div class="sidebar-welcome" hidden aria-hidden="true">
       <strong id="sidebarUserName">...</strong>
-      <button id="btnMyDeals" onclick="setViewMode('my')">My Deals</button>
-      <button id="btnAllDeals" onclick="setViewMode('all')">All Deals</button>
       <a onclick="doLogout()">Sign Out</a>
       <div id="gmailStatusBadge"></div>
+    </div>
+    <!-- All Deals / My Deals toggle -->
+    <div id="viewToggleWrap" style="display:flex;padding:8px 10px 4px;gap:0;">
+      <button id="btnAllDeals" onclick="setViewMode('all')"
+        style="flex:1;padding:5px 0;font-size:11px;font-weight:700;border:1px solid #1a3a6e;border-radius:6px 0 0 6px;cursor:pointer;background:#1a3a6e;color:#fff;transition:background .15s,color .15s;">
+        All Deals
+      </button>
+      <button id="btnMyDeals" onclick="setViewMode('my')"
+        style="flex:1;padding:5px 0;font-size:11px;font-weight:700;border:1px solid #ccc;border-left:none;border-radius:0 6px 6px 0;cursor:pointer;background:transparent;color:#888;transition:background .15s,color .15s;">
+        My Deals
+      </button>
     </div>
     <button class="add-new-btn" onclick="setNav(null,'leadintake')" title="Add New Deal">
       <span class="add-new-label">Add New Deal</span>
@@ -1808,7 +1817,7 @@ const SESSION_VERSION = 1;
 // window. The ES-module versions in js/core/auth.js read/write via window.*
 // to keep legacy and module state in sync until state.js owns the data.
 var _currentUser = null; // { id, name, email, initials, fub_name, role }
-var _viewMode = 'my';    // 'my' = own deals, 'all' = company pipeline
+var _viewMode = 'all';   // 'my' = own deals, 'all' = company pipeline
 var _authToken = null;
 var _refreshToken = null;
 
@@ -55704,8 +55713,8 @@ function _applyUserToUI(user){
   if(toggleWrap){
     toggleWrap.style.display = (user.role==='admin') ? 'flex' : 'flex';
   }
-  // Admins see All Deals by default, agents see My Deals
-  _viewMode = (user.role==='admin') ? 'all' : 'my';
+  // Default to All Deals for everyone
+  _viewMode = 'all';
   _updateViewToggle();
   // v166: Settings is now visible to everyone — non-admins land on a
   // restricted view that only exposes the Email Templates tab. Admins

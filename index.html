@@ -55333,16 +55333,16 @@ async function ndwCreateDeal(){
     renderDealPage();
     showSaveConfirm('✓ Deal created: '+addr);
 
-    // v374.24: auto-add the freshly-created deal to the current user's
-    // personal pipeline so a new seller lead shows up on their board
-    // immediately — no extra "Add to My Pipeline" click required.
-    // Fire-and-forget — failures are silent (the deal still exists in
-    // the main pipeline regardless). The agent_pipeline_add RPC is
-    // idempotent + returns the assigned stage_id so the in-memory
-    // _myPipeline maps stay in sync.
+    // Auto-add the freshly-created deal to the current user's personal pipeline
+    // so a new seller lead shows up on their board immediately. We call
+    // agent_pipeline_init first so agents who have never opened their pipeline
+    // board still get a properly-seeded pipeline (idempotent — safe to call
+    // every time). Fire-and-forget; deal already exists regardless.
     if(_currentUser && _currentUser.id && typeof _sbRpc === 'function'){
-      _sbRpc('agent_pipeline_add', { p_user_id: _currentUser.id, p_deal_id: newId })
-        .then(result => {
+      (async () => {
+        try {
+          await _sbRpc('agent_pipeline_init', { p_user_id: _currentUser.id });
+          const result = await _sbRpc('agent_pipeline_add', { p_user_id: _currentUser.id, p_deal_id: newId });
           if(!result || result.error) return;
           if(typeof _myPipelineDealIds !== 'undefined' && _myPipelineDealIds && _myPipelineDealIds.add){
             _myPipelineDealIds.add(newId);
@@ -55355,8 +55355,10 @@ async function ndwCreateDeal(){
           if(typeof _aceSyncPost === 'function'){
             _aceSyncPost('mypipeline.add', { dealId: newId, stageId: result.stage_id || null });
           }
-        })
-        .catch(e => console.warn('[ndw] personal-pipeline auto-add failed:', e.message));
+        } catch(e) {
+          console.warn('[ndw] personal-pipeline auto-add failed:', e.message);
+        }
+      })();
     }
 
   }catch(e){

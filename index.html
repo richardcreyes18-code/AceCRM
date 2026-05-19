@@ -637,11 +637,17 @@
           <div style="font-size:10px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;">Email:</div>
           <div id="dsTemplateChip"></div>
         </div>
+        <div id="dsMyPipelineChipWrap" style="display:none;align-items:center;gap:8px;">
+          <div style="font-size:10px;font-weight:600;color:#94a3b8;text-transform:uppercase;letter-spacing:.05em;">My Pipeline:</div>
+          <div id="dsMyPipelineChip" onclick="toggleDsMyPipelinePicker()" style="cursor:pointer;"></div>
+        </div>
       </div>
       <!-- Stage picker dropdown (hidden by default) -->
       <div id="dsStagePicker" style="display:none;margin-top:10px;background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:8px;max-height:220px;overflow-y:auto;"></div>
       <!-- Review tag picker dropdown (hidden by default) -->
       <div id="dsReviewPicker" style="display:none;margin-top:10px;background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:8px;"></div>
+      <!-- My Pipeline stage picker dropdown (hidden by default) -->
+      <div id="dsMyPipelinePicker" style="display:none;margin-top:10px;background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:8px;max-height:220px;overflow-y:auto;"></div>
     </div>
 
     <!-- Body — scrollable -->
@@ -3757,6 +3763,10 @@ function openDealSnapshot(dealId){
   _renderDsReviewChip(d);
   const _rp = document.getElementById('dsReviewPicker');
   if(_rp) _rp.style.display = 'none';
+  // Personal pipeline stage chip
+  _renderDsMyPipelineChip(d);
+  const _mp = document.getElementById('dsMyPipelinePicker');
+  if(_mp) _mp.style.display = 'none';
   // v149: email-template-linked indicator
   _renderDsTemplateChip(d);
 
@@ -3814,6 +3824,53 @@ function _renderDsStageChip(d){
       ${stage}
       <span style="font-size:9px;opacity:0.8;">▼</span>
     </div>`;
+}
+
+function _renderDsMyPipelineChip(d){
+  const wrap = document.getElementById('dsMyPipelineChipWrap');
+  const chip = document.getElementById('dsMyPipelineChip');
+  if(!wrap || !chip) return;
+  if(!_isInMyPipeline(d.id)){
+    wrap.style.display = 'none';
+    return;
+  }
+  wrap.style.display = 'flex';
+  const stageId = _myPipelineDealStage.get(d.id);
+  const stage = stageId ? _myPipelineStageById(stageId) : null;
+  const label = stage ? stage.label : '—';
+  const color = stage ? (stage.color || '#6b7280') : '#6b7280';
+  chip.innerHTML = `<div style="display:inline-flex;align-items:center;gap:6px;background:${color};color:#fff;padding:5px 12px;border-radius:99px;font-size:11px;font-weight:700;">${label}<span style="font-size:9px;opacity:0.8;">▼</span></div>`;
+}
+
+function toggleDsMyPipelinePicker(){
+  const picker = document.getElementById('dsMyPipelinePicker');
+  if(!picker) return;
+  if(picker.style.display === 'none'){
+    const d = allDeals.find(x => x.id === _snapshotDealId);
+    if(!d) return;
+    const curStageId = _myPipelineDealStage.get(d.id);
+    picker.innerHTML = (_myPipelineStages || []).map(s => {
+      const active = s.id === curStageId;
+      const color = s.color || '#6b7280';
+      return `<div onclick="dsPickMyPipelineStage('${s.key}')" style="padding:7px 12px;border-radius:5px;cursor:pointer;font-size:12px;font-weight:600;display:flex;align-items:center;gap:8px;${active?'background:'+color+'22;':''}" onmouseenter="this.style.background='${color}22'" onmouseleave="this.style.background='${active?color+'22':'transparent'}'">
+        <span style="display:inline-block;width:10px;height:10px;border-radius:50%;background:${color};flex-shrink:0;"></span>
+        <span style="color:#0f172a;">${s.label}</span>
+        ${active?`<span style="margin-left:auto;color:${color};font-size:11px;">✓</span>`:''}
+      </div>`;
+    }).join('');
+    picker.style.display = 'block';
+  } else {
+    picker.style.display = 'none';
+  }
+}
+
+async function dsPickMyPipelineStage(stageKey){
+  if(!_snapshotDealId) return;
+  const picker = document.getElementById('dsMyPipelinePicker');
+  if(picker) picker.style.display = 'none';
+  await _myPipelineMove(_snapshotDealId, stageKey);
+  const d = allDeals.find(x => x.id === _snapshotDealId);
+  if(d) _renderDsMyPipelineChip(d);
 }
 
 function toggleDsStagePicker(){

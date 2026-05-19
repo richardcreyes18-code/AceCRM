@@ -168,8 +168,8 @@ async function _renderAll(containerId, statesStr, countiesStr, citiesStr, fitBou
 
   _applyZoomVisibility(containerId);
 
-  if (fitBounds && stateCodes.length) {
-    _fitToStateLayers(inst);
+  if (fitBounds) {
+    _smartFit(inst, countyNames.length > 0, cities.length > 0, stateCodes.length > 0);
   }
 }
 
@@ -255,13 +255,39 @@ function _applyZoomVisibility(containerId) {
   }
 }
 
-function _fitToStateLayers(inst) {
+// Fit strategy: counties+cities > cities alone > states
+// This zooms in as tightly as the data allows.
+function _smartFit(inst, hasCounties, hasCities, hasStates) {
   const L = window.L;
   const layers = [];
-  inst.stateLayer.eachLayer(l => layers.push(l));
+
+  if (hasCounties) {
+    inst.countyLayer.eachLayer(l => layers.push(l));
+  }
+  if (hasCities) {
+    inst.cityLayer.eachLayer(l => layers.push(l));
+  }
+
+  // No county/city data found — fall back to state polygons
+  if (!layers.length && hasStates) {
+    inst.stateLayer.eachLayer(l => layers.push(l));
+  }
+
   if (!layers.length) return;
+
   try {
     const group = L.featureGroup(layers);
-    inst.map.fitBounds(group.getBounds().pad(0.1));
+    const bounds = group.getBounds();
+    if (bounds.isValid()) {
+      const pad = (hasCounties || hasCities) ? 0.12 : 0.15;
+      inst.map.fitBounds(bounds.pad(pad));
+      // fitBounds triggers zoomend which calls _applyZoomVisibility,
+      // but fire it immediately too so county layer appears right away
+      // when the fit zoom lands above 7.
+      inst.map.once('moveend', () => {
+        const containerId = [..._maps.entries()].find(([, v]) => v === inst)?.[0];
+        if (containerId) _applyZoomVisibility(containerId);
+      });
+    }
   } catch (e) {}
 }

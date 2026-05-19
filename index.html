@@ -31599,8 +31599,10 @@ async function showBuyerCriteriaPage(){
   }
 
   try{
-    let records = [];
     if(isSupabase()){
+      // Progressive load: render after each batch so the user sees the first
+      // ~1000 rows within ~1s instead of waiting for all batches to complete.
+      allBuyerCriteria = [];
       let from = 0, batchSize = 1000;
       while(true){
         // v63: embedded JOIN on ace_contacts replaces the separate batch fetch loop below.
@@ -31636,17 +31638,20 @@ async function showBuyerCriteriaPage(){
           fields['_contactId']    = row.contact_id;
           // v288: preserve raw extra_fields JSONB so the per-category
           // extras renderer can read values directly.
-          records.push({
+          allBuyerCriteria.push({
             id: row.id,
             fields,
             extra_fields: (row.extra_fields && typeof row.extra_fields === 'object') ? row.extra_fields : {},
           });
         });
+        // Render after each batch so the user sees rows immediately.
+        renderBuyerCriteriaTable(allBuyerCriteria);
         if(rows.length < batchSize) break;
         from += batchSize;
       }
       // v63: contacts are hydrated inline via embedded JOIN above — no separate fetch needed.
     } else {
+      let records = [];
       let url = `https://api.airtable.com/v0/${cfg.base}/tbltwNvbX5T3t9wRE?pageSize=100`;
       while(url){
         const res = await fetch(url, {headers:{Authorization:`Bearer ${cfg.key}`}});
@@ -31664,9 +31669,9 @@ async function showBuyerCriteriaPage(){
         const cData = await cRes.json();
         (cData.records||[]).forEach(r=>{ allBuyerContacts[r.id] = r.fields; });
       }
+      allBuyerCriteria = records;
     }
 
-    allBuyerCriteria = records;
     _bcLastLoadMs = Date.now();  // v63 perf cache marker
     _bcVipFilter = _bcState.vip;
     _populateBcSourceFilter();
@@ -31679,7 +31684,7 @@ async function showBuyerCriteriaPage(){
       _bcMountFilterCombos();
     }
 
-    renderBuyerCriteriaTable(records);
+    renderBuyerCriteriaTable(allBuyerCriteria);
   }catch(e){
     document.getElementById('bcTableWrap').innerHTML=`<tr><td colspan="14" class="bc-empty" style="color:#c00;">Error: ${e.message}</td></tr>`;
   }

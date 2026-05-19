@@ -73,25 +73,31 @@ async function _ensureStatesGeoJson() {
 
 // ── Data fetchers ─────────────────────────────────────────────────────────────
 
-// Uses the same ESRI ArcGIS endpoint as the deal-board county map — proven reliable.
-async function _fetchCountiesForState(stateAbbr) {
-  if (_countyCache.has(stateAbbr)) return _countyCache.get(stateAbbr);
-  const fullName = _STATE_FULL_NAME[stateAbbr];
-  if (!fullName) { _countyCache.set(stateAbbr, null); return null; }
+// Fetch all needed states in one ESRI call using + for spaces in SQL literals —
+// same URL pattern as the working deal-board county map (index.html:15993).
+async function _fetchCountiesForStates(stateAbbrs) {
+  const cacheKey = stateAbbrs.slice().sort().join(',');
+  if (_countyCache.has(cacheKey)) return _countyCache.get(cacheKey);
 
+  const fullNames = stateAbbrs.map(a => _STATE_FULL_NAME[a]).filter(Boolean);
+  if (!fullNames.length) { _countyCache.set(cacheKey, null); return null; }
+
+  const inClause = fullNames.map(n => `'${n.replace(/ /g, '+')}'`).join(',');
   const url =
     'https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/USA_Census_Counties/FeatureServer/0/query' +
-    `?where=STATE_NAME+%3D+'${encodeURIComponent(fullName)}'` +
+    `?where=STATE_NAME+IN+(${inClause})` +
     '&outFields=NAME,STATE_NAME&returnGeometry=true&f=geojson&outSR=4326&geometryPrecision=4';
 
   try {
-    const data = await fetch(url).then(r => r.json());
+    const res = await fetch(url);
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const data = await res.json();
     if (!data?.features?.length) throw new Error('no features');
-    _countyCache.set(stateAbbr, data);
+    _countyCache.set(cacheKey, data);
     return data;
   } catch (e) {
-    console.warn('[bc-map] county fetch failed for', stateAbbr, e.message);
-    _countyCache.set(stateAbbr, null);
+    console.error('[bc-map] county fetch failed', stateAbbrs, e.message);
+    _countyCache.set(cacheKey, null);
     return null;
   }
 }
@@ -235,21 +241,17 @@ async function _renderCountyLayer(inst, stateCodes, countyNames) {
     countyNames.map(n => n.toLowerCase().replace(/\s+county\s*$/i, '').trim())
   );
 
-  const results = await Promise.all(
-    effectiveStates.map(code => _fetchCountiesForState(code))
-  );
+  const geoJson = await _fetchCountiesForStates(effectiveStates);
+  if (!geoJson?.features) return;
 
-  for (const geoJson of results) {
-    if (!geoJson?.features) continue;
-    const matched = {
-      type: 'FeatureCollection',
-      features: geoJson.features.filter(
-        f => countySet.has((f.properties?.NAME || '').toLowerCase())
-      ),
-    };
-    if (matched.features.length) {
-      L.geoJSON(matched, { style: () => COUNTY_STYLE }).addTo(inst.countyLayer);
-    }
+  const matched = {
+    type: 'FeatureCollection',
+    features: geoJson.features.filter(
+      f => countySet.has((f.properties?.NAME || '').toLowerCase())
+    ),
+  };
+  if (matched.features.length) {
+    L.geoJSON(matched, { style: () => COUNTY_STYLE }).addTo(inst.countyLayer);
   }
 }
 

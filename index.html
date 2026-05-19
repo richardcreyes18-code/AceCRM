@@ -909,17 +909,6 @@
       <a onclick="doLogout()">Sign Out</a>
       <div id="gmailStatusBadge"></div>
     </div>
-    <!-- All Deals / My Deals toggle -->
-    <div id="viewToggleWrap" style="display:flex;padding:8px 10px 4px;gap:0;">
-      <button id="btnAllDeals" onclick="setViewMode('all')"
-        style="flex:1;padding:5px 0;font-size:11px;font-weight:700;border:1px solid #1a3a6e;border-radius:6px 0 0 6px;cursor:pointer;background:#1a3a6e;color:#fff;transition:background .15s,color .15s;">
-        All Deals
-      </button>
-      <button id="btnMyDeals" onclick="setViewMode('my')"
-        style="flex:1;padding:5px 0;font-size:11px;font-weight:700;border:1px solid #ccc;border-left:none;border-radius:0 6px 6px 0;cursor:pointer;background:transparent;color:#888;transition:background .15s,color .15s;">
-        My Deals
-      </button>
-    </div>
     <button class="add-new-btn" onclick="setNav(null,'leadintake')" title="Add New Deal">
       <span class="add-new-label">Add New Deal</span>
     </button>
@@ -55728,14 +55717,8 @@ function _applyUserToUI(user){
   // Update nav
   const navUser = document.getElementById('navUser');
   if(navUser) navUser.textContent = 'Welcome, ' + (user.name?.split(' ')[0]||'');
-  // Show/hide All Deals toggle based on role
-  const toggleWrap = document.getElementById('viewToggleWrap');
-  if(toggleWrap){
-    toggleWrap.style.display = (user.role==='admin') ? 'flex' : 'flex';
-  }
-  // Default to All Deals for everyone
+  // Always All Deals for everyone
   _viewMode = 'all';
-  _updateViewToggle();
   // v166: Settings is now visible to everyone — non-admins land on a
   // restricted view that only exposes the Email Templates tab. Admins
   // see the full settings panel as before.

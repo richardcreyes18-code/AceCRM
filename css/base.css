@@ -222,12 +222,9 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
   position:absolute;
   top:0;left:0;bottom:0;
   z-index:50;
-  /* v374.17: smoother hover-to-expand animation.
-     - Open: 0ms delay (instant response) + 220ms width animation
-     - Close: 120ms delay (responsive but tolerant of brush-by) + 220ms
-     - cubic-bezier(0.4, 0, 0.2, 1) is Material-standard, feels natural
-     - will-change hints the compositor to GPU-accelerate the layer */
-  transition:width 0.22s cubic-bezier(0.4,0,0.2,1) 0.12s;
+  /* Collapse: 60ms delay (brush-by tolerance), 150ms snappy ease-out.
+     cubic-bezier(0.2,0,0,1) starts fast and decelerates — feels sharp. */
+  transition:width 0.15s cubic-bezier(0.2,0,0,1) 0.06s;
   will-change:width;
   /* v365.3: inner padding gives symmetric breathing room. Everything
      inside the sidebar fills `width:100%` of the padded inner box so
@@ -249,51 +246,55 @@ button{font-family:inherit;font-size:13px;cursor:pointer;}
 .sidebar .sidebar-logo,
 .sidebar .sidebar-welcome{ display:none !important; }
 
-/* v374.17: smooth fade-in for labels.
-   - Top-level labels (search-box, adv-search, sb-tab-label, add-new-label,
-     #sidebarCount, .sidebar-footer): use opacity + max-width transitions so
-     the reveal animates rather than pops. White-space:nowrap keeps each
-     label single-line so max-width clipping looks clean.
-   - .recent-name / .recent-id stay on display:none (v365.4 fix) so the
-     dial-dot centers cleanly when collapsed — the dot's parent .recent-item
-     has variable text widths, and animating those would re-introduce
-     the staggering bug. */
+/* Block-level sidebar rows — opacity only. The sidebar's overflow:hidden
+   clips them at the current width; no max-width animation needed. */
 .sidebar .search-box,
 .sidebar .adv-search,
-.sidebar .sb-tab-label,
-.sidebar .add-new-label,
 .sidebar #sidebarCount,
 .sidebar .sidebar-footer{
+  opacity:0;
+  overflow:hidden;
+  white-space:nowrap;
+  pointer-events:none;
+  transition:opacity 0.10s ease-out;
+}
+/* Inline labels that sit alongside an icon — must collapse to zero width
+   so the icon stays centered in the collapsed rail. */
+.sidebar .sb-tab-label,
+.sidebar .add-new-label{
   opacity:0;
   max-width:0;
   overflow:hidden;
   white-space:nowrap;
   pointer-events:none;
-  transition:opacity 0.14s ease-out, max-width 0.20s ease-out;
+  transition:opacity 0.10s ease-out, max-width 0.13s cubic-bezier(0.2,0,0,1);
 }
 .sidebar .recent-name,
 .sidebar .recent-id{
   display:none;
 }
+/* Expanded state — block rows */
 .sidebar:hover .search-box,
 .sidebar.pinned .search-box,
 .sidebar:hover .adv-search,
 .sidebar.pinned .adv-search,
-.sidebar:hover .sb-tab-label,
-.sidebar.pinned .sb-tab-label,
-.sidebar:hover .add-new-label,
-.sidebar.pinned .add-new-label,
 .sidebar:hover #sidebarCount,
 .sidebar.pinned #sidebarCount,
 .sidebar:hover .sidebar-footer,
 .sidebar.pinned .sidebar-footer{
   opacity:1;
-  max-width:240px;
   pointer-events:auto;
-  /* Slight delay so the width animation has a head start before the
-     labels start fading in — this gives a clean "open the door, then
-     reveal what's inside" feel. */
-  transition:opacity 0.18s ease-out 0.10s, max-width 0.22s ease-out 0.08s;
+  transition:opacity 0.14s ease-out 0.05s;
+}
+/* Expanded state — inline icon labels */
+.sidebar:hover .sb-tab-label,
+.sidebar.pinned .sb-tab-label,
+.sidebar:hover .add-new-label,
+.sidebar.pinned .add-new-label{
+  opacity:1;
+  max-width:200px;
+  pointer-events:auto;
+  transition:opacity 0.14s ease-out 0.05s, max-width 0.13s cubic-bezier(0.2,0,0,1);
 }
 .sidebar:hover .recent-name,
 .sidebar.pinned .recent-name,

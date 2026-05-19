@@ -32739,7 +32739,7 @@ async function bcOpenExpanded(recordId){
           <div class="info-box-title" style="display:flex;align-items:center;justify-content:space-between;gap:8px;flex-wrap:wrap;">
             <span>🎯 What They're Looking For <span style="font-weight:500;font-size:11px;color:var(--text3,#94a3b8);text-transform:none;letter-spacing:0;margin-left:6px;">Asset types this buyer is interested in</span></span>
           </div>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
+          <div style="display:grid;grid-template-columns:1fr 1fr 1.35fr;gap:16px;align-items:start;">
             <div>
 
               <div class="bc-label" style="margin-bottom:6px;">Asset Types <span style="color:#888;font-weight:400;">(click to add · ✕ to remove)</span></div>
@@ -32905,6 +32905,12 @@ async function bcOpenExpanded(recordId){
               <div class="bc-hint">Searchable list from Settings → Preferred Cities — uniform spelling guaranteed.</div>
               <input type="hidden" id="bcf_cities_hidden" value="${(f['Preferred Cities']||'').split(',').map(c=>c.trim()).filter(_bcCleanPill).join(', ')}"/>
             </div>
+
+            <!-- 3rd column: location map -->
+            <div style="position:sticky;top:8px;">
+              <div class="bc-label" style="margin-bottom:6px;">📍 Location Map <span style="color:#888;font-weight:400;">(states · counties · cities)</span></div>
+              <div id="bcf_loc_map" style="height:460px;border-radius:8px;overflow:hidden;background:#e8eef4;border:1px solid #d1d9e0;"></div>
+            </div>
           </div>
         </div>
 
@@ -32982,6 +32988,14 @@ async function bcOpenExpanded(recordId){
     if(typeof _bcFieldStatusInit === 'function') _bcFieldStatusInit(record);
     if(typeof _bcAttachFieldStatusListeners === 'function') _bcAttachFieldStatusListeners();
   });
+
+  // Init location map in the 3rd column (async, non-blocking)
+  if(typeof bcMapInit === 'function'){
+    const _statesV  = document.getElementById('bcf_states_hidden')?.value  || '';
+    const _countiesV= document.getElementById('bcf_counties_hidden')?.value || '';
+    const _citiesV  = document.getElementById('bcf_cities_hidden')?.value   || '';
+    bcMapInit('bcf_loc_map', _statesV, _countiesV, _citiesV);
+  }
 
   // v285: bulk AI mode — auto-pop the review modal for this buyer using
   // the cached prefetch (fast path) or kick off a fresh fetch. Either
@@ -33889,8 +33903,8 @@ function _bcSyncAssets(skipAutosave){
     if(typeof _bcAutoSave==='function') _bcAutoSave();
   }
 }
-function _bcSyncCounties(skipAutosave){ document.getElementById('bcf_counties_hidden').value = _bcGetPillTexts('bcf_county_pills').join(', '); if(!skipAutosave && typeof _bcAutoSave==='function') _bcAutoSave(); }
-function _bcSyncCities(skipAutosave){ document.getElementById('bcf_cities_hidden').value = _bcGetPillTexts('bcf_city_pills').join(', '); if(!skipAutosave && typeof _bcAutoSave==='function') _bcAutoSave(); }
+function _bcSyncCounties(skipAutosave){ document.getElementById('bcf_counties_hidden').value = _bcGetPillTexts('bcf_county_pills').join(', '); if(!skipAutosave && typeof _bcAutoSave==='function') _bcAutoSave(); if(!skipAutosave && typeof bcMapRefresh==='function'){ const s=document.getElementById('bcf_states_hidden')?.value||'',co=document.getElementById('bcf_counties_hidden')?.value||'',ci=document.getElementById('bcf_cities_hidden')?.value||''; bcMapRefresh('bcf_loc_map',s,co,ci); } }
+function _bcSyncCities(skipAutosave){ document.getElementById('bcf_cities_hidden').value = _bcGetPillTexts('bcf_city_pills').join(', '); if(!skipAutosave && typeof _bcAutoSave==='function') _bcAutoSave(); if(!skipAutosave && typeof bcMapRefresh==='function'){ const s=document.getElementById('bcf_states_hidden')?.value||'',co=document.getElementById('bcf_counties_hidden')?.value||'',ci=document.getElementById('bcf_cities_hidden')?.value||''; bcMapRefresh('bcf_loc_map',s,co,ci); } }
 
 // v110.3: NJ Region quick-add for buyer criteria counties. Adds every
 // county in the named region as a pill. Dedupes against existing pills.
@@ -34756,6 +34770,10 @@ function _bcSyncStates(skipAutosave){
   const h = document.getElementById('bcf_states_hidden');
   if(h) h.value = _bcGetPillTexts('bcf_state_pills').join(', ');
   if(!skipAutosave && typeof _bcAutoSave==='function') _bcAutoSave();
+  if(!skipAutosave && typeof bcMapRefresh==='function'){
+    const s=document.getElementById('bcf_states_hidden')?.value||'',co=document.getElementById('bcf_counties_hidden')?.value||'',ci=document.getElementById('bcf_cities_hidden')?.value||'';
+    bcMapRefresh('bcf_loc_map',s,co,ci);
+  }
 }
 function _bcStateSearch(q){
   const dd = document.getElementById('bcf_state_dropdown');

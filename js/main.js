@@ -65,6 +65,7 @@ import * as bcAiSuggestions from './admin/bc-ai-suggestions.js';
 import * as backmarket      from './buyer-search/backmarket.js';
 import * as fub             from './fub/fub.js';
 import * as relationships   from './contacts/relationships.js';
+import * as bcMap           from './buyer-criteria/bc-map.js';
 
 // ═══════════════════════════════════════════════════════════════════════
 // Window aliases — every export from every feature/widget/schema-helper
@@ -103,6 +104,7 @@ for (const [name, value] of Object.entries(bcAiSuggestions)){ window[name] = val
 for (const [name, value] of Object.entries(backmarket))     { window[name] = value; }
 for (const [name, value] of Object.entries(fub))            { window[name] = value; }
 for (const [name, value] of Object.entries(relationships))  { window[name] = value; }
+for (const [name, value] of Object.entries(bcMap))          { window[name] = value; }
 
 // Realtime sync — attach to window so legacy _applyUserToUI can call rtInit()
 window.rtInit        = rtInit;
@@ -155,4 +157,5 @@ console.log('[ace-modules] all modules loaded', {
   backmarket:     Object.keys(backmarket).length,
   fub:            Object.keys(fub).length,
   relationships:  Object.keys(relationships).length,
+  bcMap:          Object.keys(bcMap).length,
 });

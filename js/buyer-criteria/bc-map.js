@@ -183,6 +183,8 @@ export async function bcMapInit(containerId, statesStr, countiesStr, citiesStr) 
   L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
     attribution: '© OpenStreetMap contributors', maxZoom: 18,
   }).addTo(map);
+  // City markers always on top of county polygons regardless of render order
+  map.createPane('citiesPane').style.zIndex = 450;
 
   const inst = {
     map,
@@ -286,7 +288,7 @@ async function _renderCityLayer(inst, cities, stateHints = []) {
   for (let i = 0; i < cities.length; i++) {
     const ll = positions[i];
     if (!ll) continue;
-    L.circleMarker(ll, { radius:7, fillColor:'#e53935', color:'#b71c1c', weight:1.5, opacity:1, fillOpacity:0.85 })
+    L.circleMarker(ll, { radius:7, fillColor:'#e53935', color:'#b71c1c', weight:1.5, opacity:1, fillOpacity:0.85, pane:'citiesPane' })
       .bindTooltip(cities[i], { permanent:false, direction:'top' })
       .addTo(inst.cityLayer);
   }

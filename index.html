@@ -32,6 +32,9 @@
      semantic-only stage badges, kill purple/gradients on action
      buttons). Layered approach: most layout stays; this file changes
      the visual language. STAGING-only rollout for visual review. -->
+<!-- Supabase JS client — loaded for Realtime WebSocket subscriptions only.
+     REST/DB calls still go through the crm-proxy Edge Function. -->
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.min.js"></script>
 <link rel="stylesheet" href="css/design-system.css"/>
 <!-- v300: deal-detail Bloomberg ticker header + clean tab strip.
      Loads after design-system.css so deal-detail-specific overrides
@@ -1826,6 +1829,8 @@ function _saveSession(token, user, refreshToken) {
   _currentUser = user;
   if(refreshToken !== undefined) _refreshToken = refreshToken;
   localStorage.setItem('ace_auth_token', token);
+  // Keep Realtime WS authenticated when the token is refreshed.
+  if(typeof rtUpdateToken === 'function') rtUpdateToken(token);
   localStorage.setItem('ace_auth_user', JSON.stringify(user));
   localStorage.setItem('ace_session_version', String(SESSION_VERSION));
   if(refreshToken) localStorage.setItem('ace_refresh_token', refreshToken);
@@ -4995,6 +5000,7 @@ async function masterSave(opts){
     if(isSupabase()){
       sbDataForMirror = _atToSb(fields, SB_PROP_MAP);
       await _sbPatch(SB_TABLES.properties, dealId, sbDataForMirror, { keepalive: !!(opts && opts.keepalive) });
+      if(typeof rtMarkSaved === 'function') rtMarkSaved('ace_properties', dealId);
     } else {
       const res = await fetch(
         `https://api.airtable.com/v0/${cfg.base}/${cfg.table}/${dealId}`,
@@ -9880,8 +9886,10 @@ async function _submitAddOffer(dealId){
       delete payload.deal_id;
       delete payload.offer_date;
       await _sbPatch('ace_deal_offers', editOfferId, payload);
+      if(typeof rtMarkSaved === 'function') rtMarkSaved('ace_deal_offers', editOfferId);
     } else {
-      await _sbPost('ace_deal_offers', payload);
+      const created = await _sbPost('ace_deal_offers', payload);
+      if(typeof rtMarkSaved === 'function' && created?.id) rtMarkSaved('ace_deal_offers', created.id);
     }
     _closeAddOfferModal();
     if(currentDeal && currentDeal.id === dealId) loadOffersTab(dealId);
@@ -12039,8 +12047,10 @@ async function saveSellerContact(propertyId){
     if(isSupabase()){
       if(existing){
         record = await _sbPatch(SB_TABLES.contacts, existing, sbFields);
+        if(typeof rtMarkSaved === 'function') rtMarkSaved('ace_contacts', existing);
       } else {
         record = await _sbPost(SB_TABLES.contacts, sbFields);
+        if(typeof rtMarkSaved === 'function' && record?.id) rtMarkSaved('ace_contacts', record.id);
       }
       record = { id: record.id };
     } else {
@@ -21423,6 +21433,7 @@ async function _bcAddBlankFromContact(contactId){
     const created = await _sbPost(SB_TABLES.buyerCriteria, row);
     const newRow = Array.isArray(created) ? created[0] : created;
     if(!newRow?.id) throw new Error('Insert returned no id');
+    if(typeof rtMarkSaved === 'function') rtMarkSaved('ace_buyer_criteria', newRow.id);
     // Mirror the loader-side hydration so the table sees this row immediately.
     const fields = {};
     for(const [snake, atLabel] of Object.entries(SB_BC_MAP)){
@@ -25825,10 +25836,12 @@ async function saveContactFromModal(recordId){
       if(recordId){
         saved = { id: recordId, fields: atFields };
         await _sbPatch(SB_TABLES.contacts, recordId, sbData);
+        if(typeof rtMarkSaved === 'function') rtMarkSaved('ace_contacts', recordId);
       } else {
         sbData.date_added = new Date().toISOString().split('T')[0];
         const row = await _sbPost(SB_TABLES.contacts, sbData);
         saved = { id: row.id, fields: {...atFields, 'Date Added': sbData.date_added} };
+        if(typeof rtMarkSaved === 'function' && row?.id) rtMarkSaved('ace_contacts', row.id);
       }
     } else {
       let res;
@@ -36483,6 +36496,7 @@ async function bcSaveExpanded(recordId, isAuto=false){
         }
       } catch(e){ console.warn('[bc-fields] doomed-key strip failed:', e.message); }
       await _sbPatch(SB_TABLES.buyerCriteria, recordId, sbData);
+      if(typeof rtMarkSaved === 'function') rtMarkSaved('ace_buyer_criteria', recordId);
     } else {
       const res = await fetch(`https://api.airtable.com/v0/${cfg.base}/tbltwNvbX5T3t9wRE/${recordId}`,{
         method:'PATCH',
@@ -44786,6 +44800,7 @@ async function submitEditTask(taskId, source){
           try { patch.sort_order = await _tasksNextSortOrder(primary); } catch(_e){}
         }
         await _sbPatch(SB_TABLES.tasks, taskId, patch);
+        if(typeof rtMarkSaved === 'function') rtMarkSaved('ace_tasks', taskId);
 
         // Reconcile junction rows. We already cached the previous assignee
         // set, so diff against that instead of fetching again.
@@ -44957,6 +44972,7 @@ async function submitCreateTask(){
       // _sbPost may return either the row object or an array of rows
       // depending on the proxy — normalize so we can read the id.
       const newId = newRow && (newRow.id || (Array.isArray(newRow) && newRow[0] && newRow[0].id));
+      if(typeof rtMarkSaved === 'function' && newId) rtMarkSaved('ace_tasks', newId);
 
       // v157: write junction rows for every assignee (including primary)
       // so per-user queues + sort orders work for shared tasks. Each
@@ -45434,6 +45450,7 @@ async function toggleTaskDone(taskId, currentStatus, source){
   try{
     if(isSupabase()){
       await _sbPatch(SB_TABLES.tasks, taskId, {status: newStatus});
+      if(typeof rtMarkSaved === 'function') rtMarkSaved('ace_tasks', taskId);
     } else {
       await fetch(`https://api.airtable.com/v0/${cfg.base}/${TASKS_TABLE_ID}/${taskId}`,{
         method:'PATCH', headers:{Authorization:`Bearer ${cfg.key}`,'Content-Type':'application/json'},
@@ -47817,7 +47834,7 @@ async function saveDocLink(propertyId, propertyAddress){
   try{
     const today = new Date().toLocaleDateString('en-US',{month:'numeric',day:'numeric',year:'numeric'});
     if(isSupabase()){
-      await _sbPost(SB_TABLES.documents, {
+      const docCreated = await _sbPost(SB_TABLES.documents, {
         property_id: propertyId,
         file_name: docName || url.split('/').pop() || docType,
         file_url: url,
@@ -47828,6 +47845,8 @@ async function saveDocLink(propertyId, propertyAddress){
         upload_date: today,
         uploaded_at: new Date().toISOString()
       });
+      const docId = docCreated?.id || (Array.isArray(docCreated) && docCreated[0]?.id);
+      if(typeof rtMarkSaved === 'function' && docId) rtMarkSaved('ace_documents', docId);
     } else {
       const res = await fetch(`https://api.airtable.com/v0/${cfg.base}/tblpL6AF6E6bDwhga`,{
         method:'POST',
@@ -54757,6 +54776,7 @@ async function airtableUpdate(recordId, fields){
         const updated = await _sbPatch(SB_TABLES.properties, recordId, sbData);
         const idx = allDeals.findIndex(d=>d.id===recordId);
         if(idx>-1) Object.assign(allDeals[idx], remoteFields);
+        if(typeof rtMarkSaved === 'function') rtMarkSaved('ace_properties', recordId);
       }
       // v350: if the patch touches any ticker-visible field on the deal
       // currently open, re-render the .dh-row2 stat strip in place so
@@ -55728,6 +55748,8 @@ function _applyUserToUI(user){
   if(aceAgentBtn) aceAgentBtn.style.display = isAdminUser ? 'inline-block' : 'none';
   const voiceWidget = document.getElementById('voiceWidget');
   if(voiceWidget) voiceWidget.style.display = isAdminUser ? 'block' : 'none';
+  // Start cross-user real-time sync after auth is confirmed.
+  if(typeof rtInit === 'function') rtInit();
 }
 
 async function setViewMode(mode){

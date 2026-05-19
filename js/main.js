@@ -40,6 +40,7 @@ import {
   _parseJwtPayload, _isTokenExpiring, _refreshAccessToken, _signIn,
 } from './core/auth.js';
 import { _showToast, showSaveConfirm } from './core/toast.js';
+import { rtInit, rtMarkSaved, rtUpdateToken, rtDestroy } from './core/realtime.js';
 
 // ─── Design system ────────────────────────────────────────────────────
 import * as designSystem    from './design/design-system.js';
@@ -102,6 +103,12 @@ for (const [name, value] of Object.entries(bcAiSuggestions)){ window[name] = val
 for (const [name, value] of Object.entries(backmarket))     { window[name] = value; }
 for (const [name, value] of Object.entries(fub))            { window[name] = value; }
 for (const [name, value] of Object.entries(relationships))  { window[name] = value; }
+
+// Realtime sync — attach to window so legacy _applyUserToUI can call rtInit()
+window.rtInit        = rtInit;
+window.rtMarkSaved   = rtMarkSaved;
+window.rtUpdateToken = rtUpdateToken;
+window.rtDestroy     = rtDestroy;
 
 // ─── Smoke-test log ───────────────────────────────────────────────────
 console.log('[ace-modules] all modules loaded', {

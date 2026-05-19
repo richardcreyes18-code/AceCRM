@@ -7478,77 +7478,124 @@ function _mfRentLoad(raw){
 // "industrial". Includes # of tenants, owner-occupied flag, office/
 // warehouse SF split, loading docks, drive-ins, ceiling height, and a
 // shortcut to the Tenant Mix tab.
+function _indSubhead(label){
+  return `<div style="margin:20px 0 10px;">
+    <div style="font-size:10px;font-weight:700;color:#2563eb;text-transform:uppercase;letter-spacing:.08em;margin-bottom:6px;">${label}</div>
+    <div style="height:1px;background:#e2e8f0;"></div>
+  </div>`;
+}
+
+function _indOwnerOccClick(val){
+  const yR = document.getElementById('indOwnerOcc_yes_radio');
+  const nR = document.getElementById('indOwnerOcc_no_radio');
+  const yB = document.getElementById('ind_ownerOcc_yes');
+  const nB = document.getElementById('ind_ownerOcc_no');
+  if(yR) yR.checked = val;
+  if(nR) nR.checked = !val;
+  if(yB){ yB.style.background = val?'#2563eb':'transparent'; yB.style.color = val?'#fff':'#64748b'; }
+  if(nB){ nB.style.background = val?'transparent':'#2563eb'; nB.style.color = val?'#64748b':'#fff'; }
+  markDirty();
+}
+
 function _renderIndustrialSection(d){
   const totalSF = Number(String(d['Total Building SF']||'').replace(/,/g,''))||0;
   const officeSF = Number(d['Office SF']||0);
-  const warehouseSF = Number(d['Warehouse SF']||0);
   const officePct = (totalSF > 0 && officeSF > 0) ? ((officeSF / totalSF) * 100).toFixed(1) : (Number(d['Office SF Pct']||0) || '');
   const ownerOcc = !!d['Owner Occupied'];
   return `    <!-- INDUSTRIAL DETAILS -->
     <div class="info-box">
       <div class="info-box-title" style="display:flex;justify-content:space-between;align-items:center;">
         <span>Industrial Details</span>
-        <button onclick="switchTab('tenantmix', document.querySelector('.tab-btn[onclick*=tenantmix]'))" style="background:linear-gradient(135deg,#2a7a2a,#1a5a1a);color:#fff;border:none;padding:4px 12px;font-size:11px;font-weight:600;border-radius:5px;cursor:pointer;">🏪 Open Tenant Mix →</button>
+        <button onclick="switchTab('tenantmix', document.querySelector('.tab-btn[onclick*=tenantmix]'))"
+          style="background:#2563eb;color:#fff;border:none;padding:5px 14px;font-size:11px;font-weight:600;border-radius:99px;cursor:pointer;display:inline-flex;align-items:center;gap:5px;">
+          🏪 Open Tenant Mix →
+        </button>
       </div>
-      <div class="pd-field-grid" style="grid-template-columns:repeat(4,1fr);">
+
+      ${_indSubhead('Tenancy')}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
         <div class="pd-field">
           <label class="pd-lbl"># of Tenants</label>
-          <input id="ind_numTenants" type="number" min="0" step="1" class="form-input" value="${d['Num Tenants']||''}" placeholder="—" oninput="markDirty()"/>
+          <input id="ind_numTenants" type="number" min="0" step="1" class="form-input"
+            value="${d['Num Tenants']||''}" placeholder="0" oninput="markDirty()"/>
         </div>
         <div class="pd-field">
           <label class="pd-lbl">Owner Occupied</label>
-          <div class="pd-radio-row">
-            <label><input type="radio" name="indOwnerOcc" value="yes" ${ownerOcc?'checked':''} onchange="markDirty()"/> Yes</label>
-            <label><input type="radio" name="indOwnerOcc" value="no" ${ownerOcc?'':'checked'} onchange="markDirty()"/> No</label>
+          <input type="radio" name="indOwnerOcc" id="indOwnerOcc_yes_radio" value="yes" ${ownerOcc?'checked':''} style="display:none;"/>
+          <input type="radio" name="indOwnerOcc" id="indOwnerOcc_no_radio"  value="no"  ${ownerOcc?'':'checked'} style="display:none;"/>
+          <div style="display:flex;border:1px solid #e2e8f0;border-radius:6px;overflow:hidden;background:#fff;">
+            <button id="ind_ownerOcc_yes" type="button" onclick="_indOwnerOccClick(true)"
+              style="flex:1;padding:8px;font-size:12px;font-weight:600;border:none;cursor:pointer;transition:background .12s,color .12s;background:${ownerOcc?'#2563eb':'transparent'};color:${ownerOcc?'#fff':'#64748b'};">Yes</button>
+            <button id="ind_ownerOcc_no"  type="button" onclick="_indOwnerOccClick(false)"
+              style="flex:1;padding:8px;font-size:12px;font-weight:600;border:none;border-left:1px solid #e2e8f0;cursor:pointer;transition:background .12s,color .12s;background:${ownerOcc?'transparent':'#2563eb'};color:${ownerOcc?'#64748b':'#fff'};">No</button>
           </div>
         </div>
+      </div>
+
+      ${_indSubhead('Access &amp; Loading')}
+      <div style="display:grid;grid-template-columns:1fr 1fr;gap:16px;">
         <div class="pd-field">
           <label class="pd-lbl">Loading Docks</label>
-          <input id="ind_loadingDocks" type="number" min="0" step="1" class="form-input" value="${d['Num Loading Docks']||''}" placeholder="—" oninput="markDirty()"/>
+          <input id="ind_loadingDocks" type="number" min="0" step="1" class="form-input"
+            value="${d['Num Loading Docks']||''}" placeholder="0" oninput="markDirty()"/>
         </div>
         <div class="pd-field">
           <label class="pd-lbl">Drive-Ins</label>
-          <input id="ind_driveIns" type="number" min="0" step="1" class="form-input" value="${d['Num Drive Ins']||''}" placeholder="—" oninput="markDirty()"/>
+          <input id="ind_driveIns" type="number" min="0" step="1" class="form-input"
+            value="${d['Num Drive Ins']||''}" placeholder="0" oninput="markDirty()"/>
         </div>
       </div>
-      <div class="pd-field-grid" style="grid-template-columns:repeat(4,1fr);">
+
+      ${_indSubhead('Space Breakdown')}
+      <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:16px;">
         <div class="pd-field">
           <label class="pd-lbl">Office SF</label>
           <div class="pd-row">
-            <input id="ind_officeSF" class="form-input num-input" type="text" inputmode="numeric" value="${_fmtNum(d['Office SF']||'')}" placeholder="—" oninput="_indSyncOfficePct();markDirty()"/>
+            <input id="ind_officeSF" class="form-input num-input" type="text" inputmode="numeric"
+              value="${_fmtNum(d['Office SF']||'')}" placeholder="0" oninput="_indSyncOfficePct();markDirty()"/>
             <span class="pd-unit">SF</span>
           </div>
         </div>
         <div class="pd-field">
           <label class="pd-lbl">Warehouse SF</label>
           <div class="pd-row">
-            <input id="ind_warehouseSF" class="form-input num-input" type="text" inputmode="numeric" value="${_fmtNum(d['Warehouse SF']||'')}" placeholder="—" oninput="markDirty()"/>
+            <input id="ind_warehouseSF" class="form-input num-input" type="text" inputmode="numeric"
+              value="${_fmtNum(d['Warehouse SF']||'')}" placeholder="0" oninput="markDirty()"/>
             <span class="pd-unit">SF</span>
           </div>
         </div>
         <div class="pd-field">
           <label class="pd-lbl">Office %</label>
           <div class="pd-row">
-            <input id="ind_officePct" class="form-input" type="number" min="0" max="100" step="0.1" value="${officePct||''}" placeholder="—" oninput="_indSyncOfficeSF();markDirty()"/>
+            <input id="ind_officePct" class="form-input" type="number" min="0" max="100" step="0.1"
+              value="${officePct||''}" placeholder="0" oninput="_indSyncOfficeSF();markDirty()"/>
             <span class="pd-unit">%</span>
           </div>
         </div>
+      </div>
+
+      ${_indSubhead('Dimensions')}
+      <div style="max-width:50%;">
         <div class="pd-field">
           <label class="pd-lbl">Ceiling Height</label>
           <div class="pd-row">
-            <input id="ind_ceilingHeight" type="number" min="0" step="0.5" class="form-input" value="${d['Ceiling Height Ft']||''}" placeholder="—" oninput="markDirty()"/>
-            <span class="pd-unit">ft</span>
+            <input id="ind_ceilingHeight" type="number" min="0" step="0.5" class="form-input"
+              value="${d['Ceiling Height Ft']||''}" placeholder="0" oninput="markDirty()"/>
+            <span class="pd-unit">FT</span>
           </div>
         </div>
       </div>
-      <!-- v129: Other Industrial Notes — free-form context that doesn't fit
-           structured fields. Owner-occupied details, additional tenant info,
-           special-purpose use, etc. AI Auto-Fill routes overflow context here. -->
-      <div class="pd-field" style="margin-top:10px;">
+
+      ${_indSubhead('Other')}
+      <div class="pd-field">
         <label class="pd-lbl">Other Industrial Notes</label>
-        <textarea id="ind_otherNotes" class="form-textarea auto-expand" placeholder="—" style="min-height:80px;width:100%;box-sizing:border-box;" oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px';markDirty()">${d['Other Industrial Notes']||''}</textarea>
+        <textarea id="ind_otherNotes" class="form-textarea auto-expand"
+          placeholder="Sprinkler system, power, column spacing, rail access..."
+          style="min-height:80px;width:100%;box-sizing:border-box;"
+          oninput="this.style.height='auto';this.style.height=this.scrollHeight+'px';markDirty()">${d['Other Industrial Notes']||''}</textarea>
       </div>
-      <div style="text-align:right;margin-top:6px;">
+
+      <div style="text-align:right;margin-top:12px;">
         <button class="save-btn" onclick="masterSave().catch(e=>console.warn('manual save error:',e))">Save</button>
       </div>
     </div>

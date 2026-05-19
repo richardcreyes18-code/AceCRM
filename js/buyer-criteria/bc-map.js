@@ -1,14 +1,14 @@
 // js/buyer-criteria/bc-map.js — Interactive location map for BC expanded view.
-// Yellow state polygons at zoom≤7, blue county polygons at zoom>7, red city markers always.
+// Yellow state polygons at low zoom, light-blue county polygons at zoom>6, red city markers always.
 
 const _maps        = new Map(); // containerId → { map, stateLayer, countyLayer, cityLayer }
-const _countyCache = new Map(); // stateFips → GeoJSON | null
+const _countyCache = new Map(); // stateAbbr → GeoJSON | null
 const _cityCache   = new Map(); // city string (lower) → [lat, lng] | null
 
 let _statesGeoJson = null; // us-atlas feature collection, loaded once
 
-const STATE_STYLE  = { color: '#b8860b', weight: 1.5, fillColor: '#ffd700', fillOpacity: 0.35 };
-const COUNTY_STYLE = { color: '#1565c0', weight: 1,   fillColor: '#1976d2', fillOpacity: 0.30 };
+const STATE_STYLE  = { color: '#b8860b', weight: 1.5, fillColor: '#ffd700', fillOpacity: 0.30 };
+const COUNTY_STYLE = { color: '#2563eb', weight: 1.5, fillColor: '#93c5fd', fillOpacity: 0.40 };
 
 const _STATE_FIPS = {
   AL:'01',AK:'02',AZ:'04',AR:'05',CA:'06',CO:'08',CT:'09',DE:'10',FL:'12',GA:'13',
@@ -16,6 +16,18 @@ const _STATE_FIPS = {
   MA:'25',MI:'26',MN:'27',MS:'28',MO:'29',MT:'30',NE:'31',NV:'32',NH:'33',NJ:'34',
   NM:'35',NY:'36',NC:'37',ND:'38',OH:'39',OK:'40',OR:'41',PA:'42',RI:'44',SC:'45',
   SD:'46',TN:'47',TX:'48',UT:'49',VT:'50',VA:'51',WA:'53',WV:'54',WI:'55',WY:'56',DC:'11',
+};
+
+const _STATE_FULL_NAME = {
+  AL:'Alabama',AK:'Alaska',AZ:'Arizona',AR:'Arkansas',CA:'California',CO:'Colorado',
+  CT:'Connecticut',DE:'Delaware',FL:'Florida',GA:'Georgia',HI:'Hawaii',ID:'Idaho',
+  IL:'Illinois',IN:'Indiana',IA:'Iowa',KS:'Kansas',KY:'Kentucky',LA:'Louisiana',
+  ME:'Maine',MD:'Maryland',MA:'Massachusetts',MI:'Michigan',MN:'Minnesota',MS:'Mississippi',
+  MO:'Missouri',MT:'Montana',NE:'Nebraska',NV:'Nevada',NH:'New Hampshire',NJ:'New Jersey',
+  NM:'New Mexico',NY:'New York',NC:'North Carolina',ND:'North Dakota',OH:'Ohio',
+  OK:'Oklahoma',OR:'Oregon',PA:'Pennsylvania',RI:'Rhode Island',SC:'South Carolina',
+  SD:'South Dakota',TN:'Tennessee',TX:'Texas',UT:'Utah',VT:'Vermont',VA:'Virginia',
+  WA:'Washington',WV:'West Virginia',WI:'Wisconsin',WY:'Wyoming',DC:'District of Columbia',
 };
 
 // ── Lazy loaders ──────────────────────────────────────────────────────────────
@@ -61,30 +73,35 @@ async function _ensureStatesGeoJson() {
 
 // ── Data fetchers ─────────────────────────────────────────────────────────────
 
-async function _fetchCountiesForState(fips) {
-  if (_countyCache.has(fips)) return _countyCache.get(fips);
+// Uses the same ESRI ArcGIS endpoint as the deal-board county map — proven reliable.
+async function _fetchCountiesForState(stateAbbr) {
+  if (_countyCache.has(stateAbbr)) return _countyCache.get(stateAbbr);
+  const fullName = _STATE_FULL_NAME[stateAbbr];
+  if (!fullName) { _countyCache.set(stateAbbr, null); return null; }
+
   const url =
-    `https://tigerweb.geo.census.gov/arcgis/rest/services/TigerWeb/State_County/MapServer/5/query` +
-    `?where=STATEFP%3D'${fips}'&outFields=NAME%2CSTATEFP&f=geojson&returnGeometry=true`;
+    'https://services.arcgis.com/P3ePLMYs2RVChkJx/arcgis/rest/services/USA_Census_Counties/FeatureServer/0/query' +
+    `?where=STATE_NAME+%3D+'${encodeURIComponent(fullName)}'` +
+    '&outFields=NAME,STATE_NAME&returnGeometry=true&f=geojson&outSR=4326&geometryPrecision=4';
+
   try {
     const data = await fetch(url).then(r => r.json());
-    _countyCache.set(fips, data);
+    if (!data?.features?.length) throw new Error('no features');
+    _countyCache.set(stateAbbr, data);
     return data;
   } catch (e) {
-    console.warn('[bc-map] county fetch failed for FIPS', fips, e.message);
-    _countyCache.set(fips, null);
+    console.warn('[bc-map] county fetch failed for', stateAbbr, e.message);
+    _countyCache.set(stateAbbr, null);
     return null;
   }
 }
 
 // Try "{city}, {stateCode}" for each buyer state before falling back to bare city name.
-// This prevents "Galloway" from resolving to Galloway, WI instead of Galloway, NJ.
 async function _geocodeCity(cityStr, stateHints = []) {
   const city = cityStr.trim();
   const key  = city.toLowerCase() + '|' + stateHints.join(',');
   if (_cityCache.has(key)) return _cityCache.get(key);
 
-  // Build query list: qualified names first, then bare city as last resort
   const queries = [...stateHints.map(s => `${city}, ${s}`), city];
 
   for (const q of queries) {
@@ -141,7 +158,7 @@ export async function bcMapInit(containerId, statesStr, countiesStr, citiesStr) 
   const inst = {
     map,
     stateLayer:  L.layerGroup().addTo(map),
-    countyLayer: L.layerGroup(),  // added to map only at zoom>7
+    countyLayer: L.layerGroup(),  // added to map only at zoom>6
     cityLayer:   L.layerGroup().addTo(map),
   };
   _maps.set(containerId, inst);
@@ -170,7 +187,6 @@ async function _renderAll(containerId, statesStr, countiesStr, citiesStr, fitBou
   const countyNames = _parseList(countiesStr);
   const cities      = _parseList(citiesStr);
 
-  // Default to NJ when no states set — keeps city geocoding anchored to the primary market
   const stateHints = stateCodes.length ? stateCodes : ['NJ'];
 
   await Promise.all([
@@ -182,7 +198,6 @@ async function _renderAll(containerId, statesStr, countiesStr, citiesStr, fitBou
   _applyZoomVisibility(containerId);
 
   if (fitBounds) {
-    // hasCounties checks actual rendered layers (counties may render even with no explicit stateCodes)
     const renderedCounties = (() => { let n = 0; inst.countyLayer.eachLayer(() => n++); return n > 0; })();
     _smartFit(inst, renderedCounties, cities.length > 0, stateCodes.length > 0);
   }
@@ -196,7 +211,6 @@ async function _renderStateLayer(inst, stateCodes) {
   let geoAll;
   try { geoAll = await _ensureStatesGeoJson(); } catch (e) { return; }
 
-  // us-atlas stores FIPS as a numeric id (e.g. 34 for NJ, 36 for NY)
   const fipsSet = new Set(stateCodes.map(c => parseInt(_STATE_FIPS[c], 10)));
 
   const filtered = {
@@ -214,17 +228,15 @@ async function _renderCountyLayer(inst, stateCodes, countyNames) {
   inst.countyLayer.clearLayers();
   if (!countyNames.length) return;
 
-  // If no states are set, default to NJ (the primary market)
   const effectiveStates = stateCodes.length ? stateCodes : ['NJ'];
 
-  // TigerWeb NAME field is bare ("Atlantic") but BC chips may have " County" suffix
-  // ("Atlantic County"). Strip the suffix so both forms match.
+  // Strip " County" suffix so both "Morris" and "Morris County" match
   const countySet = new Set(
     countyNames.map(n => n.toLowerCase().replace(/\s+county\s*$/i, '').trim())
   );
 
   const results = await Promise.all(
-    effectiveStates.map(code => _fetchCountiesForState(_STATE_FIPS[code]))
+    effectiveStates.map(code => _fetchCountiesForState(code))
   );
 
   for (const geoJson of results) {
@@ -263,12 +275,13 @@ async function _renderCityLayer(inst, cities, stateHints = []) {
   }
 }
 
+// Counties show at zoom > 6 (covers all NJ/state-level views), states at zoom ≤ 6.
 function _applyZoomVisibility(containerId) {
   const inst = _maps.get(containerId);
   if (!inst) return;
   const { map, stateLayer, countyLayer } = inst;
   const zoom = map.getZoom();
-  if (zoom <= 7) {
+  if (zoom <= 6) {
     if (!map.hasLayer(stateLayer))  map.addLayer(stateLayer);
     if (map.hasLayer(countyLayer))  map.removeLayer(countyLayer);
   } else {
@@ -278,7 +291,6 @@ function _applyZoomVisibility(containerId) {
 }
 
 // Fit strategy: counties+cities > cities alone > states
-// This zooms in as tightly as the data allows.
 function _smartFit(inst, hasCounties, hasCities, hasStates) {
   const L = window.L;
   const layers = [];
@@ -290,7 +302,6 @@ function _smartFit(inst, hasCounties, hasCities, hasStates) {
     inst.cityLayer.eachLayer(l => layers.push(l));
   }
 
-  // No county/city data found — fall back to state polygons
   if (!layers.length && hasStates) {
     inst.stateLayer.eachLayer(l => layers.push(l));
   }
@@ -303,9 +314,6 @@ function _smartFit(inst, hasCounties, hasCities, hasStates) {
     if (bounds.isValid()) {
       const pad = (hasCounties || hasCities) ? 0.12 : 0.15;
       inst.map.fitBounds(bounds.pad(pad));
-      // fitBounds triggers zoomend which calls _applyZoomVisibility,
-      // but fire it immediately too so county layer appears right away
-      // when the fit zoom lands above 7.
       inst.map.once('moveend', () => {
         const containerId = [..._maps.entries()].find(([, v]) => v === inst)?.[0];
         if (containerId) _applyZoomVisibility(containerId);

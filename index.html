@@ -21696,7 +21696,7 @@ async function showContactDetailPage(recordId, returnTo){
            push the rel button out of view. -->
       <div style="background:#fff;border-bottom:1px solid #e2e8f0;padding:18px 28px;display:flex;align-items:center;gap:12px;flex-shrink:0;flex-wrap:wrap;">
         <button onclick="${backHandler}" style="background:#f1f5f9;color:#334155;border:1px solid #e2e8f0;padding:8px 14px;font-size:12px;font-weight:600;border-radius:8px;cursor:pointer;flex-shrink:0;">${backLabel}</button>
-        <div style="width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#d97706);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;color:#fff;flex-shrink:0;">${initials}</div>
+        <div id="cdp_headerAvatar" style="width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#f59e0b,#d97706);display:flex;align-items:center;justify-content:center;font-size:20px;font-weight:700;color:#fff;flex-shrink:0;">${initials}</div>
         <div style="flex:1;min-width:200px;">
           <div id="cdp_headerName" style="font-size:22px;font-weight:800;color:#0f172a;line-height:1.2;overflow:hidden;text-overflow:ellipsis;">${f.Name||'Unnamed Contact'}</div>
           <div id="cdp_headerSub" style="font-size:13px;color:#64748b;margin-top:4px;">
@@ -25960,28 +25960,34 @@ async function saveContactFromModal(recordId){
 
       // Refresh the sticky header of the full-page detail view (if present)
       // without re-fetching all the timeline/props/bc data.
+      const nm = atFields.Name || '';
       const headerName = document.getElementById('cdp_headerName');
-      if(headerName){
-        const nm = atFields.Name || allContacts[idx]?.fields?.Name || 'Unnamed Contact';
-        headerName.textContent = nm;
-        const sub = document.getElementById('cdp_headerSub');
-        if(sub){
-          const co = atFields.Company || allContacts[idx]?.fields?.Company || '';
-          const ph = atFields['Phone Number'] || allContacts[idx]?.fields?.['Phone Number'] || '';
-          const em = atFields.Email || allContacts[idx]?.fields?.Email || '';
-          let html = co ? co : '<em style="color:#64748b;">No company</em>';
-          if(ph) html += ' · 📞 ' + ph;
-          if(em) html += ' · ✉️ ' + em;
-          sub.innerHTML = html;
-        }
-        const badges = document.getElementById('cdp_headerBadges');
-        if(badges){
-          const tArr = atFields.Type || allContacts[idx]?.fields?.Type || [];
-          badges.innerHTML = tArr.length
-            ? tArr.map(t=>`<span style="font-size:11px;padding:3px 10px;border-radius:10px;margin-right:4px;font-weight:600;${TYPE_COLORS[t]||TYPE_COLORS.Other}">${t}</span>`).join('')
-            : '<span style="font-size:11px;color:#94a3b8;">No type set</span>';
-        }
+      if(headerName) headerName.textContent = nm || 'Unnamed Contact';
+      const avatar = document.getElementById('cdp_headerAvatar');
+      if(avatar && nm){
+        const inits = nm.split(' ').map(s=>s[0]).filter(Boolean).slice(0,2).join('').toUpperCase();
+        avatar.textContent = inits || '?';
       }
+      const sub = document.getElementById('cdp_headerSub');
+      if(sub){
+        const co = atFields.Company || '';
+        const ph = atFields['Phone Number'] || '';
+        const em = atFields.Email || '';
+        let html = co ? co : '<em style="color:#94a3b8;">No company</em>';
+        if(ph) html += ` · 📞 <span style="color:#0369a1;">${ph}</span>`;
+        if(em) html += ` · ✉ <span style="color:#0369a1;">${em}</span>`;
+        sub.innerHTML = html;
+      }
+      const badges = document.getElementById('cdp_headerBadges');
+      if(badges){
+        const tArr = types;
+        badges.innerHTML = tArr.length
+          ? tArr.map(t=>`<span style="font-size:11px;padding:4px 12px;border-radius:12px;margin-right:4px;font-weight:600;${TYPE_COLORS[t]||TYPE_COLORS.Other}">${t}</span>`).join('')
+          : '<span style="font-size:11px;color:#94a3b8;">No type set</span>';
+      }
+      // Also sync the form input so it reflects the exact saved value
+      const nameInp = document.getElementById('cm_name');
+      if(nameInp) nameInp.value = nm;
     } else {
       allContacts.unshift(saved);
     }

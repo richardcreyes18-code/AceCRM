@@ -131,8 +131,21 @@ function _onContactChange({ eventType, new: row, old }) {
     if (idx !== -1) list.splice(idx, 1);
   } else {
     const existing = list.find(x => x.id === id);
-    if (existing) Object.assign(existing, row);
-    else list.unshift(row);
+    if (existing) {
+      Object.assign(existing, row);
+      // Keep the legacy {id, fields:{Name,...}} shape in sync so
+      // showContactDetailPage reads the right name on next open.
+      if (!existing.fields) existing.fields = {};
+      if (row.name        !== undefined) existing.fields['Name']                    = row.name;
+      if (row.phone_number!== undefined) existing.fields['Phone Number']            = row.phone_number;
+      if (row.secondary_phone!==undefined) existing.fields['Secondary Phone Number']= row.secondary_phone;
+      if (row.email       !== undefined) existing.fields['Email']                   = row.email;
+      if (row.company     !== undefined) existing.fields['Company']                 = row.company;
+      if (row.contact_notes!==undefined) existing.fields['Contact Notes']           = row.contact_notes;
+      if (row.type        !== undefined) existing.fields['Type']                    = row.type;
+    } else {
+      list.unshift(row);
+    }
   }
 
   if (document.getElementById('contactsTableWrap') && typeof window.renderContactsTable === 'function') {

@@ -77,22 +77,32 @@ async function _fetchCountiesForState(fips) {
   }
 }
 
-async function _geocodeCity(cityStr) {
-  const key = cityStr.trim().toLowerCase();
+// Try "{city}, {stateCode}" for each buyer state before falling back to bare city name.
+// This prevents "Galloway" from resolving to Galloway, WI instead of Galloway, NJ.
+async function _geocodeCity(cityStr, stateHints = []) {
+  const city = cityStr.trim();
+  const key  = city.toLowerCase() + '|' + stateHints.join(',');
   if (_cityCache.has(key)) return _cityCache.get(key);
-  const q = encodeURIComponent(cityStr.trim());
-  try {
-    const data = await fetch(
-      `https://nominatim.openstreetmap.org/search?q=${q}&countrycodes=us&format=json&limit=1`,
-      { headers: { 'Accept-Language': 'en', 'User-Agent': 'ace-crm/1.0' } }
-    ).then(r => r.json());
-    const ll = data?.[0] ? [parseFloat(data[0].lat), parseFloat(data[0].lon)] : null;
-    _cityCache.set(key, ll);
-    return ll;
-  } catch (e) {
-    _cityCache.set(key, null);
-    return null;
+
+  // Build query list: qualified names first, then bare city as last resort
+  const queries = [...stateHints.map(s => `${city}, ${s}`), city];
+
+  for (const q of queries) {
+    try {
+      const data = await fetch(
+        `https://nominatim.openstreetmap.org/search?q=${encodeURIComponent(q)}&countrycodes=us&format=json&limit=1`,
+        { headers: { 'Accept-Language': 'en', 'User-Agent': 'ace-crm/1.0' } }
+      ).then(r => r.json());
+      if (data?.[0]) {
+        const ll = [parseFloat(data[0].lat), parseFloat(data[0].lon)];
+        _cityCache.set(key, ll);
+        return ll;
+      }
+    } catch (e) { /* try next */ }
   }
+
+  _cityCache.set(key, null);
+  return null;
 }
 
 // ── Parsers ───────────────────────────────────────────────────────────────────
@@ -160,16 +170,21 @@ async function _renderAll(containerId, statesStr, countiesStr, citiesStr, fitBou
   const countyNames = _parseList(countiesStr);
   const cities      = _parseList(citiesStr);
 
+  // Default to NJ when no states set — keeps city geocoding anchored to the primary market
+  const stateHints = stateCodes.length ? stateCodes : ['NJ'];
+
   await Promise.all([
     _renderStateLayer(inst, stateCodes),
     _renderCountyLayer(inst, stateCodes, countyNames),
-    _renderCityLayer(inst, cities),
+    _renderCityLayer(inst, cities, stateHints),
   ]);
 
   _applyZoomVisibility(containerId);
 
   if (fitBounds) {
-    _smartFit(inst, countyNames.length > 0, cities.length > 0, stateCodes.length > 0);
+    // hasCounties checks actual rendered layers (counties may render even with no explicit stateCodes)
+    const renderedCounties = (() => { let n = 0; inst.countyLayer.eachLayer(() => n++); return n > 0; })();
+    _smartFit(inst, renderedCounties, cities.length > 0, stateCodes.length > 0);
   }
 }
 
@@ -197,12 +212,19 @@ async function _renderStateLayer(inst, stateCodes) {
 async function _renderCountyLayer(inst, stateCodes, countyNames) {
   const L = window.L;
   inst.countyLayer.clearLayers();
-  if (!stateCodes.length || !countyNames.length) return;
+  if (!countyNames.length) return;
 
-  const countySet = new Set(countyNames.map(n => n.toLowerCase()));
+  // If no states are set, default to NJ (the primary market)
+  const effectiveStates = stateCodes.length ? stateCodes : ['NJ'];
+
+  // TigerWeb NAME field is bare ("Atlantic") but BC chips may have " County" suffix
+  // ("Atlantic County"). Strip the suffix so both forms match.
+  const countySet = new Set(
+    countyNames.map(n => n.toLowerCase().replace(/\s+county\s*$/i, '').trim())
+  );
 
   const results = await Promise.all(
-    stateCodes.map(code => _fetchCountiesForState(_STATE_FIPS[code]))
+    effectiveStates.map(code => _fetchCountiesForState(_STATE_FIPS[code]))
   );
 
   for (const geoJson of results) {
@@ -219,12 +241,12 @@ async function _renderCountyLayer(inst, stateCodes, countyNames) {
   }
 }
 
-async function _renderCityLayer(inst, cities) {
+async function _renderCityLayer(inst, cities, stateHints = []) {
   const L = window.L;
   inst.cityLayer.clearLayers();
   if (!cities.length) return;
 
-  const positions = await Promise.all(cities.map(_geocodeCity));
+  const positions = await Promise.all(cities.map(c => _geocodeCity(c, stateHints)));
 
   for (let i = 0; i < cities.length; i++) {
     const ll = positions[i];

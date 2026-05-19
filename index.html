@@ -27975,6 +27975,7 @@ let _bcVipFilter = false; // show only VIP buyers
 let _bcState = {
   search: '',
   vip: false,
+  is1031: false,
   panelOpen: false,
   // Multi-select arrays (Pipeline-style)
   assetTypes: [],
@@ -31605,7 +31606,7 @@ async function showBuyerCriteriaPage(){
         // v63: embedded JOIN on ace_contacts replaces the separate batch fetch loop below.
         // One round-trip instead of ~12.
         // v108.2: filter soft-deleted BCs (losers from a smart merge)
-        const rows = await _sbGet(SB_TABLES.buyerCriteria, `deleted_at=is.null&select=*,ace_contacts(id,name,phone_number,email,company,fub_contact_id)&order=created_at.desc&limit=${batchSize}&offset=${from}`);
+        const rows = await _sbGet(SB_TABLES.buyerCriteria, `deleted_at=is.null&select=*,ace_contacts(id,name,phone_number,email,company,type,fub_contact_id)&order=created_at.desc&limit=${batchSize}&offset=${from}`);
         if(!rows.length) break;
         rows.forEach(row => {
           // Hydrate contact cache from the embedded record
@@ -31616,6 +31617,7 @@ async function showBuyerCriteriaPage(){
               'Phone Number': c.phone_number,
               Email: c.email,
               Company: c.company,
+              Type: c.type || [],
               '_fubContactId': c.fub_contact_id || null
             };
           }
@@ -31713,6 +31715,7 @@ function _bcCountActiveFilters(){
   if((_bcState.cities    ||[]).length) n++;
   if(_bcState.sfMin != null || _bcState.sfMax != null) n++;
   if(_bcState.unitsMin != null || _bcState.unitsMax != null) n++;
+  if(_bcState.is1031) n++;
   return n;
 }
 
@@ -31758,6 +31761,7 @@ function _bcClearAllFilters(){
   _bcState.cities     = [];
   _bcState.sfMin = null;    _bcState.sfMax = null;
   _bcState.unitsMin = null; _bcState.unitsMax = null;
+  _bcState.is1031 = false;
   const panel = document.getElementById('bcFilterPanel');
   if(panel) panel.innerHTML = _bcBuildFilterPanelHTML();
   _bcMountFilterCombos();
@@ -31778,6 +31782,7 @@ function removeBcFilterChip(type, val){
     case 'cities':     _bcState.cities     = (_bcState.cities    ||[]).filter(v=>v!==val); break;
     case 'sfRange':    _bcState.sfMin    = null; _bcState.sfMax    = null; break;
     case 'unitsRange': _bcState.unitsMin = null; _bcState.unitsMax = null; break;
+    case 'is1031':     _bcState.is1031   = false; break;
   }
   // Range chips need the panel rebuilt so the input boxes clear; combo
   // selections don't (the combo paints its own tags from getSelected).
@@ -31845,6 +31850,7 @@ function _bcBuildFilterChipsHTML(){
   if(_bcState.unitsMin != null || _bcState.unitsMax != null){
     chips.push(chip('unitsRange','',`Units ${_bcState.unitsMin??'—'}–${_bcState.unitsMax??'—'}`));
   }
+  if(_bcState.is1031) chips.push(chip('is1031','','🔄 1031 Buyers'));
   return chips.join(' ');
 }
 
@@ -31972,6 +31978,16 @@ function _bcBuildFilterPanelHTML(){
         + rangeInput('Square Footage', 'sfMin', 'sfMax', 'SF', 'SF')
         + rangeInput('Units (MF)',     'unitsMin', 'unitsMax', '#', 'units')
       )}
+      ${card('#f59e0b', '1031 Buyer', `
+        <div style="font-size:12px;color:#64748b;margin-bottom:12px;line-height:1.5;">Show only buyers whose contact type includes <strong>1031</strong> — indicating they need a like-kind exchange.</div>
+        <label style="display:flex;align-items:center;gap:10px;cursor:pointer;user-select:none;">
+          <div onclick="_bcState.is1031=!_bcState.is1031;(function(){const p=document.getElementById('bcFilterPanel');if(p){p.innerHTML=_bcBuildFilterPanelHTML();_bcMountFilterCombos();}})();_bcRefreshFilterChips();renderBuyerCriteriaTable(allBuyerCriteria);"
+            style="width:38px;height:20px;border-radius:10px;background:${_bcState.is1031?'#f59e0b':'#e2e8f0'};position:relative;flex-shrink:0;cursor:pointer;">
+            <span style="position:absolute;top:2px;left:2px;width:16px;height:16px;border-radius:50%;background:#fff;transition:transform .15s;transform:${_bcState.is1031?'translateX(18px)':'translateX(0)'};box-shadow:0 1px 3px rgba(0,0,0,.2);"></span>
+          </div>
+          <span style="font-size:13px;font-weight:600;color:${_bcState.is1031?'#b45309':'#475569'};">${_bcState.is1031?'1031 Buyers only':'All buyers'}</span>
+        </label>
+      `)}
     </div>`;
 }
 
@@ -32284,8 +32300,10 @@ function renderBuyerCriteriaTable(records){
     let matchRev = true;
     if(_bcReviewFilter === 'review')  matchRev = f['_reviewStatus'] === 'needs_human_review';
     if(_bcReviewFilter === 'applied') matchRev = f['_reviewStatus'] === 'ai_suggestions_applied';
+    const contactType = Array.isArray(linkedContact.Type) ? linkedContact.Type : [];
+    const match1031 = !_bcState.is1031 || contactType.includes('1031');
     return matchQ && matchT && matchSt && matchC && matchCity && matchR
-        && matchSF && matchU && matchV && matchS && matchRev;
+        && matchSF && matchU && matchV && matchS && matchRev && match1031;
   });
 
   ['name','company','phone','assets','areas','cap','price','units','sf','interests','date','notes'].forEach(c=>{

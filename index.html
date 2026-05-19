@@ -38947,6 +38947,7 @@ function _ddRenderShell(){
             <div style="font-size:12px;color:#64748b;margin-top:3px;">${total} candidate match group${total===1?'':'s'} pending review · merging is reversible for 30 days from Settings.</div>
           </div>
           <div style="flex:1;"></div>
+          <button onclick="_ddOpenManualPicker()" style="background:#fff;color:#0f172a;border:1px solid #cbd5e1;padding:9px 16px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;">Manual merge</button>
           <button onclick="_ddRunScan()" id="ddScanBtn" style="background:#fff;color:#1e3a8a;border:1px solid #1e3a8a;padding:9px 16px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;">Scan now ↻</button>
           <button onclick="setNav(null,'settings')" style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;padding:9px 16px;font-size:12px;font-weight:600;border-radius:6px;cursor:pointer;">← Back to Settings</button>
         </div>
@@ -39346,6 +39347,105 @@ function _ddCloseMerge(){
   _ddBCRows = [];
   _ddBCMerge = null;
   _ddBCConflictPicks = {};
+}
+
+// ─── Manual merge picker ───────────────────────────────────────────────
+let _ddManualPick = [null, null];
+let _ddManualSearchTimer = [null, null];
+
+function _ddOpenManualPicker() {
+  _ddManualPick = [null, null];
+  const html = `
+    <div id="ddManualOverlay" style="position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9500;display:flex;align-items:center;justify-content:center;padding:24px;">
+      <div style="background:#fff;border-radius:12px;max-width:520px;width:100%;box-shadow:0 20px 60px rgba(0,0,0,0.25);padding:28px;">
+        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:20px;">
+          <div style="font-size:16px;font-weight:700;color:#0f172a;">Manual merge — pick 2 contacts</div>
+          <button onclick="document.getElementById('ddManualOverlay').remove()" style="background:none;border:none;font-size:20px;cursor:pointer;color:#94a3b8;line-height:1;">×</button>
+        </div>
+        <div style="margin-bottom:16px;">
+          <label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:6px;">Contact 1</label>
+          <input id="ddManualSearch0" oninput="_ddManualSearch(0)" placeholder="Search by name, phone, or email…"
+            style="width:100%;padding:9px 12px;border:1px solid #e2e8f0;border-radius:7px;font-size:13px;box-sizing:border-box;outline:none;"/>
+          <div id="ddManualResults0" style="border:1px solid #e2e8f0;border-top:none;border-radius:0 0 7px 7px;max-height:160px;overflow-y:auto;display:none;"></div>
+          <div id="ddManualChosen0" style="margin-top:6px;font-size:12px;color:#0f172a;font-weight:600;min-height:18px;"></div>
+        </div>
+        <div style="margin-bottom:20px;">
+          <label style="font-size:12px;font-weight:600;color:#475569;display:block;margin-bottom:6px;">Contact 2</label>
+          <input id="ddManualSearch1" oninput="_ddManualSearch(1)" placeholder="Search by name, phone, or email…"
+            style="width:100%;padding:9px 12px;border:1px solid #e2e8f0;border-radius:7px;font-size:13px;box-sizing:border-box;outline:none;"/>
+          <div id="ddManualResults1" style="border:1px solid #e2e8f0;border-top:none;border-radius:0 0 7px 7px;max-height:160px;overflow-y:auto;display:none;"></div>
+          <div id="ddManualChosen1" style="margin-top:6px;font-size:12px;color:#0f172a;font-weight:600;min-height:18px;"></div>
+        </div>
+        <button id="ddManualGo" onclick="_ddManualProceed()" disabled
+          style="width:100%;padding:11px;background:#0f172a;color:#fff;border:none;border-radius:7px;font-size:13px;font-weight:700;cursor:pointer;opacity:0.35;">
+          Proceed to merge →
+        </button>
+      </div>
+    </div>`;
+  document.body.insertAdjacentHTML('beforeend', html);
+}
+
+async function _ddManualSearch(idx) {
+  clearTimeout(_ddManualSearchTimer[idx]);
+  const q = (document.getElementById('ddManualSearch' + idx)?.value || '').trim();
+  const resultsEl = document.getElementById('ddManualResults' + idx);
+  if (!q || q.length < 2) { if (resultsEl) resultsEl.style.display = 'none'; return; }
+  _ddManualSearchTimer[idx] = setTimeout(async () => {
+    const enc = encodeURIComponent(q);
+    const rows = await _sbGet('ace_contacts',
+      'select=id,name,phone_number,email,company&deleted_at=is.null'
+      + '&or=(name.ilike.*' + enc + '*,phone_number.ilike.*' + enc + '*,email.ilike.*' + enc + '*)'
+      + '&order=name.asc&limit=8');
+    if (!resultsEl) return;
+    if (!Array.isArray(rows) || !rows.length) {
+      resultsEl.innerHTML = '<div style="padding:10px 12px;font-size:12px;color:#94a3b8;">No contacts found</div>';
+    } else {
+      resultsEl.innerHTML = rows.map(r => {
+        const safeId   = r.id;
+        const safeName = (r.name||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+        const safePhone= (r.phone_number||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+        const safeEmail= (r.email||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+        const safeCo   = (r.company||'').replace(/\\/g,'\\\\').replace(/'/g,"\\'");
+        const sub = [r.phone_number, r.email, r.company].filter(Boolean).join(' · ');
+        return `<div onclick="_ddManualChoose(${idx},'${safeId}','${safeName}','${safePhone}','${safeEmail}','${safeCo}')"
+          style="padding:9px 12px;font-size:12px;cursor:pointer;border-bottom:1px solid #f1f5f9;background:#fff;">
+          <div style="font-weight:600;color:#0f172a;">${r.name||'(no name)'}</div>
+          <div style="color:#64748b;font-size:11px;">${sub}</div>
+        </div>`;
+      }).join('');
+    }
+    resultsEl.style.display = 'block';
+  }, 120);
+}
+
+function _ddManualChoose(idx, id, name, phone, email, company) {
+  _ddManualPick[idx] = { id, name, phone, email, company };
+  const inp    = document.getElementById('ddManualSearch' + idx);
+  const res    = document.getElementById('ddManualResults' + idx);
+  const chosen = document.getElementById('ddManualChosen' + idx);
+  if (inp) inp.value = '';
+  if (res) res.style.display = 'none';
+  if (chosen) {
+    const parts = [name, phone, email].filter(Boolean);
+    chosen.innerHTML = `<span style="color:#16a34a;">✓</span> ${parts.join(' · ')}`;
+  }
+  const bothChosen = _ddManualPick[0] && _ddManualPick[1];
+  const btn = document.getElementById('ddManualGo');
+  if (btn) { btn.disabled = !bothChosen; btn.style.opacity = bothChosen ? '1' : '0.35'; }
+}
+
+function _ddManualProceed() {
+  const [a, b] = _ddManualPick;
+  if (!a || !b) return;
+  if (a.id === b.id) { showSaveConfirm('Pick two different contacts.'); return; }
+  document.getElementById('ddManualOverlay')?.remove();
+
+  const synthetic = { id: '__manual__', contact_ids: [a.id, b.id], tier: 'manual', match_signal: 'manual', match_value: 'manual merge' };
+  const existing = _ddCandidates.findIndex(c => c.id === '__manual__');
+  if (existing !== -1) _ddCandidates.splice(existing, 1);
+  _ddCandidates.unshift(synthetic);
+
+  _ddOpenMerge('__manual__');
 }
 
 function _ddRenderMergeDialog(cand, contacts, dealCounts){

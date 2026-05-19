@@ -39357,7 +39357,7 @@ function _ddCloseMerge(){
 
 // ─── Manual merge picker ───────────────────────────────────────────────
 let _ddManualPick = [null, null];
-let _ddManualSearchTimer = [null, null];
+let _ddManualPickTimer = [null, null];
 
 function _ddOpenManualPicker() {
   _ddManualPick = [null, null];
@@ -39392,11 +39392,11 @@ function _ddOpenManualPicker() {
 }
 
 async function _ddManualSearch(idx) {
-  clearTimeout(_ddManualSearchTimer[idx]);
+  clearTimeout(_ddManualPickTimer[idx]);
   const q = (document.getElementById('ddManualSearch' + idx)?.value || '').trim();
   const resultsEl = document.getElementById('ddManualResults' + idx);
   if (!q || q.length < 2) { if (resultsEl) resultsEl.style.display = 'none'; return; }
-  _ddManualSearchTimer[idx] = setTimeout(async () => {
+  _ddManualPickTimer[idx] = setTimeout(async () => {
     const enc = encodeURIComponent(q);
     const rows = await _sbGet('ace_contacts',
       'select=id,name,phone_number,email,company&deleted_at=is.null'

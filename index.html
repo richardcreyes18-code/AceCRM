@@ -613,7 +613,7 @@
 
 <!-- ── DEAL SNAPSHOT POPUP ─────────────────────────────────────── -->
 <div id="dealSnapshotModal" style="display:none;position:fixed;inset:0;background:rgba(15,23,42,0.55);z-index:9600;align-items:flex-start;justify-content:center;padding:40px 20px;overflow-y:auto;" onclick="if(event.target===this)closeDealSnapshot()">
-  <div style="background:#fff;border-radius:12px;width:580px;max-width:94vw;box-shadow:0 20px 60px rgba(0,0,0,0.4);max-height:calc(100vh - 80px);display:flex;flex-direction:column;overflow:hidden;">
+  <div style="background:#fff;border-radius:12px;width:960px;max-width:94vw;box-shadow:0 20px 60px rgba(0,0,0,0.4);max-height:calc(100vh - 80px);display:flex;flex-direction:column;overflow:hidden;">
     <!-- Header -->
     <div id="dsHeader" style="padding:18px 22px 14px;border-bottom:1px solid #e2e8f0;background:#f8fafc;flex-shrink:0;">
       <div style="display:flex;align-items:flex-start;justify-content:space-between;gap:12px;">
@@ -650,15 +650,57 @@
       <div id="dsMyPipelinePicker" style="display:none;margin-top:10px;background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:8px;max-height:220px;overflow-y:auto;"></div>
     </div>
 
-    <!-- Body — scrollable -->
-    <div style="padding:18px 22px;overflow-y:auto;flex:1;">
-      <div id="dsStats" style="display:grid;grid-template-columns:1fr 1fr;gap:10px 16px;margin-bottom:16px;"></div>
+    <!-- Body — scrollable, two-column -->
+    <div style="padding:18px 22px;overflow-y:auto;flex:1;display:flex;gap:20px;align-items:flex-start;">
+      <!-- Left: stats + notes -->
+      <div style="flex:1;min-width:0;">
+        <div id="dsStats" style="display:grid;grid-template-columns:1fr 1fr;gap:10px 16px;margin-bottom:16px;"></div>
 
-      <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Deal Notes</div>
-      <textarea id="dsNotes" style="width:100%;min-height:100px;border:1px solid #cbd5e1;border-radius:6px;padding:8px 10px;font-size:12px;font-family:inherit;resize:vertical;box-sizing:border-box;" placeholder="No deal notes yet..."></textarea>
+        <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin-bottom:6px;">Deal Notes</div>
+        <textarea id="dsNotes" style="width:100%;min-height:100px;border:1px solid #cbd5e1;border-radius:6px;padding:8px 10px;font-size:12px;font-family:inherit;resize:vertical;box-sizing:border-box;" placeholder="No deal notes yet..."></textarea>
 
-      <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:14px 0 6px;">Next Steps</div>
-      <textarea id="dsNextSteps" style="width:100%;min-height:60px;border:1px solid #cbd5e1;border-radius:6px;padding:8px 10px;font-size:12px;font-family:inherit;resize:vertical;box-sizing:border-box;" placeholder="No next steps recorded..."></textarea>
+        <div style="font-size:11px;font-weight:700;color:#64748b;text-transform:uppercase;letter-spacing:.05em;margin:14px 0 6px;">Next Steps</div>
+        <textarea id="dsNextSteps" style="width:100%;min-height:60px;border:1px solid #cbd5e1;border-radius:6px;padding:8px 10px;font-size:12px;font-family:inherit;resize:vertical;box-sizing:border-box;" placeholder="No next steps recorded..."></textarea>
+      </div>
+      <!-- Right: Street View + Map -->
+      <div style="width:300px;flex-shrink:0;display:flex;flex-direction:column;gap:12px;">
+        <!-- Street View card -->
+        <div style="border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;background:#fff;">
+          <div style="padding:10px 14px;font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:6px;">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="3" width="18" height="18" rx="2" ry="2"/><circle cx="8.5" cy="8.5" r="1.5"/><polyline points="21 15 16 10 5 21"/></svg>
+            Street View
+          </div>
+          <div style="padding:12px;">
+            <div id="dsPhotoThumb" style="height:140px;background:#f8fafc;border-radius:7px;overflow:hidden;display:flex;align-items:center;justify-content:center;margin-bottom:8px;"></div>
+            <button onclick="if(typeof pullStreetViewPhoto==='function')pullStreetViewPhoto(_snapshotDealId).then(()=>_refreshDsStreetView());else alert('Google Maps API key required.');"
+              style="width:100%;padding:7px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;font-size:11px;font-weight:600;cursor:pointer;color:#475569;display:flex;align-items:center;justify-content:center;gap:5px;">
+              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></svg>
+              Fetch Street View
+            </button>
+          </div>
+        </div>
+        <!-- Map Location card -->
+        <div style="border:1px solid #e2e8f0;border-radius:10px;overflow:hidden;background:#fff;">
+          <div style="padding:10px 14px;font-size:11px;font-weight:700;color:#475569;text-transform:uppercase;letter-spacing:.06em;border-bottom:1px solid #f1f5f9;display:flex;align-items:center;gap:6px;">
+            <svg viewBox="0 0 24 24" width="13" height="13" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><path d="M21 10c0 7-9 13-9 13s-9-6-9-13a9 9 0 0 1 18 0z"/><circle cx="12" cy="10" r="3"/></svg>
+            Map Location
+            <span id="dsLatLng" style="margin-left:auto;font-size:10px;color:#94a3b8;font-family:monospace;font-weight:500;text-transform:none;letter-spacing:0;"></span>
+          </div>
+          <div id="dsLeafletMap" style="height:200px;"></div>
+          <div style="padding:8px 12px 10px;display:flex;gap:6px;">
+            <a id="dsMapsLink" href="#" target="_blank" rel="noopener"
+              style="flex:1;text-align:center;padding:6px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;font-size:11px;font-weight:600;color:#475569;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:4px;">
+              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><polygon points="1 6 1 22 8 18 16 22 23 18 23 2 16 6 8 2 1 6"/><line x1="8" y1="2" x2="8" y2="18"/><line x1="16" y1="6" x2="16" y2="22"/></svg>
+              Open in Maps
+            </a>
+            <a id="dsDirLink" href="#" target="_blank" rel="noopener"
+              style="flex:1;text-align:center;padding:6px;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;font-size:11px;font-weight:600;color:#475569;text-decoration:none;display:flex;align-items:center;justify-content:center;gap:4px;">
+              <svg viewBox="0 0 24 24" width="11" height="11" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"><circle cx="12" cy="12" r="10"/><polygon points="16.24 7.76 14.12 14.12 7.76 16.24 9.88 9.88 16.24 7.76"/></svg>
+              Directions
+            </a>
+          </div>
+        </div>
+      </div>
     </div>
 
     <!-- Footer -->
@@ -3748,6 +3790,7 @@ function openDealSnapshot(dealId){
   const d = allDeals.find(x => x.id === dealId);
   if(!d) return;
   _snapshotDealId = dealId;
+  currentDeal = d; // needed for _initDsMap geocode caching
 
   // Header
   document.getElementById('dsAddress').textContent = d['Address'] || 'Unnamed';
@@ -3812,6 +3855,8 @@ function openDealSnapshot(dealId){
   // Show modal
   document.getElementById('dealSnapshotModal').style.display = 'flex';
   document.getElementById('dsSaveMsg').style.opacity = '0';
+  _refreshDsStreetView();
+  requestAnimationFrame(() => _initDsMap());
 }
 
 function _renderDsStageChip(d){
@@ -4061,10 +4106,27 @@ function openDealFromSnapshot(){
   if(d && typeof openDeal === 'function') openDeal(d);
 }
 
+function _refreshDsStreetView(){
+  const d = allDeals.find(x => x.id === _snapshotDealId);
+  if(!d) return;
+  const photos = (d['PHOTO']||[]).filter(a => a.type && a.type.startsWith('image/'));
+  const mainId = d['Main Photo'] || d['main_photo_attachment_id'] || '';
+  const mainPhoto = photos.find(p => p.id === mainId) || photos[0] || null;
+  const url = mainPhoto?.thumbnails?.large?.url || mainPhoto?.url || '';
+  const thumb = document.getElementById('dsPhotoThumb');
+  if(!thumb) return;
+  thumb.innerHTML = url
+    ? `<img src="${url}" style="width:100%;height:100%;object-fit:cover;border-radius:7px;" />`
+    : `<span style="font-size:11px;color:#94a3b8;">No photo · fetch or upload</span>`;
+}
+
 function closeDealSnapshot(){
   const modal = document.getElementById('dealSnapshotModal');
   if(modal) modal.style.display = 'none';
   _snapshotDealId = null;
+  // Tear down the map so it reinitializes cleanly for the next deal.
+  const dsMapEl = document.getElementById('dsLeafletMap');
+  if(dsMapEl?._leafletMap){ try { dsMapEl._leafletMap.remove(); } catch(e){} dsMapEl._leafletMap = null; dsMapEl.innerHTML = ''; }
 }
 
 function dsUpdateCapRate(){
@@ -6407,6 +6469,48 @@ async function _initSummaryMap(){
   // Leaflet sometimes renders 0×0 inside a layout that's still settling.
   // invalidateSize on the next frame fixes the grey-tile blank state.
   requestAnimationFrame(() => { try { map.invalidateSize(); } catch(e){} });
+}
+
+// Map for the deal card snapshot modal (same logic as _initSummaryMap but
+// targets #dsLeafletMap and updates the card's lat/lng label + link hrefs).
+async function _initDsMap(){
+  const mapEl = document.getElementById('dsLeafletMap');
+  if(!mapEl || !currentDeal) return;
+  await _loadLeaflet();
+  if(!window.L) return;
+  if(mapEl._leafletMap){ try { mapEl._leafletMap.remove(); } catch(e){} mapEl._leafletMap = null; mapEl.innerHTML = ''; }
+  const d = currentDeal;
+  let lat = Number(d['Latitude']||d['Lat']||0);
+  let lng = Number(d['Longitude']||d['Lng']||d['Lon']||0);
+  const looksBogus = (a, o) => (Math.abs(a) > 72)||(a < 17 && a > -1)||(o > -60 && o < 60)||(o < -180||o > 180);
+  if(lat && lng && looksBogus(lat, lng)){ lat = 0; lng = 0; }
+  if(!lat || !lng){
+    try {
+      const addr = [d['Address'],d['City'],d['State'],d['Zip']].filter(Boolean).join(', ');
+      if(addr){
+        const res = await fetch('https://nominatim.openstreetmap.org/search?format=json&q='+encodeURIComponent(addr)+'&limit=1',{headers:{'Accept':'application/json'}});
+        if(res.ok){ const data = await res.json(); if(data?.[0]){ lat = parseFloat(data[0].lat); lng = parseFloat(data[0].lon); d['Latitude'] = lat; d['Longitude'] = lng; if(typeof isSupabase==='function'&&isSupabase()&&typeof _sbPatch==='function') _sbPatch(SB_TABLES.properties, d.id, {latitude:lat,longitude:lng}).catch(()=>{}); } }
+      }
+    } catch(e){ console.warn('[dsMap] geocode failed:', e.message); }
+  }
+  const haveCoords = !!(lat && lng);
+  if(!haveCoords){ lat = 40.0583; lng = -74.4057; }
+  const map = window.L.map(mapEl, {zoomControl:true, scrollWheelZoom:false, attributionControl:false})
+    .setView([lat, lng], haveCoords ? 13 : 8);
+  window.L.tileLayer('https://{s}.basemaps.cartocdn.com/rastertiles/voyager/{z}/{x}/{y}{r}.png',
+    {maxZoom:19, subdomains:'abcd'}).addTo(map);
+  if(haveCoords){
+    const addrSafe = String(d['Address']||'Property').replace(/</g,'&lt;');
+    window.L.marker([lat, lng]).bindPopup(`<b>${addrSafe}</b>`).addTo(map);
+  }
+  mapEl._leafletMap = map;
+  requestAnimationFrame(() => { try { map.invalidateSize(); } catch(e){} });
+  // Update label + links in the card header / footer.
+  const ll = document.getElementById('dsLatLng');
+  if(ll) ll.textContent = haveCoords ? `${lat.toFixed(4)}° ${lat>=0?'N':'S'} · ${Math.abs(lng).toFixed(4)}° ${lng<=0?'W':'E'}` : '';
+  const fullAddr = encodeURIComponent([d['Address'],d['City'],d['State'],d['Zip']].filter(Boolean).join(', '));
+  const mLink = document.getElementById('dsMapsLink'); if(mLink) mLink.href = `https://www.google.com/maps/search/?api=1&query=${fullAddr}`;
+  const dLink = document.getElementById('dsDirLink');  if(dLink) dLink.href  = `https://www.google.com/maps/dir/?api=1&destination=${fullAddr}`;
 }
 
 // ── NUMBER FORMATTING WITH COMMAS ───────────────────────────

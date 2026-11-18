@@ -159,7 +159,7 @@ export function dsCard(opts){
 // Defaults to "ACE CRM" with a gold accent on "CRM".
 export function dsBrand(opts){
   opts = opts || {};
-  const main   = _esc(opts.main || 'Ace');
+  const main   = _esc(opts.main || 'CLARKE');
   const accent = _esc(opts.accent || 'CRM');
   const mark   = _esc(opts.mark   || 'A');
   return `<span class="ds-brand">

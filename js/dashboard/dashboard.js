@@ -531,13 +531,13 @@ export function _dashOpenDeal(dealId){
 export function showHomeEmpty(){
   document.getElementById('mainArea').innerHTML=`
     <div class="center-msg">
-      <div style="font-size:22px;font-weight:bold;color:#1a3a6e;">Welcome to Ace Acquisitions CRM</div>
+      <div style="font-size:22px;font-weight:bold;color:#1a3a6e;">Welcome to Clarke Commercial</div>
       <div style="font-size:12px;color:#555;max-width:360px;text-align:center;">
-        Connect your Supabase database to load your deal pipeline, or click "Add New Deal" to get started.
+        Your CRM is ready. Click "Add New Deal" to log your first one, or import existing deals from the Settings page.
       </div>
       <div style="display:flex;gap:10px;margin-top:8px;">
-        <button class="action-btn green-btn" onclick="openConfig()">⚙ Connect Supabase</button>
         <button class="action-btn" onclick="setNav(null,'leadintake')">+ Add New Deal</button>
+        <button class="action-btn" onclick="openConfig()">⚙ Settings</button>
       </div>
     </div>`;
 }

@@ -26344,7 +26344,7 @@ function renderBrochureTab(d){
             <span style="font-size:14px;">📄</span> Quick Flyer
           </button>
           <!-- Standard OM — pdfmake template, no LLM, free -->
-          <button id="omBtnStandard" onclick="_omGenerateStandard()" title="Professional multi-page OM using the Ace Acquisitions brand template. Generates instantly from your deal data. Free."
+          <button id="omBtnStandard" onclick="_omGenerateStandard()" title="Professional multi-page OM using the Clarke Commercial brand template. Generates instantly from your deal data. Free."
             style="background:linear-gradient(180deg,#2563eb,#1a3a6e);color:#fff;border:1px solid #14305a;padding:8px 18px;font-size:12px;font-weight:700;border-radius:6px;cursor:pointer;display:flex;align-items:center;gap:6px;box-shadow:0 2px 6px rgba(26,58,110,0.25);"
             onmouseenter="this.style.transform='translateY(-1px)'" onmouseleave="this.style.transform='translateY(0)'">
             <span style="font-size:14px;">📑</span> Standard OM <span style="font-size:9px;font-weight:600;background:rgba(255,255,255,0.22);padding:1px 6px;border-radius:99px;margin-left:2px;">FREE</span>
@@ -26384,7 +26384,7 @@ function renderBrochureTab(d){
         <div><label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Email</label>
           <input class="form-input" id="br_brokerEmail" value="" style="width:100%;"/></div>
         <div><label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Company</label>
-          <input class="form-input" id="br_brokerCompany" value="Ace Acquisitions | KW Commercial NJ" style="width:100%;"/></div>
+          <input class="form-input" id="br_brokerCompany" value="Clarke Commercial | KW Commercial NJ" style="width:100%;"/></div>
         <div><label style="font-weight:bold;color:#333;display:block;margin-bottom:3px;">Website</label>
           <input class="form-input" id="br_brokerWeb" value="aceacquisitionsnj.com" style="width:100%;"/></div>
       </div>
@@ -26732,7 +26732,7 @@ function _omHideSpinner(){
 // ═══════════════════════════════════════════════════════════════════
 //  STANDARD OM GENERATION (v101)
 //
-//  Produces a multi-page PDF using the Ace Acquisitions brand template.
+//  Produces a multi-page PDF using the Clarke Commercial brand template.
 //  Matches the visual design of the reference Edgewater OM:
 //    - Navy background + gold accent cover page with hero image
 //    - Navy/gold header bar + footer on every interior page
@@ -26746,7 +26746,7 @@ function _omHideSpinner(){
 //  Photos come from deal.photo_attachments (Property Photos in Documents tab).
 // ═══════════════════════════════════════════════════════════════════
 
-// Brand constants — match the Ace Acquisitions OM brand standard from the
+// Brand constants — match the Clarke Commercial OM brand standard from the
 // Opus package. These are PDF-only colors and do NOT appear in the CRM UI.
 const OM_BRAND = {
   navy:       '#0b1f3a',
@@ -26935,9 +26935,9 @@ function _omBuildStandardDocDefinition(d, photoDataUris){
     pageMargins: [36, 76, 36, 58],
     info: {
       title: `${addr} — Offering Memorandum`,
-      author: 'Ace Acquisitions',
+      author: 'Clarke Commercial',
       subject: 'Confidential Offering Memorandum',
-      creator: 'Ace Acquisitions CRM',
+      creator: 'Clarke Commercial CRM',
     },
     background: function(currentPage) {
       if(currentPage === 1){
@@ -26981,7 +26981,7 @@ function _omBuildStandardDocDefinition(d, photoDataUris){
           },
           {
             columns: [
-              { text: 'ACE ACQUISITIONS', color: OM_BRAND.goldLight, fontSize: 8, bold: true, characterSpacing: 0.8, margin: [36, 10, 0, 0] },
+              { text: 'CLARKE COMMERCIAL', color: OM_BRAND.goldLight, fontSize: 8, bold: true, characterSpacing: 0.8, margin: [36, 10, 0, 0] },
               { text: `Page ${currentPage - 1}`, color: OM_BRAND.white, fontSize: 8, alignment: 'center', margin: [0, 10, 0, 0] },
               { text: 'CONFIDENTIAL — NOT FOR DISTRIBUTION', color: OM_BRAND.goldLight, fontSize: 8, bold: true, alignment: 'right', margin: [0, 10, 36, 0] },
             ],
@@ -27089,7 +27089,7 @@ function _omBuildExecSummaryProse(d){
   const occupancy = d['Occupancy (%)'] || '';
 
   const sentences = [];
-  let intro = `Ace Acquisitions is pleased to present the opportunity to acquire ${addr}`;
+  let intro = `Clarke Commercial is pleased to present the opportunity to acquire ${addr}`;
   if(cityState) intro += `, a ${assetType} property located in ${cityState}`;
   if(county && !cityState.includes(county)) intro += ` (${county})`;
   intro += '.';
@@ -27632,7 +27632,7 @@ function _omBuildGalleryPage(d, photoDataUris){
 // ── SECTION 07 — Confidentiality & Disclaimer ────────────────────────────
 function _omBuildDisclaimerPage(d){
   const disclaimerText =
-    'This Offering Memorandum ("OM") has been prepared by Ace Acquisitions ("Broker") for use '
+    'This Offering Memorandum ("OM") has been prepared by Clarke Commercial ("Broker") for use '
     + 'by a limited number of parties solely for the purpose of evaluating the potential acquisition '
     + 'of the subject property. This OM contains selected information about the property and does '
     + 'not purport to be all-inclusive or to contain all of the information that a prospective '
@@ -27660,7 +27660,7 @@ function _omBuildDisclaimerPage(d){
       { text: 'Confidentiality & Disclaimer', color: OM_BRAND.navy, fontSize: 22, bold: true, margin: [0, 0, 0, 2] },
       { canvas: [{ type: 'line', x1: 0, y1: 0, x2: 230, y2: 0, lineWidth: 1.5, lineColor: OM_BRAND.gold }], margin: [0, 0, 0, 18] },
       { text: disclaimerText, fontSize: 8.5, lineHeight: 1.5, color: OM_BRAND.darkGray, alignment: 'justify' },
-      { text: 'Ace Acquisitions', color: OM_BRAND.navy, fontSize: 11, bold: true, margin: [0, 22, 0, 2] },
+      { text: 'Clarke Commercial', color: OM_BRAND.navy, fontSize: 11, bold: true, margin: [0, 22, 0, 2] },
       { text: 'New Jersey | Commercial Real Estate', color: OM_BRAND.gold, fontSize: 9, margin: [0, 0, 0, 0] },
     ],
   };
@@ -27702,7 +27702,7 @@ function _omGeneratePremium(){
         <div style="font-size:11px;color:#78350f;line-height:1.5;">
           <strong>💰 Estimated cost:</strong> ~$0.08–$0.12 per OM (one API call, tokens depend on deal data size)<br>
           <strong>⏱ Time:</strong> 15–25 seconds<br>
-          <strong>🔒 Billed to:</strong> Ace Acquisitions organization account (not your personal key)
+          <strong>🔒 Billed to:</strong> Clarke Commercial organization account (not your personal key)
         </div>
       </div>
       <div style="font-size:11px;color:#94a3b8;margin-bottom:18px;">
@@ -31000,7 +31000,7 @@ function _companyRenderSystemHelp(){
     <div style="max-width:900px;margin:0 auto;">
       <div style="margin-bottom:20px;">
         <div style="font-size:22px;font-weight:700;color:#0f172a;">System Help</div>
-        <div style="font-size:13px;color:#64748b;margin-top:4px;">How to use the Ace Acquisitions CRM. This page is always kept up-to-date with the latest features.</div>
+        <div style="font-size:13px;color:#64748b;margin-top:4px;">How to use the Clarke Commercial CRM. This page is always kept up-to-date with the latest features.</div>
       </div>
 
       ${section('AI Assistant (✦ button)', '✦', `
@@ -55006,7 +55006,7 @@ const _LOCAL_FIELD_NAMES = new Set();
 
 // ── Required new fields definition ────────────────────────────
 const REQUIRED_FIELDS = [
-  { name:'Deal Tag',    description:'Secondary deal status tag set by Ace Acquisitions CRM',
+  { name:'Deal Tag',    description:'Secondary deal status tag set by Clarke Commercial CRM',
     type:'singleSelect', options:{ choices:[
       {name:'Urgent Deal',color:'redBright'},{name:'Hot Deal',color:'orangeBright'},
       {name:'Active Deal',color:'greenBright'},{name:'Overpriced',color:'yellowBright'},

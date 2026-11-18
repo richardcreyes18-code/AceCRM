@@ -214,7 +214,7 @@ export function _bmBuildEmail(){
   b += '\nLet me know what stands out — happy to send full packages on any of these.\n\n'
      + 'Best,\n'
      + 'Ricky\n'
-     + 'Ace Acquisitions · KW Commercial NJ\n'
+     + 'Clarke Commercial · KW Commercial NJ\n'
      + '848.420.9972';
 
   _bm.emailText = b;
@@ -226,7 +226,7 @@ export async function _bmOpenGmail(){
   const toEmail = _bm.buyerEmail||'';
   const subjectEl = document.getElementById('bmSubjectLine');
   const bodyEl = document.getElementById('bmEmailBody');
-  const subject = subjectEl?.value || 'Properties Matching Your Criteria — Ace Acquisitions';
+  const subject = subjectEl?.value || 'Properties Matching Your Criteria — Clarke Commercial';
   const body = bodyEl?.value || _bm.emailText;
   _bm.emailText = body;
 
@@ -379,7 +379,7 @@ export function _renderBM(){
         <!-- Subject field -->
         <div style="padding:8px 16px;border-bottom:1px solid #e0e0e0;display:flex;align-items:center;gap:8px;">
           <span style="font-size:12px;color:#444;width:40px;flex-shrink:0;">Subject</span>
-          <input type="text" id="bmSubjectLine" value="Properties Matching Your Criteria — Ace Acquisitions"
+          <input type="text" id="bmSubjectLine" value="Properties Matching Your Criteria — Clarke Commercial"
             style="flex:1;border:none;outline:none;font-size:13px;color:#202124;background:transparent;font-weight:500;"/>
         </div>
         <!-- Body -->

@@ -5,8 +5,8 @@
 // openConfig touch the DOM and call domain functions (showSaveConfirm,
 // hideOverlay, syncData, openDeal); they migrate when settings UI moves.
 
-const BAKED_SB_URL = 'https://kxtuegjptvzqycgyzehj.supabase.co';
-const BAKED_SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt4dHVlZ2pwdHZ6cXljZ3l6ZWhqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2ODg5NzQsImV4cCI6MjA5MTI2NDk3NH0.FctjQCWJfjxqD_07gbmKn9r5rCbNUNtEWNhYIhDo5Dc';
+const BAKED_SB_URL = 'https://eoatyremdqilsetmtyfk.supabase.co';
+const BAKED_SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVvYXR5cmVtZHFpbHNldG10eWZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUwMzc2NjIsImV4cCI6MjExMDYxMzY2Mn0.S3FrojHoHnoFpV8xci2jDXy_2SXhCg6N_xrsWiSoUR8';
 
 // Credentials baked in — no setup needed.
 export function getConfig(){

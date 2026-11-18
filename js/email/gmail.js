@@ -12,7 +12,7 @@ import { _sbGet, _sbPatch } from '../core/supabase.js';
 import { showSaveConfirm } from '../core/toast.js';
 
 export const GMAIL_CLIENT_ID = '419384865839-s1dc2k1r2pe3e76ga4dp2g0vnq2mblam.apps.googleusercontent.com';
-export const GMAIL_REDIRECT  = 'https://kxtuegjptvzqycgyzehj.supabase.co/functions/v1/gmail-oauth-callback';
+export const GMAIL_REDIRECT  = 'https://eoatyremdqilsetmtyfk.supabase.co/functions/v1/gmail-oauth-callback';
 // v113.31: gmail.readonly added so the inbound sync (gmail-sync edge fn)
 // can list + fetch messages on the user's behalf. Existing connections
 // granted before this version need to click "Connect Gmail" once more to

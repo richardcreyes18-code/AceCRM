@@ -755,18 +755,18 @@
 
       <!-- SUPABASE KEY -->
       <div style="margin-bottom:14px;padding:10px 12px;background:#f0fdf4;border:1px solid #86efac;border-radius:6px;font-size:11px;color:#166534;display:flex;align-items:center;justify-content:space-between;">
-        <span>🟢 <strong>Connected to Supabase</strong> · Project: kxtuegjptvzqycgyzehj</span>
+        <span>🟢 <strong>Connected to Supabase</strong> · Project: eoatyremdqilsetmtyfk</span>
         <button id="sbTestBtn" onclick="testSupabaseWrite()" style="background:#166534;color:#fff;border:none;padding:4px 12px;border-radius:4px;font-size:11px;cursor:pointer;">Test Write</button>
       </div>
       <div id="sbTestResult" style="font-size:11px;margin-bottom:8px;font-weight:600;"></div>
       <p style="font-size:11px;color:#444;margin-bottom:14px;">Your credentials are pre-configured. The CRM connects automatically.</p>
       <div class="config-field">
         <label>Supabase Project URL</label>
-        <input type="text" value="https://kxtuegjptvzqycgyzehj.supabase.co" readonly style="background:#f5f5f5;color:#666;"/>
+        <input type="text" value="https://eoatyremdqilsetmtyfk.supabase.co" readonly style="background:#f5f5f5;color:#666;"/>
       </div>
       <div class="config-field">
         <label>Supabase Anon Key</label>
-        <input type="text" id="cfgSbKey" name="sb_anon_key" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other" value="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt4dHVlZ2pwdHZ6cXljZ3l6ZWhqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2ODg5NzQsImV4cCI6MjA5MTI2NDk3NH0.FctjQCWJfjxqD_07gbmKn9r5rCbNUNtEWNhYIhDo5Dc" style="background:#f5f5f5;-webkit-text-security:disc;text-security:disc;"/>
+        <input type="text" id="cfgSbKey" name="sb_anon_key" autocomplete="off" data-lpignore="true" data-1p-ignore="true" data-form-type="other" value="eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVvYXR5cmVtZHFpbHNldG10eWZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUwMzc2NjIsImV4cCI6MjExMDYxMzY2Mn0.S3FrojHoHnoFpV8xci2jDXy_2SXhCg6N_xrsWiSoUR8" style="background:#f5f5f5;-webkit-text-security:disc;text-security:disc;"/>
       </div>
       <div id="cfgError" style="color:#c00;font-size:11px;display:none;margin-top:6px;"></div>
 
@@ -1476,9 +1476,9 @@ function _sbHeaders() {
 
 // ─── PROXY-BASED DB CALLS ───────────────────────────────────────
 // All DB calls go through the crm-proxy Edge Function — no CORS issues
-const PROXY_URL = 'https://kxtuegjptvzqycgyzehj.supabase.co/functions/v1/crm-proxy';
-const SB_AUTH_URL = 'https://kxtuegjptvzqycgyzehj.supabase.co/auth/v1';
-const SB_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt4dHVlZ2pwdHZ6cXljZ3l6ZWhqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2ODg5NzQsImV4cCI6MjA5MTI2NDk3NH0.FctjQCWJfjxqD_07gbmKn9r5rCbNUNtEWNhYIhDo5Dc';
+const PROXY_URL = 'https://eoatyremdqilsetmtyfk.supabase.co/functions/v1/crm-proxy';
+const SB_AUTH_URL = 'https://eoatyremdqilsetmtyfk.supabase.co/auth/v1';
+const SB_ANON_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVvYXR5cmVtZHFpbHNldG10eWZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUwMzc2NjIsImV4cCI6MjExMDYxMzY2Mn0.S3FrojHoHnoFpV8xci2jDXy_2SXhCg6N_xrsWiSoUR8';
 
 async function _proxyCall(params, body = null, opts = {}) {
   const url = new URL(PROXY_URL);
@@ -1785,7 +1785,7 @@ function _showToast(msg, kind){
 // Uses the anon key directly (not the proxy) because storage has its own API.
 // The 'ace-property-files' bucket is public and has permissive policies
 // allowing anon read/write/delete.
-const SB_STORAGE_URL = 'https://kxtuegjptvzqycgyzehj.supabase.co/storage/v1';
+const SB_STORAGE_URL = 'https://eoatyremdqilsetmtyfk.supabase.co/storage/v1';
 const SB_BUCKET = 'ace-property-files';
 
 // Upload a File/Blob to the bucket at the given path.
@@ -2094,8 +2094,8 @@ try{
 
 function getConfig(){
   // Credentials baked in — no setup needed
-  const BAKED_SB_URL = 'https://kxtuegjptvzqycgyzehj.supabase.co';
-  const BAKED_SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt4dHVlZ2pwdHZ6cXljZ3l6ZWhqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2ODg5NzQsImV4cCI6MjA5MTI2NDk3NH0.FctjQCWJfjxqD_07gbmKn9r5rCbNUNtEWNhYIhDo5Dc';
+  const BAKED_SB_URL = 'https://eoatyremdqilsetmtyfk.supabase.co';
+  const BAKED_SB_KEY = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVvYXR5cmVtZHFpbHNldG10eWZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUwMzc2NjIsImV4cCI6MjExMDYxMzY2Mn0.S3FrojHoHnoFpV8xci2jDXy_2SXhCg6N_xrsWiSoUR8';
   return {
     backend: 'supabase',
     url:  BAKED_SB_URL,
@@ -2144,7 +2144,7 @@ function openConfig(){
     const backend = _store.get('backend') || 'airtable';
 
     const sbKey = document.getElementById('cfgSbKey');
-    if(sbKey) sbKey.value = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6Imt4dHVlZ2pwdHZ6cXljZ3l6ZWhqIiwicm9sZSI6ImFub24iLCJpYXQiOjE3NzU2ODg5NzQsImV4cCI6MjA5MTI2NDk3NH0.FctjQCWJfjxqD_07gbmKn9r5rCbNUNtEWNhYIhDo5Dc';
+    if(sbKey) sbKey.value = 'eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImVvYXR5cmVtZHFpbHNldG10eWZrIiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTUwMzc2NjIsImV4cCI6MjExMDYxMzY2Mn0.S3FrojHoHnoFpV8xci2jDXy_2SXhCg6N_xrsWiSoUR8';
 
     // Load Anthropic key
     const akEl = document.getElementById('cfgAnthropicKey');
@@ -28401,7 +28401,7 @@ function showSettingsPage(){
           </div>
           <div id="dbStatusIndicator" style="font-size:12px;color:#64748b;margin-bottom:14px;">
             ${connected
-              ? `<span style="color:#16a34a;font-weight:600;">● Connected</span> · Project: <code style="background:#f1f5f9;padding:1px 6px;border-radius:4px;">kxtuegjptvzqycgyzehj</code>`
+              ? `<span style="color:#16a34a;font-weight:600;">● Connected</span> · Project: <code style="background:#f1f5f9;padding:1px 6px;border-radius:4px;">eoatyremdqilsetmtyfk</code>`
               : `<span style="color:#dc2626;font-weight:600;">● Not connected</span> · Key missing or invalid`}
           </div>
           <label style="display:block;font-size:11px;font-weight:700;color:#475569;margin-bottom:4px;">Supabase Anon Key <span style="font-weight:500;color:#94a3b8;">(read-only)</span></label>
@@ -30503,7 +30503,7 @@ async function _testDbConnection(){
     const rows = await _sbGet('ace_users', 'select=id&limit=1');
     const elapsed = Date.now() - start;
     if(!Array.isArray(rows)) throw new Error('Unexpected response shape');
-    ind.innerHTML = `<span style="color:#16a34a;font-weight:600;">● Connected</span> · Project: <code style="background:#f1f5f9;padding:1px 6px;border-radius:4px;">kxtuegjptvzqycgyzehj</code> · <span style="color:#94a3b8;">verified ${elapsed}ms ago</span>`;
+    ind.innerHTML = `<span style="color:#16a34a;font-weight:600;">● Connected</span> · Project: <code style="background:#f1f5f9;padding:1px 6px;border-radius:4px;">eoatyremdqilsetmtyfk</code> · <span style="color:#94a3b8;">verified ${elapsed}ms ago</span>`;
   }catch(e){
     ind.innerHTML = `<span style="color:#dc2626;font-weight:600;">● Not connected</span> · <span style="color:#dc2626;">${(e.message||'connection failed').replace(/</g,'&lt;')}</span>`;
   }finally{
@@ -30545,7 +30545,7 @@ function _copyFullKey(){
 // The service_role key lives server-side in the function's env, never in browser.
 // The function verifies the caller is an admin on every request.
 
-const _TM_FN_URL = 'https://kxtuegjptvzqycgyzehj.supabase.co/functions/v1/admin-users';
+const _TM_FN_URL = 'https://eoatyremdqilsetmtyfk.supabase.co/functions/v1/admin-users';
 
 // Get the current user's JWT. Uses the CRM's existing session state from
 // _saveSession() — _authToken global (in-memory) with localStorage fallback.
@@ -36842,7 +36842,7 @@ async function bcRunAutoExtract(){
   try {
     while(chunk <= maxChunks){
       setStatus(`Chunk ${chunk}: processing up to 50 buyers...`);
-      const url = `https://kxtuegjptvzqycgyzehj.supabase.co/functions/v1/bc-auto-extract?limit=50`;
+      const url = `https://eoatyremdqilsetmtyfk.supabase.co/functions/v1/bc-auto-extract?limit=50`;
       const res = await fetch(url, {
         method: 'POST',
         headers: {

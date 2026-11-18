@@ -27,7 +27,7 @@ import { SB_TABLES } from '../schemas/sb-tables.js';
 // pipeline back-to-back (Supabase Edge Function refresh → per-user
 // matching/insertion), both already idempotent so re-clicks only
 // add genuinely new templates.
-const _FUB_TPL_SYNC_URL = 'https://kxtuegjptvzqycgyzehj.functions.supabase.co/fub-templates-sync';
+const _FUB_TPL_SYNC_URL = 'https://eoatyremdqilsetmtyfk.functions.supabase.co/fub-templates-sync';
 
 export async function _emailTplFubSync(btn){
   const restoreBtn = () => {

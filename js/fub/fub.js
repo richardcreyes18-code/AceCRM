@@ -614,7 +614,7 @@ export function _fubImportPropertyPreview(fub){
 // matching ace_properties rows. Runs in ~300-deal chunks to stay under
 // the 150s Edge timeout. One-time sync, not scheduled.
 
-const _FUB_SYNC_URL = 'https://kxtuegjptvzqycgyzehj.functions.supabase.co/fub-stages-sync';
+const _FUB_SYNC_URL = 'https://eoatyremdqilsetmtyfk.functions.supabase.co/fub-stages-sync';
 
 // Module-level state for an in-flight sync driven by the UI.
 let _fubSyncState = { running:false, aborted:false, syncLogId:null, nextCursor:null, chunks:0, dryRun:true };

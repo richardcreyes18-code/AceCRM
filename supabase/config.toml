@@ -1,0 +1,59 @@
+# Supabase project config for Clarke Commercial CRM
+# Auto-generated during migration from Henry's project
+project_id = "eoatyremdqilsetmtyfk"
+
+# verify_jwt=true means the function requires a valid Supabase auth JWT
+# in the Authorization header. Match these to what Henry's project had.
+
+[functions.crm-proxy]
+verify_jwt = false
+[functions.admin-users]
+verify_jwt = false
+[functions.ai-parse-deal]
+verify_jwt = false
+[functions.ai-parse-deal-v2]
+verify_jwt = false
+[functions.ai-parse-batch]
+verify_jwt = false
+[functions.ai-parse-buyer-criteria]
+verify_jwt = false
+[functions.ai-clean-description]
+verify_jwt = false
+[functions.crm-ai-assist]
+verify_jwt = false
+[functions.setup-users]
+verify_jwt = false
+[functions.bc-auto-extract]
+verify_jwt = false
+[functions.fub-contacts-sync]
+verify_jwt = false
+[functions.fub-notes-sync]
+verify_jwt = false
+[functions.fub-calls-sync]
+verify_jwt = false
+[functions.fub-stages-sync]
+verify_jwt = false
+[functions.fub-probe]
+verify_jwt = false
+[functions.fub-templates-sync]
+verify_jwt = false
+[functions.fub-templates-export-csv]
+verify_jwt = false
+[functions.gmail-oauth-callback]
+verify_jwt = false
+[functions.gmail-send]
+verify_jwt = false
+[functions.gmail-sync]
+verify_jwt = false
+[functions.merge-property-with-notes]
+verify_jwt = false
+
+# JWT verification enabled (default behavior)
+[functions.crm-email-gen]
+verify_jwt = true
+[functions.bc-bulk-stats]
+verify_jwt = true
+[functions.bc-distribution-stats]
+verify_jwt = true
+[functions.bc-bulk-sandbox]
+verify_jwt = true

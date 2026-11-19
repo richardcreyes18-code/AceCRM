@@ -120,11 +120,23 @@
     const isLoaded = sh('loaded') === deal.id;
     if (!isLoaded) {
       // Kick off a load; the tab will re-render when done.
+      // `currentTab` is a module-level `let` in index.html, so it is NOT
+      // on window — we fall back to the active tab button's label as a
+      // safety net rather than relying on the global binding.
       setTimeout(() => {
         loadShare(deal.id).then(s => {
           window._portalShareCache = { share: s, loaded: deal.id };
-          if (window.currentTab === 'portal') {
-            document.getElementById('tabContent').innerHTML = renderPortalTab(deal);
+          if (isPortalActive()) {
+            const tc = document.getElementById('tabContent');
+            if (tc) tc.innerHTML = renderPortalTab(deal);
+            initPortalTab();
+          }
+        }).catch(err => {
+          console.warn('[portal] initial load failed', err);
+          window._portalShareCache = { share: null, loaded: deal.id };
+          if (isPortalActive()) {
+            const tc = document.getElementById('tabContent');
+            if (tc) tc.innerHTML = renderPortalTab(deal);
             initPortalTab();
           }
         });
@@ -558,11 +570,19 @@
     toastOK('Commission notes saved');
   }
 
+  function isPortalActive() {
+    const btn = document.querySelector('.tab-btn.active');
+    if (btn && /switchTab\(['"]portal['"]/.test(btn.getAttribute('onclick') || '')) return true;
+    // Fallback — the Website tab's heading only exists while that tab is mounted.
+    return !!document.querySelector('.pt-root');
+  }
+
   function rerender() {
-    if (window.currentTab === 'portal' && window.currentDeal) {
-      document.getElementById('tabContent').innerHTML = renderPortalTab(window.currentDeal);
-      initPortalTab();
-    }
+    if (!window.currentDeal) return;
+    if (!isPortalActive()) return;
+    const tc = document.getElementById('tabContent');
+    if (tc) tc.innerHTML = renderPortalTab(window.currentDeal);
+    initPortalTab();
   }
 
   function initPortalTab() {

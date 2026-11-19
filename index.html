@@ -889,6 +889,8 @@
   <button class="nav-btn" data-page="map" onclick="setNav(this,'map')">Map</button>
   <button class="nav-btn" data-page="contacts" onclick="setNav(this,'contacts')">Contacts</button>
   <button class="nav-btn" data-page="buyercriteria" onclick="setNav(this,'buyercriteria')">Buyer Criteria</button>
+  <button class="nav-btn" data-page="lists" onclick="setNav(this,'lists')">Lists</button>
+  <button class="nav-btn" data-page="scripts" onclick="setNav(this,'scripts')">Scripts</button>
   <button class="nav-btn" data-page="workbench" onclick="setNav(this,'workbench')">Workbench</button>
   <button class="nav-btn" data-page="company" onclick="setNav(this,'company')">Company</button>
   <button class="nav-btn" data-page="tasks-nav" onclick="setNav(this,'tasks-nav')">Tasks</button>
@@ -3145,6 +3147,8 @@ function _setNavDirect(btn, page){
   else if(page==='fieldmap') showFieldMap();
   else if(page==='contacts') showContactsPage();
   else if(page==='buyercriteria') showBuyerCriteriaPage();
+  else if(page==='lists') showListsPage();
+  else if(page==='scripts') showScriptsPage();
   else if(page==='workbench') showWorkbenchPage();
   else if(page==='company') showCompanyPage();
   else if(page==='settings') showSettingsPage();
@@ -3208,6 +3212,7 @@ const _nav = {
     const map = {
       'Dashboard':'dashboard', 'Deal Board':'dealboard', 'Pipeline':'pipeline',
       'Map':'map', 'Contacts':'contacts', 'Buyer Criteria':'buyercriteria',
+      'Lists':'lists', 'Scripts':'scripts',
       'Workbench':'workbench',
       'Tasks':'tasks-nav', 'Company':'company', 'Settings':'settings',
       'Lead Intake':'leadintake', 'Field Map':'fieldmap',

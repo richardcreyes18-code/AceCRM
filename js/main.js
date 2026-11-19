@@ -66,6 +66,10 @@ import * as backmarket      from './buyer-search/backmarket.js';
 import * as fub             from './fub/fub.js';
 import * as relationships   from './contacts/relationships.js';
 import * as bcMap           from './buyer-criteria/bc-map.js';
+import * as lists           from './lists/lists.js';
+import * as listsImport     from './lists/import.js';
+import * as listDetail      from './lists/list-detail.js';
+import * as callScripts     from './scripts/scripts.js';
 
 // ═══════════════════════════════════════════════════════════════════════
 // Window aliases — every export from every feature/widget/schema-helper
@@ -105,6 +109,10 @@ for (const [name, value] of Object.entries(backmarket))     { window[name] = val
 for (const [name, value] of Object.entries(fub))            { window[name] = value; }
 for (const [name, value] of Object.entries(relationships))  { window[name] = value; }
 for (const [name, value] of Object.entries(bcMap))          { window[name] = value; }
+for (const [name, value] of Object.entries(lists))          { window[name] = value; }
+for (const [name, value] of Object.entries(listsImport))    { window[name] = value; }
+for (const [name, value] of Object.entries(listDetail))     { window[name] = value; }
+for (const [name, value] of Object.entries(callScripts))    { window[name] = value; }
 
 // Realtime sync — attach to window so legacy _applyUserToUI can call rtInit()
 window.rtInit        = rtInit;

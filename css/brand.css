@@ -1,0 +1,142 @@
+/* ─────────────────────────────────────────────────────────────
+   brand.css — Clarke Commercial brand discipline
+   v382 — one primary, one secondary, semantic colors only.
+
+   Loads LAST so it wins the cascade. Uses attribute selectors +
+   !important to normalize the dozens of ad-hoc inline button
+   styles that accumulated through v100-v377 (bright green
+   "+ Add Contact", purple "+ Create Task", mixed primary blues,
+   gradient Save buttons). The goal is ONE visual brand accent
+   (Clarke navy) with green/red/amber reserved for real semantic
+   meaning (saved state, destructive, warning).
+   ───────────────────────────────────────────────────────────── */
+
+/* ── Brand tokens ──────────────────────────────────────────── */
+:root {
+  --clarke-navy:        #1e3a8a;   /* primary accent, matches login logo */
+  --clarke-navy-hover:  #1a3178;
+  --clarke-navy-soft:   #e5ebfa;
+  --clarke-navy-border: #16307a;
+
+  --clarke-text-on-dark: #ffffff;
+  --clarke-text-on-light: #0f172a;
+
+  --clarke-focus-ring:  0 0 0 3px rgba(30, 58, 138, 0.22);
+}
+
+/* ── Force navy on known off-brand inline backgrounds ──────── */
+/*
+   These selectors hit the inline style="background:#..." patterns
+   that recur across index.html. !important is required because
+   inline style otherwise wins specificity. Scope is narrowed to
+   buttons + anchors so we don't recolor badges or cards.
+*/
+
+/* Purple primary buttons → navy
+   (e.g. "+ Create Task", "Create Task" submit) */
+button[style*="background:#7c3aed"],
+button[style*="background:#8b5cf6"],
+button[style*="background:#6366f1"],
+button[style*="background: #7c3aed"],
+button[style*="background: #8b5cf6"],
+button[style*="background: #6366f1"],
+button[style*="background-color:#7c3aed"],
+button[style*="background-color:#8b5cf6"] {
+  background: var(--clarke-navy) !important;
+  color: var(--clarke-text-on-dark) !important;
+  border: 1px solid var(--clarke-navy-border) !important;
+}
+
+/* Bright green PRIMARY CTA buttons that aren't save-confirmations → navy.
+   The Settings "Save All Settings" and the "+ Add Contact" button are
+   primary actions, not semantic "I just saved this" affordances, so they
+   belong on the brand accent, not on green. The "✓ Save" buttons inside
+   modals (edit-address, unit-mix, recalc-financials) legitimately mean
+   "commit this change" and are left green below. */
+button[style*="linear-gradient(180deg,#22c55e,#16a34a)"],
+button[style*="linear-gradient(180deg,#2a6a2a,#1a4a1a)"] {
+  background: var(--clarke-navy) !important;
+  background-image: none !important;
+  color: var(--clarke-text-on-dark) !important;
+  border: 1px solid var(--clarke-navy-border) !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08) !important;
+}
+
+/* Flatten + normalize the semantic "✓ Save" gradient to a single clean
+   token green (modern, no Web 2.0 gradient) while keeping it green. */
+button[style*="linear-gradient(180deg,#60c060,#409040)"] {
+  background: #15803d !important;              /* green-700 */
+  background-image: none !important;
+  color: #ffffff !important;
+  border: 1px solid #14532d !important;
+  box-shadow: 0 1px 2px rgba(15, 23, 42, 0.08) !important;
+}
+button[style*="linear-gradient(180deg,#60c060,#409040)"]:hover {
+  background: #166534 !important;              /* green-800 */
+}
+
+/* Hover for the forced-navy buttons */
+button[style*="background:#7c3aed"]:hover,
+button[style*="background:#8b5cf6"]:hover,
+button[style*="background:#6366f1"]:hover,
+button[style*="linear-gradient(180deg,#22c55e,#16a34a)"]:hover,
+button[style*="linear-gradient(180deg,#2a6a2a,#1a4a1a)"]:hover {
+  background: var(--clarke-navy-hover) !important;
+  filter: none !important;
+}
+
+/* ── Focus ring for every interactive, in Clarke navy ───────── */
+button:focus-visible,
+a:focus-visible,
+input:focus-visible,
+textarea:focus-visible,
+select:focus-visible,
+[role="button"]:focus-visible,
+[tabindex]:focus-visible {
+  outline: none !important;
+  box-shadow: var(--clarke-focus-ring) !important;
+}
+
+/* ── Clarke-branded AI chat drawer + voice widget accents ───── */
+/* The drawer header icons currently use the design-system blue
+   (#2563eb); nudge them to the brand navy so the AI surface feels
+   consistent with the login lockup. */
+#aiAssistantDrawer .ai-assistant-avatar,
+#voiceWidget .voice-widget-icon {
+  background: var(--clarke-navy) !important;
+}
+
+/* ── Pipeline "Top G Review" column rename hint ─────────────── */
+/* Informational only — handled as content in the taxonomy editor. */
+
+/* ── Primary design-system button sticks to Clarke navy ─────── */
+.btn-ds.btn-primary,
+.btn-ds.btn-primary:visited {
+  background: var(--clarke-navy);
+  border-color: var(--clarke-navy-border);
+  color: var(--clarke-text-on-dark);
+}
+.btn-ds.btn-primary:hover { background: var(--clarke-navy-hover); }
+
+/* ── Dashboard "below goal" cards: amber, not red ──────────── */
+/*
+   The lead-stat cards render inline with #fef2f2 (red-50) + #fca5a5
+   (red-300) borders and #b91c1c count color when count < goal.
+   Red reads as "error"; shift to amber for "behind goal" so red
+   stays reserved for real failures.
+*/
+div[style*="background: rgb(254, 242, 242)"],
+div[style*="background:#fef2f2"] {
+  background: #fffbeb !important;        /* amber-50 */
+  border-color: #fcd34d !important;      /* amber-300 */
+}
+div[style*="background: rgb(254, 242, 242)"] [style*="color:#b91c1c"],
+div[style*="background:#fef2f2"] [style*="color:#b91c1c"] {
+  color: #b45309 !important;             /* amber-700 */
+}
+
+/* ── Nav active-state uses Clarke navy ─────────────────────── */
+.nav-btn.active {
+  background: var(--clarke-navy) !important;
+  color: var(--clarke-text-on-dark) !important;
+}

@@ -46,6 +46,11 @@
      .cal-grid / .calc-grid / .folder-list / .task-table). Loaded
      last so per-tab class swaps win the cascade. STAGING-only. -->
 <link rel="stylesheet" href="css/deal-detail-bodies.css"/>
+<!-- v382: brand discipline — loaded LAST so its !important overrides win.
+     Normalizes off-brand inline button backgrounds (purple + bright-green
+     primaries) to Clarke navy, and tints "below goal" dashboard cards from
+     red → amber so red stays reserved for real errors. -->
+<link rel="stylesheet" href="css/brand.css"/>
 </head>
 <body>
 
@@ -57037,7 +57042,7 @@ function _aiSelectDealForUpdate(dealId){
 <!-- v104: AI Assistant floating widget -->
 <div id="aiAssistWidget" style="position:fixed;bottom:24px;right:24px;z-index:8000;font-family:'Inter',system-ui,sans-serif;">
   <!-- FAB button -->
-  <button id="aiAssistFab" onclick="_aiToggle()" style="width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#7c3aed,#4f46e5);color:#fff;border:none;box-shadow:0 4px 20px rgba(79,70,229,0.4);cursor:pointer;font-size:24px;display:flex;align-items:center;justify-content:center;transition:transform 0.2s;">
+  <button id="aiAssistFab" onclick="_aiToggle()" title="Clarke AI Assistant" style="width:56px;height:56px;border-radius:50%;background:#1e3a8a;color:#fff;border:none;box-shadow:0 4px 20px rgba(30,58,138,0.35);cursor:pointer;font-size:24px;display:flex;align-items:center;justify-content:center;transition:transform 0.2s;">
     ✦
   </button>
   <!-- Chat panel (hidden by default) -->
@@ -57063,7 +57068,7 @@ function _aiSelectDealForUpdate(dealId){
         <button onclick="document.getElementById('aiAssistFileInput').click()" title="Attach PDF or image"
           style="background:#f1f5f9;color:#475569;border:1px solid #cbd5e1;width:42px;height:42px;border-radius:10px;cursor:pointer;font-size:16px;flex-shrink:0;display:flex;align-items:center;justify-content:center;">📎</button>
         <textarea id="aiAssistInput" rows="2" placeholder="Paste call notes, an email, or attach a PDF/screenshot..." style="flex:1;border:1px solid #cbd5e1;border-radius:8px;padding:10px 12px;font-size:13px;font-family:inherit;resize:none;line-height:1.4;outline:none;" onkeydown="if(event.key==='Enter'&&!event.shiftKey){event.preventDefault();_aiSend();}"></textarea>
-        <button onclick="_aiSend()" id="aiAssistSendBtn" style="background:linear-gradient(135deg,#7c3aed,#4f46e5);color:#fff;border:none;width:42px;height:42px;border-radius:10px;cursor:pointer;font-size:18px;flex-shrink:0;display:flex;align-items:center;justify-content:center;">↑</button>
+        <button onclick="_aiSend()" id="aiAssistSendBtn" style="background:#1e3a8a;color:#fff;border:none;width:42px;height:42px;border-radius:10px;cursor:pointer;font-size:18px;flex-shrink:0;display:flex;align-items:center;justify-content:center;">↑</button>
       </div>
     </div>
   </div>
@@ -57076,7 +57081,7 @@ function _aiSelectDealForUpdate(dealId){
      the feature is in development. Hidden by default; the auth flow
      flips display:block for admin users. -->
 <div id="voiceWidget" style="display:none;position:fixed;bottom:92px;right:24px;z-index:8001;font-family:'Inter',system-ui,sans-serif;">
-  <button id="voiceFab" onclick="_voiceToggle()" title="Voice agent" style="width:56px;height:56px;border-radius:50%;background:linear-gradient(135deg,#ff5b3a,#dc2626);color:#fff;border:none;box-shadow:0 4px 20px rgba(220,38,38,0.45);cursor:pointer;font-size:22px;display:flex;align-items:center;justify-content:center;transition:transform 0.2s;">🎙</button>
+  <button id="voiceFab" onclick="_voiceToggle()" title="Clarke voice agent" style="width:56px;height:56px;border-radius:50%;background:#dc2626;color:#fff;border:none;box-shadow:0 4px 20px rgba(220,38,38,0.35);cursor:pointer;font-size:22px;display:flex;align-items:center;justify-content:center;transition:transform 0.2s;">🎙</button>
   <div id="voicePanel" style="display:none;position:absolute;bottom:68px;right:0;width:420px;max-width:calc(100vw - 40px);height:560px;max-height:calc(100vh - 120px);background:#0b0d10;border-radius:16px;box-shadow:0 12px 50px rgba(0,0,0,0.45);border:1px solid #232830;overflow:hidden;flex-direction:column;color:#e6e8eb;">
     <div style="background:linear-gradient(135deg,#0f172a,#dc2626);color:#fff;padding:14px 16px;display:flex;align-items:center;gap:10px;flex-shrink:0;">
       <div style="font-size:20px;">🎙</div>
@@ -57092,7 +57097,7 @@ function _aiSelectDealForUpdate(dealId){
     </div>
     <div style="border-top:1px solid #232830;padding:14px;background:#14181d;flex-shrink:0;display:flex;justify-content:center;align-items:center;gap:12px;">
       <button id="voiceRecordBtn" onclick="_voiceToggleRecord()" style="width:64px;height:64px;border-radius:50%;background:#14181d;border:2px solid #232830;color:#e6e8eb;font-size:26px;cursor:pointer;transition:all 0.15s;display:flex;align-items:center;justify-content:center;">🎙</button>
-      <button id="voiceStopBtn" onclick="_voiceStopAudio()" title="Stop Ace from talking" style="display:none;background:#374151;color:#fff;border:none;padding:8px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;">⏹ Stop</button>
+      <button id="voiceStopBtn" onclick="_voiceStopAudio()" title="Stop Clarke from talking" style="display:none;background:#374151;color:#fff;border:none;padding:8px 14px;border-radius:8px;font-size:12px;font-weight:600;cursor:pointer;">⏹ Stop</button>
       <div id="voiceStatus" style="font-size:11px;color:#8b9199;min-width:70px;">Ready.</div>
     </div>
   </div>

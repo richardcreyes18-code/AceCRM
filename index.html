@@ -883,6 +883,12 @@
      a single hairline accent (no emoji) so the slate ribbon reads as
      Bloomberg-clean rather than emoji-soup. -->
 <div class="top-nav">
+  <!-- v383: mobile hamburger — toggles the sidebar drawer at narrow widths.
+       Hidden on desktop by CSS in brand.css. -->
+  <button class="nav-hamburger" type="button" aria-label="Menu"
+    onclick="document.querySelector('.sidebar')?.classList.toggle('mobile-open');document.querySelector('.mobile-scrim')?.classList.toggle('visible');">
+    <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"><line x1="4" y1="7" x2="20" y2="7"/><line x1="4" y1="12" x2="20" y2="12"/><line x1="4" y1="17" x2="20" y2="17"/></svg>
+  </button>
   <span class="ds-brand" style="margin-right:14px;">
     <span class="ds-brand-mark">C</span>
     <span>CLARKE <span class="ds-brand-accent">commercial</span></span>
@@ -952,6 +958,8 @@
 </div>
 
 <!-- APP WRAP -->
+<!-- v383: mobile scrim behind the open sidebar drawer. Click to dismiss. -->
+<div class="mobile-scrim" onclick="document.querySelector('.sidebar')?.classList.remove('mobile-open');this.classList.remove('visible');"></div>
 <div class="app-wrap">
 
   <!-- SIDEBAR (v365: dropped redundant logo + welcome blocks — top-nav owns

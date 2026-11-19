@@ -140,3 +140,129 @@ div[style*="background:#fef2f2"] [style*="color:#b91c1c"] {
   background: var(--clarke-navy) !important;
   color: var(--clarke-text-on-dark) !important;
 }
+
+/* ─────────────────────────────────────────────────────────────
+   RESPONSIVE / MOBILE — v383
+   At < 900px the sidebar becomes a slide-in drawer triggered by
+   the hamburger in the top-nav, the app wrap drops its 64px
+   rail padding, the top-nav search collapses, and the dashboard
+   KPI grid stacks to one column.
+   ───────────────────────────────────────────────────────────── */
+
+/* Hamburger — hidden on desktop, shown on mobile */
+.nav-hamburger {
+  display: none;
+  background: transparent;
+  border: none;
+  color: #e2e8f0;
+  padding: 6px 8px;
+  margin-right: 6px;
+  border-radius: 6px;
+  cursor: pointer;
+  align-items: center;
+  justify-content: center;
+}
+.nav-hamburger:hover { background: rgba(255, 255, 255, 0.08); color: #ffffff; }
+.nav-hamburger:focus-visible { box-shadow: var(--clarke-focus-ring); }
+
+/* Scrim behind the open mobile drawer — invisible until toggled */
+.mobile-scrim {
+  position: fixed;
+  inset: 0;
+  background: rgba(15, 23, 42, 0.45);
+  z-index: 40;
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity 0.15s ease-out;
+}
+.mobile-scrim.visible {
+  opacity: 1;
+  pointer-events: auto;
+}
+
+@media (max-width: 900px) {
+  /* Show the hamburger, hide the top-nav search box to buy horizontal
+     space for the nav itself. The nav still scrolls horizontally as
+     before via its own overflow-x. */
+  .nav-hamburger { display: inline-flex; }
+  .topnav-search { display: none !important; }
+
+  /* Collapse the 64px rail padding — the sidebar is a drawer now, not
+     always-visible. */
+  .app-wrap {
+    padding-left: 0 !important;
+  }
+
+  /* Sidebar becomes a slide-in drawer */
+  .sidebar {
+    width: 280px !important;
+    transform: translateX(-100%);
+    transition: transform 0.2s cubic-bezier(0.2, 0, 0, 1);
+    box-shadow: 6px 0 24px rgba(15, 23, 42, 0.22);
+    padding: 12px 14px 0 !important;
+    z-index: 60 !important;
+  }
+  .sidebar:hover,
+  .sidebar.pinned {
+    /* Hover-to-expand doesn't make sense on touch; disable the desktop
+       behavior by locking width + shadow back to the drawer defaults. */
+    width: 280px !important;
+    box-shadow: 6px 0 24px rgba(15, 23, 42, 0.22) !important;
+  }
+  .sidebar.mobile-open {
+    transform: translateX(0);
+  }
+  /* Show the normally-collapsed sidebar content in the drawer */
+  .sidebar.mobile-open .search-box,
+  .sidebar.mobile-open .adv-search,
+  .sidebar.mobile-open #sidebarCount,
+  .sidebar.mobile-open .sidebar-footer,
+  .sidebar.mobile-open .sb-tab-label,
+  .sidebar.mobile-open .add-new-label {
+    opacity: 1 !important;
+    max-width: none !important;
+    pointer-events: auto !important;
+  }
+  .sidebar.mobile-open .recent-name,
+  .sidebar.mobile-open .recent-id {
+    display: block !important;
+  }
+
+  /* Dashboard stat rows → single column on mobile. Covers the three
+     seller + buyer lead-card rows, the pipeline-value row, and the
+     hot/active/under-contract/closed row. */
+  #mainArea > div > div[style*="display:flex"][style*="gap:14px"],
+  #mainArea > div > div[style*="display:flex"][style*="flex-wrap:wrap"] {
+    flex-direction: column !important;
+  }
+  #mainArea > div > div[style*="display:flex"][style*="gap:14px"] > div,
+  #mainArea > div > div[style*="display:flex"][style*="flex-wrap:wrap"] > div {
+    min-width: 0 !important;
+    flex-basis: auto !important;
+    width: 100% !important;
+  }
+
+  /* FABs stay but shrink + sit above the iOS home indicator */
+  #aiAssistFab, #voiceFab {
+    width: 48px !important;
+    height: 48px !important;
+    font-size: 20px !important;
+  }
+  #aiAssistWidget { bottom: calc(16px + env(safe-area-inset-bottom, 0px)) !important; right: 16px !important; }
+  #voiceWidget    { bottom: calc(76px + env(safe-area-inset-bottom, 0px)) !important; right: 16px !important; }
+
+  /* AI chat panel + voice panel fill the width on phones */
+  #aiAssistPanel, #voicePanel {
+    width: calc(100vw - 32px) !important;
+    right: 0 !important;
+  }
+
+  /* Modals: make sure wide modals don't push the body wider */
+  body, html { overflow-x: hidden !important; }
+}
+
+@media (max-width: 480px) {
+  /* Very narrow phones — tighten the brand lockup gap so it fits */
+  .ds-brand { margin-right: 6px !important; }
+  .nav-btn { padding: 6px 8px !important; font-size: 12px !important; }
+}

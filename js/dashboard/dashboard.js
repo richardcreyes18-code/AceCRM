@@ -166,10 +166,12 @@ export function showDashboard(){
   // My starred deals (Top Priority) — for the "My Top Deals" section
   const myStarred = myDeals.filter(d => d['Top Priority']);
 
-  // First name for the welcome message
-  const firstName = agentName
-    ? (_currentUser.name || agentName).split(' ')[0]
-    : 'there';
+  // First name for the welcome message.
+  // v378: if the user is signed in, greet them by name even when their FUB
+  // agent name isn't mapped (previously fell back to "there").
+  const firstName = (typeof _currentUser !== 'undefined' && _currentUser && _currentUser.name)
+    ? _currentUser.name.split(' ')[0]
+    : (agentName ? agentName.split(' ')[0] : 'there');
 
   const activeVal = _dashSumValue(active);
   const hotVal    = _dashSumValue(hot);
@@ -237,7 +239,18 @@ export function showDashboard(){
         </div>
         <div style="font-size:11px;color:#94a3b8;text-align:right;">
           ${new Date().toLocaleDateString('en-US',{weekday:'long',year:'numeric',month:'long',day:'numeric'})}
-          ${agentName ? `<div style="font-size:10px;color:#64748b;margin-top:2px;">Showing stats for <strong>${agentName}</strong></div>` : `<div style="font-size:10px;color:#dc2626;margin-top:2px;">Not signed in — showing all deals</div>`}
+          ${(() => {
+            // v378: previously showed a red "Not signed in" banner whenever
+            // agentName (= _currentUser.fub_name) was falsy — which fires
+            // every page load for any user who doesn't have a FUB name
+            // mapped, even though they ARE signed in. Fix: trust
+            // _currentUser.id for signed-in state, and only warn in red
+            // when truly signed out.
+            const signedIn = typeof _currentUser !== 'undefined' && _currentUser && _currentUser.id;
+            if(agentName) return `<div style="font-size:10px;color:#64748b;margin-top:2px;">Showing stats for <strong>${agentName}</strong></div>`;
+            if(signedIn)  return `<div style="font-size:10px;color:#94a3b8;margin-top:2px;">Showing all deals</div>`;
+            return `<div style="font-size:10px;color:#dc2626;margin-top:2px;">Not signed in — showing all deals</div>`;
+          })()}
         </div>
       </div>
 

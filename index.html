@@ -4885,6 +4885,7 @@ function renderDealPage(){
         <button class="tab-btn" onclick="switchTab('buyermatch',this)">Buyer Match</button>
         <button class="tab-btn" onclick="switchTab('brochure',this)">OM &amp; Flyer</button>
         <button class="tab-btn" onclick="switchTab('pitchout',this)">Buyer Pitch</button>
+        <button class="tab-btn" onclick="switchTab('portal',this)">Website</button>
         <button id="fmToggleBtn" class="field-map-btn" onclick="toggleFieldMapDrawer()" title="Show where each field is stored in Airtable">Field Map</button>
       </div>
     </div>
@@ -5717,7 +5718,8 @@ function switchTab(name, btn){
     aicomm: renderAICommTab(d),
     brochure: renderBrochureTab(d),
     buyermatch: renderBuyerMatchTab(d),
-    pitchout:  renderPitchOutTab(d)
+    pitchout:  renderPitchOutTab(d),
+    portal:    (typeof renderPortalTab === 'function' ? renderPortalTab(d) : '<div style="padding:24px;color:#64748b;">Website tab is still loading…</div>')
   };
 
   // 2. Set rendering flag so the innerHTML assignment doesn't trigger markDirty
@@ -5727,6 +5729,10 @@ function switchTab(name, btn){
   // v374.16: mount the Summary tab's Leaflet map after switching to it.
   if(name === 'summary'){
     requestAnimationFrame(() => { if(typeof _initSummaryMap === 'function') _initSummaryMap(); });
+  }
+  // v379: Website tab — post-mount init (fetches share settings + view counts).
+  if(name === 'portal'){
+    requestAnimationFrame(() => { if(typeof initPortalTab === 'function') initPortalTab(); });
   }
 
   // v102.22: Reset scroll position to the top of the tab when switching tabs.
@@ -57267,6 +57273,7 @@ function _aiSelectDealForUpdate(dealId){
      phases will populate js/{core,utils,schemas,...}/* and dispatch from
      js/main.js. ES modules are deferred by default, so this loads after the
      legacy <script> block above. -->
+<script src="js/portal/portal-tab.js" defer></script>
 <script type="module" src="js/main.js"></script>
 
 </body>

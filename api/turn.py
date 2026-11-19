@@ -30,7 +30,7 @@ from anthropic import Anthropic
 
 
 PROJECT_ROOT = Path(__file__).resolve().parent.parent
-AGENT_DIR = PROJECT_ROOT / "ace-agent"
+AGENT_DIR = PROJECT_ROOT / "clarke-agent"
 COMMANDS_DIR = AGENT_DIR / "commands"
 
 OPENAI_API_KEY = os.environ["OPENAI_API_KEY"].strip()

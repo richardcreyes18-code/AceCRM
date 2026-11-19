@@ -3,7 +3,7 @@
     "api/turn.py": {
       "memory": 1024,
       "maxDuration": 60,
-      "includeFiles": "ace-agent/**/*.md"
+      "includeFiles": "clarke-agent/**/*.md"
     }
   },
   "rewrites": [

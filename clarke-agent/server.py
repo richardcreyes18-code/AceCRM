@@ -380,7 +380,7 @@ def ask_claude(prompt: str) -> str:
 
 
 # ───────────────── FastAPI ─────────────────
-app = FastAPI(title="ace-agent")
+app = FastAPI(title="clarke-agent")
 
 
 @app.get("/")

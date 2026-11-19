@@ -5,5 +5,22 @@
       "maxDuration": 60,
       "includeFiles": "ace-agent/**/*.md"
     }
-  }
+  },
+  "rewrites": [
+    { "source": "/deal/:token", "destination": "/deal.html" }
+  ],
+  "headers": [
+    {
+      "source": "/deal.html",
+      "headers": [
+        { "key": "X-Robots-Tag", "value": "noindex, nofollow" }
+      ]
+    },
+    {
+      "source": "/deal/(.*)",
+      "headers": [
+        { "key": "X-Robots-Tag", "value": "noindex, nofollow" }
+      ]
+    }
+  ]
 }

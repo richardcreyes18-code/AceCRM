@@ -57,3 +57,6 @@ verify_jwt = true
 verify_jwt = true
 [functions.bc-bulk-sandbox]
 verify_jwt = true
+[functions.get-shared-deal]
+verify_jwt = false
+

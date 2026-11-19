@@ -2413,8 +2413,15 @@ async function syncData(){
     if(typeof _splashStep==='function') _splashStep('Ready', 8, 8);
     // Small delay so the user sees the progress bar complete visually before fade
     setTimeout(()=>{ if(typeof _splashDone==='function') _splashDone(); }, 350);
-    // Land on Dashboard by default, not the first deal
-    showDashboard();
+    // Land on Dashboard by default, not the first deal.
+    // v378: honor a deep-link hash — if the user arrived at #/deal/<uuid>
+    // or #/<page>, _nav.init() has already started routing to that
+    // destination, so don't clobber it with Dashboard.
+    {
+      const h = (location.hash || '').replace(/^#\//, '').toLowerCase();
+      const isDeepLink = h && h !== 'dashboard' && h !== '';
+      if(!isDeepLink) showDashboard();
+    }
     setTimeout(()=>_bgGeocodeAll(), 3000);
     // v374.20.3: contacts pre-load now fires earlier (in parallel with
     // the deal load) — see the kick-off above near _splashStep('Loading
@@ -3441,14 +3448,66 @@ const _nav = {
 
   // Called once on app startup (after login) to wire popstate and plant
   // an initial history entry so the first Back press has somewhere to go.
+  //
+  // v378: honor a deep-link hash that the user arrived with. Previously this
+  // unconditionally replaced the URL with #/dashboard, so pasting a
+  // #/deal/<uuid> link or reloading on any page silently dropped you on the
+  // Dashboard. Now we parse the hash and route to the matching page or deal.
   init(){
     if(_nav._inited) return;
     _nav._inited = true;
     window.addEventListener('popstate', _nav.onPop);
-    // Replace (not push) the initial entry so there's no phantom blank history.
+
+    const h = (location.hash || '').replace(/^#\//, '');
+
+    // Deep-link to a deal: #/deal/<uuid> — allDeals may not be loaded yet,
+    // so poll until we can resolve the id, then open it. Up to ~10s.
+    const dealMatch = h.match(/^deal\/([0-9a-f-]{8,})/i);
+    if(dealMatch){
+      const id = dealMatch[1];
+      try {
+        window.history.replaceState({ kind:'deal', id }, '', '#/deal/'+id);
+      } catch(e){}
+      let tries = 0;
+      const tryOpen = () => {
+        tries++;
+        const ready = typeof allDeals !== 'undefined' && Array.isArray(allDeals) && allDeals.length > 0;
+        const d = ready ? allDeals.find(x => x.id === id) : null;
+        if(d){
+          _nav._suppress = true;
+          try { _openDealDirect(d); } finally { _nav._suppress = false; }
+          return;
+        }
+        if(tries < 20){
+          setTimeout(tryOpen, 500);
+        } else {
+          // Give up: fall back to Dashboard, keep URL so user sees we tried.
+          _nav._suppress = true;
+          try { _setNavDirect(null, 'dashboard'); } finally { _nav._suppress = false; }
+        }
+      };
+      tryOpen();
+      return;
+    }
+
+    // Deep-link to a top-level page: #/settings, #/pipeline, etc.
+    const pageKey = (h.split('/')[0] || '').toLowerCase();
+    const knownPages = new Set([
+      'dashboard','deals','dealboard','pipeline','map','contacts','buyercriteria',
+      'portfolios','workbench','tasks-nav','company','settings','leadintake','fieldmap'
+    ]);
+    const page = knownPages.has(pageKey) ? pageKey : 'dashboard';
+
     try {
-      window.history.replaceState({ kind:'page', page:'dashboard' }, '', '#/dashboard');
+      window.history.replaceState({ kind:'page', page }, '', '#/'+page);
     } catch(e){}
+    if(page !== 'dashboard'){
+      _nav._suppress = true;
+      try {
+        const btn = document.querySelector('.nav-btn[data-page="'+page+'"]') || _nav._findNavBtnByPage(page);
+        _setNavDirect(btn, page);
+      } finally { _nav._suppress = false; }
+    }
   },
 
   // Called BEFORE pushing a new state, to update the CURRENT history entry
